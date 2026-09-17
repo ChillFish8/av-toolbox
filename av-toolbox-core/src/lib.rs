@@ -1,14 +1,12 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+mod filter;
+mod mask;
+mod tag;
+mod stage;
+mod sink;
+mod source;
+mod transform;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use self::filter::Filter;
+pub use self::mask::Mask;
+pub use self::stage::Stage;
+pub use self::tag::Tag;

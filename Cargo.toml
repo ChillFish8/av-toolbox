@@ -5,3 +5,7 @@ members = [
     "av-toolbox-core",
     "av-toolbox-filters"
 ]
+
+[workspace.dependencies]
+
+av-scenechange = "0.24"
