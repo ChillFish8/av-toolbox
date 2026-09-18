@@ -1,6 +1,8 @@
 mod dead_code;
+mod dedup;
 
 pub use self::dead_code::DeadStageElimination;
+pub use self::dedup::CommonStageElimination;
 use crate::graph::{CompiledGraph, Sharing};
 
 /// Something a pass did to the graph.
