@@ -240,6 +240,7 @@ mod tests {
         }
     }
 
+    #[expect(dead_code, reason = "the fixture only deserializes its arguments")]
     #[derive(Debug, Deserialize, JsonSchema)]
     struct FileArgs {
         input: String,

@@ -5,6 +5,7 @@
 use schemars::{JsonSchema, SchemaGenerator};
 use serde::Deserialize;
 
+#[expect(dead_code, reason = "the fixture only deserializes its arguments")]
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ExampleArgs {
     sigma_scale: f32,
