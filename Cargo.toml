@@ -2,7 +2,8 @@
 resolver = "3"
 members = [
     "av-toolbox",
-    "av-toolbox-core"
+    "av-toolbox-core",
+    "av-toolbox-graph",
 ]
 
 [workspace.dependencies]

@@ -53,6 +53,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "av-toolbox-graph"
+version = "0.1.0"
+dependencies = [
+ "av-toolbox-core",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
