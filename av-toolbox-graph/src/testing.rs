@@ -97,7 +97,7 @@ fixture_stage!(
     Mask,
     "merge",
     NoArgs,
-    &InputSignature::with_variadic(&[InputParam::required("base")], "extra")
+    &InputSignature::with_variadic(&[InputParam::required("base")])
 );
 fixture_stage!(
     Split,

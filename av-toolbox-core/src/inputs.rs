@@ -49,7 +49,7 @@ impl InputParam {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct InputSignature {
     params: &'static [InputParam],
-    variadic: Option<&'static str>,
+    variadic: bool,
 }
 
 impl InputSignature {
@@ -58,14 +58,14 @@ impl InputSignature {
     pub const fn new(params: &'static [InputParam]) -> Self {
         Self {
             params,
-            variadic: None,
+            variadic: false,
         }
     }
 
-    pub const fn with_variadic(params: &'static [InputParam], variadic: &'static str) -> Self {
+    pub const fn with_variadic(params: &'static [InputParam]) -> Self {
         Self {
             params,
-            variadic: Some(variadic),
+            variadic: true,
         }
     }
 
@@ -73,12 +73,12 @@ impl InputSignature {
         self.params
     }
 
-    pub const fn variadic(&self) -> Option<&'static str> {
+    pub const fn is_variadic(&self) -> bool {
         self.variadic
     }
 
     pub const fn is_empty(&self) -> bool {
-        self.params.is_empty() && self.variadic.is_none()
+        self.params.is_empty() && !self.variadic
     }
 }
 
@@ -228,7 +228,7 @@ fn bind_positional(
         return Ok(());
     }
 
-    if signature.variadic().is_none() {
+    if !signature.is_variadic() {
         return Err(BindInputsError::TooManyInputs {
             position,
             expected: params.len(),
@@ -264,7 +264,7 @@ fn bind_named(
         return Ok(());
     }
 
-    if signature.variadic().is_none() {
+    if !signature.is_variadic() {
         return Err(BindInputsError::UnknownInput {
             name: name.to_string(),
             position,
@@ -286,8 +286,7 @@ mod tests {
     const REFERENCE: &InputSignature =
         &InputSignature::new(&[InputParam::required("reference"), InputParam::optional("mask")]);
 
-    const VARIADIC: &InputSignature =
-        &InputSignature::with_variadic(&[InputParam::required("reference")], "extras");
+    const VARIADIC: &InputSignature = &InputSignature::with_variadic(&[InputParam::required("reference")]);
 
     fn handle(id: u64) -> StageHandle {
         StageHandle::new(id)
@@ -430,5 +429,14 @@ mod tests {
         assert_eq!(bound.iter().count(), 0);
         assert!(bound.variadic().is_empty());
         assert!(InputSignature::EMPTY.is_empty());
+    }
+
+    #[test]
+    fn a_signature_records_whether_it_has_a_variadic_tail() {
+        const PLAIN: &InputSignature = &InputSignature::new(&[InputParam::required("base")]);
+        const TAILED: &InputSignature = &InputSignature::with_variadic(&[InputParam::required("base")]);
+
+        assert!(!PLAIN.is_variadic());
+        assert!(TAILED.is_variadic());
     }
 }
