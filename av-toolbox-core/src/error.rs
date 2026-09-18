@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::StageKind;
+use crate::{StageKind, StreamType};
 
 /// A failure raised by a stage while it is building itself.
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +58,13 @@ pub enum BindInputsError {
     TooManyInputs { position: usize, expected: usize },
     #[error("the stage has no input named {name}, given at position {position}")]
     UnknownInput { name: String, position: usize },
+    #[error("the input at position {position} produces {found}, but {expected} was expected")]
+    InputTypeMismatch {
+        name: Option<&'static str>,
+        position: usize,
+        expected: StreamType,
+        found: StreamType,
+    },
 }
 
 /// A single way in which some arguments failed to match a stage's schema.

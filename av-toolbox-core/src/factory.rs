@@ -224,7 +224,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::{BoundInputs, InputParam, StageError, StageHandle, StageInstance};
+    use crate::{BoundInputs, InputParam, StageError, StageHandle, StageInstance, StreamType};
 
     #[derive(Debug, Deserialize, JsonSchema)]
     struct ExampleArgs {
@@ -282,7 +282,7 @@ mod tests {
     }
 
     fn reference_input() -> Vec<InputArgument> {
-        vec![InputArgument::positional(StageHandle::new(1))]
+        vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)]
     }
 
     #[test]

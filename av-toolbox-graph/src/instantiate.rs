@@ -52,7 +52,7 @@ impl CompiledGraph {
 
         for id in self.order() {
             let node = self.node(*id);
-            let arguments = arguments_for(node);
+            let arguments = arguments_for(self, node);
 
             match build_stage(registry, node, &arguments) {
                 Ok(stage) => built[id.index()] = Some(stage),
@@ -74,15 +74,20 @@ impl CompiledGraph {
 }
 
 /// Rebuilds the input list exactly as the definition wrote it, so binding repeats what it did.
-fn arguments_for(node: &Node) -> Vec<InputArgument> {
+fn arguments_for(graph: &CompiledGraph, node: &Node) -> Vec<InputArgument> {
     node.inputs()
         .iter()
         .map(|edge| {
             let handle = av_toolbox_core::StageHandle::new(edge.source().index() as u64);
+            let stream = graph
+                .node(edge.source())
+                .kind()
+                .output()
+                .expect("a sink cannot be an input");
 
             match edge.name() {
-                Some(name) => InputArgument::named(name, handle),
-                None => InputArgument::positional(handle),
+                Some(name) => InputArgument::named(name, handle, stream),
+                None => InputArgument::positional(handle, stream),
             }
         })
         .collect()

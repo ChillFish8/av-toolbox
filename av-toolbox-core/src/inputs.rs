@@ -120,21 +120,29 @@ impl InputSignature {
 }
 
 /// An input supplied by a pipeline, either positionally or by name.
+///
+/// Carries what its producer emits, so binding can check it against the param it fills.
 #[derive(Debug, Clone)]
 pub struct InputArgument {
     name: Option<String>,
     handle: StageHandle,
+    stream: StreamType,
 }
 
 impl InputArgument {
-    pub fn positional(handle: StageHandle) -> Self {
-        Self { name: None, handle }
+    pub fn positional(handle: StageHandle, stream: StreamType) -> Self {
+        Self {
+            name: None,
+            handle,
+            stream,
+        }
     }
 
-    pub fn named(name: impl Into<String>, handle: StageHandle) -> Self {
+    pub fn named(name: impl Into<String>, handle: StageHandle, stream: StreamType) -> Self {
         Self {
             name: Some(name.into()),
             handle,
+            stream,
         }
     }
 
@@ -144,6 +152,11 @@ impl InputArgument {
 
     pub fn handle(&self) -> StageHandle {
         self.handle
+    }
+
+    /// What the stage supplying this input produces.
+    pub fn stream(&self) -> StreamType {
+        self.stream
     }
 }
 
@@ -259,8 +272,11 @@ fn bind_positional(
     argument: &InputArgument,
     position: usize,
 ) -> Result<(), BindInputsError> {
-    if let Some(bound) = params.get_mut(*next_positional) {
-        bound.handle = Some(argument.handle());
+    if *next_positional < params.len() {
+        let param = &signature.params()[*next_positional];
+        check_stream_type(Some(param.name()), param.accepts(), argument, position)?;
+
+        params[*next_positional].handle = Some(argument.handle());
         *next_positional += 1;
         return Ok(());
     }
@@ -271,6 +287,8 @@ fn bind_positional(
             expected: params.len(),
         });
     }
+
+    check_stream_type(None, signature.variadic_accepts(), argument, position)?;
 
     variadic.push(VariadicInput {
         name: None,
@@ -288,16 +306,19 @@ fn bind_named(
     name: &str,
     position: usize,
 ) -> Result<(), BindInputsError> {
-    let matching = params.iter_mut().find(|param| param.name == name);
-    if let Some(bound) = matching {
-        if bound.handle.is_some() {
+    let matching = params.iter().position(|param| param.name == name);
+    if let Some(index) = matching {
+        if params[index].handle.is_some() {
             return Err(BindInputsError::DuplicateInput {
                 name: name.to_string(),
                 position,
             });
         }
 
-        bound.handle = Some(argument.handle());
+        let param = &signature.params()[index];
+        check_stream_type(Some(param.name()), param.accepts(), argument, position)?;
+
+        params[index].handle = Some(argument.handle());
         return Ok(());
     }
 
@@ -308,12 +329,38 @@ fn bind_named(
         });
     }
 
+    check_stream_type(None, signature.variadic_accepts(), argument, position)?;
+
     variadic.push(VariadicInput {
         name: Some(name.to_string()),
         handle: argument.handle(),
     });
 
     Ok(())
+}
+
+/// Rejects an argument whose producer emits a type the param does not take.
+fn check_stream_type(
+    name: Option<&'static str>,
+    accepts: Option<StreamType>,
+    argument: &InputArgument,
+    position: usize,
+) -> Result<(), BindInputsError> {
+    let Some(expected) = accepts else {
+        return Ok(());
+    };
+
+    let found = argument.stream();
+    if found == expected {
+        return Ok(());
+    }
+
+    Err(BindInputsError::InputTypeMismatch {
+        name,
+        position,
+        expected,
+        found,
+    })
 }
 
 #[cfg(test)]
@@ -332,8 +379,8 @@ mod tests {
     #[test]
     fn positional_inputs_fill_params_in_order() {
         let arguments = [
-            InputArgument::positional(handle(1)),
-            InputArgument::positional(handle(2)),
+            InputArgument::positional(handle(1), StreamType::Frames),
+            InputArgument::positional(handle(2), StreamType::Frames),
         ];
         let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
 
@@ -345,8 +392,8 @@ mod tests {
     #[test]
     fn named_inputs_bind_by_name_in_any_order() {
         let arguments = [
-            InputArgument::named("mask", handle(2)),
-            InputArgument::named("reference", handle(1)),
+            InputArgument::named("mask", handle(2), StreamType::Frames),
+            InputArgument::named("reference", handle(1), StreamType::Frames),
         ];
         let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
 
@@ -357,8 +404,8 @@ mod tests {
     #[test]
     fn positional_and_named_inputs_mix() {
         let arguments = [
-            InputArgument::positional(handle(1)),
-            InputArgument::named("mask", handle(2)),
+            InputArgument::positional(handle(1), StreamType::Frames),
+            InputArgument::named("mask", handle(2), StreamType::Frames),
         ];
         let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
 
@@ -368,7 +415,7 @@ mod tests {
 
     #[test]
     fn an_omitted_optional_input_is_unbound() {
-        let arguments = [InputArgument::positional(handle(1))];
+        let arguments = [InputArgument::positional(handle(1), StreamType::Frames)];
         let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
 
         assert_eq!(bound.get("mask"), None);
@@ -378,8 +425,8 @@ mod tests {
     #[test]
     fn a_positional_input_after_a_named_input_is_rejected() {
         let arguments = [
-            InputArgument::named("reference", handle(1)),
-            InputArgument::positional(handle(2)),
+            InputArgument::named("reference", handle(1), StreamType::Frames),
+            InputArgument::positional(handle(2), StreamType::Frames),
         ];
         let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
 
@@ -392,8 +439,8 @@ mod tests {
     #[test]
     fn naming_an_already_filled_param_is_rejected() {
         let arguments = [
-            InputArgument::positional(handle(1)),
-            InputArgument::named("reference", handle(2)),
+            InputArgument::positional(handle(1), StreamType::Frames),
+            InputArgument::named("reference", handle(2), StreamType::Frames),
         ];
         let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
 
@@ -405,7 +452,7 @@ mod tests {
 
     #[test]
     fn a_missing_required_input_is_rejected() {
-        let arguments = [InputArgument::named("mask", handle(2))];
+        let arguments = [InputArgument::named("mask", handle(2), StreamType::Frames)];
         let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
 
         assert!(matches!(
@@ -417,9 +464,9 @@ mod tests {
     #[test]
     fn extra_positional_inputs_are_rejected_without_a_variadic_tail() {
         let arguments = [
-            InputArgument::positional(handle(1)),
-            InputArgument::positional(handle(2)),
-            InputArgument::positional(handle(3)),
+            InputArgument::positional(handle(1), StreamType::Frames),
+            InputArgument::positional(handle(2), StreamType::Frames),
+            InputArgument::positional(handle(3), StreamType::Frames),
         ];
         let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
 
@@ -435,8 +482,8 @@ mod tests {
     #[test]
     fn an_unknown_named_input_is_rejected_without_a_variadic_tail() {
         let arguments = [
-            InputArgument::positional(handle(1)),
-            InputArgument::named("nonsense", handle(2)),
+            InputArgument::positional(handle(1), StreamType::Frames),
+            InputArgument::named("nonsense", handle(2), StreamType::Frames),
         ];
         let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
 
@@ -446,9 +493,9 @@ mod tests {
     #[test]
     fn a_variadic_tail_collects_extra_inputs_in_order() {
         let arguments = [
-            InputArgument::positional(handle(1)),
-            InputArgument::positional(handle(2)),
-            InputArgument::named("overlay", handle(3)),
+            InputArgument::positional(handle(1), StreamType::Frames),
+            InputArgument::positional(handle(2), StreamType::Frames),
+            InputArgument::named("overlay", handle(3), StreamType::Frames),
         ];
         let bound = bind_inputs(VARIADIC, &arguments).expect("should bind");
 
@@ -493,6 +540,93 @@ mod tests {
         assert!(!PARAM.is_required());
         assert_eq!(PARAM.name(), "overlay");
         assert_eq!(PARAM.accepts(), Some(StreamType::Mask));
+    }
+
+    #[test]
+    fn a_param_binds_an_argument_of_the_type_it_declares() {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]);
+        let arguments = [InputArgument::positional(handle(1), StreamType::Frames)];
+
+        let bound = bind_inputs(SIGNATURE, &arguments).expect("should bind");
+
+        assert_eq!(bound.get("reference"), Some(handle(1)));
+    }
+
+    #[test]
+    fn a_param_rejects_an_argument_of_another_type() {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("overlay").accepting(StreamType::Mask)]);
+        let arguments = [InputArgument::positional(handle(1), StreamType::Frames)];
+
+        let error = bind_inputs(SIGNATURE, &arguments).expect_err("should reject");
+
+        assert!(matches!(
+            error,
+            BindInputsError::InputTypeMismatch {
+                name: Some("overlay"),
+                position: 0,
+                expected: StreamType::Mask,
+                found: StreamType::Frames,
+            }
+        ));
+    }
+
+    #[test]
+    fn a_param_with_no_declared_type_takes_either() {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("either")]);
+
+        let frames = [InputArgument::positional(handle(1), StreamType::Frames)];
+        let mask = [InputArgument::positional(handle(1), StreamType::Mask)];
+
+        assert!(bind_inputs(SIGNATURE, &frames).is_ok());
+        assert!(bind_inputs(SIGNATURE, &mask).is_ok());
+    }
+
+    #[test]
+    fn an_optional_param_enforces_its_type_when_it_is_supplied() {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::optional("overlay").accepting(StreamType::Mask)]);
+
+        let empty: [InputArgument; 0] = [];
+        assert!(bind_inputs(SIGNATURE, &empty).is_ok());
+
+        let wrong = [InputArgument::named("overlay", handle(1), StreamType::Frames)];
+        let error = bind_inputs(SIGNATURE, &wrong).expect_err("should reject");
+
+        assert!(matches!(
+            error,
+            BindInputsError::InputTypeMismatch {
+                name: Some("overlay"),
+                expected: StreamType::Mask,
+                found: StreamType::Frames,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_variadic_tail_enforces_its_type() {
+        const SIGNATURE: &InputSignature = &InputSignature::with_variadic_of(
+            &[InputParam::required("base").accepting(StreamType::Frames)],
+            StreamType::Frames,
+        );
+        let arguments = [
+            InputArgument::positional(handle(1), StreamType::Frames),
+            InputArgument::positional(handle(2), StreamType::Mask),
+        ];
+
+        let error = bind_inputs(SIGNATURE, &arguments).expect_err("should reject");
+
+        assert!(matches!(
+            error,
+            BindInputsError::InputTypeMismatch {
+                name: None,
+                position: 1,
+                expected: StreamType::Frames,
+                found: StreamType::Mask,
+            }
+        ));
     }
 
     #[test]

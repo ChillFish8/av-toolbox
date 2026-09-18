@@ -195,7 +195,15 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::{BoundInputs, InputParam, InputSignature, StageError, StageHandle, StageInstance};
+    use crate::{
+        BoundInputs,
+        InputParam,
+        InputSignature,
+        StageError,
+        StageHandle,
+        StageInstance,
+        StreamType,
+    };
 
     #[derive(Debug, Deserialize, JsonSchema)]
     struct DenoiseArgs {
@@ -306,7 +314,7 @@ mod tests {
     }
 
     fn reference_input() -> Vec<InputArgument> {
-        vec![InputArgument::positional(StageHandle::new(1))]
+        vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)]
     }
 
     #[test]

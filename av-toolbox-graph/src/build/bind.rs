@@ -2,16 +2,20 @@ use std::collections::HashMap;
 
 use av_toolbox_core::{BindInputsError, InputArgument, InputSignature, StageHandle};
 
-use crate::build::resolve::{Resolution, ResolvedStage};
+use super::resolve::{Resolution, ResolvedStage};
 use crate::diagnostic::{input_path, stage_path};
 use crate::graph::{Edge, Node, NodeId, NodeParts};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics, StageSpec};
 
 /// Binds every resolved stage against its signature and turns it into a node.
-pub(crate) fn bind(resolution: &Resolution<'_>, diagnostics: &mut Diagnostics) -> Vec<Node> {
+pub(crate) fn bind(
+    specs: &[StageSpec],
+    resolution: &Resolution<'_>,
+    diagnostics: &mut Diagnostics,
+) -> Vec<Node> {
     let mut accepted: Vec<bool> = resolution.stages.iter().map(|stage| stage.is_some()).collect();
 
-    check_signatures(resolution, &mut accepted, diagnostics);
+    check_signatures(specs, resolution, &mut accepted, diagnostics);
     drop_broken_consumers(resolution, &mut accepted);
 
     let ids = assign_ids(&accepted);
@@ -19,13 +23,18 @@ pub(crate) fn bind(resolution: &Resolution<'_>, diagnostics: &mut Diagnostics) -
 }
 
 /// Rejects any stage whose inputs do not match its signature.
-fn check_signatures(resolution: &Resolution<'_>, accepted: &mut [bool], diagnostics: &mut Diagnostics) {
+fn check_signatures(
+    specs: &[StageSpec],
+    resolution: &Resolution<'_>,
+    accepted: &mut [bool],
+    diagnostics: &mut Diagnostics,
+) {
     for (index, stage) in resolution.stages.iter().enumerate() {
         let Some(stage) = stage else {
             continue;
         };
 
-        let arguments = placeholder_arguments(stage.spec);
+        let arguments = placeholder_arguments(stage.spec, specs, &resolution.by_name);
         let bound = av_toolbox_core::bind_inputs(stage.info.inputs(), &arguments);
         let Err(error) = bound else {
             continue;
@@ -37,14 +46,29 @@ fn check_signatures(resolution: &Resolution<'_>, accepted: &mut [bool], diagnost
 }
 
 /// Builds the argument list binding needs, with handles that binding never looks at.
-fn placeholder_arguments(spec: &StageSpec) -> Vec<InputArgument> {
+///
+/// The handles are placeholders because ids are not assigned until rejections have settled, but
+/// each producer's stream type is already known from its kind.
+fn placeholder_arguments(
+    spec: &StageSpec,
+    specs: &[StageSpec],
+    by_name: &HashMap<String, usize>,
+) -> Vec<InputArgument> {
     let placeholder = StageHandle::new(0);
 
     spec.inputs
         .iter()
-        .map(|input| match &input.value.name {
-            Some(name) => InputArgument::named(name.clone(), placeholder),
-            None => InputArgument::positional(placeholder),
+        .map(|input| {
+            let target = by_name[&input.value.target];
+            let stream = specs[target]
+                .kind
+                .output()
+                .expect("resolution rejects a stage that reads a sink");
+
+            match &input.value.name {
+                Some(name) => InputArgument::named(name.clone(), placeholder, stream),
+                None => InputArgument::positional(placeholder, stream),
+            }
         })
         .collect()
 }
@@ -56,6 +80,7 @@ fn bind_diagnostic(spec: &StageSpec, error: BindInputsError) -> Diagnostic {
         BindInputsError::DuplicateInput { position, .. } => Some(*position),
         BindInputsError::TooManyInputs { position, .. } => Some(*position),
         BindInputsError::UnknownInput { position, .. } => Some(*position),
+        BindInputsError::InputTypeMismatch { position, .. } => Some(*position),
         BindInputsError::MissingRequiredInput { .. } => None,
     };
 
@@ -211,7 +236,7 @@ mod tests {
         let mut diagnostics = Diagnostics::new();
 
         let resolution = resolve(&registry, specs, &mut diagnostics);
-        let nodes = bind(&resolution, &mut diagnostics);
+        let nodes = bind(specs, &resolution, &mut diagnostics);
         let codes = diagnostics.iter().map(|entry| entry.code()).collect();
 
         (nodes, codes)
@@ -288,7 +313,7 @@ mod tests {
         let registry = testing::registry();
         let mut diagnostics = Diagnostics::new();
         let resolution = resolve(&registry, &specs, &mut diagnostics);
-        bind(&resolution, &mut diagnostics);
+        bind(&specs, &resolution, &mut diagnostics);
 
         let invalid = diagnostics
             .iter()

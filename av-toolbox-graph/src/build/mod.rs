@@ -36,7 +36,7 @@ pub fn build(registry: &PipelineRegistry, specs: &[StageSpec]) -> Result<Built, 
     let mut diagnostics = Diagnostics::new();
 
     let resolution = resolve::resolve(registry, specs, &mut diagnostics);
-    let nodes = bind::bind(&resolution, &mut diagnostics);
+    let nodes = bind::bind(specs, &resolution, &mut diagnostics);
     checks::detect_cycles(&nodes, &mut diagnostics);
 
     if diagnostics.has_errors() {
