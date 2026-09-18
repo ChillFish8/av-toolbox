@@ -61,19 +61,16 @@ macro_rules! fixture_stage {
 
 /// The fixture arguments exist to give the registry a schema to validate against, so nothing ever
 /// reads the fields back out.
-#[expect(dead_code, reason = "the fixtures only deserialize their arguments")]
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct FileArgs {
     pub(crate) path: String,
 }
 
-#[expect(dead_code, reason = "the fixtures only deserialize their arguments")]
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct BlurArgs {
     pub(crate) sigma: f64,
 }
 
-#[expect(dead_code, reason = "the fixtures only deserialize their arguments")]
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct SplitArgs {
     pub(crate) seconds: u32,
@@ -161,7 +158,6 @@ pub(crate) fn registry() -> PipelineRegistry {
 /// Builds a spec with no inputs, empty arguments and unknown spans.
 ///
 /// Every field is public, so a test that cares about a span or an argument sets it directly.
-#[expect(dead_code, reason = "used by later tasks' tests")]
 pub(crate) fn spec(kind: StageKind, name: &str, stage_type: &str) -> StageSpec {
     StageSpec {
         name: Spanned::unknown(name.to_string()),
@@ -173,7 +169,6 @@ pub(crate) fn spec(kind: StageKind, name: &str, stage_type: &str) -> StageSpec {
     }
 }
 
-#[expect(dead_code, reason = "used by later tasks' tests")]
 pub(crate) fn positional(target: &str) -> Spanned<InputRef> {
     Spanned::unknown(InputRef {
         name: None,
@@ -181,7 +176,6 @@ pub(crate) fn positional(target: &str) -> Spanned<InputRef> {
     })
 }
 
-#[expect(dead_code, reason = "used by later tasks' tests")]
 pub(crate) fn named(name: &str, target: &str) -> Spanned<InputRef> {
     Spanned::unknown(InputRef {
         name: Some(name.to_string()),

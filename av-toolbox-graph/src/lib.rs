@@ -1,3 +1,9 @@
+#![expect(
+    dead_code,
+    reason = "the crate is built up task by task, later tasks add the callers"
+)]
+
+mod build;
 mod diagnostic;
 mod graph;
 mod spec;

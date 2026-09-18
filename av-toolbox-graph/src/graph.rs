@@ -59,13 +59,6 @@ pub struct Edge {
 }
 
 impl Edge {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first caller arrives once the build entry point is wired in task 8"
-        )
-    )]
     pub(crate) fn new(name: Option<String>, param: Option<&'static str>, source: NodeId, span: Span) -> Self {
         Self {
             name,
@@ -98,34 +91,16 @@ impl Edge {
         self.span
     }
 
-    #[expect(
-        dead_code,
-        reason = "the first caller arrives once fan out analysis lands in task 12"
-    )]
     pub(crate) fn set_sharing(&mut self, sharing: Sharing) {
         self.sharing = sharing;
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first caller arrives once dead stage elimination lands in task 10"
-        )
-    )]
     pub(crate) fn set_source(&mut self, source: NodeId) {
         self.source = source;
     }
 }
 
 /// The pieces a node is built from.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the first caller arrives once the build entry point is wired in task 8"
-    )
-)]
 pub(crate) struct NodeParts {
     pub(crate) id: NodeId,
     pub(crate) name: String,
@@ -152,13 +127,6 @@ pub struct Node {
 }
 
 impl Node {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first caller arrives once the build entry point is wired in task 8"
-        )
-    )]
     pub(crate) fn new(parts: NodeParts) -> Self {
         Self {
             id: parts.id,
@@ -216,13 +184,6 @@ impl Node {
         self.span
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first caller arrives once dead stage elimination lands in task 10"
-        )
-    )]
     pub(crate) fn inputs_mut(&mut self) -> &mut [Edge] {
         &mut self.inputs
     }
@@ -236,13 +197,6 @@ pub struct CompiledGraph {
 }
 
 impl CompiledGraph {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first caller arrives once the build entry point is wired in task 8"
-        )
-    )]
     pub(crate) fn new(nodes: Vec<Node>) -> Self {
         let mut graph = Self {
             nodes,
@@ -280,10 +234,6 @@ impl CompiledGraph {
             .map(|node| node.id())
     }
 
-    #[expect(
-        dead_code,
-        reason = "the first caller arrives once dead stage elimination lands in task 10"
-    )]
     pub(crate) fn node_mut(&mut self, id: NodeId) -> &mut Node {
         &mut self.nodes[id.index()]
     }
@@ -292,13 +242,6 @@ impl CompiledGraph {
     ///
     /// Surviving nodes are reindexed, so every [NodeId](crate::NodeId) held across this call is
     /// stale afterwards.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first caller arrives once dead stage elimination lands in task 10"
-        )
-    )]
     pub(crate) fn retain_nodes(&mut self, replacements: &HashMap<NodeId, NodeId>, dropped: &HashSet<NodeId>) {
         let mut moved: HashMap<NodeId, NodeId> = HashMap::new();
         let mut kept: Vec<Node> = Vec::with_capacity(self.nodes.len());
@@ -331,13 +274,6 @@ impl CompiledGraph {
     }
 
     /// Recomputes consumers and the topological order after the node list changes.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first caller arrives once the build entry point is wired in task 8"
-        )
-    )]
     fn refresh(&mut self) {
         for node in self.nodes.iter_mut() {
             node.consumers.clear();
@@ -361,13 +297,6 @@ impl CompiledGraph {
 }
 
 /// Follows a chain of replacements through to the node that survived.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the first caller arrives once dead stage elimination lands in task 10"
-    )
-)]
 fn follow_replacements(replacements: &HashMap<NodeId, NodeId>, node: NodeId) -> NodeId {
     let mut current = node;
 
@@ -385,13 +314,6 @@ fn follow_replacements(replacements: &HashMap<NodeId, NodeId>, node: NodeId) -> 
 /// Orders the nodes so every node follows the nodes it reads.
 ///
 /// Ready nodes are taken in index order, so the same nodes always produce the same order.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the first caller arrives once the build entry point is wired in task 8"
-    )
-)]
 fn topological_order(nodes: &[Node]) -> Vec<NodeId> {
     let mut remaining: Vec<usize> = nodes.iter().map(|node| node.inputs().len()).collect();
     let mut ready: BinaryHeap<Reverse<usize>> = remaining
