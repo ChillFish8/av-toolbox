@@ -1,11 +1,13 @@
 mod ascii;
 mod grid;
 mod mermaid;
+mod svg;
 
 use std::collections::HashMap;
 
 pub use self::ascii::render_ascii;
 pub use self::mermaid::render_mermaid;
+pub use self::svg::render_svg;
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::layout::{Layout, Slot};
 

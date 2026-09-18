@@ -29,5 +29,5 @@ pub use self::optimise::{
     default_passes,
     optimise,
 };
-pub use self::render::{RenderOptions, render_ascii, render_mermaid};
+pub use self::render::{RenderOptions, render_ascii, render_mermaid, render_svg};
 pub use self::spec::{InputRef, Span, Spanned, StageSpec};
