@@ -1,8 +1,10 @@
 mod dead_code;
 mod dedup;
+mod fan_out;
 
 pub use self::dead_code::DeadStageElimination;
 pub use self::dedup::CommonStageElimination;
+pub use self::fan_out::FanOutAnalysis;
 use crate::graph::{CompiledGraph, Sharing};
 
 /// Something a pass did to the graph.
@@ -67,4 +69,16 @@ pub trait OptimisationPass {
 /// Runs each pass in turn, returning what each one did.
 pub fn optimise(graph: &mut CompiledGraph, passes: &[Box<dyn OptimisationPass>]) -> Vec<PassReport> {
     passes.iter().map(|pass| pass.run(graph)).collect()
+}
+
+/// The passes to run when the caller has no opinion.
+///
+/// Dead stages go first so nothing else spends work on them, merging follows, and the fan out
+/// analysis runs last because merging changes how many consumers a stage has.
+pub fn default_passes() -> Vec<Box<dyn OptimisationPass>> {
+    vec![
+        Box::new(DeadStageElimination),
+        Box::new(CommonStageElimination),
+        Box::new(FanOutAnalysis),
+    ]
 }

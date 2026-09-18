@@ -20,8 +20,10 @@ pub use self::optimise::{
     Change,
     CommonStageElimination,
     DeadStageElimination,
+    FanOutAnalysis,
     OptimisationPass,
     PassReport,
+    default_passes,
     optimise,
 };
 pub use self::spec::{InputRef, Span, Spanned, StageSpec};
