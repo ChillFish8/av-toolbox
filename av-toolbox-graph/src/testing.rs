@@ -62,16 +62,19 @@ macro_rules! fixture_stage {
 /// The fixture arguments exist to give the registry a schema to validate against, so nothing ever
 /// reads the fields back out.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[expect(dead_code, reason = "the fixtures only deserialize their arguments")]
 pub(crate) struct FileArgs {
     pub(crate) path: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[expect(dead_code, reason = "the fixtures only deserialize their arguments")]
 pub(crate) struct BlurArgs {
     pub(crate) sigma: f64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[expect(dead_code, reason = "the fixtures only deserialize their arguments")]
 pub(crate) struct SplitArgs {
     pub(crate) seconds: u32,
 }

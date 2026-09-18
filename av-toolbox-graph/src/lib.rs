@@ -1,7 +1,28 @@
-#![expect(
-    dead_code,
-    reason = "the crate is built up task by task, later tasks add the callers"
-)]
+//! Compiling stage definitions into a pipeline graph
+//!
+//! A caller hands [build] a list of [StageSpec] values and gets back a [CompiledGraph]: the same
+//! stages resolved to each other, checked against the registry and ordered by dependency. Anything
+//! wrong with the definitions comes back as a [Diagnostics] set, each entry carrying the span it
+//! came from.
+//!
+//! A graph can then be taken three ways.
+//!
+//! - [CompiledGraph::instantiate] builds the stages through the registry.
+//! - [optimise()] runs passes over it, merging identical stages and working out which outputs have
+//!   to be shared.
+//! - [render_ascii], [render_svg] and [render_mermaid] draw it.
+//!
+//! ```no_run
+//! # use av_toolbox_core::PipelineRegistry;
+//! # use av_toolbox_graph::{RenderOptions, StageSpec, build, default_passes, optimise, render_ascii};
+//! # fn example(registry: &PipelineRegistry, specs: &[StageSpec]) {
+//! let built = build(registry, specs).expect("the definitions are valid");
+//! let mut graph = built.into_graph();
+//!
+//! optimise(&mut graph, &default_passes());
+//! println!("{}", render_ascii(&graph, &RenderOptions::default()));
+//! # }
+//! ```
 
 mod build;
 mod diagnostic;
