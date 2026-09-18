@@ -57,6 +57,8 @@ name = "av-toolbox-graph"
 version = "0.1.0"
 dependencies = [
  "av-toolbox-core",
+ "schemars",
+ "serde",
  "serde_json",
  "thiserror",
 ]

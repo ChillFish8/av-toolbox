@@ -7,3 +7,7 @@ edition = "2024"
 av-toolbox-core = { path = "../av-toolbox-core" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
