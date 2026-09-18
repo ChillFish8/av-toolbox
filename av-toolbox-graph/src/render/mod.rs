@@ -1,3 +1,4 @@
+mod grid;
 mod mermaid;
 
 pub use self::mermaid::render_mermaid;
