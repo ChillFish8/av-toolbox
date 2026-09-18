@@ -1,6 +1,4 @@
-use crate::Stage;
+use crate::StageInstance;
 
 /// A [Source] produces video frames to be processed by the pipeline.
-pub trait Source: Stage {
-
-}
+pub trait Source: StageInstance {}

@@ -1,5 +1,3 @@
-
-
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 /// A [Tag] is a standardised label used for organisation.
 pub enum Tag {
@@ -9,5 +7,5 @@ pub enum Tag {
     Deinterlace,
     Color,
     Conversion,
-    Other(&'static str)
+    Other(&'static str),
 }
