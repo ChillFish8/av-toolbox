@@ -11,6 +11,7 @@ use av_toolbox_core::{
     StageError,
     StageInstance,
     StageKind,
+    StreamType,
     Transform,
 };
 use schemars::JsonSchema;
@@ -89,7 +90,7 @@ fixture_stage!(
     Filter,
     "blur",
     BlurArgs,
-    &InputSignature::new(&[InputParam::required("reference")])
+    &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)])
 );
 fixture_stage!(
     Merge,
@@ -97,7 +98,10 @@ fixture_stage!(
     Mask,
     "merge",
     NoArgs,
-    &InputSignature::with_variadic(&[InputParam::required("base")])
+    &InputSignature::with_variadic_of(
+        &[InputParam::required("base").accepting(StreamType::Frames)],
+        StreamType::Frames,
+    )
 );
 fixture_stage!(
     Split,
@@ -105,7 +109,7 @@ fixture_stage!(
     Transform,
     "split",
     SplitArgs,
-    &InputSignature::new(&[InputParam::required("input")])
+    &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)])
 );
 fixture_stage!(
     Stdout,
@@ -114,6 +118,17 @@ fixture_stage!(
     "stdout",
     NoArgs,
     &InputSignature::new(&[InputParam::required("input")])
+);
+fixture_stage!(
+    Deband,
+    DebandStage,
+    Filter,
+    "deband",
+    NoArgs,
+    &InputSignature::new(&[
+        InputParam::required("reference").accepting(StreamType::Frames),
+        InputParam::optional("overlay").accepting(StreamType::Mask),
+    ])
 );
 
 struct FailingStage;
@@ -154,6 +169,7 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_mask::<Merge>().expect("should register");
     registry.register_transform::<Split>().expect("should register");
     registry.register_sink::<Stdout>().expect("should register");
+    registry.register_filter::<Deband>().expect("should register");
 
     registry
 }
@@ -195,7 +211,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 6);
+        assert_eq!(identifiers.len(), 7);
         assert!(identifiers.contains(&"test/blur"));
         assert!(identifiers.contains(&"test/failing"));
     }

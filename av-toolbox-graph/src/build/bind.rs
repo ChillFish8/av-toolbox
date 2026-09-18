@@ -84,7 +84,7 @@ fn bind_diagnostic(spec: &StageSpec, error: BindInputsError) -> Diagnostic {
         BindInputsError::MissingRequiredInput { .. } => None,
     };
 
-    let message = error.to_string();
+    let message = describe(spec, &error, position);
     let Some(position) = position else {
         return Diagnostic::error(
             DiagnosticCode::InvalidInputs,
@@ -101,6 +101,28 @@ fn bind_diagnostic(spec: &StageSpec, error: BindInputsError) -> Diagnostic {
         span,
         message,
     )
+}
+
+/// Names the producing stage when a type did not match, which the core error cannot do.
+fn describe(spec: &StageSpec, error: &BindInputsError, position: Option<usize>) -> String {
+    let BindInputsError::InputTypeMismatch {
+        name,
+        expected,
+        found,
+        ..
+    } = error
+    else {
+        return error.to_string();
+    };
+
+    let index = position.expect("a type mismatch always carries a position");
+    let producer = &spec.inputs[index].value.target;
+
+    let Some(name) = name else {
+        return format!("the variadic tail takes {expected}, but {producer} produces {found}");
+    };
+
+    format!("the input {name} takes {expected}, but {producer} produces {found}")
 }
 
 /// Drops any stage that reads a stage which was itself rejected, until nothing changes.
@@ -337,5 +359,84 @@ mod tests {
 
         assert_eq!(codes, vec![DiagnosticCode::UnknownStageReference]);
         assert_eq!(nodes.len(), 1);
+    }
+
+    /// A source feeding deband's frames input, and a mask feeding its overlay input.
+    fn well_typed_deband() -> Vec<StageSpec> {
+        let source = testing::spec(StageKind::Source, "input", "test/file");
+
+        let mut merge = testing::spec(StageKind::Mask, "selection", "test/merge");
+        merge.inputs = vec![testing::positional("input")];
+
+        let mut deband = testing::spec(StageKind::Filter, "deband", "test/deband");
+        deband.inputs = vec![testing::positional("input"), testing::positional("selection")];
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("deband")];
+
+        vec![source, merge, deband, sink]
+    }
+
+    #[test]
+    fn a_correctly_typed_pipeline_binds() {
+        let (nodes, codes) = run(&well_typed_deband());
+
+        assert!(codes.is_empty());
+        assert_eq!(nodes.len(), 4);
+    }
+
+    #[test]
+    fn a_mask_input_given_frames_names_the_param_and_the_producer() {
+        let mut specs = well_typed_deband();
+        specs[2].inputs = vec![testing::positional("input"), testing::positional("other")];
+        specs.push(testing::spec(StageKind::Source, "other", "test/file"));
+
+        let registry = testing::registry();
+        let mut diagnostics = Diagnostics::new();
+        let resolution = resolve(&registry, &specs, &mut diagnostics);
+        bind(&specs, &resolution, &mut diagnostics);
+
+        let reported = diagnostics
+            .iter()
+            .find(|entry| entry.code() == DiagnosticCode::InvalidInputs)
+            .expect("should report invalid inputs");
+
+        assert_eq!(reported.path(), "filter.deband.inputs[1]");
+        assert!(reported.message().contains("overlay"));
+        assert!(reported.message().contains("other"));
+        assert!(reported.message().contains("mask"));
+        assert!(reported.message().contains("frames"));
+    }
+
+    #[test]
+    fn a_variadic_tail_given_the_wrong_type_is_named_as_the_tail() {
+        let source = testing::spec(StageKind::Source, "input", "test/file");
+
+        let mut selection = testing::spec(StageKind::Mask, "selection", "test/merge");
+        selection.inputs = vec![testing::positional("input")];
+
+        let mut composite = testing::spec(StageKind::Mask, "composite", "test/merge");
+        composite.inputs = vec![testing::positional("input"), testing::positional("selection")];
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("composite")];
+
+        let specs = vec![source, selection, composite, sink];
+
+        let registry = testing::registry();
+        let mut diagnostics = Diagnostics::new();
+        let resolution = resolve(&registry, &specs, &mut diagnostics);
+        bind(&specs, &resolution, &mut diagnostics);
+
+        let reported = diagnostics
+            .iter()
+            .find(|entry| entry.code() == DiagnosticCode::InvalidInputs)
+            .expect("should report invalid inputs");
+
+        assert_eq!(reported.path(), "mask.composite.inputs[1]");
+        assert!(reported.message().contains("the variadic tail"));
+        assert!(reported.message().contains("selection"));
+        assert!(reported.message().contains("frames"));
+        assert!(reported.message().contains("mask"));
     }
 }
