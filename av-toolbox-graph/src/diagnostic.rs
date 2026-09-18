@@ -212,22 +212,34 @@ fn render_diagnostics(entries: &[Diagnostic]) -> String {
     lines.join("\n\n")
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the first caller arrives with resolution in task 5"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the first caller arrives with resolution in task 5")
+)]
 pub(crate) fn stage_path(kind: StageKind, name: &str) -> String {
     format!("{kind}.{name}")
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the first caller arrives with resolution in task 5"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the first caller arrives with resolution in task 5")
+)]
 pub(crate) fn type_path(kind: StageKind, name: &str) -> String {
     format!("{kind}.{name}.type")
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the first caller arrives with resolution in task 5"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the first caller arrives with resolution in task 5")
+)]
 pub(crate) fn args_path(kind: StageKind, name: &str) -> String {
     format!("{kind}.{name}.args")
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the first caller arrives with resolution in task 5"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the first caller arrives with resolution in task 5")
+)]
 pub(crate) fn input_path(kind: StageKind, name: &str, index: usize) -> String {
     format!("{kind}.{name}.inputs[{index}]")
 }
