@@ -1,4 +1,4 @@
-use crate::BindInputsError;
+use crate::{BindInputsError, StreamType};
 
 /// An opaque reference to another stage in the pipeline.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -19,18 +19,32 @@ impl StageHandle {
 pub struct InputParam {
     name: &'static str,
     required: bool,
+    accepts: Option<StreamType>,
 }
 
 impl InputParam {
     pub const fn required(name: &'static str) -> Self {
-        Self { name, required: true }
+        Self {
+            name,
+            required: true,
+            accepts: None,
+        }
     }
 
     pub const fn optional(name: &'static str) -> Self {
         Self {
             name,
             required: false,
+            accepts: None,
         }
+    }
+
+    /// Narrows the param to one stream type.
+    ///
+    /// A param that has not been narrowed takes either type.
+    pub const fn accepting(mut self, stream: StreamType) -> Self {
+        self.accepts = Some(stream);
+        self
     }
 
     pub const fn name(&self) -> &'static str {
@@ -39,6 +53,10 @@ impl InputParam {
 
     pub const fn is_required(&self) -> bool {
         self.required
+    }
+
+    pub const fn accepts(&self) -> Option<StreamType> {
+        self.accepts
     }
 }
 
@@ -50,6 +68,7 @@ impl InputParam {
 pub struct InputSignature {
     params: &'static [InputParam],
     variadic: bool,
+    variadic_accepts: Option<StreamType>,
 }
 
 impl InputSignature {
@@ -59,6 +78,7 @@ impl InputSignature {
         Self {
             params,
             variadic: false,
+            variadic_accepts: None,
         }
     }
 
@@ -66,6 +86,16 @@ impl InputSignature {
         Self {
             params,
             variadic: true,
+            variadic_accepts: None,
+        }
+    }
+
+    /// A signature whose tail only takes one stream type.
+    pub const fn with_variadic_of(params: &'static [InputParam], accepts: StreamType) -> Self {
+        Self {
+            params,
+            variadic: true,
+            variadic_accepts: Some(accepts),
         }
     }
 
@@ -75,6 +105,13 @@ impl InputSignature {
 
     pub const fn is_variadic(&self) -> bool {
         self.variadic
+    }
+
+    /// What the tail takes, or `None` when it takes either type.
+    ///
+    /// Only meaningful when [InputSignature::is_variadic] is true.
+    pub const fn variadic_accepts(&self) -> Option<StreamType> {
+        self.variadic_accepts
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -438,5 +475,39 @@ mod tests {
 
         assert!(!PLAIN.is_variadic());
         assert!(TAILED.is_variadic());
+    }
+
+    #[test]
+    fn a_param_accepts_either_type_until_it_is_narrowed() {
+        const ANY: InputParam = InputParam::required("reference");
+        const FRAMES: InputParam = InputParam::required("reference").accepting(StreamType::Frames);
+
+        assert_eq!(ANY.accepts(), None);
+        assert_eq!(FRAMES.accepts(), Some(StreamType::Frames));
+    }
+
+    #[test]
+    fn narrowing_a_param_keeps_whether_it_is_required() {
+        const PARAM: InputParam = InputParam::optional("overlay").accepting(StreamType::Mask);
+
+        assert!(!PARAM.is_required());
+        assert_eq!(PARAM.name(), "overlay");
+        assert_eq!(PARAM.accepts(), Some(StreamType::Mask));
+    }
+
+    #[test]
+    fn a_tail_that_accepts_anything_is_not_the_same_as_having_no_tail() {
+        const NONE: &InputSignature = &InputSignature::new(&[]);
+        const ANY: &InputSignature = &InputSignature::with_variadic(&[]);
+        const MASKS: &InputSignature = &InputSignature::with_variadic_of(&[], StreamType::Mask);
+
+        assert!(!NONE.is_variadic());
+        assert_eq!(NONE.variadic_accepts(), None);
+
+        assert!(ANY.is_variadic());
+        assert_eq!(ANY.variadic_accepts(), None);
+
+        assert!(MASKS.is_variadic());
+        assert_eq!(MASKS.variadic_accepts(), Some(StreamType::Mask));
     }
 }
