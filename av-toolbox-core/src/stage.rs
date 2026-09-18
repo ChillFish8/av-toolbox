@@ -3,7 +3,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
-use crate::{BoundInputs, InputSignature, StageError, Tag};
+use crate::{BoundInputs, InputSignature, StageError, StreamType, Tag};
 
 /// The category a stage belongs to.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -13,6 +13,17 @@ pub enum StageKind {
     Mask,
     Transform,
     Sink,
+}
+
+impl StageKind {
+    /// What a stage of this kind produces, or `None` for a sink.
+    pub const fn output(&self) -> Option<StreamType> {
+        match self {
+            Self::Source | Self::Filter | Self::Transform => Some(StreamType::Frames),
+            Self::Mask => Some(StreamType::Mask),
+            Self::Sink => None,
+        }
+    }
 }
 
 impl fmt::Display for StageKind {
@@ -173,5 +184,14 @@ mod tests {
     #[test]
     fn tags_default_to_empty() {
         assert!(ExampleDefinition::tags().is_empty());
+    }
+
+    #[test]
+    fn every_kind_but_a_sink_produces_a_stream() {
+        assert_eq!(StageKind::Source.output(), Some(StreamType::Frames));
+        assert_eq!(StageKind::Filter.output(), Some(StreamType::Frames));
+        assert_eq!(StageKind::Transform.output(), Some(StreamType::Frames));
+        assert_eq!(StageKind::Mask.output(), Some(StreamType::Mask));
+        assert_eq!(StageKind::Sink.output(), None);
     }
 }

@@ -22,6 +22,7 @@ mod registry;
 mod sink;
 mod source;
 mod stage;
+mod stream;
 mod tag;
 mod transform;
 
@@ -49,5 +50,6 @@ pub use self::registry::PipelineRegistry;
 pub use self::sink::Sink;
 pub use self::source::Source;
 pub use self::stage::{StageDefinition, StageInstance, StageKind};
+pub use self::stream::StreamType;
 pub use self::tag::Tag;
 pub use self::transform::Transform;
