@@ -5,6 +5,7 @@ mod stage;
 mod sink;
 mod source;
 mod transform;
+mod registry;
 
 pub use self::filter::Filter;
 pub use self::mask::Mask;
