@@ -9,6 +9,7 @@ mod graph;
 mod instantiate;
 mod layout;
 mod optimise;
+mod render;
 mod spec;
 #[cfg(test)]
 mod testing;
@@ -28,4 +29,5 @@ pub use self::optimise::{
     default_passes,
     optimise,
 };
+pub use self::render::{RenderOptions, render_mermaid};
 pub use self::spec::{InputRef, Span, Spanned, StageSpec};
