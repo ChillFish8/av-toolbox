@@ -66,6 +66,7 @@ impl Layout {
         };
 
         layout.crossings = layout.count_crossings();
+        layout.reduce_crossings();
         layout
     }
 
@@ -110,6 +111,65 @@ impl Layout {
 
         total
     }
+
+    /// Reorders the ranks a few times, keeping whichever ordering crossed the least.
+    fn reduce_crossings(&mut self) {
+        let mut best = self.ranks.clone();
+        let mut fewest = self.crossings;
+
+        for _ in 0..SWEEPS {
+            for rank in 1..self.ranks.len() {
+                self.order_by_median(rank, rank - 1);
+            }
+
+            for rank in (0..self.ranks.len().saturating_sub(1)).rev() {
+                self.order_by_median(rank, rank + 1);
+            }
+
+            let crossings = self.count_crossings();
+            if crossings < fewest {
+                fewest = crossings;
+                best = self.ranks.clone();
+            }
+        }
+
+        self.ranks = best;
+        self.crossings = fewest;
+    }
+
+    /// Orders one rank by where each slot's neighbours sit in an adjacent rank.
+    fn order_by_median(&mut self, rank: usize, neighbour_rank: usize) {
+        let gap = rank.min(neighbour_rank);
+        let reading_upwards = neighbour_rank > rank;
+        let neighbours = positions_in(&self.ranks[neighbour_rank]);
+
+        let mut keyed: Vec<(Slot, f64)> = self.ranks[rank]
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| {
+                let found: Vec<usize> = self.links[gap]
+                    .iter()
+                    .filter_map(|link| {
+                        let (near, far) = match reading_upwards {
+                            true => (link.upper, link.lower),
+                            false => (link.lower, link.upper),
+                        };
+
+                        if near != *slot {
+                            return None;
+                        }
+
+                        neighbours.get(&far).copied()
+                    })
+                    .collect();
+
+                (*slot, median(found, index))
+            })
+            .collect();
+
+        keyed.sort_by(|first, second| first.1.total_cmp(&second.1));
+        self.ranks[rank] = keyed.into_iter().map(|(slot, _)| slot).collect();
+    }
 }
 
 fn positions_in(rank: &[Slot]) -> HashMap<Slot, usize> {
@@ -135,6 +195,25 @@ fn assign_ranks(graph: &CompiledGraph) -> Vec<usize> {
     }
 
     ranks
+}
+
+/// How many down and up passes to make. More than this rarely finds a better ordering.
+const SWEEPS: usize = 4;
+
+/// The middle of a slot's neighbours, or its current position when it has none.
+fn median(mut positions: Vec<usize>, fallback: usize) -> f64 {
+    if positions.is_empty() {
+        return fallback as f64;
+    }
+
+    positions.sort_unstable();
+    let middle = positions.len() / 2;
+
+    if positions.len() % 2 == 1 {
+        return positions[middle] as f64;
+    }
+
+    (positions[middle - 1] + positions[middle]) as f64 / 2.0
 }
 
 #[cfg(test)]
@@ -216,5 +295,52 @@ mod tests {
         let (_, layout) = layout_of(&[source, sink]);
 
         assert_eq!(layout.crossings(), 0);
+    }
+
+    /// Two sources whose consumers are declared in the opposite order, which crosses the edges.
+    fn crossed_branches() -> Vec<StageSpec> {
+        let mut first_source = testing::spec(StageKind::Source, "first_source", "test/file");
+        first_source.args = Spanned::unknown(json!({ "path": "a.mkv" }));
+
+        let mut second_source = testing::spec(StageKind::Source, "second_source", "test/file");
+        second_source.args = Spanned::unknown(json!({ "path": "b.mkv" }));
+
+        let mut first_blur = testing::spec(StageKind::Filter, "first_blur", "test/blur");
+        first_blur.inputs = vec![testing::positional("second_source")];
+        first_blur.args = Spanned::unknown(json!({ "sigma": 1.0 }));
+
+        let mut second_blur = testing::spec(StageKind::Filter, "second_blur", "test/blur");
+        second_blur.inputs = vec![testing::positional("first_source")];
+        second_blur.args = Spanned::unknown(json!({ "sigma": 2.0 }));
+
+        let mut first_sink = testing::spec(StageKind::Sink, "first_out", "test/stdout");
+        first_sink.inputs = vec![testing::positional("first_blur")];
+
+        let mut second_sink = testing::spec(StageKind::Sink, "second_out", "test/stdout");
+        second_sink.inputs = vec![testing::positional("second_blur")];
+
+        vec![
+            first_source,
+            second_source,
+            first_blur,
+            second_blur,
+            first_sink,
+            second_sink,
+        ]
+    }
+
+    #[test]
+    fn reordering_a_rank_removes_the_crossings_declaration_order_created() {
+        let (_, layout) = layout_of(&crossed_branches());
+
+        assert_eq!(layout.crossings(), 0);
+    }
+
+    #[test]
+    fn the_same_graph_always_lays_out_the_same_way() {
+        let (_, first) = layout_of(&crossed_branches());
+        let (_, second) = layout_of(&crossed_branches());
+
+        assert_eq!(first.ranks(), second.ranks());
     }
 }
