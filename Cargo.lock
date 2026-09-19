@@ -53,6 +53,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "av-toolbox-cubek"
+version = "0.1.0"
+
+[[package]]
 name = "av-toolbox-graph"
 version = "0.1.0"
 dependencies = [
@@ -62,6 +66,10 @@ dependencies = [
  "serde_json",
  "thiserror",
 ]
+
+[[package]]
+name = "av-toolbox-runtime"
+version = "0.1.0"
 
 [[package]]
 name = "bit-set"

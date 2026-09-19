@@ -1,0 +1,7 @@
+[package]
+name = "av-toolbox-runtime"
+version = "0.1.0"
+edition = "2024"
+description = "The av-toolbox filter graph runtime."
+
+[dependencies]

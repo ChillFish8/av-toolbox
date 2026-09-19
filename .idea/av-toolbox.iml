@@ -9,6 +9,9 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-core/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-graph/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-cubek/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-graph/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-runtime/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
