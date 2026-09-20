@@ -18,12 +18,14 @@ compile_error!("av-toolbox-gpu needs at least one accelerator backend enabled: c
 compile_error!("the vulkan and metal backends cannot both be enabled, pick one");
 
 mod accelerator;
+mod backend;
 mod cache;
 mod capabilities;
 mod device;
 mod enumerate;
 mod frame;
 mod memory;
+mod negotiate;
 mod probe;
 mod sniff;
 mod stack;
@@ -32,7 +34,11 @@ mod warmup;
 #[cfg(test)]
 mod testing;
 
+pub use cubecl::client::ComputeClient;
+pub use cubecl::prelude::Runtime;
+
 pub use self::accelerator::{Accelerator, default_accelerators};
+pub use self::backend::{Backend, BuildContext, BuildTask};
 pub use self::cache::{
     COMPILATION_CACHE_ENV,
     CacheError,
@@ -69,6 +75,7 @@ pub use self::frame::{
     Transfer,
 };
 pub use self::memory::{BufferPool, ClientAllocator, DeviceAllocator, Ring, RingGeometry, RingSpec};
+pub use self::negotiate::{FormatSet, OutputFormats, ResolvedFormats, StreamTemplate};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};
 pub use self::warmup::WarmUp;

@@ -4,26 +4,40 @@ use av_toolbox_core::{
     InputSignature,
     PipelineRegistry,
     Sink,
+    SinkDefinition,
     Source,
+    SourceDefinition,
     StageDefinition,
     StageError,
     StageInstance,
     StageKind,
 };
+use av_toolbox_gpu::{
+    BuildContext,
+    Capabilities,
+    ColourInfo,
+    FormatSet,
+    FrameFormat,
+    FrameLayout,
+    OutputFormats,
+    ResolvedFormats,
+    Runtime,
+    SampleFormat,
+    StreamFormat,
+    StreamTemplate,
+    Subsampling,
+};
+#[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 use av_toolbox_graph::{
     CompiledGraph,
-    InputRef,
     RenderOptions,
-    Span,
-    Spanned,
-    StageSpec,
-    build,
     default_passes,
     optimise,
     render_ascii,
     render_mermaid,
     render_svg,
 };
+use av_toolbox_graph::{InputRef, Span, Spanned, StageSpec, build};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -40,7 +54,6 @@ struct Read;
 
 impl StageDefinition for Read {
     type Args = NoArgs;
-    type Instance = ReadStage;
 
     fn package() -> &'static str {
         "demo"
@@ -53,9 +66,25 @@ impl StageDefinition for Read {
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
+}
 
-    fn build(_args: Self::Args, _inputs: BoundInputs) -> Result<Self::Instance, StageError> {
-        Ok(ReadStage)
+impl SourceDefinition for Read {
+    fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+        let format = fixture_format();
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Source>, StageError> {
+        Ok(Box::new(ReadStage))
     }
 }
 
@@ -68,7 +97,6 @@ struct Write;
 
 impl StageDefinition for Write {
     type Args = NoArgs;
-    type Instance = WriteStage;
 
     fn package() -> &'static str {
         "demo"
@@ -82,10 +110,41 @@ impl StageDefinition for Write {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
         SIGNATURE
     }
+}
 
-    fn build(_args: Self::Args, _inputs: BoundInputs) -> Result<Self::Instance, StageError> {
-        Ok(WriteStage)
+impl SinkDefinition for Write {
+    fn accepts(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        offered: &[StreamFormat],
+    ) -> Result<Vec<FormatSet>, StageError> {
+        Ok(offered
+            .iter()
+            .map(|format| FormatSet::of([format.sample()]))
+            .collect())
     }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Sink>, StageError> {
+        Ok(Box::new(WriteStage))
+    }
+}
+
+/// A fixed frame format, used as the demo source's arbitrary starting point.
+fn fixture_format() -> StreamFormat {
+    StreamFormat::Frames(FrameFormat {
+        width: 64,
+        height: 64,
+        layout: FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv420,
+        },
+        sample: SampleFormat::U8,
+        colour: ColourInfo::default(),
+    })
 }
 
 fn spec(kind: StageKind, name: &str, stage_type: &str, inputs: Vec<&str>, args: Value) -> StageSpec {
@@ -116,8 +175,11 @@ fn registry() -> PipelineRegistry {
     registry
 }
 
+#[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 #[test]
 fn a_pipeline_builds_optimises_renders_and_instantiates() {
+    use av_toolbox_gpu::{Backend, Device};
+
     let specs = vec![
         spec(StageKind::Source, "input", "demo/read", vec![], json!({})),
         spec(StageKind::Sink, "out", "demo/write", vec!["input"], json!({})),
@@ -139,7 +201,12 @@ fn a_pipeline_builds_optimises_renders_and_instantiates() {
     assert!(svg.contains("<svg"));
     assert!(svg.contains("input"));
 
-    let stages = graph.instantiate(&registry).expect("should instantiate");
+    let backend = Backend::open_default(Device::Default).expect("should open");
+    let formats = vec![ResolvedFormats::new(vec![], None); graph.len()];
+
+    let stages = graph
+        .instantiate(&registry, &backend, &formats)
+        .expect("should instantiate");
     assert_eq!(stages.len(), 2);
 }
 

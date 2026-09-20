@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use av_toolbox_gpu::{Backend, BuildContext, BuildTask, ResolvedFormats, Runtime};
 use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value;
@@ -7,19 +8,26 @@ use serde_json::Value;
 use crate::{
     ArgsError,
     BindInputsError,
+    BoundInputs,
     BuildStageError,
     Filter,
+    FilterDefinition,
     InputArgument,
     InputSignature,
     Mask,
+    MaskDefinition,
     RegistryError,
     SchemaViolation,
     Sink,
+    SinkDefinition,
     Source,
+    SourceDefinition,
     StageDefinition,
+    StageError,
     StageKind,
     Tag,
     Transform,
+    TransformDefinition,
     bind_inputs,
 };
 
@@ -69,7 +77,13 @@ impl<'a> StageInfo<'a> {
 pub trait StageFactory<K: ?Sized>: Send + Sync {
     fn info(&self) -> StageInfo<'_>;
 
-    fn build(&self, args: &Value, inputs: &[InputArgument]) -> Result<Box<K>, BuildStageError>;
+    fn build(
+        &self,
+        backend: &Backend,
+        args: &Value,
+        inputs: &[InputArgument],
+        formats: &ResolvedFormats,
+    ) -> Result<Box<K>, BuildStageError>;
 }
 
 /// The adapter that erases a concrete [StageDefinition](crate::StageDefinition).
@@ -130,21 +144,6 @@ impl<D: StageDefinition> Definition<D> {
         }
     }
 
-    /// Validates, deserializes and binds, then hands the pieces to the stage.
-    ///
-    /// The order matters. Schema validation runs before deserialization, so the arguments are
-    /// reported against the schema the stage published.
-    fn build_instance(&self, args: &Value, inputs: &[InputArgument]) -> Result<D::Instance, BuildStageError> {
-        let args = self.deserialize_args(args)?;
-
-        let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
-
-        D::build(args, bound).map_err(|source| BuildStageError::Build {
-            identifier: self.full_identifier.clone(),
-            source,
-        })
-    }
-
     fn deserialize_args(&self, args: &Value) -> Result<D::Args, BuildStageError> {
         let violations: Vec<SchemaViolation> = self
             .validator
@@ -188,52 +187,79 @@ impl<D: StageDefinition> Definition<D> {
 }
 
 macro_rules! impl_stage_factory {
-    ($kind_trait:ident) => {
-        impl<D> StageFactory<dyn $kind_trait> for Definition<D>
-        where
-            D: StageDefinition,
-            D::Instance: $kind_trait,
-        {
+    ($kind_trait:ident, $definition_trait:ident, $task:ident) => {
+        /// Carries a stage's pieces into whichever runtime the backend opened.
+        struct $task<'a, D: $definition_trait> {
+            args: D::Args,
+            inputs: BoundInputs,
+            formats: &'a ResolvedFormats,
+        }
+
+        impl<'a, D: $definition_trait> BuildTask for $task<'a, D> {
+            type Output = Result<Box<dyn $kind_trait>, StageError>;
+
+            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+                D::build::<R>(context, self.args, self.inputs, self.formats)
+            }
+        }
+
+        impl<D: $definition_trait> StageFactory<dyn $kind_trait> for Definition<D> {
             fn info(&self) -> StageInfo<'_> {
                 self.stage_info()
             }
 
             fn build(
                 &self,
+                backend: &Backend,
                 args: &Value,
                 inputs: &[InputArgument],
+                formats: &ResolvedFormats,
             ) -> Result<Box<dyn $kind_trait>, BuildStageError> {
-                let instance = self.build_instance(args, inputs)?;
-                Ok(Box::new(instance))
+                let args = self.deserialize_args(args)?;
+                let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+
+                let task = $task::<D> {
+                    args,
+                    inputs: bound,
+                    formats,
+                };
+
+                backend
+                    .build(task)
+                    .map_err(|source| BuildStageError::Build {
+                        identifier: self.full_identifier().to_string(),
+                        source,
+                    })
             }
         }
     };
 }
 
-impl_stage_factory!(Source);
-impl_stage_factory!(Filter);
-impl_stage_factory!(Mask);
-impl_stage_factory!(Transform);
-impl_stage_factory!(Sink);
+impl_stage_factory!(Source, SourceDefinition, BuildSource);
+impl_stage_factory!(Filter, FilterDefinition, BuildFilter);
+impl_stage_factory!(Mask, MaskDefinition, BuildMask);
+impl_stage_factory!(Transform, TransformDefinition, BuildTransform);
+impl_stage_factory!(Sink, SinkDefinition, BuildSink);
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    use av_toolbox_gpu::{Capabilities, FormatSet, OutputFormats, StreamFormat, StreamTemplate};
     use schemars::JsonSchema;
     use serde::Deserialize;
 
     use super::*;
-    use crate::{BoundInputs, InputParam, StageError, StageHandle, StageInstance, StreamType};
+    use crate::{InputParam, StageInstance};
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    use crate::{StageHandle, StreamType};
 
     #[derive(Debug, Deserialize, JsonSchema)]
     struct ExampleArgs {
         sigma_scale: f32,
     }
 
-    struct ExampleFilter {
-        sigma_scale: f32,
-    }
+    struct ExampleFilter;
 
     impl StageInstance for ExampleFilter {}
     impl Filter for ExampleFilter {}
@@ -244,7 +270,6 @@ mod tests {
 
     impl StageDefinition for ExampleDefinition {
         type Args = ExampleArgs;
-        type Instance = ExampleFilter;
 
         fn package() -> &'static str {
             "av-denoise"
@@ -262,18 +287,45 @@ mod tests {
             const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
             SIGNATURE
         }
+    }
 
-        fn build(args: Self::Args, _inputs: BoundInputs) -> Result<Self::Instance, StageError> {
+    impl FilterDefinition for ExampleDefinition {
+        fn accepts(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            offered: &[StreamFormat],
+        ) -> Result<Vec<FormatSet>, StageError> {
+            Ok(offered
+                .iter()
+                .map(|format| FormatSet::of([format.sample()]))
+                .collect())
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            chosen: &[StreamFormat],
+        ) -> Result<OutputFormats, StageError> {
+            let format = chosen[0];
+            Ok(OutputFormats {
+                template: StreamTemplate::from_format(&format),
+                samples: FormatSet::of([format.sample()]),
+            })
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Filter>, StageError> {
             if args.sigma_scale < 0.0 {
                 return Err(StageError::msg("sigma_scale must not be negative"));
             }
 
-            let instance = ExampleFilter {
-                sigma_scale: args.sigma_scale,
-            };
-            RECORDED_SIGMA_SCALE.store(instance.sigma_scale.to_bits(), Ordering::SeqCst);
+            RECORDED_SIGMA_SCALE.store(args.sigma_scale.to_bits(), Ordering::SeqCst);
 
-            Ok(instance)
+            Ok(Box::new(ExampleFilter))
         }
     }
 
@@ -281,6 +333,7 @@ mod tests {
         Definition::new(StageKind::Filter).expect("should build the definition")
     }
 
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     fn reference_input() -> Vec<InputArgument> {
         vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)]
     }
@@ -297,71 +350,97 @@ mod tests {
         assert_eq!(info.inputs().params().len(), 1);
     }
 
-    #[test]
-    fn valid_arguments_build_a_boxed_filter() {
-        let definition = definition();
-        let args = serde_json::json!({ "sigma_scale": 0.8 });
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    mod device_tests {
+        use av_toolbox_gpu::Device;
 
-        let filter: Box<dyn Filter> = definition.build(&args, &reference_input()).expect("should build");
+        use super::*;
 
-        let recorded_sigma_scale = f32::from_bits(RECORDED_SIGMA_SCALE.load(Ordering::SeqCst));
-        assert_eq!(recorded_sigma_scale, 0.8);
+        fn backend() -> Backend {
+            Backend::open_default(Device::Default).expect("should open")
+        }
 
-        drop(filter);
-    }
+        fn formats() -> ResolvedFormats {
+            ResolvedFormats::new(vec![], None)
+        }
 
-    #[test]
-    fn arguments_that_break_the_schema_are_rejected_before_deserialization() {
-        let definition = definition();
-        let args = serde_json::json!({ "sigma_scale": "not a number" });
+        #[test]
+        fn valid_arguments_build_a_boxed_filter() {
+            let definition = definition();
+            let args = serde_json::json!({ "sigma_scale": 0.8 });
+            let backend = backend();
+            let formats = formats();
 
-        let result = StageFactory::<dyn Filter>::build(&definition, &args, &reference_input());
-        let Err(error) = result else {
-            panic!("the stage should not have been built");
-        };
+            let filter: Box<dyn Filter> = definition
+                .build(&backend, &args, &reference_input(), &formats)
+                .expect("should build");
+            drop(filter);
 
-        assert!(error.to_string().contains("av-denoise/nl4d"));
+            let recorded_sigma_scale = f32::from_bits(RECORDED_SIGMA_SCALE.load(Ordering::SeqCst));
+            assert_eq!(recorded_sigma_scale, 0.8);
+        }
 
-        let BuildStageError::InvalidArgs { source, .. } = error else {
-            panic!("expected invalid arguments, got {error:?}");
-        };
+        #[test]
+        fn arguments_that_break_the_schema_are_rejected_before_deserialization() {
+            let definition = definition();
+            let args = serde_json::json!({ "sigma_scale": "not a number" });
+            let backend = backend();
+            let formats = formats();
 
-        let ArgsError::SchemaViolations(violations) = source else {
-            panic!("expected schema violations");
-        };
+            let result =
+                StageFactory::<dyn Filter>::build(&definition, &backend, &args, &reference_input(), &formats);
+            let Err(error) = result else {
+                panic!("the stage should not have been built");
+            };
 
-        assert_eq!(violations[0].path(), "/sigma_scale");
-    }
+            assert!(error.to_string().contains("av-denoise/nl4d"));
 
-    #[test]
-    fn inputs_that_break_the_signature_are_rejected() {
-        let definition = definition();
-        let args = serde_json::json!({ "sigma_scale": 0.8 });
+            let BuildStageError::InvalidArgs { source, .. } = error else {
+                panic!("expected invalid arguments, got {error:?}");
+            };
 
-        let result = StageFactory::<dyn Filter>::build(&definition, &args, &[]);
-        let Err(error) = result else {
-            panic!("the stage should not have been built");
-        };
+            let ArgsError::SchemaViolations(violations) = source else {
+                panic!("expected schema violations");
+            };
 
-        assert!(error.to_string().contains("av-denoise/nl4d"));
-        assert!(matches!(error, BuildStageError::InvalidInputs { .. }));
-    }
+            assert_eq!(violations[0].path(), "/sigma_scale");
+        }
 
-    #[test]
-    fn a_stage_failure_is_wrapped_with_its_identifier() {
-        let definition = definition();
-        let args = serde_json::json!({ "sigma_scale": -1.0 });
+        #[test]
+        fn inputs_that_break_the_signature_are_rejected() {
+            let definition = definition();
+            let args = serde_json::json!({ "sigma_scale": 0.8 });
+            let backend = backend();
+            let formats = formats();
 
-        let result = StageFactory::<dyn Filter>::build(&definition, &args, &reference_input());
-        let Err(error) = result else {
-            panic!("the stage should not have been built");
-        };
+            let result = StageFactory::<dyn Filter>::build(&definition, &backend, &args, &[], &formats);
+            let Err(error) = result else {
+                panic!("the stage should not have been built");
+            };
 
-        assert!(matches!(error, BuildStageError::Build { .. }));
-        assert!(error.to_string().contains("av-denoise/nl4d"));
+            assert!(error.to_string().contains("av-denoise/nl4d"));
+            assert!(matches!(error, BuildStageError::InvalidInputs { .. }));
+        }
 
-        let source = std::error::Error::source(&error).expect("should carry the stage's error");
-        assert!(source.to_string().contains("sigma_scale must not be negative"));
+        #[test]
+        fn a_stage_failure_is_wrapped_with_its_identifier() {
+            let definition = definition();
+            let args = serde_json::json!({ "sigma_scale": -1.0 });
+            let backend = backend();
+            let formats = formats();
+
+            let result =
+                StageFactory::<dyn Filter>::build(&definition, &backend, &args, &reference_input(), &formats);
+            let Err(error) = result else {
+                panic!("the stage should not have been built");
+            };
+
+            assert!(matches!(error, BuildStageError::Build { .. }));
+            assert!(error.to_string().contains("av-denoise/nl4d"));
+
+            let source = std::error::Error::source(&error).expect("should carry the stage's error");
+            assert!(source.to_string().contains("sigma_scale must not be negative"));
+        }
     }
 
     #[test]
@@ -370,7 +449,6 @@ mod tests {
 
         impl StageDefinition for BadDefinition {
             type Args = ExampleArgs;
-            type Instance = ExampleFilter;
 
             fn package() -> &'static str {
                 "av/denoise"
@@ -382,12 +460,6 @@ mod tests {
 
             fn inputs() -> &'static InputSignature {
                 &InputSignature::EMPTY
-            }
-
-            fn build(args: Self::Args, _inputs: BoundInputs) -> Result<Self::Instance, StageError> {
-                Ok(ExampleFilter {
-                    sigma_scale: args.sigma_scale,
-                })
             }
         }
 

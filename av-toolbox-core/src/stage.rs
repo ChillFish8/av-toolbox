@@ -1,9 +1,29 @@
 use std::fmt;
 
+use av_toolbox_gpu::{
+    BuildContext,
+    Capabilities,
+    FormatSet,
+    OutputFormats,
+    ResolvedFormats,
+    Runtime,
+    StreamFormat,
+};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
-use crate::{BoundInputs, InputSignature, StageError, StreamType, Tag};
+use crate::{
+    BoundInputs,
+    Filter,
+    InputSignature,
+    Mask,
+    Sink,
+    Source,
+    StageError,
+    StreamType,
+    Tag,
+    Transform,
+};
 
 /// The category a stage belongs to.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -43,10 +63,11 @@ impl fmt::Display for StageKind {
 /// A constructed stage ready to be placed in a pipeline.
 pub trait StageInstance: Send + 'static {}
 
-/// A type of stage that can be registered and built.
+/// A type of stage that can be registered.
 ///
 /// The arguments type supplies the JSON schema for a stage's arguments, and the input signature
-/// declares which inputs it accepts.
+/// declares which inputs it accepts. This carries only what every kind has in common. What a stage
+/// negotiates and how it is built come from the matching per-kind trait.
 ///
 /// # Example
 ///
@@ -54,12 +75,23 @@ pub trait StageInstance: Send + 'static {}
 /// use av_toolbox_core::{
 ///     BoundInputs,
 ///     Filter,
+///     FilterDefinition,
 ///     InputParam,
 ///     InputSignature,
 ///     PipelineRegistry,
 ///     StageDefinition,
 ///     StageError,
 ///     StageInstance,
+/// };
+/// use av_toolbox_gpu::{
+///     BuildContext,
+///     Capabilities,
+///     FormatSet,
+///     OutputFormats,
+///     ResolvedFormats,
+///     Runtime,
+///     StreamFormat,
+///     StreamTemplate,
 /// };
 /// use schemars::JsonSchema;
 /// use serde::Deserialize;
@@ -80,7 +112,6 @@ pub trait StageInstance: Send + 'static {}
 ///
 /// impl StageDefinition for Denoise {
 ///     type Args = DenoiseArgs;
-///     type Instance = DenoiseFilter;
 ///
 ///     fn package() -> &'static str {
 ///         "av-denoise"
@@ -94,11 +125,38 @@ pub trait StageInstance: Send + 'static {}
 ///         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
 ///         SIGNATURE
 ///     }
+/// }
 ///
-///     fn build(args: Self::Args, _inputs: BoundInputs) -> Result<Self::Instance, StageError> {
-///         Ok(DenoiseFilter {
-///             sigma_scale: args.sigma_scale,
+/// impl FilterDefinition for Denoise {
+///     fn accepts(
+///         _capabilities: &Capabilities,
+///         _args: &Self::Args,
+///         offered: &[StreamFormat],
+///     ) -> Result<Vec<FormatSet>, StageError> {
+///         Ok(offered.iter().map(|format| FormatSet::of([format.sample()])).collect())
+///     }
+///
+///     fn produces(
+///         _capabilities: &Capabilities,
+///         _args: &Self::Args,
+///         chosen: &[StreamFormat],
+///     ) -> Result<OutputFormats, StageError> {
+///         let format = chosen[0];
+///         Ok(OutputFormats {
+///             template: StreamTemplate::from_format(&format),
+///             samples: FormatSet::of([format.sample()]),
 ///         })
+///     }
+///
+///     fn build<R: Runtime>(
+///         _context: &BuildContext<R>,
+///         args: Self::Args,
+///         _inputs: BoundInputs,
+///         _formats: &ResolvedFormats,
+///     ) -> Result<Box<dyn Filter>, StageError> {
+///         Ok(Box::new(DenoiseFilter {
+///             sigma_scale: args.sigma_scale,
+///         }))
 ///     }
 /// }
 ///
@@ -109,9 +167,6 @@ pub trait StageDefinition: 'static {
     /// The arguments this stage takes, supplied by the pipeline as JSON.
     type Args: DeserializeOwned + JsonSchema;
 
-    /// The stage this definition builds.
-    type Instance: StageInstance;
-
     fn package() -> &'static str;
 
     fn identifier() -> &'static str;
@@ -121,35 +176,158 @@ pub trait StageDefinition: 'static {
     }
 
     fn inputs() -> &'static InputSignature;
+}
 
-    /// Builds the stage from its arguments and bound inputs.
-    fn build(args: Self::Args, inputs: BoundInputs) -> Result<Self::Instance, StageError>;
+/// A stage that produces frames from something outside the pipeline.
+pub trait SourceDefinition: StageDefinition {
+    /// What it could produce.
+    ///
+    /// A source has no inputs to base this on, so it follows from its arguments and the
+    /// accelerator's capabilities alone.
+    fn produces(capabilities: &Capabilities, args: &Self::Args) -> Result<OutputFormats, StageError>;
+
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Source>, StageError>;
+}
+
+/// A stage that changes the frames passing through it.
+pub trait FilterDefinition: StageDefinition {
+    /// Which sample formats this stage will take on each input, most preferred first.
+    ///
+    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
+    /// layout, dimensions and colour information are the stage's to validate, and an unusable
+    /// one is an error rather than an empty set.
+    fn accepts(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        offered: &[StreamFormat],
+    ) -> Result<Vec<FormatSet>, StageError>;
+
+    /// What it could produce, given what it will be given.
+    fn produces(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        chosen: &[StreamFormat],
+    ) -> Result<OutputFormats, StageError>;
+
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError>;
+}
+
+/// A stage that selects pixels from two or more inputs.
+pub trait MaskDefinition: StageDefinition {
+    /// Which sample formats this stage will take on each input, most preferred first.
+    ///
+    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
+    /// layout, dimensions and colour information are the stage's to validate, and an unusable
+    /// one is an error rather than an empty set.
+    fn accepts(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        offered: &[StreamFormat],
+    ) -> Result<Vec<FormatSet>, StageError>;
+
+    /// What it could produce, given what it will be given.
+    fn produces(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        chosen: &[StreamFormat],
+    ) -> Result<OutputFormats, StageError>;
+
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Mask>, StageError>;
+}
+
+/// A stage that changes the pipeline stream rather than the frames within it.
+pub trait TransformDefinition: StageDefinition {
+    /// Which sample formats this stage will take on each input, most preferred first.
+    ///
+    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
+    /// layout, dimensions and colour information are the stage's to validate, and an unusable
+    /// one is an error rather than an empty set.
+    fn accepts(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        offered: &[StreamFormat],
+    ) -> Result<Vec<FormatSet>, StageError>;
+
+    /// What it could produce, given what it will be given.
+    fn produces(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        chosen: &[StreamFormat],
+    ) -> Result<OutputFormats, StageError>;
+
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Transform>, StageError>;
+}
+
+/// A stage that consumes the finished stream.
+pub trait SinkDefinition: StageDefinition {
+    /// Which sample formats this stage will take on each input, most preferred first.
+    ///
+    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
+    /// layout, dimensions and colour information are the stage's to validate, and an unusable
+    /// one is an error rather than an empty set.
+    fn accepts(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        offered: &[StreamFormat],
+    ) -> Result<Vec<FormatSet>, StageError>;
+
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Sink>, StageError>;
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use av_toolbox_gpu::StreamTemplate;
     use schemars::JsonSchema;
     use serde::Deserialize;
 
     use super::*;
-    use crate::{InputParam, bind_inputs};
+    use crate::InputParam;
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    use crate::bind_inputs;
 
     #[derive(Debug, Deserialize, JsonSchema)]
     struct ExampleArgs {
         sigma_scale: f32,
     }
 
-    struct ExampleInstance {
-        sigma_scale: f32,
-    }
+    struct ExampleInstance;
 
     impl StageInstance for ExampleInstance {}
+    impl Filter for ExampleInstance {}
+
+    static RECORDED_SIGMA_SCALE: AtomicU32 = AtomicU32::new(0);
 
     struct ExampleDefinition;
 
     impl StageDefinition for ExampleDefinition {
         type Args = ExampleArgs;
-        type Instance = ExampleInstance;
 
         fn package() -> &'static str {
             "av-denoise"
@@ -163,22 +341,76 @@ mod tests {
             const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
             SIGNATURE
         }
+    }
 
-        fn build(args: Self::Args, _inputs: BoundInputs) -> Result<Self::Instance, StageError> {
-            Ok(ExampleInstance {
-                sigma_scale: args.sigma_scale,
+    impl FilterDefinition for ExampleDefinition {
+        fn accepts(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            offered: &[StreamFormat],
+        ) -> Result<Vec<FormatSet>, StageError> {
+            Ok(offered
+                .iter()
+                .map(|format| FormatSet::of([format.sample()]))
+                .collect())
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            chosen: &[StreamFormat],
+        ) -> Result<OutputFormats, StageError> {
+            let format = chosen[0];
+            Ok(OutputFormats {
+                template: StreamTemplate::from_format(&format),
+                samples: FormatSet::of([format.sample()]),
             })
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Filter>, StageError> {
+            RECORDED_SIGMA_SCALE.store(args.sigma_scale.to_bits(), Ordering::SeqCst);
+
+            Ok(Box::new(ExampleInstance))
         }
     }
 
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
-    fn a_definition_builds_its_instance() {
-        let arguments = [];
-        let bound = bind_inputs(&InputSignature::EMPTY, &arguments).expect("should bind");
-        let instance =
-            ExampleDefinition::build(ExampleArgs { sigma_scale: 0.8 }, bound).expect("should build");
+    fn a_definition_builds_its_instance_against_a_real_backend() {
+        use av_toolbox_gpu::{Backend, BuildTask, Device};
 
-        assert_eq!(instance.sigma_scale, 0.8);
+        struct BuildExample {
+            args: ExampleArgs,
+            inputs: BoundInputs,
+        }
+
+        impl BuildTask for BuildExample {
+            type Output = Result<Box<dyn Filter>, StageError>;
+
+            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+                let formats = ResolvedFormats::new(vec![], None);
+                ExampleDefinition::build(context, self.args, self.inputs, &formats)
+            }
+        }
+
+        let backend = Backend::open_default(Device::Default).expect("should open");
+        let bound = bind_inputs(&InputSignature::EMPTY, &[]).expect("should bind");
+
+        let task = BuildExample {
+            args: ExampleArgs { sigma_scale: 0.8 },
+            inputs: bound,
+        };
+
+        let instance = backend.build(task).expect("should build");
+        drop(instance);
+
+        let recorded_sigma_scale = f32::from_bits(RECORDED_SIGMA_SCALE.load(Ordering::SeqCst));
+        assert_eq!(recorded_sigma_scale, 0.8);
     }
 
     #[test]

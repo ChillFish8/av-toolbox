@@ -4,8 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+av-toolbox-gpu = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 jsonschema = { workspace = true }
 thiserror = { workspace = true }
+
+[features]
+vulkan = ["av-toolbox-gpu/vulkan"]
+metal = ["av-toolbox-gpu/metal"]
+cuda = ["av-toolbox-gpu/cuda"]
+rocm = ["av-toolbox-gpu/rocm"]
+gpu-tests = ["av-toolbox-gpu/gpu-tests"]

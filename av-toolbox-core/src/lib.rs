@@ -8,10 +8,13 @@
 //! - [Transform], which changes the stream rather than the frames.
 //! - [Sink], which consumes the finished stream.
 //!
-//! A stage type is written as a [StageDefinition]. It declares its arguments as a type, which
-//! supplies a JSON schema, and its inputs as an [InputSignature]. Stages are registered with a
-//! [PipelineRegistry], which validates arguments against the schema and binds inputs to the
-//! signature before handing them to the stage.
+//! A stage type is written as a [StageDefinition] plus the matching kind trait, one of
+//! [SourceDefinition], [FilterDefinition], [MaskDefinition], [TransformDefinition] or
+//! [SinkDefinition]. [StageDefinition] declares its arguments as a type, which supplies a JSON
+//! schema, and its inputs as an [InputSignature]. The kind trait declares what formats it accepts
+//! and produces, and how to build it. Stages are registered with a [PipelineRegistry], which
+//! validates arguments against the schema and binds inputs to the signature before handing them
+//! to the stage.
 
 mod error;
 mod factory;
@@ -49,7 +52,16 @@ pub use self::mask::Mask;
 pub use self::registry::PipelineRegistry;
 pub use self::sink::Sink;
 pub use self::source::Source;
-pub use self::stage::{StageDefinition, StageInstance, StageKind};
+pub use self::stage::{
+    FilterDefinition,
+    MaskDefinition,
+    SinkDefinition,
+    SourceDefinition,
+    StageDefinition,
+    StageInstance,
+    StageKind,
+    TransformDefinition,
+};
 pub use self::stream::StreamType;
 pub use self::tag::Tag;
 pub use self::transform::Transform;

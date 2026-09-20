@@ -1,8 +1,11 @@
 # Backend the tests build against. Set AVTB_TEST_BACKEND=metal on macOS.
 test_backend := env("AVTB_TEST_BACKEND", "vulkan")
 
-# Features for the tests that also exercise a real accelerator.
-gpu_test_features := "av-toolbox-gpu/" + test_backend + ",av-toolbox-gpu/gpu-tests"
+# Backend features across every crate that forwards them.
+backend_features := "av-toolbox-gpu/" + test_backend + ",av-toolbox-core/" + test_backend + ",av-toolbox-graph/" + test_backend
+
+# The above plus the device tests those crates gate behind gpu-tests.
+device_features := backend_features + ",av-toolbox-gpu/gpu-tests,av-toolbox-core/gpu-tests,av-toolbox-graph/gpu-tests"
 
 # Formats the whole workspace.
 format:
@@ -10,18 +13,18 @@ format:
 
 # Lints the workspace. Pass `-- -D warnings` to fail on any lint.
 clippy *ARGS:
-    cargo clippy --workspace --all-targets --features av-toolbox-gpu/{{test_backend}} {{ARGS}}
+    cargo clippy --workspace --all-targets --features {{device_features}} {{ARGS}}
 
 # Every test, accelerator and doc tests included.
 test:
-    cargo nextest run --release --workspace --features {{gpu_test_features}}
-    cargo test --doc --release --workspace --features {{gpu_test_features}}
+    cargo nextest run --cargo-profile test-release --workspace --features {{device_features}}
+    cargo test --doc --profile test-release --workspace --features {{device_features}}
     cargo check --workspace --features av-toolbox-gpu/{{test_backend}}
 
 # Every test that runs without an accelerator.
 test-fast:
-    cargo nextest run --release --workspace --features av-toolbox-gpu/{{test_backend}}
-    cargo test --doc --release --workspace --features av-toolbox-gpu/{{test_backend}}
+    cargo nextest run --cargo-profile test-release --workspace --features {{backend_features}}
+    cargo test --doc --profile test-release --workspace --features {{backend_features}}
 
 # Lints every backend including test code, and checks the illegal feature sets are refused.
 check-backends:

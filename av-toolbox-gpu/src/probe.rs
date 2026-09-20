@@ -69,7 +69,7 @@ where
 }
 
 /// Unwraps a device conversion, logging why the selector does not fit this backend.
-fn supported_device<T>(converted: Result<T, DeviceError>) -> Option<T> {
+pub(crate) fn supported_device<T>(converted: Result<T, DeviceError>) -> Option<T> {
     match converted {
         Ok(device) => Some(device),
         Err(error) => {
@@ -90,7 +90,7 @@ fn supported_device<T>(converted: Result<T, DeviceError>) -> Option<T> {
 ///
 /// The client is synchronised before it is handed back. CubeCL kernels are fully asynchronous,
 /// so a successful `sync` is what proves the backend works and no test kernel is needed.
-fn open_client<R: Runtime>(
+pub(crate) fn open_client<R: Runtime>(
     accelerator: Accelerator,
     selector: Device,
     device: &R::Device,

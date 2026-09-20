@@ -108,6 +108,7 @@ version = "0.1.0"
 name = "av-toolbox-core"
 version = "0.1.0"
 dependencies = [
+ "av-toolbox-gpu",
  "jsonschema",
  "schemars",
  "serde",
@@ -137,6 +138,7 @@ name = "av-toolbox-graph"
 version = "0.1.0"
 dependencies = [
  "av-toolbox-core",
+ "av-toolbox-gpu",
  "schemars",
  "serde",
  "serde_json",
