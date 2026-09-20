@@ -22,6 +22,7 @@ mod cache;
 mod capabilities;
 mod device;
 mod enumerate;
+mod frame;
 mod probe;
 mod sniff;
 mod stack;
@@ -43,6 +44,29 @@ pub use self::cache::{
 pub use self::capabilities::{Capabilities, ElementType, capabilities_for};
 pub use self::device::{Device, DeviceError, ParseDeviceError};
 pub use self::enumerate::{BackendDevices, enumerate_devices};
+pub use self::frame::{
+    Channel,
+    ColourInfo,
+    ColourRange,
+    Depth,
+    DepthError,
+    Frame,
+    FrameFormat,
+    FrameLayout,
+    FrameMeta,
+    FrameMut,
+    HostPlanes,
+    Mask,
+    MaskFormat,
+    Matrix,
+    Plane,
+    PlaneBuffer,
+    Primaries,
+    SampleFormat,
+    StreamFormat,
+    Subsampling,
+    Transfer,
+};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};
 pub use self::warmup::WarmUp;
