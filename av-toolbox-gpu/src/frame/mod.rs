@@ -7,7 +7,7 @@
 //! Planes are flat, with one sample per pixel per row and no padding between rows.
 
 mod format;
-mod gpu;
+pub(crate) mod gpu;
 mod host;
 mod layout;
 mod sample;

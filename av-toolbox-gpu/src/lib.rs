@@ -23,6 +23,7 @@ mod capabilities;
 mod device;
 mod enumerate;
 mod frame;
+mod memory;
 mod probe;
 mod sniff;
 mod stack;
@@ -67,6 +68,7 @@ pub use self::frame::{
     Subsampling,
     Transfer,
 };
+pub use self::memory::{BufferPool, ClientAllocator, DeviceAllocator, Ring, RingGeometry, RingSpec};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};
 pub use self::warmup::WarmUp;

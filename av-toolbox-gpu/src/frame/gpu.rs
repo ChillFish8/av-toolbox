@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use cubecl::server::Handle;
@@ -6,30 +6,74 @@ use cubecl::server::Handle;
 use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat};
 use crate::frame::layout::Channel;
 
+/// Where a plane's memory goes when its last holder drops it.
+pub(crate) trait Recycle: Send + Sync {
+    fn recycle(&self, bytes: usize, handle: Handle);
+}
+
 /// The device memory behind one plane.
 #[derive(Debug)]
 pub struct PlaneBuffer {
-    handle: Handle,
+    /// Taken by [PlaneBuffer::drop], which is the only thing that ever clears it.
+    handle: Option<Handle>,
     bytes: usize,
+    recycle: Option<Weak<dyn Recycle>>,
+    /// The allocation this is a window into, kept alive for as long as the window is.
+    #[expect(dead_code, reason = "held only so its Arc keeps the owning allocation alive")]
+    owner: Option<Arc<PlaneBuffer>>,
 }
 
 impl PlaneBuffer {
-    #[cfg_attr(not(test), expect(dead_code, reason = "used only by tests in this module"))]
-    pub(crate) fn new(handle: Handle, bytes: usize) -> Self {
-        Self { handle, bytes }
+    /// A window into `owner`, or a standalone buffer when there is none.
+    ///
+    /// A window releases nothing of its own, because the allocation it points into is released as
+    /// one piece. Holding the owner is what stops that happening while the window is still alive.
+    pub(crate) fn view(owner: Option<Arc<PlaneBuffer>>, handle: Handle, bytes: usize) -> Self {
+        Self {
+            handle: Some(handle),
+            bytes,
+            recycle: None,
+            owner,
+        }
+    }
+
+    /// Memory that goes back to `recycle` when its last holder drops it.
+    pub(crate) fn pooled(handle: Handle, bytes: usize, recycle: Weak<dyn Recycle>) -> Self {
+        Self {
+            handle: Some(handle),
+            bytes,
+            recycle: Some(recycle),
+            owner: None,
+        }
     }
 
     /// The device memory this plane occupies.
     ///
-    /// Borrow it for a kernel launch. Cloning it out and keeping it holds the memory without the
-    /// frame knowing, which is what [Frame::try_into_mut] relies on to decide a frame is writable.
+    /// Borrow it for a kernel launch. A clone must not outlive the plane. When the last holder
+    /// drops, the memory goes back to the pool and is handed to the next caller wanting that size.
     pub fn handle(&self) -> &Handle {
-        &self.handle
+        self.handle
+            .as_ref()
+            .expect("a plane buffer holds its handle until it is dropped")
     }
 
     /// How many bytes of device memory this plane occupies.
     pub const fn bytes(&self) -> usize {
         self.bytes
+    }
+}
+
+impl Drop for PlaneBuffer {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+
+        let Some(recycle) = self.recycle.as_ref().and_then(Weak::upgrade) else {
+            return;
+        };
+
+        recycle.recycle(self.bytes, handle);
     }
 }
 
@@ -45,7 +89,6 @@ pub struct Plane {
 }
 
 impl Plane {
-    #[cfg_attr(not(test), expect(dead_code, reason = "used only by tests in this module"))]
     pub(crate) fn new(buffer: PlaneBuffer, width: u32, height: u32) -> Self {
         Self {
             buffer: Arc::new(buffer),
@@ -99,7 +142,6 @@ pub struct Frame {
 }
 
 impl Frame {
-    #[cfg_attr(not(test), expect(dead_code, reason = "used only by tests in this module"))]
     pub(crate) fn new(format: FrameFormat, planes: Vec<Plane>, meta: FrameMeta) -> Self {
         debug_assert_eq!(
             planes.len(),
@@ -183,7 +225,6 @@ pub struct Mask {
 }
 
 impl Mask {
-    #[cfg_attr(not(test), expect(dead_code, reason = "used only by tests in this module"))]
     pub(crate) fn new(format: MaskFormat, plane: Plane, meta: FrameMeta) -> Self {
         Self { format, plane, meta }
     }
@@ -224,13 +265,13 @@ mod tests {
         }
     }
 
-    /// A handle with no device behind it, which is all these tests need: nothing here reads or
+    /// A handle with no device behind it, which is all these tests need. Nothing here reads or
     /// writes the memory it names.
     fn plane(width: u32, height: u32) -> Plane {
         let bytes = width as usize * height as usize;
         let handle = Handle::new(StreamId::current(), bytes as u64);
 
-        Plane::new(PlaneBuffer::new(handle, bytes), width, height)
+        Plane::new(PlaneBuffer::view(None, handle, bytes), width, height)
     }
 
     fn frame() -> Frame {
