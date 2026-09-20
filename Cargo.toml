@@ -4,6 +4,7 @@ members = [
     "av-toolbox",
     "av-toolbox-core", "av-toolbox-cubek",
     "av-toolbox-graph", "av-toolbox-runtime",
+    "av-toolbox-gpu",
 ]
 
 [workspace.dependencies]
@@ -13,3 +14,7 @@ schemars = "1.2.2"
 jsonschema = { version = "0.56.0", default-features = false }
 thiserror = "2.0.20"
 av-scenechange = "0.24"
+cubecl = { version = "0.10", features = ["std"] }
+strum = "0.28"
+strum_macros = "0.28"
+tracing = "0.1"
