@@ -1,0 +1,4 @@
+# Kernel codegen overflows the 2 MiB default stack. A thread's stack size is fixed when it starts,
+# and cargo spawns threads before any test body runs, so this has to be set before the process does.
+[env]
+RUST_MIN_STACK = "16777216"

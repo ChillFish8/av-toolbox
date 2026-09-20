@@ -6,10 +6,14 @@ description = "Accelerator selection and device management for av-toolbox."
 
 [dependencies]
 cubecl = { workspace = true }
+etcetera = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [features]
 vulkan = ["cubecl/vulkan"]

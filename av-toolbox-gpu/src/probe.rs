@@ -135,7 +135,7 @@ fn open_client<R: Runtime>(
 /// A failing backend prints its own panic from its worker thread before the caller ever sees
 /// one, so the hook is quietened for as long as `work` runs and put back afterwards. The hook
 /// is process wide, so callers hold [PROBED] across this.
-fn quiet_panics<T>(work: impl FnOnce() -> T) -> std::thread::Result<T> {
+pub(crate) fn quiet_panics<T>(work: impl FnOnce() -> T) -> std::thread::Result<T> {
     let previous = panic::take_hook();
     panic::set_hook(Box::new(|info| tracing::debug!("{info}")));
     let result = panic::catch_unwind(AssertUnwindSafe(work));

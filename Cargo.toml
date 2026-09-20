@@ -15,6 +15,8 @@ jsonschema = { version = "0.56.0", default-features = false }
 thiserror = "2.0.20"
 av-scenechange = "0.24"
 cubecl = { version = "0.10", features = ["std"] }
+etcetera = "0.11"
 strum = "0.28"
 strum_macros = "0.28"
 tracing = "0.1"
+tempfile = "3"
