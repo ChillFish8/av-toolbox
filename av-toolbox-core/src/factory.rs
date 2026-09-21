@@ -27,6 +27,7 @@ use crate::{
     InputSignature,
     Mask,
     MaskDefinition,
+    Parallelism,
     RegistryError,
     SchemaViolation,
     Sink,
@@ -94,6 +95,12 @@ pub trait StageFactory<P: ?Sized>: Send + Sync {
 
 /// A source whose arguments are deserialized, ready to negotiate and build.
 pub trait PreparedSource: Send + Sync {
+    /// The smallest unit of a stream this stage can be given on its own.
+    fn parallelism(&self) -> Parallelism;
+
+    /// Which input's chunk ids line this stage's inputs up.
+    fn chunk_authority(&self) -> Option<usize>;
+
     fn produces(&self, capabilities: &Capabilities) -> Result<OutputFormats, StageError>;
 
     fn build(
@@ -105,6 +112,12 @@ pub trait PreparedSource: Send + Sync {
 
 /// A filter whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedFilter: Send + Sync {
+    /// The smallest unit of a stream this stage can be given on its own.
+    fn parallelism(&self) -> Parallelism;
+
+    /// Which input's chunk ids line this stage's inputs up.
+    fn chunk_authority(&self) -> Option<usize>;
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -128,6 +141,12 @@ pub trait PreparedFilter: Send + Sync {
 
 /// A mask whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedMask: Send + Sync {
+    /// The smallest unit of a stream this stage can be given on its own.
+    fn parallelism(&self) -> Parallelism;
+
+    /// Which input's chunk ids line this stage's inputs up.
+    fn chunk_authority(&self) -> Option<usize>;
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -151,6 +170,12 @@ pub trait PreparedMask: Send + Sync {
 
 /// A transform whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedTransform: Send + Sync {
+    /// The smallest unit of a stream this stage can be given on its own.
+    fn parallelism(&self) -> Parallelism;
+
+    /// Which input's chunk ids line this stage's inputs up.
+    fn chunk_authority(&self) -> Option<usize>;
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -174,6 +199,12 @@ pub trait PreparedTransform: Send + Sync {
 
 /// A sink whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedSink: Send + Sync {
+    /// The smallest unit of a stream this stage can be given on its own.
+    fn parallelism(&self) -> Parallelism;
+
+    /// Which input's chunk ids line this stage's inputs up.
+    fn chunk_authority(&self) -> Option<usize>;
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -206,6 +237,26 @@ impl PreparedStage {
             Self::Mask(_) => StageKind::Mask,
             Self::Transform(_) => StageKind::Transform,
             Self::Sink(_) => StageKind::Sink,
+        }
+    }
+
+    pub fn parallelism(&self) -> Parallelism {
+        match self {
+            Self::Source(prepared) => prepared.parallelism(),
+            Self::Filter(prepared) => prepared.parallelism(),
+            Self::Mask(prepared) => prepared.parallelism(),
+            Self::Transform(prepared) => prepared.parallelism(),
+            Self::Sink(prepared) => prepared.parallelism(),
+        }
+    }
+
+    pub fn chunk_authority(&self) -> Option<usize> {
+        match self {
+            Self::Source(prepared) => prepared.chunk_authority(),
+            Self::Filter(prepared) => prepared.chunk_authority(),
+            Self::Mask(prepared) => prepared.chunk_authority(),
+            Self::Transform(prepared) => prepared.chunk_authority(),
+            Self::Sink(prepared) => prepared.chunk_authority(),
         }
     }
 
@@ -371,6 +422,14 @@ macro_rules! impl_stage_factory {
         }
 
         impl<D: $definition_trait> $prepared_trait for Prepared<D> {
+            fn parallelism(&self) -> Parallelism {
+                D::parallelism(&self.args)
+            }
+
+            fn chunk_authority(&self) -> Option<usize> {
+                self.inputs.chunk_authority()
+            }
+
             fn accepts_input(
                 &self,
                 capabilities: &Capabilities,
@@ -448,6 +507,14 @@ macro_rules! impl_source_factory {
         }
 
         impl<D: SourceDefinition> PreparedSource for Prepared<D> {
+            fn parallelism(&self) -> Parallelism {
+                D::parallelism(&self.args)
+            }
+
+            fn chunk_authority(&self) -> Option<usize> {
+                self.inputs.chunk_authority()
+            }
+
             fn produces(&self, capabilities: &Capabilities) -> Result<OutputFormats, StageError> {
                 D::produces(capabilities, &self.args)
             }
@@ -511,6 +578,14 @@ macro_rules! impl_sink_factory {
         }
 
         impl<D: SinkDefinition> PreparedSink for Prepared<D> {
+            fn parallelism(&self) -> Parallelism {
+                D::parallelism(&self.args)
+            }
+
+            fn chunk_authority(&self) -> Option<usize> {
+                self.inputs.chunk_authority()
+            }
+
             fn accepts_input(
                 &self,
                 capabilities: &Capabilities,
@@ -675,6 +750,172 @@ mod tests {
 
     fn reference_input() -> Vec<InputArgument> {
         vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)]
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema)]
+    struct TemporalArgs {
+        radius: u32,
+    }
+
+    struct TemporalExample;
+
+    impl StageDefinition for TemporalExample {
+        type Args = TemporalArgs;
+
+        fn package() -> &'static str {
+            "av-denoise"
+        }
+
+        fn identifier() -> &'static str {
+            "temporal"
+        }
+
+        fn parallelism(args: &Self::Args) -> Parallelism {
+            if args.radius == 0 {
+                Parallelism::Frame
+            } else {
+                Parallelism::Chunk
+            }
+        }
+
+        fn inputs() -> &'static InputSignature {
+            const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
+            SIGNATURE
+        }
+    }
+
+    impl FilterDefinition for TemporalExample {
+        fn accepts_input(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            _index: usize,
+            offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            Ok(FormatSet::of([offered.sample()]))
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            chosen: &[Option<StreamFormat>],
+        ) -> Result<OutputFormats, StageError> {
+            let format = chosen.iter().flatten().next().copied().expect("an input");
+            Ok(OutputFormats {
+                template: StreamTemplate::from_format(&format),
+                samples: FormatSet::of([format.sample()]),
+            })
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Filter>, StageError> {
+            Ok(Box::new(ExampleFilter))
+        }
+    }
+
+    #[test]
+    fn a_prepared_stage_reports_the_granularity_its_arguments_asked_for() {
+        let definition = Definition::<TemporalExample>::new(StageKind::Filter).expect("should build");
+
+        let wide = StageFactory::<dyn PreparedFilter>::prepare(
+            &definition,
+            &serde_json::json!({ "radius": 0 }),
+            &reference_input(),
+        )
+        .expect("should prepare");
+
+        let narrow = StageFactory::<dyn PreparedFilter>::prepare(
+            &definition,
+            &serde_json::json!({ "radius": 4 }),
+            &reference_input(),
+        )
+        .expect("should prepare");
+
+        assert_eq!(wide.parallelism(), Parallelism::Frame);
+        assert_eq!(narrow.parallelism(), Parallelism::Chunk);
+
+        let erased = PreparedStage::Filter(narrow);
+        assert_eq!(erased.parallelism(), Parallelism::Chunk);
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema)]
+    struct ChunkAuthorityArgs {}
+
+    struct ChunkAuthorityExample;
+
+    impl StageDefinition for ChunkAuthorityExample {
+        type Args = ChunkAuthorityArgs;
+
+        fn package() -> &'static str {
+            "av-denoise"
+        }
+
+        fn identifier() -> &'static str {
+            "chunk-authority"
+        }
+
+        fn inputs() -> &'static InputSignature {
+            const SIGNATURE: &InputSignature = &InputSignature::new(&[
+                InputParam::required("primary"),
+                InputParam::required("secondary").chunk_authority(),
+            ]);
+            SIGNATURE
+        }
+    }
+
+    impl FilterDefinition for ChunkAuthorityExample {
+        fn accepts_input(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            _index: usize,
+            offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            Ok(FormatSet::of([offered.sample()]))
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            chosen: &[Option<StreamFormat>],
+        ) -> Result<OutputFormats, StageError> {
+            let format = chosen.iter().flatten().next().copied().expect("an input");
+            Ok(OutputFormats {
+                template: StreamTemplate::from_format(&format),
+                samples: FormatSet::of([format.sample()]),
+            })
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Filter>, StageError> {
+            Ok(Box::new(ExampleFilter))
+        }
+    }
+
+    fn two_inputs() -> Vec<InputArgument> {
+        vec![
+            InputArgument::positional(StageHandle::new(1), StreamType::Frames),
+            InputArgument::positional(StageHandle::new(2), StreamType::Frames),
+        ]
+    }
+
+    #[test]
+    fn chunk_authority_survives_type_erasure_when_a_later_input_is_marked() {
+        let definition = Definition::<ChunkAuthorityExample>::new(StageKind::Filter).expect("should build");
+
+        let prepared: Box<dyn PreparedFilter> =
+            StageFactory::<dyn PreparedFilter>::prepare(&definition, &serde_json::json!({}), &two_inputs())
+                .expect("should prepare");
+
+        assert_eq!(prepared.chunk_authority(), Some(1));
     }
 
     #[test]

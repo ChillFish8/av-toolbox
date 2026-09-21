@@ -19,6 +19,7 @@ use crate::{
     Filter,
     InputSignature,
     Mask,
+    Parallelism,
     Sink,
     Source,
     StageError,
@@ -67,7 +68,8 @@ pub trait StageInstance: Send + 'static {
     /// Called once before the first item of a stream.
     ///
     /// A stage holding a temporal window uses this to know its ring holds padding rather than
-    /// history.
+    /// history. A stage that is given one chunk at a time is called at the start of every
+    /// chunk, because each chunk is a stream of its own to it.
     fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         Ok(())
     }
@@ -197,6 +199,14 @@ pub trait StageDefinition: 'static {
 
     fn tags() -> &'static [Tag] {
         &[]
+    }
+
+    /// The smallest unit of a stream this stage can be given on its own.
+    ///
+    /// The whole stream is always safe, so that is the default. A stage that can take less
+    /// says so, and more than one of it may then be run at once.
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Stream
     }
 
     fn inputs() -> &'static InputSignature;
@@ -502,6 +512,13 @@ mod tests {
     #[test]
     fn tags_default_to_empty() {
         assert!(ExampleDefinition::tags().is_empty());
+    }
+
+    #[test]
+    fn a_stage_defaults_to_needing_the_whole_stream() {
+        let args = ExampleArgs { sigma_scale: 0.8 };
+
+        assert_eq!(ExampleDefinition::parallelism(&args), Parallelism::Stream);
     }
 
     #[test]

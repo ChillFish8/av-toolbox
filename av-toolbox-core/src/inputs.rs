@@ -22,6 +22,7 @@ pub struct InputParam {
     name: &'static str,
     required: bool,
     accepts: Option<StreamType>,
+    authority: bool,
 }
 
 impl InputParam {
@@ -30,6 +31,7 @@ impl InputParam {
             name,
             required: true,
             accepts: None,
+            authority: false,
         }
     }
 
@@ -38,6 +40,7 @@ impl InputParam {
             name,
             required: false,
             accepts: None,
+            authority: false,
         }
     }
 
@@ -46,6 +49,15 @@ impl InputParam {
     /// A param that has not been narrowed takes either type.
     pub const fn accepting(mut self, stream: StreamType) -> Self {
         self.accepts = Some(stream);
+        self
+    }
+
+    /// Marks this param as the one whose chunk ids line the stage's inputs up.
+    ///
+    /// A stage with more than one input can only line its frames up against one of them.
+    /// Only one param of a signature may be marked.
+    pub const fn chunk_authority(mut self) -> Self {
+        self.authority = true;
         self
     }
 
@@ -60,6 +72,10 @@ impl InputParam {
     pub const fn accepts(&self) -> Option<StreamType> {
         self.accepts
     }
+
+    pub const fn is_chunk_authority(&self) -> bool {
+        self.authority
+    }
 }
 
 /// The set of inputs a stage accepts, in declaration order.
@@ -73,10 +89,29 @@ pub struct InputSignature {
     variadic_accepts: Option<StreamType>,
 }
 
+/// Panics unless at most one of `params` is marked as the chunk authority.
+const fn check_one_authority(params: &[InputParam]) {
+    let mut index = 0;
+    let mut seen = false;
+
+    while index < params.len() {
+        if params[index].authority {
+            if seen {
+                panic!("a signature may mark only one param as the chunk authority");
+            }
+
+            seen = true;
+        }
+
+        index += 1;
+    }
+}
+
 impl InputSignature {
     pub const EMPTY: Self = Self::new(&[]);
 
     pub const fn new(params: &'static [InputParam]) -> Self {
+        check_one_authority(params);
         Self {
             params,
             variadic: false,
@@ -85,6 +120,7 @@ impl InputSignature {
     }
 
     pub const fn with_variadic(params: &'static [InputParam]) -> Self {
+        check_one_authority(params);
         Self {
             params,
             variadic: true,
@@ -94,6 +130,7 @@ impl InputSignature {
 
     /// A signature whose tail only takes one stream type.
     pub const fn with_variadic_of(params: &'static [InputParam], accepts: StreamType) -> Self {
+        check_one_authority(params);
         Self {
             params,
             variadic: true,
@@ -114,6 +151,24 @@ impl InputSignature {
     /// Only meaningful when [InputSignature::is_variadic] is true.
     pub const fn variadic_accepts(&self) -> Option<StreamType> {
         self.variadic_accepts
+    }
+
+    /// The param marked as the chunk authority, if any was.
+    ///
+    /// Indexes [InputSignature::params], which is not the same space as
+    /// [BoundInputs::chunk_authority] once a signature has a variadic tail.
+    pub const fn chunk_authority(&self) -> Option<usize> {
+        let mut index = 0;
+
+        while index < self.params.len() {
+            if self.params[index].authority {
+                return Some(index);
+            }
+
+            index += 1;
+        }
+
+        None
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -167,6 +222,7 @@ impl InputArgument {
 pub struct VariadicInput {
     name: Option<String>,
     handle: StageHandle,
+    stream: StreamType,
 }
 
 impl VariadicInput {
@@ -177,12 +233,18 @@ impl VariadicInput {
     pub fn handle(&self) -> StageHandle {
         self.handle
     }
+
+    /// What the stage supplying this input produces.
+    pub fn stream(&self) -> StreamType {
+        self.stream
+    }
 }
 
 #[derive(Debug, Clone)]
 struct BoundParam {
     name: &'static str,
     handle: Option<StageHandle>,
+    stream: Option<StreamType>,
 }
 
 /// A stage's inputs after they have been matched to its signature.
@@ -190,6 +252,7 @@ struct BoundParam {
 pub struct BoundInputs {
     params: Vec<BoundParam>,
     variadic: Vec<VariadicInput>,
+    chunk_authority: Option<usize>,
 }
 
 impl BoundInputs {
@@ -211,6 +274,13 @@ impl BoundInputs {
         self.params
             .iter()
             .filter_map(|param| param.handle.map(|handle| (param.name, handle)))
+    }
+
+    /// Which input's chunk ids line this stage's inputs up.
+    ///
+    /// Indexed the way [Inputs] indexes its slots. `None` when nothing was bound.
+    pub fn chunk_authority(&self) -> Option<usize> {
+        self.chunk_authority
     }
 }
 
@@ -286,6 +356,7 @@ pub fn bind_inputs(
         .map(|param| BoundParam {
             name: param.name(),
             handle: None,
+            stream: None,
         })
         .collect();
 
@@ -320,7 +391,43 @@ pub fn bind_inputs(
         }
     }
 
-    Ok(BoundInputs { params, variadic })
+    let chunk_authority = resolve_chunk_authority(signature, &params, &variadic);
+
+    Ok(BoundInputs {
+        params,
+        variadic,
+        chunk_authority,
+    })
+}
+
+/// Which slot's chunk ids line a stage's inputs up.
+///
+/// Slots are numbered as [Inputs] numbers them, one per param followed by one per variadic
+/// input.
+fn resolve_chunk_authority(
+    signature: &InputSignature,
+    params: &[BoundParam],
+    variadic: &[VariadicInput],
+) -> Option<usize> {
+    let marked = signature.chunk_authority();
+    if let Some(index) = marked
+        && params[index].handle.is_some()
+    {
+        return Some(index);
+    }
+
+    let param_streams = params.iter().map(|param| param.stream);
+    let variadic_streams = variadic.iter().map(|input| Some(input.stream));
+    let slots: Vec<Option<StreamType>> = param_streams.chain(variadic_streams).collect();
+
+    let frames = slots
+        .iter()
+        .position(|stream| *stream == Some(StreamType::Frames));
+    if frames.is_some() {
+        return frames;
+    }
+
+    slots.iter().position(|stream| stream.is_some())
 }
 
 fn bind_positional(
@@ -336,6 +443,7 @@ fn bind_positional(
         check_stream_type(Some(param.name()), param.accepts(), argument, position)?;
 
         params[*next_positional].handle = Some(argument.handle());
+        params[*next_positional].stream = Some(argument.stream());
         *next_positional += 1;
         return Ok(());
     }
@@ -352,6 +460,7 @@ fn bind_positional(
     variadic.push(VariadicInput {
         name: None,
         handle: argument.handle(),
+        stream: argument.stream(),
     });
 
     Ok(())
@@ -378,6 +487,7 @@ fn bind_named(
         check_stream_type(Some(param.name()), param.accepts(), argument, position)?;
 
         params[index].handle = Some(argument.handle());
+        params[index].stream = Some(argument.stream());
         return Ok(());
     }
 
@@ -393,6 +503,7 @@ fn bind_named(
     variadic.push(VariadicInput {
         name: Some(name.to_string()),
         handle: argument.handle(),
+        stream: argument.stream(),
     });
 
     Ok(())
@@ -420,406 +531,4 @@ fn check_stream_type(
         expected,
         found,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use av_toolbox_gpu::{
-        BufferPool,
-        Bytes,
-        ColourInfo,
-        DeviceAllocator,
-        DeviceRead,
-        FrameFormat,
-        FrameLayout,
-        FrameMeta,
-        MaskFormat,
-        SampleFormat,
-        Subsampling,
-    };
-    use cubecl::server::Handle;
-    use cubecl::stream_id::StreamId;
-
-    use super::*;
-
-    /// A [DeviceAllocator] that reserves nothing real, so `Inputs` can be tested without a device.
-    #[derive(Debug)]
-    struct FakeAllocator;
-
-    impl DeviceAllocator for FakeAllocator {
-        fn empty(&self, bytes: usize) -> Handle {
-            Handle::new(StreamId::current(), bytes as u64)
-        }
-
-        fn upload(&self, bytes: &[u8]) -> Handle {
-            self.empty(bytes.len())
-        }
-
-        fn alignment(&self) -> usize {
-            1
-        }
-
-        /// Fills buffer `position` with the byte `position` repeated, so two same-sized handles
-        /// still come back as distinguishable buffers.
-        fn read(&self, handles: Vec<Handle>) -> DeviceRead {
-            let buffers = handles
-                .into_iter()
-                .enumerate()
-                .map(|(position, handle)| {
-                    Bytes::from_bytes_vec(vec![position as u8; handle.size_in_used() as usize])
-                })
-                .collect();
-
-            Box::pin(async move { Ok(buffers) })
-        }
-    }
-
-    fn pool() -> BufferPool {
-        BufferPool::new(Arc::new(FakeAllocator))
-    }
-
-    fn frame() -> Frame {
-        let format = FrameFormat {
-            width: 4,
-            height: 4,
-            layout: FrameLayout::Yuv {
-                subsampling: Subsampling::Yuv420,
-            },
-            sample: SampleFormat::U8,
-            colour: ColourInfo::default(),
-        };
-
-        pool().alloc_frame(&format, FrameMeta::at(0))
-    }
-
-    fn mask() -> Mask {
-        let format = MaskFormat {
-            width: 4,
-            height: 4,
-            sample: SampleFormat::U8,
-        };
-
-        pool().alloc_mask(&format, FrameMeta::at(0))
-    }
-
-    #[test]
-    fn a_taken_slot_is_empty_afterwards() {
-        let mut inputs = Inputs::new(vec![Some(StreamItem::Frame(frame()))]);
-
-        assert!(inputs.take(0).is_some());
-        assert!(inputs.take(0).is_none());
-    }
-
-    #[test]
-    fn take_frame_on_a_mask_slot_returns_none_and_leaves_it_in_place() {
-        let mut inputs = Inputs::new(vec![Some(StreamItem::Mask(mask()))]);
-
-        assert!(inputs.take_frame(0).is_none());
-        assert!(inputs.take_mask(0).is_some());
-    }
-
-    #[test]
-    fn take_mask_on_a_frame_slot_returns_none_and_leaves_it_in_place() {
-        let mut inputs = Inputs::new(vec![Some(StreamItem::Frame(frame()))]);
-
-        assert!(inputs.take_mask(0).is_none());
-        assert!(inputs.take_frame(0).is_some());
-    }
-
-    #[test]
-    fn the_index_is_the_signature_slot_rather_than_a_compacted_one() {
-        let mut inputs = Inputs::new(vec![None, Some(StreamItem::Frame(frame()))]);
-
-        assert!(inputs.take_frame(0).is_none());
-        assert!(inputs.take_frame(1).is_some());
-    }
-
-    #[test]
-    fn len_and_is_empty_report_the_slot_count_not_how_many_are_filled() {
-        let inputs = Inputs::new(vec![None, Some(StreamItem::Frame(frame()))]);
-
-        assert_eq!(inputs.len(), 2);
-        assert!(!inputs.is_empty());
-        assert!(Inputs::new(Vec::new()).is_empty());
-    }
-
-    const REFERENCE: &InputSignature =
-        &InputSignature::new(&[InputParam::required("reference"), InputParam::optional("mask")]);
-
-    const VARIADIC: &InputSignature = &InputSignature::with_variadic(&[InputParam::required("reference")]);
-
-    fn handle(id: u64) -> StageHandle {
-        StageHandle::new(id)
-    }
-
-    #[test]
-    fn positional_inputs_fill_params_in_order() {
-        let arguments = [
-            InputArgument::positional(handle(1), StreamType::Frames),
-            InputArgument::positional(handle(2), StreamType::Frames),
-        ];
-        let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
-
-        assert_eq!(bound.get("reference"), Some(handle(1)));
-        assert_eq!(bound.get("mask"), Some(handle(2)));
-        assert_eq!(bound.positional(0), Some(handle(1)));
-    }
-
-    #[test]
-    fn named_inputs_bind_by_name_in_any_order() {
-        let arguments = [
-            InputArgument::named("mask", handle(2), StreamType::Frames),
-            InputArgument::named("reference", handle(1), StreamType::Frames),
-        ];
-        let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
-
-        assert_eq!(bound.get("reference"), Some(handle(1)));
-        assert_eq!(bound.get("mask"), Some(handle(2)));
-    }
-
-    #[test]
-    fn positional_and_named_inputs_mix() {
-        let arguments = [
-            InputArgument::positional(handle(1), StreamType::Frames),
-            InputArgument::named("mask", handle(2), StreamType::Frames),
-        ];
-        let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
-
-        assert_eq!(bound.get("reference"), Some(handle(1)));
-        assert_eq!(bound.get("mask"), Some(handle(2)));
-    }
-
-    #[test]
-    fn an_omitted_optional_input_is_unbound() {
-        let arguments = [InputArgument::positional(handle(1), StreamType::Frames)];
-        let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
-
-        assert_eq!(bound.get("mask"), None);
-        assert_eq!(bound.iter().count(), 1);
-    }
-
-    #[test]
-    fn a_positional_input_after_a_named_input_is_rejected() {
-        let arguments = [
-            InputArgument::named("reference", handle(1), StreamType::Frames),
-            InputArgument::positional(handle(2), StreamType::Frames),
-        ];
-        let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
-
-        assert!(matches!(
-            error,
-            BindInputsError::PositionalAfterNamed { position: 1 },
-        ));
-    }
-
-    #[test]
-    fn naming_an_already_filled_param_is_rejected() {
-        let arguments = [
-            InputArgument::positional(handle(1), StreamType::Frames),
-            InputArgument::named("reference", handle(2), StreamType::Frames),
-        ];
-        let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
-
-        assert!(matches!(
-            error,
-            BindInputsError::DuplicateInput { position: 1, .. },
-        ));
-    }
-
-    #[test]
-    fn a_missing_required_input_is_rejected() {
-        let arguments = [InputArgument::named("mask", handle(2), StreamType::Frames)];
-        let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
-
-        assert!(matches!(
-            error,
-            BindInputsError::MissingRequiredInput { name: "reference" },
-        ));
-    }
-
-    #[test]
-    fn extra_positional_inputs_are_rejected_without_a_variadic_tail() {
-        let arguments = [
-            InputArgument::positional(handle(1), StreamType::Frames),
-            InputArgument::positional(handle(2), StreamType::Frames),
-            InputArgument::positional(handle(3), StreamType::Frames),
-        ];
-        let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
-
-        assert!(matches!(
-            error,
-            BindInputsError::TooManyInputs {
-                position: 2,
-                expected: 2,
-            },
-        ));
-    }
-
-    #[test]
-    fn an_unknown_named_input_is_rejected_without_a_variadic_tail() {
-        let arguments = [
-            InputArgument::positional(handle(1), StreamType::Frames),
-            InputArgument::named("nonsense", handle(2), StreamType::Frames),
-        ];
-        let error = bind_inputs(REFERENCE, &arguments).expect_err("should not bind");
-
-        assert!(matches!(error, BindInputsError::UnknownInput { position: 1, .. },));
-    }
-
-    #[test]
-    fn a_variadic_tail_collects_extra_inputs_in_order() {
-        let arguments = [
-            InputArgument::positional(handle(1), StreamType::Frames),
-            InputArgument::positional(handle(2), StreamType::Frames),
-            InputArgument::named("overlay", handle(3), StreamType::Frames),
-        ];
-        let bound = bind_inputs(VARIADIC, &arguments).expect("should bind");
-
-        assert_eq!(bound.get("reference"), Some(handle(1)));
-        assert_eq!(bound.variadic().len(), 2);
-        assert_eq!(bound.variadic()[0].name(), None);
-        assert_eq!(bound.variadic()[0].handle(), handle(2));
-        assert_eq!(bound.variadic()[1].name(), Some("overlay"));
-    }
-
-    #[test]
-    fn an_empty_signature_binds_no_arguments() {
-        let bound = bind_inputs(&InputSignature::EMPTY, &[]).expect("should bind");
-
-        assert_eq!(bound.iter().count(), 0);
-        assert!(bound.variadic().is_empty());
-        assert!(InputSignature::EMPTY.is_empty());
-    }
-
-    #[test]
-    fn a_signature_records_whether_it_has_a_variadic_tail() {
-        const PLAIN: &InputSignature = &InputSignature::new(&[InputParam::required("base")]);
-        const TAILED: &InputSignature = &InputSignature::with_variadic(&[InputParam::required("base")]);
-
-        assert!(!PLAIN.is_variadic());
-        assert!(TAILED.is_variadic());
-    }
-
-    #[test]
-    fn a_param_accepts_either_type_until_it_is_narrowed() {
-        const ANY: InputParam = InputParam::required("reference");
-        const FRAMES: InputParam = InputParam::required("reference").accepting(StreamType::Frames);
-
-        assert_eq!(ANY.accepts(), None);
-        assert_eq!(FRAMES.accepts(), Some(StreamType::Frames));
-    }
-
-    #[test]
-    fn narrowing_a_param_keeps_whether_it_is_required() {
-        const PARAM: InputParam = InputParam::optional("overlay").accepting(StreamType::Mask);
-
-        assert!(!PARAM.is_required());
-        assert_eq!(PARAM.name(), "overlay");
-        assert_eq!(PARAM.accepts(), Some(StreamType::Mask));
-    }
-
-    #[test]
-    fn a_param_binds_an_argument_of_the_type_it_declares() {
-        const SIGNATURE: &InputSignature =
-            &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]);
-        let arguments = [InputArgument::positional(handle(1), StreamType::Frames)];
-
-        let bound = bind_inputs(SIGNATURE, &arguments).expect("should bind");
-
-        assert_eq!(bound.get("reference"), Some(handle(1)));
-    }
-
-    #[test]
-    fn a_param_rejects_an_argument_of_another_type() {
-        const SIGNATURE: &InputSignature =
-            &InputSignature::new(&[InputParam::required("overlay").accepting(StreamType::Mask)]);
-        let arguments = [InputArgument::positional(handle(1), StreamType::Frames)];
-
-        let error = bind_inputs(SIGNATURE, &arguments).expect_err("should reject");
-
-        assert!(matches!(
-            error,
-            BindInputsError::InputTypeMismatch {
-                name: Some("overlay"),
-                position: 0,
-                expected: StreamType::Mask,
-                found: StreamType::Frames,
-            }
-        ));
-    }
-
-    #[test]
-    fn a_param_with_no_declared_type_takes_either() {
-        const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("either")]);
-
-        let frames = [InputArgument::positional(handle(1), StreamType::Frames)];
-        let mask = [InputArgument::positional(handle(1), StreamType::Mask)];
-
-        assert!(bind_inputs(SIGNATURE, &frames).is_ok());
-        assert!(bind_inputs(SIGNATURE, &mask).is_ok());
-    }
-
-    #[test]
-    fn an_optional_param_enforces_its_type_when_it_is_supplied() {
-        const SIGNATURE: &InputSignature =
-            &InputSignature::new(&[InputParam::optional("overlay").accepting(StreamType::Mask)]);
-
-        let empty: [InputArgument; 0] = [];
-        assert!(bind_inputs(SIGNATURE, &empty).is_ok());
-
-        let wrong = [InputArgument::named("overlay", handle(1), StreamType::Frames)];
-        let error = bind_inputs(SIGNATURE, &wrong).expect_err("should reject");
-
-        assert!(matches!(
-            error,
-            BindInputsError::InputTypeMismatch {
-                name: Some("overlay"),
-                expected: StreamType::Mask,
-                found: StreamType::Frames,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn the_variadic_tail_enforces_its_type() {
-        const SIGNATURE: &InputSignature = &InputSignature::with_variadic_of(
-            &[InputParam::required("base").accepting(StreamType::Frames)],
-            StreamType::Frames,
-        );
-        let arguments = [
-            InputArgument::positional(handle(1), StreamType::Frames),
-            InputArgument::positional(handle(2), StreamType::Mask),
-        ];
-
-        let error = bind_inputs(SIGNATURE, &arguments).expect_err("should reject");
-
-        assert!(matches!(
-            error,
-            BindInputsError::InputTypeMismatch {
-                name: None,
-                position: 1,
-                expected: StreamType::Frames,
-                found: StreamType::Mask,
-            }
-        ));
-    }
-
-    #[test]
-    fn a_tail_that_accepts_anything_is_not_the_same_as_having_no_tail() {
-        const NONE: &InputSignature = &InputSignature::new(&[]);
-        const ANY: &InputSignature = &InputSignature::with_variadic(&[]);
-        const MASKS: &InputSignature = &InputSignature::with_variadic_of(&[], StreamType::Mask);
-
-        assert!(!NONE.is_variadic());
-        assert_eq!(NONE.variadic_accepts(), None);
-
-        assert!(ANY.is_variadic());
-        assert_eq!(ANY.variadic_accepts(), None);
-
-        assert!(MASKS.is_variadic());
-        assert_eq!(MASKS.variadic_accepts(), Some(StreamType::Mask));
-    }
 }

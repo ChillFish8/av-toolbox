@@ -150,16 +150,27 @@ impl Plane {
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct FrameMeta {
     pub index: u64,
+    /// The chunk this frame belongs to.
+    ///
+    /// A stream nothing has split is one chunk, so this stays zero until a stage sets it.
+    pub chunk: u64,
     pub timestamp: Option<Duration>,
 }
 
 impl FrameMeta {
-    /// Metadata for the frame at `index`, with no timestamp.
+    /// Metadata for the frame at `index`, in the first chunk, with no timestamp.
     pub const fn at(index: u64) -> Self {
         Self {
             index,
+            chunk: 0,
             timestamp: None,
         }
+    }
+
+    /// The same metadata in `chunk`.
+    pub const fn in_chunk(mut self, chunk: u64) -> Self {
+        self.chunk = chunk;
+        self
     }
 }
 
@@ -640,5 +651,21 @@ mod tests {
 
         assert_eq!(luma.samples(), 64 * 64);
         assert_eq!(luma.buffer().bytes(), 64 * 64);
+    }
+
+    #[test]
+    fn metadata_starts_in_the_first_chunk() {
+        let meta = FrameMeta::at(7);
+
+        assert_eq!(meta.index, 7);
+        assert_eq!(meta.chunk, 0);
+    }
+
+    #[test]
+    fn metadata_can_be_moved_into_another_chunk() {
+        let meta = FrameMeta::at(7).in_chunk(3);
+
+        assert_eq!(meta.index, 7);
+        assert_eq!(meta.chunk, 3);
     }
 }

@@ -21,6 +21,7 @@ mod factory;
 mod filter;
 mod inputs;
 mod mask;
+mod parallelism;
 mod registry;
 mod sink;
 mod source;
@@ -28,6 +29,9 @@ mod stage;
 mod stream;
 mod tag;
 mod transform;
+
+#[cfg(test)]
+mod tests;
 
 pub use self::error::{
     ArgsError,
@@ -59,6 +63,7 @@ pub use self::inputs::{
     bind_inputs,
 };
 pub use self::mask::Mask;
+pub use self::parallelism::Parallelism;
 pub use self::registry::PipelineRegistry;
 pub use self::sink::Sink;
 pub use self::source::Source;

@@ -484,6 +484,7 @@ mod tests {
         let context = FrameContext::for_testing(allocator, capabilities());
         let stamped = FrameMeta {
             index: 12,
+            chunk: 0,
             timestamp: Some(Duration::from_millis(500)),
         };
         let items = vec![
