@@ -1,3 +1,5 @@
+use av_toolbox_gpu::{Frame, Mask, StreamItem};
+
 use crate::{BindInputsError, StreamType};
 
 /// An opaque reference to another stage in the pipeline.
@@ -212,6 +214,63 @@ impl BoundInputs {
     }
 }
 
+/// What a stage was handed this step, one slot per parameter followed by one per variadic input,
+/// the same order [ResolvedFormats](av_toolbox_gpu::ResolvedFormats) uses.
+///
+/// A slot is empty when an optional input was never bound, and once taken it stays empty.
+#[derive(Debug)]
+pub struct Inputs {
+    slots: Vec<Option<StreamItem>>,
+}
+
+impl Inputs {
+    pub fn new(slots: Vec<Option<StreamItem>>) -> Self {
+        Self { slots }
+    }
+
+    pub fn take(&mut self, index: usize) -> Option<StreamItem> {
+        self.slots.get_mut(index)?.take()
+    }
+
+    /// The frame at `index`, leaving the slot empty.
+    ///
+    /// Returns `None` when the slot was empty and when it held a mask, and leaves a mask in
+    /// place rather than consuming it.
+    pub fn take_frame(&mut self, index: usize) -> Option<Frame> {
+        let slot = self.slots.get_mut(index)?;
+        match slot.take()? {
+            StreamItem::Frame(frame) => Some(frame),
+            other => {
+                *slot = Some(other);
+                None
+            },
+        }
+    }
+
+    /// The mask at `index`, leaving the slot empty.
+    ///
+    /// Returns `None` when the slot was empty and when it held a frame, and leaves a frame in
+    /// place rather than consuming it.
+    pub fn take_mask(&mut self, index: usize) -> Option<Mask> {
+        let slot = self.slots.get_mut(index)?;
+        match slot.take()? {
+            StreamItem::Mask(mask) => Some(mask),
+            other => {
+                *slot = Some(other);
+                None
+            },
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+}
+
 /// Matches a pipeline's inputs against a stage's signature.
 ///
 /// The rules follow Python's arguments and keyword arguments. Positional inputs fill the params
@@ -365,7 +424,110 @@ fn check_stream_type(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use av_toolbox_gpu::{
+        BufferPool,
+        ColourInfo,
+        DeviceAllocator,
+        FrameFormat,
+        FrameLayout,
+        FrameMeta,
+        MaskFormat,
+        SampleFormat,
+        Subsampling,
+    };
+    use cubecl::server::Handle;
+    use cubecl::stream_id::StreamId;
+
     use super::*;
+
+    /// A [DeviceAllocator] that reserves nothing real, so `Inputs` can be tested without a device.
+    #[derive(Debug)]
+    struct FakeAllocator;
+
+    impl DeviceAllocator for FakeAllocator {
+        fn empty(&self, bytes: usize) -> Handle {
+            Handle::new(StreamId::current(), bytes as u64)
+        }
+
+        fn upload(&self, bytes: &[u8]) -> Handle {
+            self.empty(bytes.len())
+        }
+
+        fn alignment(&self) -> usize {
+            1
+        }
+    }
+
+    fn pool() -> BufferPool {
+        BufferPool::new(Arc::new(FakeAllocator))
+    }
+
+    fn frame() -> Frame {
+        let format = FrameFormat {
+            width: 4,
+            height: 4,
+            layout: FrameLayout::Yuv {
+                subsampling: Subsampling::Yuv420,
+            },
+            sample: SampleFormat::U8,
+            colour: ColourInfo::default(),
+        };
+
+        pool().alloc_frame(&format, FrameMeta::at(0))
+    }
+
+    fn mask() -> Mask {
+        let format = MaskFormat {
+            width: 4,
+            height: 4,
+            sample: SampleFormat::U8,
+        };
+
+        pool().alloc_mask(&format, FrameMeta::at(0))
+    }
+
+    #[test]
+    fn a_taken_slot_is_empty_afterwards() {
+        let mut inputs = Inputs::new(vec![Some(StreamItem::Frame(frame()))]);
+
+        assert!(inputs.take(0).is_some());
+        assert!(inputs.take(0).is_none());
+    }
+
+    #[test]
+    fn take_frame_on_a_mask_slot_returns_none_and_leaves_it_in_place() {
+        let mut inputs = Inputs::new(vec![Some(StreamItem::Mask(mask()))]);
+
+        assert!(inputs.take_frame(0).is_none());
+        assert!(inputs.take_mask(0).is_some());
+    }
+
+    #[test]
+    fn take_mask_on_a_frame_slot_returns_none_and_leaves_it_in_place() {
+        let mut inputs = Inputs::new(vec![Some(StreamItem::Frame(frame()))]);
+
+        assert!(inputs.take_mask(0).is_none());
+        assert!(inputs.take_frame(0).is_some());
+    }
+
+    #[test]
+    fn the_index_is_the_signature_slot_rather_than_a_compacted_one() {
+        let mut inputs = Inputs::new(vec![None, Some(StreamItem::Frame(frame()))]);
+
+        assert!(inputs.take_frame(0).is_none());
+        assert!(inputs.take_frame(1).is_some());
+    }
+
+    #[test]
+    fn len_and_is_empty_report_the_slot_count_not_how_many_are_filled() {
+        let inputs = Inputs::new(vec![None, Some(StreamItem::Frame(frame()))]);
+
+        assert_eq!(inputs.len(), 2);
+        assert!(!inputs.is_empty());
+        assert!(Inputs::new(Vec::new()).is_empty());
+    }
 
     const REFERENCE: &InputSignature =
         &InputSignature::new(&[InputParam::required("reference"), InputParam::optional("mask")]);

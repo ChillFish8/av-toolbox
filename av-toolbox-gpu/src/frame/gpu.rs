@@ -1,6 +1,7 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use cubecl::prelude::{ArrayArg, CubePrimitive, Runtime};
 use cubecl::server::Handle;
 
 use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat};
@@ -19,7 +20,6 @@ pub struct PlaneBuffer {
     bytes: usize,
     recycle: Option<Weak<dyn Recycle>>,
     /// The allocation this is a window into, kept alive for as long as the window is.
-    #[expect(dead_code, reason = "held only so its Arc keeps the owning allocation alive")]
     owner: Option<Arc<PlaneBuffer>>,
 }
 
@@ -60,6 +60,11 @@ impl PlaneBuffer {
     /// How many bytes of device memory this plane occupies.
     pub const fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// Whether this buffer is a window into somebody else's allocation.
+    const fn is_view(&self) -> bool {
+        self.owner.is_some()
     }
 }
 
@@ -110,8 +115,33 @@ impl Plane {
         &self.buffer
     }
 
+    /// This plane as a kernel argument of `C` elements.
+    ///
+    /// The length is this plane's byte count divided by `C`'s own size, so whichever element type
+    /// a kernel declares gets exactly the count of `C` values this window holds, not a count
+    /// carried over from the plane's own sample format. One `array` serves both a kernel that
+    /// reads the plane and one that writes it, because the binding only carries the handle, and
+    /// it is the kernel that decides what to do with it.
+    pub fn array<C: CubePrimitive, R: Runtime>(&self) -> ArrayArg<R> {
+        let handle = self.buffer.handle().clone();
+        let elements = self.buffer.bytes() / C::type_size();
+
+        // Safety: `elements` is this window's own byte count divided by `C`'s size, so it names
+        // exactly as many `C` values as the window holds, matching what a kernel declaring `C`
+        // computes from the same handle at launch.
+        unsafe { ArrayArg::from_raw_parts(handle, elements) }
+    }
+
     /// Whether this is the only holder of the buffer.
+    ///
+    /// A window into somebody else's allocation is never exclusive, however few holders the window
+    /// itself has. Two windows onto one ring slot are separate buffers pointing at the same memory,
+    /// so counting holders of either one says nothing about the other.
     fn is_exclusive(&self) -> bool {
+        if self.buffer.is_view() {
+            return false;
+        }
+
         Arc::strong_count(&self.buffer) == 1
     }
 }
@@ -198,6 +228,10 @@ impl FrameMut {
         self.frame.meta()
     }
 
+    /// The plane for `channel`.
+    ///
+    /// A kernel may write through the binding this yields, because holding a `FrameMut` at all
+    /// means nothing else holds this frame.
     pub fn plane(&self, channel: Channel) -> Option<&Plane> {
         self.frame.plane(channel)
     }
@@ -242,16 +276,87 @@ impl Mask {
     }
 }
 
+/// One item flowing along an edge of the pipeline.
+#[derive(Debug, Clone)]
+pub enum StreamItem {
+    Frame(Frame),
+    Mask(Mask),
+}
+
+impl StreamItem {
+    pub const fn is_frame(&self) -> bool {
+        matches!(self, Self::Frame(_))
+    }
+
+    pub const fn is_mask(&self) -> bool {
+        matches!(self, Self::Mask(_))
+    }
+
+    pub fn as_frame(&self) -> Option<&Frame> {
+        match self {
+            Self::Frame(frame) => Some(frame),
+            Self::Mask(_) => None,
+        }
+    }
+
+    pub fn as_mask(&self) -> Option<&Mask> {
+        match self {
+            Self::Mask(mask) => Some(mask),
+            Self::Frame(_) => None,
+        }
+    }
+
+    pub fn into_frame(self) -> Result<Frame, Self> {
+        match self {
+            Self::Frame(frame) => Ok(frame),
+            Self::Mask(_) => Err(self),
+        }
+    }
+
+    pub fn into_mask(self) -> Result<Mask, Self> {
+        match self {
+            Self::Mask(mask) => Ok(mask),
+            Self::Frame(_) => Err(self),
+        }
+    }
+}
+
+impl From<Frame> for StreamItem {
+    fn from(frame: Frame) -> Self {
+        Self::Frame(frame)
+    }
+}
+
+impl From<Mask> for StreamItem {
+    fn from(mask: Mask) -> Self {
+        Self::Mask(mask)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use cubecl::server::Handle;
+    // Whichever backend this build enables, picked in the same order `Backend` tries them, so the
+    // array tests below need no device and run under every feature set.
+    #[cfg(all(feature = "cuda", not(any(feature = "vulkan", feature = "metal"))))]
+    use cubecl::cuda::CudaRuntime as TestRuntime;
+    #[cfg(all(
+        feature = "rocm",
+        not(any(feature = "vulkan", feature = "metal", feature = "cuda"))
+    ))]
+    use cubecl::hip::HipRuntime as TestRuntime;
+    use cubecl::server::{Binding, Handle};
     use cubecl::stream_id::StreamId;
+    #[cfg(any(feature = "vulkan", feature = "metal"))]
+    use cubecl::wgpu::WgpuRuntime as TestRuntime;
 
     use super::*;
     use crate::frame::format::ColourRange;
     use crate::frame::layout::{FrameLayout, Subsampling};
     use crate::frame::sample::SampleFormat;
-    use crate::{HostPlanes, StreamFormat};
+    use crate::testing::CountingAllocator;
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    use crate::{Backend, Device};
+    use crate::{BufferPool, HostPlanes, RingSpec, StreamFormat};
 
     fn format() -> FrameFormat {
         FrameFormat {
@@ -376,6 +481,22 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_and_a_mask_convert_into_stream_items() {
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+        };
+        let mask = Mask::new(format, plane(64, 64), FrameMeta::at(3));
+
+        let from_frame: StreamItem = frame().into();
+        let from_mask: StreamItem = mask.into();
+
+        assert!(from_frame.is_frame());
+        assert!(from_mask.is_mask());
+    }
+
+    #[test]
     fn a_plane_buffer_reports_the_bytes_it_holds() {
         let plane = plane(8, 4);
 
@@ -433,5 +554,64 @@ mod tests {
                 "{channel}",
             );
         }
+    }
+
+    /// The raw handle an `array` binding carries, or a failure if it somehow aliased an input.
+    ///
+    /// A plane never launches through an input array of its own, so `array` always produces the
+    /// `Handle` variant. This just unwraps it once for the offset test below to read from.
+    fn binding<C: CubePrimitive>(plane: &Plane) -> Binding {
+        match plane.array::<C, TestRuntime>() {
+            ArrayArg::Handle { handle } => handle.handle,
+            ArrayArg::Alias { .. } => panic!("a plane binds its own buffer, never an alias"),
+        }
+    }
+
+    #[test]
+    fn array_declares_one_element_per_sample_for_a_matching_element_type() {
+        let plane = plane(8, 4);
+
+        assert_eq!(plane.array::<u8, TestRuntime>().size(), plane.samples());
+    }
+
+    /// The regression guard for the fix: a length taken from `samples()` instead of from the
+    /// element type would claim twice as many elements as this window holds.
+    #[test]
+    fn array_does_not_overclaim_for_an_element_type_wider_than_the_plane() {
+        let plane = plane(8, 4);
+
+        assert_eq!(plane.array::<u16, TestRuntime>().size(), plane.samples() / 2);
+    }
+
+    /// The regression guard for the ring case: a binding built from the wrong handle would carry
+    /// no offset, or the ring's own offset instead of its slot's.
+    #[test]
+    fn a_ring_slot_planes_binding_carries_its_own_offset_not_the_wholes_ring() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let pool = BufferPool::new(allocator);
+        let ring = pool.ring(RingSpec {
+            slots: 2,
+            format: format(),
+        });
+
+        let expected = ring.geometry().plane_offset(1, 0).expect("the plane exists");
+        let luma = ring.slot_plane(1, Channel::Y).expect("the ring carries luma");
+
+        assert_eq!(binding::<u8>(&luma).offset_start, Some(expected as u64));
+    }
+
+    /// Data round-tripping through the binding is only meaningful against a real client, so that
+    /// is checked where it is launched at a kernel, not here.
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    #[test]
+    fn a_plane_binds_as_an_array_of_its_samples() {
+        let backend = Backend::open_default(Device::Default).expect("a backend should open");
+        let context = backend.frame_context();
+        let frame = context.alloc_frame(&format(), FrameMeta::at(0));
+
+        let luma = frame.plane(Channel::Y).expect("a yuv frame has luma");
+
+        assert_eq!(luma.samples(), 64 * 64);
+        assert_eq!(luma.buffer().bytes(), 64 * 64);
     }
 }

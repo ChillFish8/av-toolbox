@@ -39,6 +39,9 @@ impl BufferPool {
     }
 
     /// A buffer of exactly `bytes`, reused if one is free and reserved otherwise.
+    ///
+    /// A reused buffer still holds whatever was last written into it, so a caller that does not
+    /// write every byte has to fill the rest itself.
     pub fn reserve(&self, bytes: usize) -> PlaneBuffer {
         let recycled = self
             .inner
@@ -62,7 +65,8 @@ impl BufferPool {
     /// Transient memory for one stage's working set.
     ///
     /// It comes from the same free lists as everything else, so scratch released by one stage is
-    /// what the next stage's output is built from.
+    /// what the next stage's output is built from. It arrives holding whatever that stage left in
+    /// it, so read nothing from it that this stage has not written.
     pub fn scratch(&self, bytes: usize) -> PlaneBuffer {
         self.reserve(bytes)
     }
@@ -81,6 +85,9 @@ impl BufferPool {
     }
 
     /// A frame of `format`, one buffer per channel.
+    ///
+    /// Its planes are recycled memory holding an earlier frame's samples, so a stage that writes
+    /// only some of them has to copy the rest from its input.
     pub fn alloc_frame(&self, format: &FrameFormat, meta: FrameMeta) -> Frame {
         let planes = format
             .channels()
@@ -99,12 +106,18 @@ impl BufferPool {
         Frame::new(*format, planes, meta)
     }
 
-    /// A frame shaped like `frame`, carrying the same metadata.
-    pub fn alloc_like(&self, frame: &Frame) -> Frame {
-        self.alloc_frame(frame.format(), *frame.meta())
+    /// A frame shaped like `frame`, carrying `meta`.
+    ///
+    /// Its planes are recycled memory holding an earlier frame's samples, so a stage that writes
+    /// only some of them has to copy the rest from its input.
+    pub fn alloc_like(&self, frame: &Frame, meta: FrameMeta) -> Frame {
+        self.alloc_frame(frame.format(), meta)
     }
 
     /// A mask of `format`, which is one buffer.
+    ///
+    /// That buffer is recycled memory holding an earlier mask's samples, so a stage that writes
+    /// only part of it has to fill the rest.
     pub fn alloc_mask(&self, format: &MaskFormat, meta: FrameMeta) -> Mask {
         let buffer = self.reserve(format.bytes());
         let plane = Plane::new(buffer, format.width, format.height);
@@ -276,10 +289,10 @@ mod tests {
         let pool = pool(allocator);
 
         let first = pool.alloc_frame(&frame_format(), FrameMeta::at(0));
-        let second = pool.alloc_like(&first);
+        let second = pool.alloc_like(&first, FrameMeta::at(9));
 
         assert_eq!(second.format(), first.format());
-        assert_eq!(second.meta().index, first.meta().index);
+        assert_eq!(second.meta().index, 9);
     }
 
     #[test]

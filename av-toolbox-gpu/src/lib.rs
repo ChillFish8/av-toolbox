@@ -21,6 +21,7 @@ mod accelerator;
 mod backend;
 mod cache;
 mod capabilities;
+mod context;
 mod device;
 mod enumerate;
 mod frame;
@@ -35,7 +36,7 @@ mod warmup;
 mod testing;
 
 pub use cubecl::client::ComputeClient;
-pub use cubecl::prelude::Runtime;
+pub use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, Runtime};
 
 pub use self::accelerator::{Accelerator, default_accelerators};
 pub use self::backend::{Backend, BuildContext, BuildTask};
@@ -49,6 +50,7 @@ pub use self::cache::{
     install_compilation_cache_once,
 };
 pub use self::capabilities::{Capabilities, CapabilitiesBuilder, ElementType, capabilities_for};
+pub use self::context::FrameContext;
 pub use self::device::{Device, DeviceError, ParseDeviceError};
 pub use self::enumerate::{BackendDevices, enumerate_devices};
 pub use self::frame::{
@@ -71,6 +73,7 @@ pub use self::frame::{
     Primaries,
     SampleFormat,
     StreamFormat,
+    StreamItem,
     Subsampling,
     Transfer,
 };

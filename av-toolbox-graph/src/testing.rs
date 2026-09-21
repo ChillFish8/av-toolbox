@@ -6,6 +6,7 @@ use av_toolbox_core::{
     FilterDefinition,
     InputParam,
     InputSignature,
+    Inputs,
     Mask,
     MaskDefinition,
     PipelineRegistry,
@@ -28,8 +29,12 @@ use av_toolbox_gpu::{
     Depth,
     ElementType,
     FormatSet,
+    Frame,
+    FrameContext,
     FrameFormat,
     FrameLayout,
+    FrameMeta,
+    Mask as GpuMask,
     MaskFormat,
     Offered,
     OutputFormats,
@@ -37,6 +42,7 @@ use av_toolbox_gpu::{
     Runtime,
     SampleFormat,
     StreamFormat,
+    StreamItem,
     StreamTemplate,
     Subsampling,
 };
@@ -74,6 +80,19 @@ fn fixture_format() -> StreamFormat {
     StreamFormat::Frames(frame_format())
 }
 
+/// The mask format every fixture mask allocates into, so a select fixture needs nothing from its
+/// inputs to produce one.
+///
+/// The sample is arbitrary and does not have to agree with whatever `mask_template` negotiated,
+/// because nothing reads a fixture's allocated output.
+fn fixture_mask_format() -> MaskFormat {
+    MaskFormat {
+        width: 64,
+        height: 64,
+        sample: SampleFormat::U8,
+    }
+}
+
 fn frames_template(chosen: StreamFormat) -> StreamTemplate {
     StreamTemplate::from_format(&chosen)
 }
@@ -101,7 +120,12 @@ macro_rules! fixture_source {
         struct $instance;
 
         impl StageInstance for $instance {}
-        impl Source for $instance {}
+
+        impl Source for $instance {
+            fn next(&mut self, _context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+                Ok(None)
+            }
+        }
 
         struct $definition;
 
@@ -147,6 +171,44 @@ macro_rules! fixture_source {
     };
 }
 
+/// Writes the kind-specific instance method for a filter, mask or transform fixture.
+///
+/// Each does the minimum its trait requires: a filter and a transform pass their first bound
+/// input through, and a mask allocates a fresh one in the fixture format.
+macro_rules! fixture_kind_method {
+    (Filter, $instance:ident) => {
+        impl Filter for $instance {
+            fn process(
+                &mut self,
+                _context: &mut FrameContext,
+                mut inputs: Inputs,
+            ) -> Result<Frame, StageError> {
+                inputs
+                    .take_frame(0)
+                    .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            }
+        }
+    };
+    (Mask, $instance:ident) => {
+        impl Mask for $instance {
+            fn select(&mut self, context: &mut FrameContext, _inputs: Inputs) -> Result<GpuMask, StageError> {
+                Ok(context.alloc_mask(&fixture_mask_format(), FrameMeta::at(0)))
+            }
+        }
+    };
+    (Transform, $instance:ident) => {
+        impl Transform for $instance {
+            fn process(
+                &mut self,
+                _context: &mut FrameContext,
+                mut inputs: Inputs,
+            ) -> Result<Vec<StreamItem>, StageError> {
+                Ok(inputs.take(0).into_iter().collect())
+            }
+        }
+    };
+}
+
 /// Writes a filter, mask or transform fixture: something with both an input and an output side.
 ///
 /// It accepts whatever it is offered and produces what it was given, which is the least
@@ -165,7 +227,7 @@ macro_rules! fixture_stage {
         struct $instance;
 
         impl StageInstance for $instance {}
-        impl $kind_trait for $instance {}
+        fixture_kind_method!($kind_trait, $instance);
 
         struct $definition;
 
@@ -234,7 +296,12 @@ macro_rules! fixture_sink {
         struct $instance;
 
         impl StageInstance for $instance {}
-        impl Sink for $instance {}
+
+        impl Sink for $instance {
+            fn consume(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<(), StageError> {
+                Ok(())
+            }
+        }
 
         struct $definition;
 
@@ -417,7 +484,14 @@ pub(crate) static RECORDED_INPUT_WIDTH: AtomicU32 = AtomicU32::new(0);
 struct RecordingStage;
 
 impl StageInstance for RecordingStage {}
-impl Filter for RecordingStage {}
+
+impl Filter for RecordingStage {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+    }
+}
 
 struct Recording;
 
@@ -484,7 +558,12 @@ macro_rules! opinionated_source {
         struct $instance;
 
         impl StageInstance for $instance {}
-        impl Source for $instance {}
+
+        impl Source for $instance {
+            fn next(&mut self, _context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+                Ok(None)
+            }
+        }
 
         struct $definition;
 
@@ -534,7 +613,18 @@ macro_rules! opinionated_filter {
         struct $instance;
 
         impl StageInstance for $instance {}
-        impl Filter for $instance {}
+
+        impl Filter for $instance {
+            fn process(
+                &mut self,
+                _context: &mut FrameContext,
+                mut inputs: Inputs,
+            ) -> Result<Frame, StageError> {
+                inputs
+                    .take_frame(0)
+                    .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            }
+        }
 
         struct $definition;
 
@@ -629,7 +719,14 @@ opinionated_filter!(Narrow, NarrowStage, "narrow", FormatSet::of([SampleFormat::
 struct Prefers16Stage;
 
 impl StageInstance for Prefers16Stage {}
-impl Filter for Prefers16Stage {}
+
+impl Filter for Prefers16Stage {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+    }
+}
 
 /// A filter that would rather work in a ten-bit integer, and asks the device before offering it.
 struct Prefers16;
@@ -701,7 +798,12 @@ const COUPLED_INPUTS: &InputSignature = &InputSignature::new(&[
 struct MatchedStage;
 
 impl StageInstance for MatchedStage {}
-impl Mask for MatchedStage {}
+
+impl Mask for MatchedStage {
+    fn select(&mut self, context: &mut FrameContext, _inputs: Inputs) -> Result<GpuMask, StageError> {
+        Ok(context.alloc_mask(&fixture_mask_format(), FrameMeta::at(0)))
+    }
+}
 
 /// A mask whose two inputs have to carry the same sample, because its kernel reads them together.
 struct Matched;
@@ -768,7 +870,12 @@ impl MaskDefinition for Matched {
 struct AnchoredStage;
 
 impl StageInstance for AnchoredStage {}
-impl Mask for AnchoredStage {}
+
+impl Mask for AnchoredStage {
+    fn select(&mut self, context: &mut FrameContext, _inputs: Inputs) -> Result<GpuMask, StageError> {
+        Ok(context.alloc_mask(&fixture_mask_format(), FrameMeta::at(0)))
+    }
+}
 
 /// A mask whose base has to carry its overlay's sample, while the overlay itself takes anything.
 struct Anchored;
@@ -835,7 +942,12 @@ impl MaskDefinition for Anchored {
 struct MislabelledStage;
 
 impl StageInstance for MislabelledStage {}
-impl Mask for MislabelledStage {}
+
+impl Mask for MislabelledStage {
+    fn select(&mut self, context: &mut FrameContext, _inputs: Inputs) -> Result<GpuMask, StageError> {
+        Ok(context.alloc_mask(&fixture_mask_format(), FrameMeta::at(0)))
+    }
+}
 
 /// A mask that produces frames, which is not what a mask emits.
 struct Mislabelled;
@@ -905,7 +1017,14 @@ pub(crate) static SPARSE_FILLED_SLOTS: AtomicUsize = AtomicUsize::new(0);
 struct SparseStage;
 
 impl StageInstance for SparseStage {}
-impl Filter for SparseStage {}
+
+impl Filter for SparseStage {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        inputs
+            .take_frame(1)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 1"))
+    }
+}
 
 /// A filter whose first input is optional, so a pipeline can leave a hole before a bound slot.
 struct Sparse;

@@ -2,6 +2,7 @@ use av_toolbox_core::{
     BoundInputs,
     InputParam,
     InputSignature,
+    Inputs,
     PipelineRegistry,
     Sink,
     SinkDefinition,
@@ -17,6 +18,8 @@ use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
     FormatSet,
+    Frame,
+    FrameContext,
     FrameFormat,
     FrameLayout,
     Offered,
@@ -50,7 +53,12 @@ struct NoArgs {}
 struct ReadStage;
 
 impl StageInstance for ReadStage {}
-impl Source for ReadStage {}
+
+impl Source for ReadStage {
+    fn next(&mut self, _context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+        Ok(None)
+    }
+}
 
 struct Read;
 
@@ -93,7 +101,12 @@ impl SourceDefinition for Read {
 struct WriteStage;
 
 impl StageInstance for WriteStage {}
-impl Sink for WriteStage {}
+
+impl Sink for WriteStage {
+    fn consume(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<(), StageError> {
+        Ok(())
+    }
+}
 
 struct Write;
 

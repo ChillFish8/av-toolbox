@@ -412,6 +412,23 @@ mod tests {
         );
     }
 
+    /// Two views onto one slot are separate buffers over the same memory, so a writer taking one
+    /// would corrupt the other and the history the ring is holding.
+    #[test]
+    fn two_views_of_one_slot_cannot_both_be_taken_for_writing() {
+        let (_allocator, ring) = ring(2);
+
+        let first = ring
+            .slot_frame(0, FrameMeta::at(0))
+            .expect("the ring has this slot");
+        let second = ring
+            .slot_frame(0, FrameMeta::at(0))
+            .expect("the ring has this slot");
+
+        assert!(first.try_into_mut().is_err(), "a slot view was writable");
+        assert!(second.try_into_mut().is_err(), "a slot view was writable");
+    }
+
     #[test]
     fn a_slot_can_be_taken_as_a_whole_frame() {
         let (_allocator, ring) = ring(2);

@@ -161,6 +161,22 @@ impl StreamFormat {
         }
     }
 
+    /// The frame format this carries, or `None` when it is a mask.
+    pub const fn as_frames(&self) -> Option<&FrameFormat> {
+        match self {
+            Self::Frames(format) => Some(format),
+            Self::Mask(_) => None,
+        }
+    }
+
+    /// The mask format this carries, or `None` when it is a frame stream.
+    pub const fn as_mask(&self) -> Option<&MaskFormat> {
+        match self {
+            Self::Mask(format) => Some(format),
+            Self::Frames(_) => None,
+        }
+    }
+
     /// The byte size of every plane, in plane order.
     pub fn plane_sizes(&self) -> Vec<usize> {
         match self {
@@ -331,6 +347,23 @@ mod tests {
             sample: SampleFormat::U16 { depth: Depth::TEN },
         });
         assert_eq!(wide.sample(), SampleFormat::U16 { depth: Depth::TEN });
+    }
+
+    #[test]
+    fn a_stream_format_unwraps_to_the_kind_it_holds_and_not_the_other() {
+        let inner = yuv420(SampleFormat::U8);
+        let frames = StreamFormat::Frames(inner);
+        let mask_format = MaskFormat {
+            width: 8,
+            height: 8,
+            sample: SampleFormat::U8,
+        };
+        let mask = StreamFormat::Mask(mask_format);
+
+        assert_eq!(frames.as_frames(), Some(&inner));
+        assert_eq!(frames.as_mask(), None);
+        assert_eq!(mask.as_mask(), Some(&mask_format));
+        assert_eq!(mask.as_frames(), None);
     }
 
     /// A negotiation failure names an edge with these, so they have to read as something a user can

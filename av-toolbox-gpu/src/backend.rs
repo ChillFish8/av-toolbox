@@ -5,7 +5,7 @@ use cubecl::prelude::Runtime;
 
 use crate::memory::{BufferPool, ClientAllocator};
 use crate::probe::{open_client, supported_device};
-use crate::{Accelerator, Capabilities, Device};
+use crate::{Accelerator, Capabilities, Device, FrameContext};
 
 /// What a stage is built against.
 ///
@@ -39,6 +39,11 @@ impl<R: Runtime> BuildContext<R> {
 
     pub const fn pool(&self) -> &BufferPool {
         &self.pool
+    }
+
+    /// The context this stage's work runs against.
+    pub fn frame_context(&self) -> FrameContext {
+        FrameContext::new(self.pool.clone(), self.capabilities.clone())
     }
 }
 
@@ -139,6 +144,18 @@ impl Backend {
             Opened::Rocm(context) => context.capabilities(),
             #[cfg(any(feature = "vulkan", feature = "metal"))]
             Opened::Wgpu(context) => context.capabilities(),
+        }
+    }
+
+    /// The context stages built against this backend do their work through.
+    pub fn frame_context(&self) -> FrameContext {
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            Opened::Cuda(context) => context.frame_context(),
+            #[cfg(feature = "rocm")]
+            Opened::Rocm(context) => context.frame_context(),
+            #[cfg(any(feature = "vulkan", feature = "metal"))]
+            Opened::Wgpu(context) => context.frame_context(),
         }
     }
 

@@ -53,6 +53,7 @@ pub use self::inputs::{
     InputArgument,
     InputParam,
     InputSignature,
+    Inputs,
     StageHandle,
     VariadicInput,
     bind_inputs,

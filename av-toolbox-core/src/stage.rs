@@ -4,6 +4,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     FormatSet,
+    FrameContext,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -62,7 +63,15 @@ impl fmt::Display for StageKind {
 }
 
 /// A constructed stage ready to be placed in a pipeline.
-pub trait StageInstance: Send + 'static {}
+pub trait StageInstance: Send + 'static {
+    /// Called once before the first item of a stream.
+    ///
+    /// A stage holding a temporal window uses this to know its ring holds padding rather than
+    /// history.
+    fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
+        Ok(())
+    }
+}
 
 /// A type of stage that can be registered.
 ///
@@ -79,6 +88,7 @@ pub trait StageInstance: Send + 'static {}
 ///     FilterDefinition,
 ///     InputParam,
 ///     InputSignature,
+///     Inputs,
 ///     PipelineRegistry,
 ///     StageDefinition,
 ///     StageError,
@@ -88,6 +98,8 @@ pub trait StageInstance: Send + 'static {}
 ///     BuildContext,
 ///     Capabilities,
 ///     FormatSet,
+///     Frame,
+///     FrameContext,
 ///     Offered,
 ///     OutputFormats,
 ///     ResolvedFormats,
@@ -108,7 +120,14 @@ pub trait StageInstance: Send + 'static {}
 /// }
 ///
 /// impl StageInstance for DenoiseFilter {}
-/// impl Filter for DenoiseFilter {}
+///
+/// impl Filter for DenoiseFilter {
+///     fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+///         inputs
+///             .take_frame(0)
+///             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+///     }
+/// }
 ///
 /// struct Denoise;
 ///
@@ -364,14 +383,14 @@ pub trait SinkDefinition: StageDefinition {
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use av_toolbox_gpu::StreamTemplate;
+    use av_toolbox_gpu::{Frame, StreamTemplate};
     use schemars::JsonSchema;
     use serde::Deserialize;
 
     use super::*;
-    use crate::InputParam;
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::bind_inputs;
+    use crate::{InputParam, Inputs};
 
     #[derive(Debug, Deserialize, JsonSchema)]
     struct ExampleArgs {
@@ -381,7 +400,14 @@ mod tests {
     struct ExampleInstance;
 
     impl StageInstance for ExampleInstance {}
-    impl Filter for ExampleInstance {}
+
+    impl Filter for ExampleInstance {
+        fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+            inputs
+                .take_frame(0)
+                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+        }
+    }
 
     static RECORDED_SIGMA_SCALE: AtomicU32 = AtomicU32::new(0);
 

@@ -793,6 +793,9 @@ mod tests {
         Capabilities::builder(any_accelerator())
             .storable(every)
             .computable(every)
+            .plane_size(32, 32)
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
             .build()
     }
 
@@ -1329,6 +1332,9 @@ mod tests {
         let capabilities = Capabilities::builder(any_accelerator())
             .storable([ElementType::F32, ElementType::U16])
             .computable([ElementType::F32])
+            .plane_size(32, 32)
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
             .build();
 
         let registry = testing::registry();

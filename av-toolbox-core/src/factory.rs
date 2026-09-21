@@ -572,12 +572,21 @@ impl_sink_factory!(BuildSink);
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use av_toolbox_gpu::{Capabilities, FormatSet, Offered, OutputFormats, StreamFormat, StreamTemplate};
+    use av_toolbox_gpu::{
+        Capabilities,
+        FormatSet,
+        Frame,
+        FrameContext,
+        Offered,
+        OutputFormats,
+        StreamFormat,
+        StreamTemplate,
+    };
     use schemars::JsonSchema;
     use serde::Deserialize;
 
     use super::*;
-    use crate::{InputParam, StageHandle, StageInstance, StreamType};
+    use crate::{InputParam, Inputs, StageHandle, StageInstance, StreamType};
 
     #[derive(Debug, Deserialize, JsonSchema)]
     struct ExampleArgs {
@@ -587,7 +596,14 @@ mod tests {
     struct ExampleFilter;
 
     impl StageInstance for ExampleFilter {}
-    impl Filter for ExampleFilter {}
+
+    impl Filter for ExampleFilter {
+        fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+            inputs
+                .take_frame(0)
+                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+        }
+    }
 
     static RECORDED_SIGMA_SCALE: AtomicU32 = AtomicU32::new(0);
 

@@ -11,6 +11,9 @@ schemars = { workspace = true }
 jsonschema = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+cubecl = { workspace = true }
+
 [features]
 vulkan = ["av-toolbox-gpu/vulkan"]
 metal = ["av-toolbox-gpu/metal"]

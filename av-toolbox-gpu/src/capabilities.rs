@@ -212,7 +212,41 @@ impl CapabilitiesBuilder {
         self
     }
 
+    pub fn plane_size(mut self, min: u32, max: u32) -> Self {
+        self.capabilities.plane_size = (min, max);
+        self
+    }
+
+    pub fn max_units_per_cube(mut self, units: u32) -> Self {
+        self.capabilities.max_units_per_cube = units;
+        self
+    }
+
+    pub fn max_cube_count(mut self, x: u32, y: u32, z: u32) -> Self {
+        self.capabilities.max_cube_count = (x, y, z);
+        self
+    }
+
+    /// Finishes the table, refusing one that cannot describe a device.
+    ///
+    /// The limits a launch is sized from start at zero specifically so a forgotten setter is
+    /// caught here, at the fixture's construction, rather than later as a silently wrong
+    /// `cube_dim` or `cube_count`.
     pub fn build(self) -> Capabilities {
+        assert_ne!(
+            self.capabilities.plane_size.0, 0,
+            "CapabilitiesBuilder::plane_size was never set, so this table cannot describe a device",
+        );
+        assert_ne!(
+            self.capabilities.max_units_per_cube, 0,
+            "CapabilitiesBuilder::max_units_per_cube was never set, so this table cannot describe a device",
+        );
+        assert_ne!(
+            self.capabilities.max_cube_count,
+            (0, 0, 0),
+            "CapabilitiesBuilder::max_cube_count was never set, so this table cannot describe a device",
+        );
+
         self.capabilities
     }
 }
@@ -337,6 +371,9 @@ mod tests {
             .atomic_add([ElementType::F32])
             .alignment(64)
             .max_allocation(2 << 30)
+            .plane_size(32, 32)
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
             .build();
 
         assert!(capabilities.can_store(ElementType::U16));
@@ -352,10 +389,39 @@ mod tests {
     fn storable_does_not_imply_computable() {
         let capabilities = Capabilities::builder(any_accelerator())
             .storable([ElementType::U16])
+            .plane_size(32, 32)
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
             .build();
 
         assert!(capabilities.can_store(ElementType::U16));
         assert!(!capabilities.can_compute(ElementType::U16));
+    }
+
+    #[test]
+    #[should_panic(expected = "CapabilitiesBuilder::plane_size was never set")]
+    fn building_without_plane_size_fails_at_the_fixture_rather_than_later() {
+        Capabilities::builder(any_accelerator())
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
+            .build();
+    }
+
+    #[test]
+    #[should_panic(expected = "CapabilitiesBuilder::max_units_per_cube was never set")]
+    fn building_without_max_units_per_cube_fails_at_the_fixture_rather_than_later() {
+        Capabilities::builder(any_accelerator())
+            .plane_size(32, 32)
+            .build();
+    }
+
+    #[test]
+    #[should_panic(expected = "CapabilitiesBuilder::max_cube_count was never set")]
+    fn building_without_max_cube_count_fails_at_the_fixture_rather_than_later() {
+        Capabilities::builder(any_accelerator())
+            .plane_size(32, 32)
+            .max_units_per_cube(1024)
+            .build();
     }
 
     #[test]

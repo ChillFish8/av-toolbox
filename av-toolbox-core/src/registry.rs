@@ -158,6 +158,8 @@ mod tests {
         BuildContext,
         Capabilities,
         FormatSet,
+        Frame,
+        FrameContext,
         Offered,
         OutputFormats,
         ResolvedFormats,
@@ -169,7 +171,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::{BoundInputs, Filter, InputParam, InputSignature, Source, StageError, StageInstance};
+    use crate::{BoundInputs, Filter, InputParam, InputSignature, Inputs, Source, StageError, StageInstance};
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::{StageHandle, StreamType};
 
@@ -312,9 +314,22 @@ mod tests {
         }
     }
 
-    impl Source for FileSource {}
+    impl Source for FileSource {
+        fn next(&mut self, _context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+            Ok(None)
+        }
+    }
+
     impl StageInstance for FileSource {}
-    impl Filter for DenoiseFilter {}
+
+    impl Filter for DenoiseFilter {
+        fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+            inputs
+                .take_frame(0)
+                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+        }
+    }
+
     impl StageInstance for DenoiseFilter {}
 
     fn registry_with_denoise() -> PipelineRegistry {
