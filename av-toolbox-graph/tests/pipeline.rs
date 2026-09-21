@@ -19,6 +19,7 @@ use av_toolbox_gpu::{
     FormatSet,
     FrameFormat,
     FrameLayout,
+    Offered,
     OutputFormats,
     ResolvedFormats,
     Runtime,
@@ -36,6 +37,7 @@ use av_toolbox_graph::{
     render_ascii,
     render_mermaid,
     render_svg,
+    solve,
 };
 use av_toolbox_graph::{InputRef, Span, Spanned, StageSpec, build};
 use schemars::JsonSchema;
@@ -113,15 +115,14 @@ impl StageDefinition for Write {
 }
 
 impl SinkDefinition for Write {
-    fn accepts(
+    fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
-        offered: &[StreamFormat],
-    ) -> Result<Vec<FormatSet>, StageError> {
-        Ok(offered
-            .iter()
-            .map(|format| FormatSet::of([format.sample()]))
-            .collect())
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
     }
 
     fn build<R: Runtime>(
@@ -202,10 +203,10 @@ fn a_pipeline_builds_optimises_renders_and_instantiates() {
     assert!(svg.contains("input"));
 
     let backend = Backend::open_default(Device::Default).expect("should open");
-    let formats = vec![ResolvedFormats::new(vec![], None); graph.len()];
+    let solved = solve(&graph, &registry, backend.capabilities()).expect("should solve");
 
     let stages = graph
-        .instantiate(&registry, &backend, &formats)
+        .instantiate(&registry, &backend, &solved)
         .expect("should instantiate");
     assert_eq!(stages.len(), 2);
 }

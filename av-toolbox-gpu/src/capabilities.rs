@@ -2,12 +2,14 @@ use cubecl::client::ComputeClient;
 use cubecl::features::{AtomicUsage, TypeUsage};
 use cubecl::ir::{DeviceProperties, ElemType, FloatKind, IntKind, StorageType, Type, UIntKind};
 use cubecl::prelude::Runtime;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 use crate::probe::{RuntimeTask, with_runtime};
 use crate::{Accelerator, Device};
 
 /// An element type a plane can be stored or computed in.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, EnumIter)]
 pub enum ElementType {
     F32,
     F16,
@@ -84,13 +86,50 @@ pub struct Capabilities {
     /// CUDA and ROCm report one fixed value in both. Under wgpu it is a range, and on Intel the
     /// real value varies with a kernel's register use, so the minimum is the safe assumption.
     pub plane_size: (u32, u32),
-    /// The device's own report, kept so the queries below can answer from it.
-    properties: DeviceProperties,
+    /// The three questions below, answered once when the table was built.
+    usage: Usage,
+}
+
+#[derive(Debug, Default, Clone)]
+struct Usage {
+    storable: Vec<ElementType>,
+    computable: Vec<ElementType>,
+    atomic_add: Vec<ElementType>,
+}
+
+impl Usage {
+    fn from_properties(properties: &DeviceProperties) -> Self {
+        let mut storable = Vec::new();
+        let mut computable = Vec::new();
+        let mut atomic_add = Vec::new();
+
+        for element in ElementType::iter() {
+            let usage = properties.type_usage(StorageType::Scalar(element.elem()));
+            if usage.contains(TypeUsage::Buffer) {
+                storable.push(element);
+            }
+            if usage.contains(TypeUsage::Arithmetic) {
+                computable.push(element);
+            }
+
+            let atomic = properties.atomic_type_usage(Type::scalar(element.elem()));
+            if atomic.contains(AtomicUsage::Add) {
+                atomic_add.push(element);
+            }
+        }
+
+        Self {
+            storable,
+            computable,
+            atomic_add,
+        }
+    }
 }
 
 impl Capabilities {
     pub fn from_properties(accelerator: Accelerator, properties: &DeviceProperties) -> Self {
         let hardware = &properties.hardware;
+        let usage = Usage::from_properties(properties);
 
         Self {
             accelerator,
@@ -101,29 +140,80 @@ impl Capabilities {
             max_units_per_cube: hardware.max_units_per_cube,
             max_shared_memory: hardware.max_shared_memory_size,
             plane_size: (hardware.plane_size_min, hardware.plane_size_max),
-            properties: properties.clone(),
+            usage,
+        }
+    }
+
+    /// Describes a device without opening one.
+    ///
+    /// Every limit starts at an obviously inert value, so a test that forgets to set one fails
+    /// instead of quietly passing on a number that looked plausible.
+    pub fn builder(accelerator: Accelerator) -> CapabilitiesBuilder {
+        CapabilitiesBuilder {
+            capabilities: Self {
+                accelerator,
+                alignment: 0,
+                max_allocation: 0,
+                max_cube_count: (0, 0, 0),
+                max_cube_dim: (0, 0, 0),
+                max_units_per_cube: 0,
+                max_shared_memory: 0,
+                plane_size: (0, 0),
+                usage: Usage::default(),
+            },
         }
     }
 
     /// Whether a plane of this type can live in a buffer.
     pub fn can_store(&self, element: ElementType) -> bool {
-        self.usage(element).contains(TypeUsage::Buffer)
+        self.usage.storable.contains(&element)
     }
 
     /// Whether kernels can do arithmetic in this type.
     pub fn can_compute(&self, element: ElementType) -> bool {
-        self.usage(element).contains(TypeUsage::Arithmetic)
+        self.usage.computable.contains(&element)
     }
 
     /// Whether atomic add is available, which aggregating kernels need.
     pub fn can_atomic_add(&self, element: ElementType) -> bool {
-        let atomic = self.properties.atomic_type_usage(Type::scalar(element.elem()));
+        self.usage.atomic_add.contains(&element)
+    }
+}
 
-        atomic.contains(AtomicUsage::Add)
+/// Builds a [Capabilities] table by hand, for tests and solvers that need one without a device.
+#[derive(Debug, Clone)]
+pub struct CapabilitiesBuilder {
+    capabilities: Capabilities,
+}
+
+impl CapabilitiesBuilder {
+    pub fn storable(mut self, elements: impl IntoIterator<Item = ElementType>) -> Self {
+        self.capabilities.usage.storable = elements.into_iter().collect();
+        self
     }
 
-    fn usage(&self, element: ElementType) -> cubecl::features::EnumSet<TypeUsage> {
-        self.properties.type_usage(StorageType::Scalar(element.elem()))
+    pub fn computable(mut self, elements: impl IntoIterator<Item = ElementType>) -> Self {
+        self.capabilities.usage.computable = elements.into_iter().collect();
+        self
+    }
+
+    pub fn atomic_add(mut self, elements: impl IntoIterator<Item = ElementType>) -> Self {
+        self.capabilities.usage.atomic_add = elements.into_iter().collect();
+        self
+    }
+
+    pub fn alignment(mut self, alignment: u64) -> Self {
+        self.capabilities.alignment = alignment;
+        self
+    }
+
+    pub fn max_allocation(mut self, bytes: u64) -> Self {
+        self.capabilities.max_allocation = bytes;
+        self
+    }
+
+    pub fn build(self) -> Capabilities {
+        self.capabilities
     }
 }
 
@@ -234,6 +324,35 @@ mod tests {
         );
 
         let capabilities = Capabilities::from_properties(any_accelerator(), &properties);
+
+        assert!(capabilities.can_store(ElementType::U16));
+        assert!(!capabilities.can_compute(ElementType::U16));
+    }
+
+    #[test]
+    fn a_built_table_answers_from_what_it_was_told() {
+        let capabilities = Capabilities::builder(any_accelerator())
+            .storable([ElementType::F32, ElementType::U16, ElementType::U8])
+            .computable([ElementType::F32, ElementType::U8])
+            .atomic_add([ElementType::F32])
+            .alignment(64)
+            .max_allocation(2 << 30)
+            .build();
+
+        assert!(capabilities.can_store(ElementType::U16));
+        assert!(!capabilities.can_compute(ElementType::U16));
+        assert!(capabilities.can_compute(ElementType::F32));
+        assert!(capabilities.can_atomic_add(ElementType::F32));
+        assert!(!capabilities.can_atomic_add(ElementType::U8));
+    }
+
+    /// A device that holds a type but cannot do maths in it is the case a stage falls back on, and
+    /// no accelerator on this machine reports it.
+    #[test]
+    fn storable_does_not_imply_computable() {
+        let capabilities = Capabilities::builder(any_accelerator())
+            .storable([ElementType::U16])
+            .build();
 
         assert!(capabilities.can_store(ElementType::U16));
         assert!(!capabilities.can_compute(ElementType::U16));

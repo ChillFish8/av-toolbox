@@ -36,6 +36,8 @@ pub enum DiagnosticCode {
     UnusedStage,
     InvalidArgs,
     StageBuildFailed,
+    NoCommonFormat,
+    StreamTypeMismatch,
 }
 
 impl DiagnosticCode {
@@ -53,6 +55,8 @@ impl DiagnosticCode {
             Self::UnusedStage => "unused-stage",
             Self::InvalidArgs => "invalid-args",
             Self::StageBuildFailed => "stage-build-failed",
+            Self::NoCommonFormat => "no-common-format",
+            Self::StreamTypeMismatch => "stream-type-mismatch",
         }
     }
 }

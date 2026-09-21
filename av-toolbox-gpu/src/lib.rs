@@ -48,7 +48,7 @@ pub use self::cache::{
     install_compilation_cache_at,
     install_compilation_cache_once,
 };
-pub use self::capabilities::{Capabilities, ElementType, capabilities_for};
+pub use self::capabilities::{Capabilities, CapabilitiesBuilder, ElementType, capabilities_for};
 pub use self::device::{Device, DeviceError, ParseDeviceError};
 pub use self::enumerate::{BackendDevices, enumerate_devices};
 pub use self::frame::{
@@ -75,7 +75,7 @@ pub use self::frame::{
     Transfer,
 };
 pub use self::memory::{BufferPool, ClientAllocator, DeviceAllocator, Ring, RingGeometry, RingSpec};
-pub use self::negotiate::{FormatSet, OutputFormats, ResolvedFormats, StreamTemplate};
+pub use self::negotiate::{FormatSet, Offered, OutputFormats, ResolvedFormats, StreamTemplate};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};
 pub use self::warmup::WarmUp;

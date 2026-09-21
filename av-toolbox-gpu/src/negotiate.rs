@@ -64,6 +64,36 @@ impl FormatSet {
     }
 }
 
+/// What the solver knows about one of a stage's inputs.
+///
+/// A stage is asked about one input at a time, and the rest may not be settled yet. A proposal is
+/// real information to steer by, so a stage that cares which format a sibling carries can say so
+/// while the decision is still open. It is not a promise, so it is not something to reject a
+/// pipeline over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Offered {
+    /// Already decided. It will not change.
+    Resolved(StreamFormat),
+    /// What its producer would prefer, not yet agreed with anyone.
+    Proposed(StreamFormat),
+    /// Its producer has not been reached yet.
+    Unknown,
+}
+
+impl Offered {
+    /// The format this carries, whether settled or only proposed.
+    pub fn format(self) -> Option<StreamFormat> {
+        match self {
+            Self::Resolved(format) | Self::Proposed(format) => Some(format),
+            Self::Unknown => None,
+        }
+    }
+
+    pub fn is_resolved(self) -> bool {
+        matches!(self, Self::Resolved(_))
+    }
+}
+
 /// Everything about a stream except the sample format.
 ///
 /// Dimensions, layout and colour are fixed by the stage that produces them. Only the sample is
@@ -107,24 +137,32 @@ pub struct OutputFormats {
 }
 
 /// The formats a stage was actually given and will actually emit.
+///
+/// The inputs are in the stage's signature order, one entry per parameter followed by one per
+/// variadic input, so they line up with the inputs the stage was bound to. An optional parameter
+/// nobody bound is a hole rather than a gap that shifts everything after it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedFormats {
-    inputs: Vec<StreamFormat>,
+    inputs: Vec<Option<StreamFormat>>,
     output: Option<StreamFormat>,
 }
 
 impl ResolvedFormats {
     /// A sink resolves to no output, every other kind to one.
-    pub fn new(inputs: Vec<StreamFormat>, output: Option<StreamFormat>) -> Self {
+    pub fn new(inputs: Vec<Option<StreamFormat>>, output: Option<StreamFormat>) -> Self {
         Self { inputs, output }
     }
 
-    pub fn inputs(&self) -> &[StreamFormat] {
+    pub fn inputs(&self) -> &[Option<StreamFormat>] {
         &self.inputs
     }
 
+    /// The format in one signature slot.
+    ///
+    /// `None` covers two cases a caller may want to tell apart. The slot is an optional parameter
+    /// nobody bound, or `index` is past the end of the signature.
     pub fn input(&self, index: usize) -> Option<StreamFormat> {
-        self.inputs.get(index).copied()
+        self.inputs.get(index).copied().flatten()
     }
 
     pub fn output(&self) -> Option<StreamFormat> {
@@ -260,7 +298,10 @@ mod tests {
 
     #[test]
     fn resolved_formats_report_what_a_stage_was_given_and_will_emit() {
-        let resolved = ResolvedFormats::new(vec![frames(SampleFormat::U8)], Some(frames(SampleFormat::F32)));
+        let resolved = ResolvedFormats::new(
+            vec![Some(frames(SampleFormat::U8))],
+            Some(frames(SampleFormat::F32)),
+        );
 
         assert_eq!(
             resolved.input(0).map(|format| format.sample()),
@@ -273,9 +314,22 @@ mod tests {
         );
     }
 
+    /// An optional parameter nobody bound keeps its slot, so everything after it keeps its index.
+    #[test]
+    fn an_unbound_slot_is_a_hole_rather_than_a_gap() {
+        let resolved = ResolvedFormats::new(vec![None, Some(frames(SampleFormat::U8))], None);
+
+        assert_eq!(resolved.inputs().len(), 2);
+        assert_eq!(resolved.input(0), None);
+        assert_eq!(
+            resolved.input(1).map(|format| format.sample()),
+            Some(SampleFormat::U8)
+        );
+    }
+
     #[test]
     fn a_sink_resolves_to_no_output() {
-        let resolved = ResolvedFormats::new(vec![frames(SampleFormat::U8)], None);
+        let resolved = ResolvedFormats::new(vec![Some(frames(SampleFormat::U8))], None);
 
         assert_eq!(resolved.output(), None);
         assert_eq!(resolved.inputs().len(), 1);

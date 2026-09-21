@@ -7,16 +7,16 @@ use av_toolbox_core::{
     InputArgument,
     Mask,
     PipelineRegistry,
+    PreparedStage,
     Sink,
     Source,
-    StageKind,
     Transform,
 };
 use av_toolbox_gpu::{Backend, ResolvedFormats};
 
 use crate::diagnostic::{args_path, stage_path};
 use crate::graph::{CompiledGraph, Node};
-use crate::{Diagnostic, DiagnosticCode, Diagnostics};
+use crate::{Diagnostic, DiagnosticCode, Diagnostics, SolvedFormats};
 
 /// A built stage, in whichever of the five kinds it belongs to.
 pub enum StageBox {
@@ -42,36 +42,60 @@ impl fmt::Debug for StageBox {
 }
 
 impl CompiledGraph {
-    /// Builds every stage through the registry, in dependency order.
+    /// Validates and binds every stage's arguments and inputs, without needing a device.
     ///
-    /// `formats` holds one entry per node, in the same order as the graph's nodes, which is what a
-    /// solved graph produces.
-    ///
-    /// This is where arguments are checked, so a schema violation and a failure raised by the
-    /// stage itself are reported together. Every stage is attempted, so one run names every stage
-    /// that could not be built.
-    pub fn instantiate(
+    /// Every node is attempted, so a node whose arguments or inputs are invalid does not stop
+    /// another from being prepared in the same run. Its failure is pushed onto `diagnostics` and
+    /// its slot in the result is left empty, rather than stopping the whole run early.
+    pub(crate) fn prepare_stages(
         &self,
         registry: &PipelineRegistry,
-        backend: &Backend,
-        formats: &[ResolvedFormats],
-    ) -> Result<Vec<StageBox>, Diagnostics> {
-        debug_assert_eq!(
-            formats.len(),
-            self.len(),
-            "a solved graph has one set of formats per node",
-        );
-
-        let mut diagnostics = Diagnostics::new();
-        let mut built: Vec<Option<StageBox>> = (0..self.len()).map(|_| None).collect();
+        diagnostics: &mut Diagnostics,
+    ) -> Vec<Option<PreparedStage>> {
+        let mut prepared: Vec<Option<PreparedStage>> = (0..self.len()).map(|_| None).collect();
 
         for id in self.order() {
             let node = self.node(*id);
             let arguments = arguments_for(self, node);
-            let node_formats = &formats[id.index()];
 
-            match build_stage(registry, node, &arguments, backend, node_formats) {
-                Ok(stage) => built[id.index()] = Some(stage),
+            match registry.prepare(node.kind(), node.identifier(), node.args(), &arguments) {
+                Ok(stage) => prepared[id.index()] = Some(stage),
+                Err(error) => report(node, error, diagnostics),
+            }
+        }
+
+        prepared
+    }
+
+    /// Builds every stage through the registry, in dependency order.
+    ///
+    /// `formats` is what solving the same graph produced, so it always covers every node here.
+    ///
+    /// Arguments and inputs are checked before any stage is built, so a schema violation and a
+    /// failure raised by the stage itself are reported together. A node whose arguments or inputs
+    /// are invalid is skipped rather than built, but every other node is still attempted, so one
+    /// run names every stage that could not be prepared or built.
+    pub fn instantiate(
+        &self,
+        registry: &PipelineRegistry,
+        backend: &Backend,
+        formats: &SolvedFormats,
+    ) -> Result<Vec<StageBox>, Diagnostics> {
+        let mut diagnostics = Diagnostics::new();
+        let mut prepared = self.prepare_stages(registry, &mut diagnostics);
+
+        let mut built: Vec<Option<StageBox>> = (0..self.len()).map(|_| None).collect();
+
+        for id in self.order() {
+            let Some(stage) = prepared[id.index()].take() else {
+                continue;
+            };
+
+            let node = self.node(*id);
+            let node_formats = formats.get(*id);
+
+            match build_stage(stage, backend, node_formats) {
+                Ok(stage_box) => built[id.index()] = Some(stage_box),
                 Err(error) => report(node, error, &mut diagnostics),
             }
         }
@@ -110,36 +134,16 @@ fn arguments_for(graph: &CompiledGraph, node: &Node) -> Vec<InputArgument> {
 }
 
 fn build_stage(
-    registry: &PipelineRegistry,
-    node: &Node,
-    arguments: &[InputArgument],
+    prepared: PreparedStage,
     backend: &Backend,
     formats: &ResolvedFormats,
 ) -> Result<StageBox, BuildStageError> {
-    let identifier = node.identifier();
-    let args = node.args();
-
-    let stage = match node.kind() {
-        StageKind::Source => {
-            let source = registry.build_source(identifier, backend, args, arguments, formats)?;
-            StageBox::Source(source)
-        },
-        StageKind::Filter => {
-            let filter = registry.build_filter(identifier, backend, args, arguments, formats)?;
-            StageBox::Filter(filter)
-        },
-        StageKind::Mask => {
-            let mask = registry.build_mask(identifier, backend, args, arguments, formats)?;
-            StageBox::Mask(mask)
-        },
-        StageKind::Transform => {
-            let transform = registry.build_transform(identifier, backend, args, arguments, formats)?;
-            StageBox::Transform(transform)
-        },
-        StageKind::Sink => {
-            let sink = registry.build_sink(identifier, backend, args, arguments, formats)?;
-            StageBox::Sink(sink)
-        },
+    let stage = match prepared {
+        PreparedStage::Source(prepared) => StageBox::Source(prepared.build(backend, formats)?),
+        PreparedStage::Filter(prepared) => StageBox::Filter(prepared.build(backend, formats)?),
+        PreparedStage::Mask(prepared) => StageBox::Mask(prepared.build(backend, formats)?),
+        PreparedStage::Transform(prepared) => StageBox::Transform(prepared.build(backend, formats)?),
+        PreparedStage::Sink(prepared) => StageBox::Sink(prepared.build(backend, formats)?),
     };
 
     Ok(stage)
@@ -201,29 +205,19 @@ fn describe(error: &BuildStageError) -> String {
     message
 }
 
-// Every test here calls `instantiate`, which now needs a real backend, so the whole module needs
-// a device. There is no non-device test to keep running separately.
+/// Diagnostics raised while preparing a graph need no device, so these tests join the fast suite
+/// rather than the device-gated module below.
 #[cfg(test)]
-#[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
-mod tests {
-    use std::sync::atomic::Ordering;
-
+mod diagnostics_tests {
     use av_toolbox_core::StageKind;
-    use av_toolbox_gpu::{
-        ColourInfo,
-        Device,
-        FrameFormat,
-        FrameLayout,
-        SampleFormat,
-        StreamFormat,
-        Subsampling,
-    };
     use serde_json::json;
 
-    use super::*;
-    use crate::{DiagnosticCode, Span, Spanned, StageSpec, build, testing};
+    use crate::{Diagnostic, DiagnosticCode, Diagnostics, Span, Spanned, StageSpec, build, testing};
 
-    fn pipeline() -> Vec<StageSpec> {
+    /// The pipeline every test in this file builds from, tweaking whichever node it needs to.
+    ///
+    /// `pub(super)` rather than a copy, so the device-gated `tests` module below shares it.
+    pub(super) fn pipeline() -> Vec<StageSpec> {
         let mut source = testing::spec(StageKind::Source, "input", "test/file");
         source.args = Spanned::unknown(json!({ "path": "example.mkv" }));
 
@@ -237,18 +231,86 @@ mod tests {
         vec![source, blur, sink]
     }
 
+    #[test]
+    fn a_schema_violation_lands_on_the_arguments() {
+        let mut specs = pipeline();
+        specs[1].args = Spanned::new(json!({ "sigma": "wide" }), Span::new(40, 60));
+
+        let registry = testing::registry();
+        let graph = build(&registry, &specs).expect("should build").into_graph();
+
+        let mut diagnostics = Diagnostics::new();
+        graph.prepare_stages(&registry, &mut diagnostics);
+        let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
+
+        assert_eq!(reported[0].code(), DiagnosticCode::InvalidArgs);
+        assert!(reported[0].path().starts_with("filter.blur.args"));
+        assert_eq!(reported[0].span(), Span::new(40, 60));
+    }
+
+    #[test]
+    fn every_failing_stage_is_reported_not_just_the_first() {
+        let mut specs = pipeline();
+        specs[0].args = Spanned::unknown(json!({}));
+        specs[1].args = Spanned::unknown(json!({ "sigma": "wide" }));
+
+        let registry = testing::registry();
+        let graph = build(&registry, &specs).expect("should build").into_graph();
+
+        let mut diagnostics = Diagnostics::new();
+        graph.prepare_stages(&registry, &mut diagnostics);
+
+        assert_eq!(diagnostics.iter().count(), 2);
+    }
+}
+
+// Every test here calls `instantiate` through to a real build, which needs a real backend, so the
+// whole module needs a device. The argument-diagnostics tests that do not need one live in
+// `diagnostics_tests` above.
+#[cfg(test)]
+#[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use av_toolbox_gpu::{
+        ColourInfo,
+        Device,
+        FrameFormat,
+        FrameLayout,
+        SampleFormat,
+        StreamFormat,
+        Subsampling,
+    };
+    use serde_json::json;
+
+    use super::diagnostics_tests::pipeline;
+    use super::*;
+    use crate::solve::solve;
+    use crate::{DiagnosticCode, Spanned, build, testing};
+
     fn backend() -> Backend {
         Backend::open_default(Device::Default).expect("should open")
     }
 
+    /// Solves `graph` for real, against the capabilities of the backend it will build against.
+    fn formats(graph: &CompiledGraph, registry: &PipelineRegistry, backend: &Backend) -> SolvedFormats {
+        solve(graph, registry, backend.capabilities()).expect("should solve")
+    }
+
     /// One set of formats per node, each carrying a width that identifies its node.
-    fn formats(graph: &CompiledGraph) -> Vec<ResolvedFormats> {
-        (0..graph.len())
+    ///
+    /// The fixture stages here pass a format through unchanged, so a real solve settles every node
+    /// on the same width, and a test proving that node 1 got node 1's formats needs this synthetic
+    /// path instead.
+    fn synthetic_formats(graph: &CompiledGraph) -> SolvedFormats {
+        let per_node = (0..graph.len())
             .map(|index| {
                 let format = frames(100 + index as u32);
-                ResolvedFormats::new(vec![format], Some(format))
+                ResolvedFormats::new(vec![Some(format)], Some(format))
             })
-            .collect()
+            .collect();
+
+        SolvedFormats::new(per_node)
     }
 
     fn frames(width: u32) -> StreamFormat {
@@ -268,7 +330,7 @@ mod tests {
         let registry = testing::registry();
         let graph = build(&registry, &pipeline()).expect("should build").into_graph();
         let backend = backend();
-        let formats = formats(&graph);
+        let formats = formats(&graph, &registry, &backend);
 
         let stages = graph
             .instantiate(&registry, &backend, &formats)
@@ -291,7 +353,7 @@ mod tests {
         let registry = testing::registry();
         let graph = build(&registry, &specs).expect("should build").into_graph();
         let backend = backend();
-        let formats = formats(&graph);
+        let formats = synthetic_formats(&graph);
 
         testing::RECORDED_INPUT_WIDTH.store(0, Ordering::SeqCst);
 
@@ -303,26 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn a_schema_violation_lands_on_the_arguments() {
-        let mut specs = pipeline();
-        specs[1].args = Spanned::new(json!({ "sigma": "wide" }), Span::new(40, 60));
-
-        let registry = testing::registry();
-        let graph = build(&registry, &specs).expect("should build").into_graph();
-        let backend = backend();
-        let formats = formats(&graph);
-
-        let diagnostics = graph
-            .instantiate(&registry, &backend, &formats)
-            .expect_err("should fail");
-        let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
-
-        assert_eq!(reported[0].code(), DiagnosticCode::InvalidArgs);
-        assert!(reported[0].path().starts_with("filter.blur.args"));
-        assert_eq!(reported[0].span(), Span::new(40, 60));
-    }
-
-    #[test]
     fn a_stage_that_fails_to_build_is_reported_with_its_own_message() {
         let mut specs = pipeline();
         specs[1].stage_type = Spanned::unknown(String::from("test/failing"));
@@ -331,7 +373,7 @@ mod tests {
         let registry = testing::registry();
         let graph = build(&registry, &specs).expect("should build").into_graph();
         let backend = backend();
-        let formats = formats(&graph);
+        let formats = formats(&graph, &registry, &backend);
 
         let diagnostics = graph
             .instantiate(&registry, &backend, &formats)
@@ -342,21 +384,54 @@ mod tests {
         assert!(reported[0].message().contains("this stage always fails"));
     }
 
+    /// A node that never reaches the backend and a node that fails once it does are two different
+    /// phases of the same run, and both should come back from one call rather than needing two.
+    ///
+    /// The first node's arguments are invalid here, so solving this graph fails before it ever
+    /// reaches the second node, which is why this uses the synthetic formats instead.
     #[test]
-    fn every_failing_stage_is_reported_not_just_the_first() {
+    fn an_argument_failure_and_a_build_failure_are_reported_together() {
         let mut specs = pipeline();
         specs[0].args = Spanned::unknown(json!({}));
-        specs[1].args = Spanned::unknown(json!({ "sigma": "wide" }));
+        specs[1].stage_type = Spanned::unknown(String::from("test/failing"));
+        specs[1].args = Spanned::unknown(json!({}));
 
         let registry = testing::registry();
         let graph = build(&registry, &specs).expect("should build").into_graph();
         let backend = backend();
-        let formats = formats(&graph);
+        let formats = synthetic_formats(&graph);
 
         let diagnostics = graph
             .instantiate(&registry, &backend, &formats)
             .expect_err("should fail");
+        let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
 
-        assert_eq!(diagnostics.iter().count(), 2);
+        assert_eq!(reported.len(), 2);
+        assert!(
+            reported
+                .iter()
+                .any(|diagnostic| diagnostic.code() == DiagnosticCode::InvalidArgs)
+        );
+        assert!(
+            reported
+                .iter()
+                .any(|diagnostic| diagnostic.code() == DiagnosticCode::StageBuildFailed)
+        );
+    }
+
+    /// The one thing the pure solver tests cannot cover: capabilities from a real opened backend,
+    /// carried through solving into the stages that backend then builds.
+    #[test]
+    fn a_pipeline_solves_then_instantiates_every_stage() {
+        let backend = backend();
+        let registry = testing::registry();
+        let graph = build(&registry, &pipeline()).expect("should build").into_graph();
+
+        let solved = solve(&graph, &registry, backend.capabilities()).expect("should solve");
+        let stages = graph
+            .instantiate(&registry, &backend, &solved)
+            .expect("should instantiate");
+
+        assert_eq!(stages.len(), 3);
     }
 }

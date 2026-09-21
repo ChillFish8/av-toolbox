@@ -37,7 +37,16 @@ pub use self::error::{
     SchemaViolation,
     StageError,
 };
-pub use self::factory::{StageFactory, StageInfo};
+pub use self::factory::{
+    PreparedFilter,
+    PreparedMask,
+    PreparedSink,
+    PreparedSource,
+    PreparedStage,
+    PreparedTransform,
+    StageFactory,
+    StageInfo,
+};
 pub use self::filter::Filter;
 pub use self::inputs::{
     BoundInputs,

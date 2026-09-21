@@ -1,41 +1,41 @@
 use std::collections::HashMap;
 
-use av_toolbox_gpu::{Backend, ResolvedFormats};
 use serde_json::Value;
 
 use crate::factory::Definition;
 use crate::{
     BuildStageError,
-    Filter,
     FilterDefinition,
     InputArgument,
-    Mask,
     MaskDefinition,
+    PreparedFilter,
+    PreparedMask,
+    PreparedSink,
+    PreparedSource,
+    PreparedStage,
+    PreparedTransform,
     RegistryError,
-    Sink,
     SinkDefinition,
-    Source,
     SourceDefinition,
     StageDefinition,
     StageFactory,
     StageInfo,
     StageKind,
-    Transform,
     TransformDefinition,
 };
 
-type Factories<K> = HashMap<String, Box<dyn StageFactory<K>>>;
+type Factories<P> = HashMap<String, Box<dyn StageFactory<P>>>;
 
 /// The registry tracks all stages available for use within the pipeline.
 ///
 /// Stages are keyed by their fully qualified `package/stage` identifier.
 #[derive(Default)]
 pub struct PipelineRegistry {
-    sources: Factories<dyn Source>,
-    filters: Factories<dyn Filter>,
-    masks: Factories<dyn Mask>,
-    transforms: Factories<dyn Transform>,
-    sinks: Factories<dyn Sink>,
+    sources: Factories<dyn PreparedSource>,
+    filters: Factories<dyn PreparedFilter>,
+    masks: Factories<dyn PreparedMask>,
+    transforms: Factories<dyn PreparedTransform>,
+    sinks: Factories<dyn PreparedSink>,
 }
 
 impl PipelineRegistry {
@@ -79,104 +79,27 @@ impl PipelineRegistry {
         insert(&mut self.sinks, definition)
     }
 
-    /// Validates the arguments, deserializes them, binds the inputs, then builds the stage.
-    pub fn build_source(
+    /// Deserializes the arguments and binds the inputs, without needing a device.
+    pub fn prepare(
         &self,
+        kind: StageKind,
         identifier: &str,
-        backend: &Backend,
         args: &Value,
         inputs: &[InputArgument],
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Source>, BuildStageError> {
-        build(
-            &self.sources,
-            StageKind::Source,
-            identifier,
-            backend,
-            args,
-            inputs,
-            formats,
-        )
-    }
-
-    /// Validates the arguments, deserializes them, binds the inputs, then builds the stage.
-    pub fn build_filter(
-        &self,
-        identifier: &str,
-        backend: &Backend,
-        args: &Value,
-        inputs: &[InputArgument],
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Filter>, BuildStageError> {
-        build(
-            &self.filters,
-            StageKind::Filter,
-            identifier,
-            backend,
-            args,
-            inputs,
-            formats,
-        )
-    }
-
-    /// Validates the arguments, deserializes them, binds the inputs, then builds the stage.
-    pub fn build_mask(
-        &self,
-        identifier: &str,
-        backend: &Backend,
-        args: &Value,
-        inputs: &[InputArgument],
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Mask>, BuildStageError> {
-        build(
-            &self.masks,
-            StageKind::Mask,
-            identifier,
-            backend,
-            args,
-            inputs,
-            formats,
-        )
-    }
-
-    /// Validates the arguments, deserializes them, binds the inputs, then builds the stage.
-    pub fn build_transform(
-        &self,
-        identifier: &str,
-        backend: &Backend,
-        args: &Value,
-        inputs: &[InputArgument],
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Transform>, BuildStageError> {
-        build(
-            &self.transforms,
-            StageKind::Transform,
-            identifier,
-            backend,
-            args,
-            inputs,
-            formats,
-        )
-    }
-
-    /// Validates the arguments, deserializes them, binds the inputs, then builds the stage.
-    pub fn build_sink(
-        &self,
-        identifier: &str,
-        backend: &Backend,
-        args: &Value,
-        inputs: &[InputArgument],
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Sink>, BuildStageError> {
-        build(
-            &self.sinks,
-            StageKind::Sink,
-            identifier,
-            backend,
-            args,
-            inputs,
-            formats,
-        )
+    ) -> Result<PreparedStage, BuildStageError> {
+        match kind {
+            StageKind::Source => {
+                prepare(&self.sources, kind, identifier, args, inputs).map(PreparedStage::Source)
+            },
+            StageKind::Filter => {
+                prepare(&self.filters, kind, identifier, args, inputs).map(PreparedStage::Filter)
+            },
+            StageKind::Mask => prepare(&self.masks, kind, identifier, args, inputs).map(PreparedStage::Mask),
+            StageKind::Transform => {
+                prepare(&self.transforms, kind, identifier, args, inputs).map(PreparedStage::Transform)
+            },
+            StageKind::Sink => prepare(&self.sinks, kind, identifier, args, inputs).map(PreparedStage::Sink),
+        }
     }
 
     /// Describes every registered stage.
@@ -191,11 +114,11 @@ impl PipelineRegistry {
     }
 }
 
-fn insert<D, K>(factories: &mut Factories<K>, definition: Definition<D>) -> Result<(), RegistryError>
+fn insert<D, P>(factories: &mut Factories<P>, definition: Definition<D>) -> Result<(), RegistryError>
 where
     D: StageDefinition,
-    K: ?Sized,
-    Definition<D>: StageFactory<K> + 'static,
+    P: ?Sized,
+    Definition<D>: StageFactory<P> + 'static,
 {
     let identifier = definition.full_identifier().to_string();
     if factories.contains_key(&identifier) {
@@ -210,15 +133,13 @@ where
     Ok(())
 }
 
-fn build<K: ?Sized>(
-    factories: &Factories<K>,
+fn prepare<P: ?Sized>(
+    factories: &Factories<P>,
     kind: StageKind,
     identifier: &str,
-    backend: &Backend,
     args: &Value,
     inputs: &[InputArgument],
-    formats: &ResolvedFormats,
-) -> Result<Box<K>, BuildStageError> {
+) -> Result<Box<P>, BuildStageError> {
     let factory = factories
         .get(identifier)
         .ok_or_else(|| BuildStageError::UnknownStage {
@@ -226,7 +147,7 @@ fn build<K: ?Sized>(
             identifier: identifier.to_string(),
         })?;
 
-    factory.build(backend, args, inputs, formats)
+    factory.prepare(args, inputs)
 }
 
 #[cfg(test)]
@@ -237,7 +158,9 @@ mod tests {
         BuildContext,
         Capabilities,
         FormatSet,
+        Offered,
         OutputFormats,
+        ResolvedFormats,
         Runtime,
         StreamFormat,
         StreamTemplate,
@@ -246,7 +169,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::{BoundInputs, InputParam, InputSignature, StageError, StageInstance};
+    use crate::{BoundInputs, Filter, InputParam, InputSignature, Source, StageError, StageInstance};
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::{StageHandle, StreamType};
 
@@ -355,23 +278,22 @@ mod tests {
     }
 
     impl FilterDefinition for Denoise {
-        fn accepts(
+        fn accepts_input(
             _capabilities: &Capabilities,
             _args: &Self::Args,
-            offered: &[StreamFormat],
-        ) -> Result<Vec<FormatSet>, StageError> {
-            Ok(offered
-                .iter()
-                .map(|format| FormatSet::of([format.sample()]))
-                .collect())
+            _index: usize,
+            offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            Ok(FormatSet::of([offered.sample()]))
         }
 
         fn produces(
             _capabilities: &Capabilities,
             _args: &Self::Args,
-            chosen: &[StreamFormat],
+            chosen: &[Option<StreamFormat>],
         ) -> Result<OutputFormats, StageError> {
-            let format = chosen[0];
+            let format = chosen.iter().flatten().next().copied().expect("an input");
             Ok(OutputFormats {
                 template: StreamTemplate::from_format(&format),
                 samples: FormatSet::of([format.sample()]),
@@ -444,9 +366,28 @@ mod tests {
         assert_eq!(identifiers, vec!["av-denoise/nl4d", "builtin/file"]);
     }
 
+    #[test]
+    fn an_unregistered_identifier_reports_the_kind_looked_in() {
+        let registry = registry_with_denoise();
+        let args = serde_json::json!({});
+
+        let result = registry.prepare(StageKind::Sink, "av-denoise/nl4d", &args, &[]);
+        let Err(error) = result else {
+            panic!("the stage should not have been prepared");
+        };
+
+        assert!(matches!(
+            error,
+            BuildStageError::UnknownStage {
+                kind: StageKind::Sink,
+                ..
+            },
+        ));
+    }
+
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     mod device_tests {
-        use av_toolbox_gpu::Device;
+        use av_toolbox_gpu::{Backend, Device};
 
         use super::*;
 
@@ -465,34 +406,18 @@ mod tests {
             let backend = backend();
             let formats = formats();
 
-            let filter = registry
-                .build_filter("av-denoise/nl4d", &backend, &args, &reference_input(), &formats)
-                .expect("should build");
+            let prepared = registry
+                .prepare(StageKind::Filter, "av-denoise/nl4d", &args, &reference_input())
+                .expect("should prepare");
+            let PreparedStage::Filter(prepared) = prepared else {
+                panic!("expected a filter");
+            };
+
+            let filter = prepared.build(&backend, &formats).expect("should build");
             drop(filter);
 
             let recorded_sigma_scale = f32::from_bits(RECORDED_SIGMA_SCALE.load(Ordering::SeqCst));
             assert_eq!(recorded_sigma_scale, 0.8);
-        }
-
-        #[test]
-        fn an_unregistered_identifier_reports_the_kind_looked_in() {
-            let registry = registry_with_denoise();
-            let args = serde_json::json!({});
-            let backend = backend();
-            let formats = formats();
-
-            let result = registry.build_sink("av-denoise/nl4d", &backend, &args, &[], &formats);
-            let Err(error) = result else {
-                panic!("the stage should not have been built");
-            };
-
-            assert!(matches!(
-                error,
-                BuildStageError::UnknownStage {
-                    kind: StageKind::Sink,
-                    ..
-                },
-            ));
         }
     }
 }

@@ -4,6 +4,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     FormatSet,
+    Offered,
     OutputFormats,
     ResolvedFormats,
     Runtime,
@@ -87,6 +88,7 @@ pub trait StageInstance: Send + 'static {}
 ///     BuildContext,
 ///     Capabilities,
 ///     FormatSet,
+///     Offered,
 ///     OutputFormats,
 ///     ResolvedFormats,
 ///     Runtime,
@@ -128,20 +130,23 @@ pub trait StageInstance: Send + 'static {}
 /// }
 ///
 /// impl FilterDefinition for Denoise {
-///     fn accepts(
+///     fn accepts_input(
 ///         _capabilities: &Capabilities,
 ///         _args: &Self::Args,
-///         offered: &[StreamFormat],
-///     ) -> Result<Vec<FormatSet>, StageError> {
-///         Ok(offered.iter().map(|format| FormatSet::of([format.sample()])).collect())
+///         _index: usize,
+///         offered: StreamFormat,
+///         _inputs: &[Offered],
+///     ) -> Result<FormatSet, StageError> {
+///         Ok(FormatSet::of([offered.sample()]))
 ///     }
 ///
 ///     fn produces(
 ///         _capabilities: &Capabilities,
 ///         _args: &Self::Args,
-///         chosen: &[StreamFormat],
+///         chosen: &[Option<StreamFormat>],
 ///     ) -> Result<OutputFormats, StageError> {
-///         let format = chosen[0];
+///         let format = chosen.iter().flatten().next().copied();
+///         let format = format.ok_or_else(|| StageError::msg("no input was bound"))?;
 ///         Ok(OutputFormats {
 ///             template: StreamTemplate::from_format(&format),
 ///             samples: FormatSet::of([format.sample()]),
@@ -165,7 +170,7 @@ pub trait StageInstance: Send + 'static {}
 /// ```
 pub trait StageDefinition: 'static {
     /// The arguments this stage takes, supplied by the pipeline as JSON.
-    type Args: DeserializeOwned + JsonSchema;
+    type Args: DeserializeOwned + JsonSchema + Send + Sync;
 
     fn package() -> &'static str;
 
@@ -196,22 +201,36 @@ pub trait SourceDefinition: StageDefinition {
 
 /// A stage that changes the frames passing through it.
 pub trait FilterDefinition: StageDefinition {
-    /// Which sample formats this stage will take on each input, most preferred first.
+    /// Which sample formats this stage will take on one input, most preferred first.
     ///
-    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
-    /// layout, dimensions and colour information are the stage's to validate, and an unusable
-    /// one is an error rather than an empty set.
-    fn accepts(
+    /// The offered layout, dimensions and colour information are the stage's to validate, and an
+    /// unusable one is an error rather than an empty set. Raise one only for those, because the
+    /// stage is asked once per sample its producer could emit and an error stops the whole edge
+    /// rather than the one sample. A sample the stage cannot work in is left out of the set.
+    ///
+    /// `inputs` holds every input in signature order, including this one at `index`. A stage whose
+    /// answer depends on more than one input reads it, and what it returns is binding only when
+    /// every other input is [Offered::Resolved](av_toolbox_gpu::Offered::Resolved). While any of them is
+    /// [Offered::Proposed](av_toolbox_gpu::Offered::Proposed) or
+    /// [Offered::Unknown](av_toolbox_gpu::Offered::Unknown), leaving a sample out reads as a preference
+    /// rather than a refusal, so the solver may still settle on it when nothing else suits every
+    /// reader. An optional input nobody bound never settles, so it does not hold an answer back.
+    /// The stage is asked again once everything is decided, and that answer is the one that holds.
+    /// Apply the same check from whichever input is asked about, so the answer does not depend on
+    /// which came first.
+    fn accepts_input(
         capabilities: &Capabilities,
         args: &Self::Args,
-        offered: &[StreamFormat],
-    ) -> Result<Vec<FormatSet>, StageError>;
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError>;
 
     /// What it could produce, given what it will be given.
     fn produces(
         capabilities: &Capabilities,
         args: &Self::Args,
-        chosen: &[StreamFormat],
+        chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError>;
 
     fn build<R: Runtime>(
@@ -224,22 +243,36 @@ pub trait FilterDefinition: StageDefinition {
 
 /// A stage that selects pixels from two or more inputs.
 pub trait MaskDefinition: StageDefinition {
-    /// Which sample formats this stage will take on each input, most preferred first.
+    /// Which sample formats this stage will take on one input, most preferred first.
     ///
-    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
-    /// layout, dimensions and colour information are the stage's to validate, and an unusable
-    /// one is an error rather than an empty set.
-    fn accepts(
+    /// The offered layout, dimensions and colour information are the stage's to validate, and an
+    /// unusable one is an error rather than an empty set. Raise one only for those, because the
+    /// stage is asked once per sample its producer could emit and an error stops the whole edge
+    /// rather than the one sample. A sample the stage cannot work in is left out of the set.
+    ///
+    /// `inputs` holds every input in signature order, including this one at `index`. A stage whose
+    /// answer depends on more than one input reads it, and what it returns is binding only when
+    /// every other input is [Offered::Resolved](av_toolbox_gpu::Offered::Resolved). While any of them is
+    /// [Offered::Proposed](av_toolbox_gpu::Offered::Proposed) or
+    /// [Offered::Unknown](av_toolbox_gpu::Offered::Unknown), leaving a sample out reads as a preference
+    /// rather than a refusal, so the solver may still settle on it when nothing else suits every
+    /// reader. An optional input nobody bound never settles, so it does not hold an answer back.
+    /// The stage is asked again once everything is decided, and that answer is the one that holds.
+    /// Apply the same check from whichever input is asked about, so the answer does not depend on
+    /// which came first.
+    fn accepts_input(
         capabilities: &Capabilities,
         args: &Self::Args,
-        offered: &[StreamFormat],
-    ) -> Result<Vec<FormatSet>, StageError>;
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError>;
 
     /// What it could produce, given what it will be given.
     fn produces(
         capabilities: &Capabilities,
         args: &Self::Args,
-        chosen: &[StreamFormat],
+        chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError>;
 
     fn build<R: Runtime>(
@@ -252,22 +285,36 @@ pub trait MaskDefinition: StageDefinition {
 
 /// A stage that changes the pipeline stream rather than the frames within it.
 pub trait TransformDefinition: StageDefinition {
-    /// Which sample formats this stage will take on each input, most preferred first.
+    /// Which sample formats this stage will take on one input, most preferred first.
     ///
-    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
-    /// layout, dimensions and colour information are the stage's to validate, and an unusable
-    /// one is an error rather than an empty set.
-    fn accepts(
+    /// The offered layout, dimensions and colour information are the stage's to validate, and an
+    /// unusable one is an error rather than an empty set. Raise one only for those, because the
+    /// stage is asked once per sample its producer could emit and an error stops the whole edge
+    /// rather than the one sample. A sample the stage cannot work in is left out of the set.
+    ///
+    /// `inputs` holds every input in signature order, including this one at `index`. A stage whose
+    /// answer depends on more than one input reads it, and what it returns is binding only when
+    /// every other input is [Offered::Resolved](av_toolbox_gpu::Offered::Resolved). While any of them is
+    /// [Offered::Proposed](av_toolbox_gpu::Offered::Proposed) or
+    /// [Offered::Unknown](av_toolbox_gpu::Offered::Unknown), leaving a sample out reads as a preference
+    /// rather than a refusal, so the solver may still settle on it when nothing else suits every
+    /// reader. An optional input nobody bound never settles, so it does not hold an answer back.
+    /// The stage is asked again once everything is decided, and that answer is the one that holds.
+    /// Apply the same check from whichever input is asked about, so the answer does not depend on
+    /// which came first.
+    fn accepts_input(
         capabilities: &Capabilities,
         args: &Self::Args,
-        offered: &[StreamFormat],
-    ) -> Result<Vec<FormatSet>, StageError>;
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError>;
 
     /// What it could produce, given what it will be given.
     fn produces(
         capabilities: &Capabilities,
         args: &Self::Args,
-        chosen: &[StreamFormat],
+        chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError>;
 
     fn build<R: Runtime>(
@@ -280,16 +327,30 @@ pub trait TransformDefinition: StageDefinition {
 
 /// A stage that consumes the finished stream.
 pub trait SinkDefinition: StageDefinition {
-    /// Which sample formats this stage will take on each input, most preferred first.
+    /// Which sample formats this stage will take on one input, most preferred first.
     ///
-    /// Returns one [FormatSet] per offered input, in the same order it was offered. The offered
-    /// layout, dimensions and colour information are the stage's to validate, and an unusable
-    /// one is an error rather than an empty set.
-    fn accepts(
+    /// The offered layout, dimensions and colour information are the stage's to validate, and an
+    /// unusable one is an error rather than an empty set. Raise one only for those, because the
+    /// stage is asked once per sample its producer could emit and an error stops the whole edge
+    /// rather than the one sample. A sample the stage cannot work in is left out of the set.
+    ///
+    /// `inputs` holds every input in signature order, including this one at `index`. A stage whose
+    /// answer depends on more than one input reads it, and what it returns is binding only when
+    /// every other input is [Offered::Resolved](av_toolbox_gpu::Offered::Resolved). While any of them is
+    /// [Offered::Proposed](av_toolbox_gpu::Offered::Proposed) or
+    /// [Offered::Unknown](av_toolbox_gpu::Offered::Unknown), leaving a sample out reads as a preference
+    /// rather than a refusal, so the solver may still settle on it when nothing else suits every
+    /// reader. An optional input nobody bound never settles, so it does not hold an answer back.
+    /// The stage is asked again once everything is decided, and that answer is the one that holds.
+    /// Apply the same check from whichever input is asked about, so the answer does not depend on
+    /// which came first.
+    fn accepts_input(
         capabilities: &Capabilities,
         args: &Self::Args,
-        offered: &[StreamFormat],
-    ) -> Result<Vec<FormatSet>, StageError>;
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError>;
 
     fn build<R: Runtime>(
         context: &BuildContext<R>,
@@ -344,23 +405,22 @@ mod tests {
     }
 
     impl FilterDefinition for ExampleDefinition {
-        fn accepts(
+        fn accepts_input(
             _capabilities: &Capabilities,
             _args: &Self::Args,
-            offered: &[StreamFormat],
-        ) -> Result<Vec<FormatSet>, StageError> {
-            Ok(offered
-                .iter()
-                .map(|format| FormatSet::of([format.sample()]))
-                .collect())
+            _index: usize,
+            offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            Ok(FormatSet::of([offered.sample()]))
         }
 
         fn produces(
             _capabilities: &Capabilities,
             _args: &Self::Args,
-            chosen: &[StreamFormat],
+            chosen: &[Option<StreamFormat>],
         ) -> Result<OutputFormats, StageError> {
-            let format = chosen[0];
+            let format = chosen.iter().flatten().next().copied().expect("an input");
             Ok(OutputFormats {
                 template: StreamTemplate::from_format(&format),
                 samples: FormatSet::of([format.sample()]),

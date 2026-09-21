@@ -5,8 +5,9 @@
 //! wrong with the definitions comes back as a [Diagnostics] set, each entry carrying the span it
 //! came from.
 //!
-//! A graph can then be taken three ways.
+//! A graph can then be taken four ways.
 //!
+//! - [solve()] chooses the sample format every edge carries.
 //! - [CompiledGraph::instantiate] builds the stages through the registry.
 //! - [optimise()] runs passes over it, merging identical stages and working out which outputs have
 //!   to be shared.
@@ -31,6 +32,7 @@ mod instantiate;
 mod layout;
 mod optimise;
 mod render;
+mod solve;
 mod spec;
 #[cfg(test)]
 mod testing;
@@ -51,4 +53,5 @@ pub use self::optimise::{
     optimise,
 };
 pub use self::render::{RenderOptions, render_ascii, render_mermaid, render_svg};
+pub use self::solve::{SolvedFormats, solve};
 pub use self::spec::{InputRef, Span, Spanned, StageSpec};

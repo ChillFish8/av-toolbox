@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use av_toolbox_core::{
     BoundInputs,
@@ -25,9 +25,13 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     ColourInfo,
+    Depth,
+    ElementType,
     FormatSet,
     FrameFormat,
     FrameLayout,
+    MaskFormat,
+    Offered,
     OutputFormats,
     ResolvedFormats,
     Runtime,
@@ -42,9 +46,9 @@ use serde_json::json;
 
 use crate::{InputRef, Span, Spanned, StageSpec};
 
-/// A fixed frame format used as the starting point for every fixture source.
-fn fixture_format() -> StreamFormat {
-    StreamFormat::Frames(FrameFormat {
+/// The frame format every fixture works in, so they all name the same dimensions.
+fn frame_format() -> FrameFormat {
+    FrameFormat {
         width: 64,
         height: 64,
         layout: FrameLayout::Yuv {
@@ -52,6 +56,36 @@ fn fixture_format() -> StreamFormat {
         },
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
+    }
+}
+
+/// The format of the first bound input, since every fixture passes its first input through.
+///
+/// A signature with an optional parameter can leave a hole before the input a fixture wants, so it
+/// takes the first one that is actually there rather than the first slot.
+fn first_bound(chosen: &[Option<StreamFormat>]) -> Result<StreamFormat, StageError> {
+    let format = chosen.iter().flatten().next().copied();
+
+    format.ok_or_else(|| StageError::msg("a stage with inputs was given none"))
+}
+
+/// A fixed frame format used as the starting point for every fixture source.
+fn fixture_format() -> StreamFormat {
+    StreamFormat::Frames(frame_format())
+}
+
+fn frames_template(chosen: StreamFormat) -> StreamTemplate {
+    StreamTemplate::from_format(&chosen)
+}
+
+/// A mask of the fixture dimensions, carrying whatever sample was chosen.
+///
+/// A mask stage emits a mask, so it cannot pass a frames template straight through.
+fn mask_template(chosen: StreamFormat) -> StreamTemplate {
+    StreamTemplate::Mask(MaskFormat {
+        width: 64,
+        height: 64,
+        sample: chosen.sample(),
     })
 }
 
@@ -125,7 +159,8 @@ macro_rules! fixture_stage {
         $definition_trait:ident,
         $identifier:literal,
         $args:ty,
-        $signature:expr
+        $signature:expr,
+        $template:expr
     ) => {
         struct $instance;
 
@@ -152,29 +187,25 @@ macro_rules! fixture_stage {
         }
 
         impl $definition_trait for $definition {
-            fn accepts(
+            fn accepts_input(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
-                offered: &[StreamFormat],
-            ) -> Result<Vec<FormatSet>, StageError> {
-                Ok(offered
-                    .iter()
-                    .map(|format| FormatSet::of([format.sample()]))
-                    .collect())
+                _index: usize,
+                offered: StreamFormat,
+                _inputs: &[Offered],
+            ) -> Result<FormatSet, StageError> {
+                Ok(FormatSet::of([offered.sample()]))
             }
 
             fn produces(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
-                chosen: &[StreamFormat],
+                chosen: &[Option<StreamFormat>],
             ) -> Result<OutputFormats, StageError> {
-                let format = chosen
-                    .first()
-                    .copied()
-                    .ok_or_else(|| StageError::msg("a stage with inputs was given none"))?;
+                let format = first_bound(chosen)?;
 
                 Ok(OutputFormats {
-                    template: StreamTemplate::from_format(&format),
+                    template: $template(format),
                     samples: FormatSet::of([format.sample()]),
                 })
             }
@@ -225,15 +256,14 @@ macro_rules! fixture_sink {
         }
 
         impl SinkDefinition for $definition {
-            fn accepts(
+            fn accepts_input(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
-                offered: &[StreamFormat],
-            ) -> Result<Vec<FormatSet>, StageError> {
-                Ok(offered
-                    .iter()
-                    .map(|format| FormatSet::of([format.sample()]))
-                    .collect())
+                _index: usize,
+                offered: StreamFormat,
+                _inputs: &[Offered],
+            ) -> Result<FormatSet, StageError> {
+                Ok(FormatSet::of([offered.sample()]))
             }
 
             fn build<R: Runtime>(
@@ -279,7 +309,8 @@ fixture_stage!(
     FilterDefinition,
     "blur",
     BlurArgs,
-    &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)])
+    &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]),
+    frames_template
 );
 fixture_stage!(
     Merge,
@@ -291,7 +322,8 @@ fixture_stage!(
     &InputSignature::with_variadic_of(
         &[InputParam::required("base").accepting(StreamType::Frames)],
         StreamType::Frames,
-    )
+    ),
+    mask_template
 );
 fixture_stage!(
     Split,
@@ -300,7 +332,8 @@ fixture_stage!(
     TransformDefinition,
     "split",
     SplitArgs,
-    &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)])
+    &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]),
+    frames_template
 );
 fixture_sink!(
     Stdout,
@@ -319,7 +352,8 @@ fixture_stage!(
     &InputSignature::new(&[
         InputParam::required("reference").accepting(StreamType::Frames),
         InputParam::optional("overlay").accepting(StreamType::Mask),
-    ])
+    ]),
+    frames_template
 );
 
 struct Failing;
@@ -342,26 +376,22 @@ impl StageDefinition for Failing {
 }
 
 impl FilterDefinition for Failing {
-    fn accepts(
+    fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
-        offered: &[StreamFormat],
-    ) -> Result<Vec<FormatSet>, StageError> {
-        Ok(offered
-            .iter()
-            .map(|format| FormatSet::of([format.sample()]))
-            .collect())
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
     }
 
     fn produces(
         _capabilities: &Capabilities,
         _args: &Self::Args,
-        chosen: &[StreamFormat],
+        chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
-        let format = chosen
-            .first()
-            .copied()
-            .ok_or_else(|| StageError::msg("a stage with inputs was given none"))?;
+        let format = first_bound(chosen)?;
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
@@ -409,26 +439,22 @@ impl StageDefinition for Recording {
 }
 
 impl FilterDefinition for Recording {
-    fn accepts(
+    fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
-        offered: &[StreamFormat],
-    ) -> Result<Vec<FormatSet>, StageError> {
-        Ok(offered
-            .iter()
-            .map(|format| FormatSet::of([format.sample()]))
-            .collect())
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
     }
 
     fn produces(
         _capabilities: &Capabilities,
         _args: &Self::Args,
-        chosen: &[StreamFormat],
+        chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
-        let format = chosen
-            .first()
-            .copied()
-            .ok_or_else(|| StageError::msg("a stage with inputs was given none"))?;
+        let format = first_bound(chosen)?;
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
@@ -452,6 +478,505 @@ impl FilterDefinition for Recording {
     }
 }
 
+/// Writes a source fixture offering more than one sample, so an edge from it has a choice to make.
+macro_rules! opinionated_source {
+    ($definition:ident, $instance:ident, $identifier:literal, $samples:expr) => {
+        struct $instance;
+
+        impl StageInstance for $instance {}
+        impl Source for $instance {}
+
+        struct $definition;
+
+        impl StageDefinition for $definition {
+            type Args = NoArgs;
+
+            fn package() -> &'static str {
+                "test"
+            }
+
+            fn identifier() -> &'static str {
+                $identifier
+            }
+
+            fn inputs() -> &'static InputSignature {
+                const SIGNATURE: &InputSignature = &InputSignature::EMPTY;
+                SIGNATURE
+            }
+        }
+
+        impl SourceDefinition for $definition {
+            fn produces(
+                _capabilities: &Capabilities,
+                _args: &Self::Args,
+            ) -> Result<OutputFormats, StageError> {
+                Ok(OutputFormats {
+                    template: StreamTemplate::Frames(frame_format()),
+                    samples: $samples,
+                })
+            }
+
+            fn build<R: Runtime>(
+                _context: &BuildContext<R>,
+                _args: Self::Args,
+                _inputs: BoundInputs,
+                _formats: &ResolvedFormats,
+            ) -> Result<Box<dyn Source>, StageError> {
+                Ok(Box::new($instance))
+            }
+        }
+    };
+}
+
+/// Writes a filter fixture that takes only certain samples and emits the same ones.
+macro_rules! opinionated_filter {
+    ($definition:ident, $instance:ident, $identifier:literal, $samples:expr) => {
+        struct $instance;
+
+        impl StageInstance for $instance {}
+        impl Filter for $instance {}
+
+        struct $definition;
+
+        impl StageDefinition for $definition {
+            type Args = NoArgs;
+
+            fn package() -> &'static str {
+                "test"
+            }
+
+            fn identifier() -> &'static str {
+                $identifier
+            }
+
+            fn inputs() -> &'static InputSignature {
+                const SIGNATURE: &InputSignature =
+                    &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]);
+                SIGNATURE
+            }
+        }
+
+        impl FilterDefinition for $definition {
+            fn accepts_input(
+                _capabilities: &Capabilities,
+                _args: &Self::Args,
+                _index: usize,
+                _offered: StreamFormat,
+                _inputs: &[Offered],
+            ) -> Result<FormatSet, StageError> {
+                Ok($samples)
+            }
+
+            fn produces(
+                _capabilities: &Capabilities,
+                _args: &Self::Args,
+                chosen: &[Option<StreamFormat>],
+            ) -> Result<OutputFormats, StageError> {
+                let format = first_bound(chosen)?;
+
+                Ok(OutputFormats {
+                    template: StreamTemplate::from_format(&format),
+                    samples: $samples,
+                })
+            }
+
+            fn build<R: Runtime>(
+                _context: &BuildContext<R>,
+                _args: Self::Args,
+                _inputs: BoundInputs,
+                _formats: &ResolvedFormats,
+            ) -> Result<Box<dyn Filter>, StageError> {
+                Ok(Box::new($instance))
+            }
+        }
+    };
+}
+
+opinionated_source!(
+    Wide,
+    WideStage,
+    "wide",
+    FormatSet::of([SampleFormat::U8, SampleFormat::F32])
+);
+opinionated_source!(
+    Deep,
+    DeepStage,
+    "deep",
+    FormatSet::of([SampleFormat::U16 { depth: Depth::TEN }, SampleFormat::F32])
+);
+// FloatFirst would rather emit the wider of its two samples, so its preference and its narrowest
+// sample are not the same.
+opinionated_source!(
+    FloatFirst,
+    FloatFirstStage,
+    "floatfirst",
+    FormatSet::of([SampleFormat::F32, SampleFormat::U8])
+);
+opinionated_filter!(
+    Precise,
+    PreciseStage,
+    "precise",
+    FormatSet::of([SampleFormat::F32])
+);
+opinionated_filter!(
+    Either,
+    EitherStage,
+    "either",
+    FormatSet::of([SampleFormat::U8, SampleFormat::F32])
+);
+opinionated_filter!(Narrow, NarrowStage, "narrow", FormatSet::of([SampleFormat::U8]));
+
+struct Prefers16Stage;
+
+impl StageInstance for Prefers16Stage {}
+impl Filter for Prefers16Stage {}
+
+/// A filter that would rather work in a ten-bit integer, and asks the device before offering it.
+struct Prefers16;
+
+impl StageDefinition for Prefers16 {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "prefers16"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Prefers16 {
+    fn accepts_input(
+        capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        _offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        let mut formats = FormatSet::new();
+        if capabilities.can_compute(ElementType::U16) {
+            formats.push(SampleFormat::U16 { depth: Depth::TEN });
+        }
+        formats.push(SampleFormat::F32);
+
+        Ok(formats)
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(Prefers16Stage))
+    }
+}
+
+/// The signature both coupled masks take, one frame stream per input.
+const COUPLED_INPUTS: &InputSignature = &InputSignature::new(&[
+    InputParam::required("base").accepting(StreamType::Frames),
+    InputParam::required("overlay").accepting(StreamType::Frames),
+]);
+
+struct MatchedStage;
+
+impl StageInstance for MatchedStage {}
+impl Mask for MatchedStage {}
+
+/// A mask whose two inputs have to carry the same sample, because its kernel reads them together.
+struct Matched;
+
+impl StageDefinition for Matched {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "matched"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        COUPLED_INPUTS
+    }
+}
+
+impl MaskDefinition for Matched {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        let sibling = inputs
+            .iter()
+            .enumerate()
+            .find(|(slot, _)| *slot != index)
+            .and_then(|(_, other)| other.format());
+
+        match sibling {
+            Some(other) => Ok(FormatSet::of([other.sample()])),
+            None => Ok(FormatSet::of([offered.sample()])),
+        }
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: mask_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Mask>, StageError> {
+        Ok(Box::new(MatchedStage))
+    }
+}
+
+struct AnchoredStage;
+
+impl StageInstance for AnchoredStage {}
+impl Mask for AnchoredStage {}
+
+/// A mask whose base has to carry its overlay's sample, while the overlay itself takes anything.
+struct Anchored;
+
+impl StageDefinition for Anchored {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "anchored"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        COUPLED_INPUTS
+    }
+}
+
+impl MaskDefinition for Anchored {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        if index != 0 {
+            return Ok(FormatSet::of([offered.sample()]));
+        }
+
+        let overlay = inputs.get(1).and_then(|input| input.format());
+
+        match overlay {
+            Some(format) => Ok(FormatSet::of([format.sample()])),
+            None => Ok(FormatSet::of([offered.sample()])),
+        }
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: mask_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Mask>, StageError> {
+        Ok(Box::new(AnchoredStage))
+    }
+}
+
+struct MislabelledStage;
+
+impl StageInstance for MislabelledStage {}
+impl Mask for MislabelledStage {}
+
+/// A mask that produces frames, which is not what a mask emits.
+struct Mislabelled;
+
+impl StageDefinition for Mislabelled {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "mislabelled"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("base").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl MaskDefinition for Mislabelled {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: frames_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Mask>, StageError> {
+        Ok(Box::new(MislabelledStage))
+    }
+}
+
+/// What [Sparse] was told about its inputs, recorded so a test can compare the three places a
+/// stage hears about them.
+///
+/// The slot it was asked about and how many it was offered, then how many formats it was given to
+/// produce from and which of those slots were filled, as a bit per slot.
+pub(crate) static SPARSE_ASKED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static SPARSE_OFFERED_SLOTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SPARSE_CHOSEN_SLOTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SPARSE_FILLED_SLOTS: AtomicUsize = AtomicUsize::new(0);
+
+struct SparseStage;
+
+impl StageInstance for SparseStage {}
+impl Filter for SparseStage {}
+
+/// A filter whose first input is optional, so a pipeline can leave a hole before a bound slot.
+struct Sparse;
+
+impl StageDefinition for Sparse {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "sparse"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[
+            InputParam::optional("first").accepting(StreamType::Frames),
+            InputParam::required("second").accepting(StreamType::Frames),
+        ]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Sparse {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        SPARSE_ASKED_SLOT.store(index, Ordering::SeqCst);
+        SPARSE_OFFERED_SLOTS.store(inputs.len(), Ordering::SeqCst);
+
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let filled: usize = chosen
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.is_some())
+            .map(|(index, _)| 1 << index)
+            .sum();
+
+        SPARSE_CHOSEN_SLOTS.store(chosen.len(), Ordering::SeqCst);
+        SPARSE_FILLED_SLOTS.store(filled, Ordering::SeqCst);
+
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: frames_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(SparseStage))
+    }
+}
+
 pub(crate) fn registry() -> PipelineRegistry {
     let mut registry = PipelineRegistry::new();
 
@@ -463,6 +988,17 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_sink::<Stdout>().expect("should register");
     registry.register_filter::<Deband>().expect("should register");
     registry.register_filter::<Recording>().expect("should register");
+    registry.register_source::<Wide>().expect("should register");
+    registry.register_source::<Deep>().expect("should register");
+    registry.register_filter::<Precise>().expect("should register");
+    registry.register_filter::<Either>().expect("should register");
+    registry.register_filter::<Narrow>().expect("should register");
+    registry.register_filter::<Prefers16>().expect("should register");
+    registry.register_mask::<Matched>().expect("should register");
+    registry.register_mask::<Anchored>().expect("should register");
+    registry.register_source::<FloatFirst>().expect("should register");
+    registry.register_mask::<Mislabelled>().expect("should register");
+    registry.register_filter::<Sparse>().expect("should register");
 
     registry
 }
@@ -504,7 +1040,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 8);
+        assert_eq!(identifiers.len(), 19);
         assert!(identifiers.contains(&"test/blur"));
         assert!(identifiers.contains(&"test/failing"));
         assert!(identifiers.contains(&"test/recording"));
