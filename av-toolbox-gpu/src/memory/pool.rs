@@ -4,8 +4,18 @@ use std::sync::{Arc, Mutex};
 use cubecl::server::Handle;
 
 use crate::frame::gpu::Recycle;
-use crate::frame::{Frame, FrameFormat, FrameMeta, Mask, MaskFormat, Plane, PlaneBuffer};
-use crate::memory::allocator::DeviceAllocator;
+use crate::frame::{
+    Channel,
+    Frame,
+    FrameFormat,
+    FrameMeta,
+    HostPlanes,
+    Mask,
+    MaskFormat,
+    Plane,
+    PlaneBuffer,
+};
+use crate::memory::allocator::{DeviceAllocator, DeviceRead, RuntimeError};
 use crate::memory::ring::{Ring, RingGeometry, RingSpec};
 
 /// Device buffers kept for reuse, keyed by size.
@@ -56,6 +66,11 @@ impl BufferPool {
             None => self.inner.allocator.empty(bytes),
         };
 
+        self.recycle_handle(handle, bytes)
+    }
+
+    /// Wraps `handle` so it goes back to this pool's free lists when its last holder drops it.
+    fn recycle_handle(&self, handle: Handle, bytes: usize) -> PlaneBuffer {
         let recyclable: Arc<dyn Recycle> = self.inner.clone();
         let recycle = Arc::downgrade(&recyclable);
 
@@ -74,6 +89,11 @@ impl BufferPool {
     /// The byte alignment every buffer view has to start on.
     pub fn alignment(&self) -> usize {
         self.inner.allocator.alignment()
+    }
+
+    /// Starts reading `handles` back from the device, in the order given.
+    pub(crate) fn read(&self, handles: Vec<Handle>) -> DeviceRead {
+        self.inner.allocator.read(handles)
     }
 
     /// A ring of `spec.slots` frames in one allocation.
@@ -125,6 +145,93 @@ impl BufferPool {
         Mask::new(*format, plane, meta)
     }
 
+    /// Uploads `planes` as a frame of `format`, carrying `meta`.
+    ///
+    /// Channels are walked in the format's own order, the one
+    /// [FrameFormat::plane_sizes](crate::FrameFormat::plane_sizes) uses, so a plane lands against
+    /// the channel it belongs to rather than wherever `planes` happened to carry it.
+    pub fn load_frame(
+        &self,
+        item: usize,
+        format: &FrameFormat,
+        planes: &HostPlanes,
+        meta: FrameMeta,
+    ) -> Result<Frame, RuntimeError> {
+        let mut loaded = Vec::with_capacity(format.channels().len());
+        for channel in format.channels() {
+            let (width, height) = format
+                .channel_dimensions(*channel)
+                .expect("the layout carries every channel it lists");
+            let expected = format
+                .channel_bytes(*channel)
+                .expect("the layout carries every channel it lists");
+
+            let plane = self.load_plane(item, *channel, width, height, expected, planes)?;
+            loaded.push(plane);
+        }
+
+        Ok(Frame::new(*format, loaded, meta))
+    }
+
+    /// Uploads `planes` as a mask of `format`, carrying `meta`.
+    pub fn load_mask(
+        &self,
+        item: usize,
+        format: &MaskFormat,
+        planes: &HostPlanes,
+        meta: FrameMeta,
+    ) -> Result<Mask, RuntimeError> {
+        let plane = self.load_plane(
+            item,
+            Channel::Y,
+            format.width,
+            format.height,
+            format.bytes(),
+            planes,
+        )?;
+
+        Ok(Mask::new(*format, plane, meta))
+    }
+
+    /// The `channel` plane of `item`, uploaded from `planes`.
+    ///
+    /// `planes` is caller data, so a missing channel or a byte count that does not match
+    /// `expected` is reported here rather than left to upload a short buffer, which would leave
+    /// the plane holding whatever memory the device handed back.
+    fn load_plane(
+        &self,
+        item: usize,
+        channel: Channel,
+        width: u32,
+        height: u32,
+        expected: usize,
+        planes: &HostPlanes,
+    ) -> Result<Plane, RuntimeError> {
+        let bytes = planes.plane(channel).ok_or(RuntimeError::HostPlaneMissing {
+            item,
+            channel,
+            width,
+            height,
+            expected,
+        })?;
+
+        if bytes.len() != expected {
+            return Err(RuntimeError::HostPlaneSize {
+                item,
+                channel,
+                width,
+                height,
+                expected,
+                given: bytes.len(),
+            });
+        }
+
+        let handle = self.inner.allocator.upload(bytes);
+        let buffer = self.recycle_handle(handle, expected);
+
+        Ok(Plane::new(buffer, width, height))
+    }
+
     /// Releases every buffer being held for reuse.
     ///
     /// A pipeline that changes format stops asking for the old sizes, and nothing else would ever
@@ -163,6 +270,7 @@ mod tests {
         FrameMeta,
         MaskFormat,
         SampleFormat,
+        StreamFormat,
         Subsampling,
     };
 
@@ -323,6 +431,68 @@ mod tests {
 
         assert_eq!(allocator.requests(), vec![64 * 32]);
         assert_eq!(mask.plane().dimensions(), (64, 32));
+    }
+
+    #[test]
+    fn loading_a_frame_uploads_one_plane_per_channel() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let pool = pool(allocator.clone());
+        let format = frame_format();
+        let planes = HostPlanes::zeroed(&StreamFormat::Frames(format));
+
+        let frame = pool
+            .load_frame(0, &format, &planes, FrameMeta::at(3))
+            .expect("the planes match the format");
+
+        assert_eq!(allocator.count(), 3, "one upload per plane of a yuv frame");
+        assert_eq!(frame.meta().index, 3);
+    }
+
+    /// `load_frame` and `load_mask` still take their format as a plain argument, independent of
+    /// what `planes` itself declares, unlike `LoadItem`, which takes its format from the planes
+    /// alone. Calling the pool directly like this is what keeps `HostPlaneMissing` reachable.
+    #[test]
+    fn loading_a_masks_planes_as_a_frame_reports_the_missing_chroma() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let pool = pool(allocator);
+        let mask_format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+        };
+        let planes = HostPlanes::zeroed(&StreamFormat::Mask(mask_format));
+
+        let error = pool
+            .load_frame(0, &frame_format(), &planes, FrameMeta::at(0))
+            .expect_err("a mask has no chroma planes to load as a frame");
+
+        assert!(error.to_string().contains('U'), "{error}");
+    }
+
+    /// Calling the pool directly like this, rather than through `FrameContext::load`, is what
+    /// keeps `HostPlaneSize` reachable now that `LoadItem` can no longer pair a `HostPlanes` with
+    /// a format it disagrees with.
+    #[test]
+    fn loading_a_short_host_plane_reports_a_mismatch_instead_of_uploading_it() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let pool = pool(allocator);
+        let short = MaskFormat {
+            width: 8,
+            height: 8,
+            sample: SampleFormat::U8,
+        };
+        let target = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+        };
+        let planes = HostPlanes::zeroed(&StreamFormat::Mask(short));
+
+        let error = pool
+            .load_mask(0, &target, &planes, FrameMeta::at(0))
+            .expect_err("a short host plane should not load");
+
+        assert!(error.to_string().contains("needs 4096 bytes"), "{error}");
     }
 
     #[test]

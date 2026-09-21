@@ -1,5 +1,60 @@
 use crate::frame::format::StreamFormat;
+use crate::frame::gpu::FrameMeta;
 use crate::frame::layout::Channel;
+
+/// One item that came back from the device, with where it sits in its stream.
+///
+/// This is what [LoadItem](crate::LoadItem) turns back into, so a sink gets each frame's index and
+/// timestamp alongside its samples rather than tracking them in a list of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostItem {
+    planes: HostPlanes,
+    meta: FrameMeta,
+}
+
+impl HostItem {
+    pub fn new(planes: HostPlanes, meta: FrameMeta) -> Self {
+        Self { planes, meta }
+    }
+
+    pub const fn meta(&self) -> &FrameMeta {
+        &self.meta
+    }
+
+    pub const fn planes(&self) -> &HostPlanes {
+        &self.planes
+    }
+
+    pub fn into_planes(self) -> HostPlanes {
+        self.planes
+    }
+
+    /// How many planes this item holds.
+    pub fn len(&self) -> usize {
+        self.planes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.planes.is_empty()
+    }
+
+    pub fn plane(&self, channel: Channel) -> Option<&[u8]> {
+        self.planes.plane(channel)
+    }
+
+    pub fn plane_mut(&mut self, channel: Channel) -> Option<&mut [u8]> {
+        self.planes.plane_mut(channel)
+    }
+
+    /// Resizes to hold `format` and takes `meta` as its new place in the stream.
+    ///
+    /// Whatever allocations already fit are kept, so a caller reading batch after batch into the
+    /// same items allocates nothing per batch.
+    pub(crate) fn reshape(&mut self, format: &StreamFormat, meta: FrameMeta) {
+        self.planes.resize_for(format);
+        self.meta = meta;
+    }
+}
 
 /// Host-side planes, tightly packed, one per channel.
 ///

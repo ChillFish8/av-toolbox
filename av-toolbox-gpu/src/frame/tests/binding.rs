@@ -18,7 +18,7 @@ const BASELINE: u32 = 1_000_000;
 /// A wrong offset and a wrong length fail differently. An offset error moves where the run of
 /// indices lands, and a length error leaves a tail holding whatever was in it before.
 #[cube(launch_unchecked)]
-fn write_index(output: &mut Array<u32>, base: u32) {
+pub(crate) fn write_index(output: &mut Array<u32>, base: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -39,7 +39,7 @@ fn format() -> FrameFormat {
 }
 
 /// How many `u32` values `bytes` of a buffer hold.
-const fn elements(bytes: usize) -> usize {
+pub(crate) const fn elements(bytes: usize) -> usize {
     bytes / size_of::<u32>()
 }
 
@@ -52,7 +52,7 @@ fn read_back<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u32>
 }
 
 /// Runs the kernel over `output`, sized from the context so the launch covers every element.
-fn launch<R: Runtime>(context: &BuildContext<R>, output: ArrayArg<R>, count: usize, base: u32) {
+pub(crate) fn launch<R: Runtime>(context: &BuildContext<R>, output: ArrayArg<R>, count: usize, base: u32) {
     let frames = context.frame_context();
     let cubes = frames.cube_count(count);
     let shape = frames.cube_dim();

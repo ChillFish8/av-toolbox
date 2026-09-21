@@ -6,13 +6,13 @@
 //!
 //! Planes are flat, with one sample per pixel per row and no padding between rows.
 
-#[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
-mod binding_tests;
 mod format;
 pub(crate) mod gpu;
 mod host;
 mod layout;
 mod sample;
+#[cfg(test)]
+pub(crate) mod tests;
 
 pub use self::format::{
     ColourInfo,
@@ -25,6 +25,6 @@ pub use self::format::{
     Transfer,
 };
 pub use self::gpu::{Frame, FrameMeta, FrameMut, Mask, Plane, PlaneBuffer, StreamItem};
-pub use self::host::HostPlanes;
+pub use self::host::{HostItem, HostPlanes};
 pub use self::layout::{Channel, FrameLayout, Subsampling};
 pub use self::sample::{Depth, DepthError, SampleFormat};

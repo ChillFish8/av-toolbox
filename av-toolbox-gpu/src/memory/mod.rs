@@ -7,6 +7,6 @@ mod allocator;
 mod pool;
 mod ring;
 
-pub use self::allocator::{ClientAllocator, DeviceAllocator};
+pub use self::allocator::{ClientAllocator, DeviceAllocator, DeviceRead, RuntimeError};
 pub use self::pool::BufferPool;
 pub use self::ring::{Ring, RingGeometry, RingSpec};

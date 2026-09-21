@@ -1,9 +1,11 @@
 use std::sync::Mutex;
 
+use cubecl::bytes::Bytes;
 use cubecl::server::Handle;
 use cubecl::stream_id::StreamId;
 
 use crate::DeviceAllocator;
+use crate::memory::DeviceRead;
 
 /// The wgpu-backed accelerator this build tests against.
 ///
@@ -25,6 +27,8 @@ pub(crate) const TEST_ACCELERATOR: crate::Accelerator = crate::Accelerator::Meta
 pub(crate) struct CountingAllocator {
     alignment: usize,
     requests: Mutex<Vec<usize>>,
+    reads: Mutex<Vec<usize>>,
+    uploads: Mutex<Vec<Vec<u8>>>,
 }
 
 impl CountingAllocator {
@@ -32,6 +36,8 @@ impl CountingAllocator {
         Self {
             alignment,
             requests: Mutex::new(Vec::new()),
+            reads: Mutex::new(Vec::new()),
+            uploads: Mutex::new(Vec::new()),
         }
     }
 
@@ -50,6 +56,22 @@ impl CountingAllocator {
             .unwrap_or_else(|error| error.into_inner())
             .len()
     }
+
+    /// The sizes read back, in the order the handles were given.
+    pub(crate) fn reads(&self) -> Vec<usize> {
+        self.reads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    /// The bytes uploaded, in order.
+    pub(crate) fn uploads(&self) -> Vec<Vec<u8>> {
+        self.uploads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
 }
 
 impl DeviceAllocator for CountingAllocator {
@@ -63,10 +85,40 @@ impl DeviceAllocator for CountingAllocator {
     }
 
     fn upload(&self, bytes: &[u8]) -> Handle {
+        self.uploads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(bytes.to_vec());
+
         self.empty(bytes.len())
     }
 
     fn alignment(&self) -> usize {
         self.alignment
+    }
+
+    /// Reads `handles` back, filling buffer `position` with the byte `position` repeated.
+    ///
+    /// Two handles the same size, such as a frame's U and V planes, would come back identical if
+    /// the fake filled every buffer the same way. Marking each buffer by its position instead
+    /// means a caller that swaps two same-sized handles gets back buffers a test can tell apart.
+    fn read(&self, handles: Vec<Handle>) -> DeviceRead {
+        let sizes: Vec<usize> = handles
+            .iter()
+            .map(|handle| handle.size_in_used() as usize)
+            .collect();
+
+        self.reads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .extend(sizes.iter().copied());
+
+        let buffers = sizes
+            .into_iter()
+            .enumerate()
+            .map(|(position, size)| Bytes::from_bytes_vec(vec![position as u8; size]))
+            .collect();
+
+        Box::pin(async move { Ok(buffers) })
     }
 }

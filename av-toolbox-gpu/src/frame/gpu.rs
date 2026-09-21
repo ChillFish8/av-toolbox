@@ -4,7 +4,7 @@ use std::time::Duration;
 use cubecl::prelude::{ArrayArg, CubePrimitive, Runtime};
 use cubecl::server::Handle;
 
-use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat};
+use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat, StreamFormat};
 use crate::frame::layout::Channel;
 
 /// Where a plane's memory goes when its last holder drops it.
@@ -317,6 +317,33 @@ impl StreamItem {
         match self {
             Self::Mask(mask) => Ok(mask),
             Self::Frame(_) => Err(self),
+        }
+    }
+
+    /// This item's format, as [StreamFormat](crate::frame::StreamFormat) describes it.
+    pub fn format(&self) -> StreamFormat {
+        match self {
+            Self::Frame(frame) => StreamFormat::Frames(*frame.format()),
+            Self::Mask(mask) => StreamFormat::Mask(*mask.format()),
+        }
+    }
+
+    /// Where this item sits in its stream.
+    pub const fn meta(&self) -> &FrameMeta {
+        match self {
+            Self::Frame(frame) => frame.meta(),
+            Self::Mask(mask) => mask.meta(),
+        }
+    }
+
+    /// The plane carrying `channel`, if this item has one.
+    ///
+    /// A mask carries a single plane, addressed as [Channel::Y](crate::frame::Channel::Y).
+    pub(crate) fn plane(&self, channel: Channel) -> Option<&Plane> {
+        match self {
+            Self::Frame(frame) => frame.plane(channel),
+            Self::Mask(mask) if channel == Channel::Y => Some(mask.plane()),
+            Self::Mask(_) => None,
         }
     }
 }

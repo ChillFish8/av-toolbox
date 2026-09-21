@@ -19,6 +19,7 @@ compile_error!("the vulkan and metal backends cannot both be enabled, pick one")
 
 mod accelerator;
 mod backend;
+mod batch;
 mod cache;
 mod capabilities;
 mod context;
@@ -34,12 +35,16 @@ mod warmup;
 
 #[cfg(test)]
 mod testing;
+#[cfg(test)]
+mod tests;
 
+pub use cubecl::bytes::Bytes;
 pub use cubecl::client::ComputeClient;
 pub use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, Runtime};
 
 pub use self::accelerator::{Accelerator, default_accelerators};
 pub use self::backend::{Backend, BuildContext, BuildTask};
+pub use self::batch::{PendingBatch, TryWait};
 pub use self::cache::{
     COMPILATION_CACHE_ENV,
     CacheError,
@@ -50,7 +55,7 @@ pub use self::cache::{
     install_compilation_cache_once,
 };
 pub use self::capabilities::{Capabilities, CapabilitiesBuilder, ElementType, capabilities_for};
-pub use self::context::FrameContext;
+pub use self::context::{FrameContext, LoadItem};
 pub use self::device::{Device, DeviceError, ParseDeviceError};
 pub use self::enumerate::{BackendDevices, enumerate_devices};
 pub use self::frame::{
@@ -64,6 +69,7 @@ pub use self::frame::{
     FrameLayout,
     FrameMeta,
     FrameMut,
+    HostItem,
     HostPlanes,
     Mask,
     MaskFormat,
@@ -77,7 +83,16 @@ pub use self::frame::{
     Subsampling,
     Transfer,
 };
-pub use self::memory::{BufferPool, ClientAllocator, DeviceAllocator, Ring, RingGeometry, RingSpec};
+pub use self::memory::{
+    BufferPool,
+    ClientAllocator,
+    DeviceAllocator,
+    DeviceRead,
+    Ring,
+    RingGeometry,
+    RingSpec,
+    RuntimeError,
+};
 pub use self::negotiate::{FormatSet, Offered, OutputFormats, ResolvedFormats, StreamTemplate};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};

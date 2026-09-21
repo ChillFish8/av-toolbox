@@ -428,8 +428,10 @@ mod tests {
 
     use av_toolbox_gpu::{
         BufferPool,
+        Bytes,
         ColourInfo,
         DeviceAllocator,
+        DeviceRead,
         FrameFormat,
         FrameLayout,
         FrameMeta,
@@ -457,6 +459,20 @@ mod tests {
 
         fn alignment(&self) -> usize {
             1
+        }
+
+        /// Fills buffer `position` with the byte `position` repeated, so two same-sized handles
+        /// still come back as distinguishable buffers.
+        fn read(&self, handles: Vec<Handle>) -> DeviceRead {
+            let buffers = handles
+                .into_iter()
+                .enumerate()
+                .map(|(position, handle)| {
+                    Bytes::from_bytes_vec(vec![position as u8; handle.size_in_used() as usize])
+                })
+                .collect();
+
+            Box::pin(async move { Ok(buffers) })
         }
     }
 
