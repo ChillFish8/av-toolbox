@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
+use super::execution::render_execution;
 use super::grid::Grid;
-use super::{Metrics, Placement, Placements, RenderOptions, chain_of, labels_for, place_slots};
+use super::{Metrics, Placement, Placements, RenderOptions, RenderView, chain_of, labels_for, place_slots};
 use crate::graph::{CompiledGraph, NodeId};
 use crate::layout::{Layout, Slot};
 
@@ -16,6 +17,10 @@ const METRICS: Metrics = Metrics {
 
 /// Draws the graph as boxes joined by lines.
 pub fn render_ascii(graph: &CompiledGraph, options: &RenderOptions) -> String {
+    if options.view == RenderView::Execution {
+        return render_execution(graph, options);
+    }
+
     if graph.is_empty() {
         return String::new();
     }
@@ -24,7 +29,10 @@ pub fn render_ascii(graph: &CompiledGraph, options: &RenderOptions) -> String {
     let labels: Vec<Vec<String>> = graph
         .nodes()
         .iter()
-        .map(|node| labels_for(node, options))
+        .map(|node| {
+            let plan = graph.execution_plan().map(|plan| plan.node(node.id()));
+            labels_for(node, plan, options)
+        })
         .collect();
 
     let sizes = sizes_of(graph, &labels);
@@ -193,6 +201,7 @@ mod tests {
         let options = RenderOptions {
             show_identifier: false,
             show_param_names: false,
+            ..RenderOptions::default()
         };
 
         render_ascii(&graph, &options)

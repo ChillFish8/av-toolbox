@@ -38,6 +38,7 @@ pub enum DiagnosticCode {
     StageBuildFailed,
     NoCommonFormat,
     StreamTypeMismatch,
+    InvalidWorkers,
 }
 
 impl DiagnosticCode {
@@ -57,6 +58,7 @@ impl DiagnosticCode {
             Self::StageBuildFailed => "stage-build-failed",
             Self::NoCommonFormat => "no-common-format",
             Self::StreamTypeMismatch => "stream-type-mismatch",
+            Self::InvalidWorkers => "invalid-workers",
         }
     }
 }

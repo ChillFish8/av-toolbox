@@ -60,6 +60,8 @@ pub struct StageSpec {
     pub stage_type: Spanned<String>,
     pub inputs: Vec<Spanned<InputRef>>,
     pub args: Spanned<Value>,
+    /// How many instances of this stage to run, or `None` when the pipeline did not say.
+    pub workers: Option<usize>,
     pub span: Span,
 }
 

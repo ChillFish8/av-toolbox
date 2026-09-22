@@ -5,6 +5,7 @@ use av_toolbox_core::{StageHandle, StageKind};
 use serde_json::Value;
 
 use crate::Span;
+use crate::plan::ExecutionPlan;
 
 /// A node's position in the graph.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -53,16 +54,24 @@ pub enum Sharing {
 pub struct Edge {
     name: Option<String>,
     param: Option<&'static str>,
+    slot: usize,
     source: NodeId,
     sharing: Sharing,
     span: Span,
 }
 
 impl Edge {
-    pub(crate) fn new(name: Option<String>, param: Option<&'static str>, source: NodeId, span: Span) -> Self {
+    pub(crate) fn new(
+        name: Option<String>,
+        param: Option<&'static str>,
+        slot: usize,
+        source: NodeId,
+        span: Span,
+    ) -> Self {
         Self {
             name,
             param,
+            slot,
             source,
             sharing: Sharing::Share,
             span,
@@ -77,6 +86,14 @@ impl Edge {
     /// The signature param this input filled, or `None` for the variadic tail.
     pub fn param(&self) -> Option<&'static str> {
         self.param
+    }
+
+    /// The `Inputs` slot this edge fills.
+    ///
+    /// This is the same space [Region::chunk_authority](crate::plan::Region::chunk_authority)
+    /// indexes into.
+    pub fn slot(&self) -> usize {
+        self.slot
     }
 
     pub fn source(&self) -> NodeId {
@@ -109,6 +126,7 @@ pub(crate) struct NodeParts {
     pub(crate) args: Value,
     pub(crate) args_span: Span,
     pub(crate) inputs: Vec<Edge>,
+    pub(crate) workers: Option<usize>,
     pub(crate) span: Span,
 }
 
@@ -123,6 +141,7 @@ pub struct Node {
     args_span: Span,
     inputs: Vec<Edge>,
     consumers: Vec<NodeId>,
+    workers: Option<usize>,
     span: Span,
 }
 
@@ -137,6 +156,7 @@ impl Node {
             args_span: parts.args_span,
             inputs: parts.inputs,
             consumers: Vec::new(),
+            workers: parts.workers,
             span: parts.span,
         }
     }
@@ -180,6 +200,11 @@ impl Node {
         &self.consumers
     }
 
+    /// How many instances of this stage the pipeline asked for, if it asked.
+    pub fn workers(&self) -> Option<usize> {
+        self.workers
+    }
+
     pub fn span(&self) -> Span {
         self.span
     }
@@ -194,6 +219,7 @@ impl Node {
 pub struct CompiledGraph {
     nodes: Vec<Node>,
     order: Vec<NodeId>,
+    plan: Option<ExecutionPlan>,
 }
 
 impl CompiledGraph {
@@ -201,10 +227,20 @@ impl CompiledGraph {
         let mut graph = Self {
             nodes,
             order: Vec::new(),
+            plan: None,
         };
 
         graph.refresh();
         graph
+    }
+
+    /// How this graph will be run, once it has been planned.
+    pub fn execution_plan(&self) -> Option<&ExecutionPlan> {
+        self.plan.as_ref()
+    }
+
+    pub fn set_execution_plan(&mut self, plan: ExecutionPlan) {
+        self.plan = Some(plan);
     }
 
     pub fn nodes(&self) -> &[Node] {
@@ -241,7 +277,8 @@ impl CompiledGraph {
     /// Drops nodes and points every edge that read a dropped node at its replacement.
     ///
     /// Surviving nodes are reindexed, so every [NodeId](crate::NodeId) held across this call is
-    /// stale afterwards.
+    /// stale afterwards. A stored plan is keyed by those same stale ids, so it does not survive
+    /// the call either.
     pub(crate) fn retain_nodes(&mut self, replacements: &HashMap<NodeId, NodeId>, dropped: &HashSet<NodeId>) {
         let mut moved: HashMap<NodeId, NodeId> = HashMap::new();
         let mut kept: Vec<Node> = Vec::with_capacity(self.nodes.len());
@@ -270,6 +307,7 @@ impl CompiledGraph {
         }
 
         self.nodes = kept;
+        self.plan = None;
         self.refresh();
     }
 
@@ -349,12 +387,15 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::build::build;
+    use crate::testing;
 
     /// Builds a node with no arguments and the given positional inputs.
     fn node(index: usize, name: &str, kind: StageKind, inputs: &[usize]) -> Node {
         let edges = inputs
             .iter()
-            .map(|source| Edge::new(None, None, NodeId::new(*source), Span::unknown()))
+            .enumerate()
+            .map(|(slot, source)| Edge::new(None, None, slot, NodeId::new(*source), Span::unknown()))
             .collect();
 
         Node::new(NodeParts {
@@ -365,6 +406,7 @@ mod tests {
             args: json!({}),
             args_span: Span::unknown(),
             inputs: edges,
+            workers: None,
             span: Span::unknown(),
         })
     }
@@ -442,5 +484,22 @@ mod tests {
         let sinks: Vec<NodeId> = graph.sinks().collect();
 
         assert_eq!(sinks, vec![NodeId::new(0)]);
+    }
+
+    #[test]
+    fn a_node_carries_the_worker_count_its_spec_asked_for() {
+        let registry = testing::registry();
+        let source = testing::spec(StageKind::Source, "input", "test/file");
+        let mut blur = testing::spec(StageKind::Filter, "blur", "test/blur");
+        blur.inputs = vec![testing::positional("input")];
+        blur.workers = Some(4);
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("blur")];
+
+        let specs = vec![source, blur, sink];
+        let graph = build(&registry, &specs).expect("should build").into_graph();
+
+        assert_eq!(graph.node(NodeId::new(0)).workers(), None);
+        assert_eq!(graph.node(NodeId::new(1)).workers(), Some(4));
     }
 }

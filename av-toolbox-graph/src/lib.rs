@@ -31,6 +31,7 @@ mod graph;
 mod instantiate;
 mod layout;
 mod optimise;
+mod plan;
 mod render;
 mod solve;
 mod spec;
@@ -52,6 +53,7 @@ pub use self::optimise::{
     default_passes,
     optimise,
 };
-pub use self::render::{RenderOptions, render_ascii, render_mermaid, render_svg};
+pub use self::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId, plan};
+pub use self::render::{RenderOptions, RenderView, render_ascii, render_mermaid, render_svg};
 pub use self::solve::{SolvedFormats, solve};
 pub use self::spec::{InputRef, Span, Spanned, StageSpec};

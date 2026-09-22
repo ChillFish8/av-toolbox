@@ -176,6 +176,7 @@ fn spec(kind: StageKind, name: &str, stage_type: &str, inputs: Vec<&str>, args: 
             })
             .collect(),
         args: Spanned::unknown(args),
+        workers: None,
         span: Span::unknown(),
     }
 }

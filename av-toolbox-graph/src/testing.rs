@@ -9,6 +9,7 @@ use av_toolbox_core::{
     Inputs,
     Mask,
     MaskDefinition,
+    Parallelism,
     PipelineRegistry,
     Sink,
     SinkDefinition,
@@ -1096,6 +1097,284 @@ impl FilterDefinition for Sparse {
     }
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct TemporalArgs {
+    #[serde(default)]
+    radius: u32,
+}
+
+struct TemporalFilter;
+
+impl StageInstance for TemporalFilter {}
+
+impl Filter for TemporalFilter {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+    }
+}
+
+/// A filter whose granularity comes from its arguments, unlike every other fixture.
+struct Temporal;
+
+impl StageDefinition for Temporal {
+    type Args = TemporalArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "temporal"
+    }
+
+    fn parallelism(args: &Self::Args) -> Parallelism {
+        match args.radius {
+            0 => Parallelism::Frame,
+            _ => Parallelism::Chunk,
+        }
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Temporal {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: frames_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(TemporalFilter))
+    }
+}
+
+struct TemporalMergeStage;
+
+impl StageInstance for TemporalMergeStage {}
+
+impl Mask for TemporalMergeStage {
+    fn select(&mut self, context: &mut FrameContext, _inputs: Inputs) -> Result<GpuMask, StageError> {
+        Ok(context.alloc_mask(&fixture_mask_format(), FrameMeta::at(0)))
+    }
+}
+
+/// A two input mask whose granularity comes from its arguments, so it can widen where
+/// `test/merge` cannot.
+struct TemporalMerge;
+
+impl StageDefinition for TemporalMerge {
+    type Args = TemporalArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "temporal-merge"
+    }
+
+    fn parallelism(args: &Self::Args) -> Parallelism {
+        match args.radius {
+            0 => Parallelism::Frame,
+            _ => Parallelism::Chunk,
+        }
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[
+            InputParam::required("base").accepting(StreamType::Frames),
+            InputParam::required("overlay").accepting(StreamType::Frames),
+        ]);
+        SIGNATURE
+    }
+}
+
+impl MaskDefinition for TemporalMerge {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: mask_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Mask>, StageError> {
+        Ok(Box::new(TemporalMergeStage))
+    }
+}
+
+struct GatherStage;
+
+impl StageInstance for GatherStage {}
+
+impl Mask for GatherStage {
+    fn select(&mut self, context: &mut FrameContext, _inputs: Inputs) -> Result<GpuMask, StageError> {
+        Ok(context.alloc_mask(&fixture_mask_format(), FrameMeta::at(0)))
+    }
+}
+
+/// A mask with an optional param nobody has to bind, ahead of its variadic tail.
+///
+/// Lets a pipeline put the chunk authority in the tail while the leading slot stays empty, the
+/// shape that puts the authority past the end of a signature's own params.
+struct Gather;
+
+impl StageDefinition for Gather {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "gather"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::with_variadic_of(
+            &[InputParam::optional("guide").accepting(StreamType::Frames)],
+            StreamType::Frames,
+        );
+        SIGNATURE
+    }
+}
+
+impl MaskDefinition for Gather {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: mask_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Mask>, StageError> {
+        Ok(Box::new(GatherStage))
+    }
+}
+
+struct WideningSourceStage;
+
+impl StageInstance for WideningSourceStage {}
+
+impl Source for WideningSourceStage {
+    fn next(&mut self, _context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+        Ok(None)
+    }
+}
+
+/// A source whose granularity is per frame, unlike every other fixture source.
+struct WideningSource;
+
+impl StageDefinition for WideningSource {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "widening-source"
+    }
+
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Frame
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::EMPTY;
+        SIGNATURE
+    }
+}
+
+impl SourceDefinition for WideningSource {
+    fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+        let format = fixture_format();
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Source>, StageError> {
+        Ok(Box::new(WideningSourceStage))
+    }
+}
+
 pub(crate) fn registry() -> PipelineRegistry {
     let mut registry = PipelineRegistry::new();
 
@@ -1118,6 +1397,14 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_source::<FloatFirst>().expect("should register");
     registry.register_mask::<Mislabelled>().expect("should register");
     registry.register_filter::<Sparse>().expect("should register");
+    registry.register_filter::<Temporal>().expect("should register");
+    registry
+        .register_mask::<TemporalMerge>()
+        .expect("should register");
+    registry.register_mask::<Gather>().expect("should register");
+    registry
+        .register_source::<WideningSource>()
+        .expect("should register");
 
     registry
 }
@@ -1132,6 +1419,7 @@ pub(crate) fn spec(kind: StageKind, name: &str, stage_type: &str) -> StageSpec {
         stage_type: Spanned::unknown(stage_type.to_string()),
         inputs: Vec::new(),
         args: Spanned::unknown(json!({})),
+        workers: None,
         span: Span::unknown(),
     }
 }
@@ -1159,9 +1447,13 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 19);
+        assert_eq!(identifiers.len(), 23);
         assert!(identifiers.contains(&"test/blur"));
         assert!(identifiers.contains(&"test/failing"));
         assert!(identifiers.contains(&"test/recording"));
+        assert!(identifiers.contains(&"test/temporal"));
+        assert!(identifiers.contains(&"test/temporal-merge"));
+        assert!(identifiers.contains(&"test/gather"));
+        assert!(identifiers.contains(&"test/widening-source"));
     }
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use av_toolbox_core::StageKind;
 
-use super::{Metrics, Placement, Placements, RenderOptions, chain_of, labels_for, place_slots};
+use super::{Metrics, Placement, Placements, RenderOptions, RenderView, chain_of, labels_for, place_slots};
 use crate::graph::{CompiledGraph, NodeId};
 use crate::layout::{Layout, Slot};
 
@@ -28,13 +28,23 @@ const STYLE: &str = "\
 .edge { fill: none; stroke: #4b5563; stroke-width: 1.5; }
 .edge-label { font: 11px monospace; fill: #4b5563; text-anchor: middle; }";
 
+/// SVG has no execution view, since its layout engine ranks the graph the pipeline declared.
+const NO_EXECUTION_VIEW: &str = "an SVG has no execution view. Use the ascii or mermaid report instead";
+
 /// Draws the graph as an SVG document that needs nothing else to display.
 pub fn render_svg(graph: &CompiledGraph, options: &RenderOptions) -> String {
+    if options.view == RenderView::Execution {
+        return String::from(NO_EXECUTION_VIEW);
+    }
+
     let layout = Layout::build(graph);
     let labels: Vec<Vec<String>> = graph
         .nodes()
         .iter()
-        .map(|node| labels_for(node, options))
+        .map(|node| {
+            let plan = graph.execution_plan().map(|plan| plan.node(node.id()));
+            labels_for(node, plan, options)
+        })
         .collect();
 
     let sizes = sizes_of(graph, &labels);

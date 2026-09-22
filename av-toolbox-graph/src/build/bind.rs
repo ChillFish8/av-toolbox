@@ -194,6 +194,7 @@ fn build_nodes(resolution: &Resolution<'_>, accepted: &[bool], ids: &HashMap<usi
             args: stage.spec.args.value.clone(),
             args_span: stage.spec.args.span,
             inputs,
+            workers: stage.spec.workers,
             span: stage.spec.span,
         }));
     }
@@ -208,40 +209,63 @@ fn build_edges(
 ) -> Vec<Edge> {
     let signature = stage.info.inputs();
     let mut next_positional = 0;
+    let mut next_variadic = 0;
     let mut edges = Vec::with_capacity(stage.spec.inputs.len());
 
     for input in &stage.spec.inputs {
         let position = resolution.by_name[&input.value.target];
         let source = ids[&position];
-        let param = param_for(signature, &input.value.name, &mut next_positional);
+        let (param, slot) = slot_for(
+            signature,
+            &input.value.name,
+            &mut next_positional,
+            &mut next_variadic,
+        );
 
-        edges.push(Edge::new(input.value.name.clone(), param, source, input.span));
+        edges.push(Edge::new(
+            input.value.name.clone(),
+            param,
+            slot,
+            source,
+            input.span,
+        ));
     }
 
     edges
 }
 
-/// Works out which signature param an input filled, mirroring the binding rules.
+/// Works out which signature param an input filled and the `Inputs` slot it lines up with.
 ///
-/// A positional input takes the next unfilled param, a named one takes the param of that name,
-/// and anything left over went to the variadic tail and has no param.
-fn param_for(
+/// Mirrors the rules `av_toolbox_core::bind_inputs` binds by, so the slot returned here always
+/// agrees with the space [InputSignature::chunk_authority] and the chunk authority it resolves
+/// are in. A positional input takes the next unfilled param, a named one takes the param of that
+/// name, and anything left over goes to the variadic tail and has no param. A param's slot is
+/// its index in the signature, and a variadic input's slot follows every param's, in the order
+/// it was bound.
+fn slot_for(
     signature: &'static InputSignature,
     name: &Option<String>,
     next_positional: &mut usize,
-) -> Option<&'static str> {
+    next_variadic: &mut usize,
+) -> (Option<&'static str>, usize) {
     let params = signature.params();
 
-    let Some(name) = name else {
-        let param = params.get(*next_positional).map(|param| param.name());
-        *next_positional += 1;
-        return param;
+    let matched = match name {
+        Some(name) => params.iter().position(|param| param.name() == name),
+        None => {
+            let position = *next_positional;
+            *next_positional += 1;
+            (position < params.len()).then_some(position)
+        },
     };
 
-    params
-        .iter()
-        .find(|param| param.name() == name)
-        .map(|param| param.name())
+    let Some(index) = matched else {
+        let slot = params.len() + *next_variadic;
+        *next_variadic += 1;
+        return (None, slot);
+    };
+
+    (Some(params[index].name()), index)
 }
 
 #[cfg(test)]

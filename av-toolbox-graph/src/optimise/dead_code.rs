@@ -56,10 +56,11 @@ fn reachable_from_sinks(graph: &CompiledGraph) -> HashSet<NodeId> {
 #[cfg(test)]
 mod tests {
     use av_toolbox_core::StageKind;
+    use serde_json::json;
 
     use super::*;
     use crate::optimise::Change;
-    use crate::{StageSpec, build, testing};
+    use crate::{Spanned, StageSpec, build, testing};
 
     /// A source and a sink, plus a filter nothing reads.
     fn specs_with_a_spare_filter() -> Vec<StageSpec> {
@@ -103,6 +104,24 @@ mod tests {
         let report = DeadStageElimination.run(&mut graph);
 
         assert!(report.is_empty());
+    }
+
+    #[test]
+    fn dropping_a_stage_clears_a_stored_plan() {
+        let registry = testing::registry();
+        let mut specs = specs_with_a_spare_filter();
+        specs[0].args = Spanned::unknown(json!({ "path": "a.mkv" }));
+        specs[1].args = Spanned::unknown(json!({ "sigma": 1.0 }));
+
+        let mut graph = build(&registry, &specs).expect("should build").into_graph();
+
+        let made = crate::plan::plan(&graph, &registry).expect("should plan");
+        graph.set_execution_plan(made);
+        assert!(graph.execution_plan().is_some());
+
+        DeadStageElimination.run(&mut graph);
+
+        assert!(graph.execution_plan().is_none());
     }
 
     #[test]

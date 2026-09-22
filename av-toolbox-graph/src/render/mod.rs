@@ -1,4 +1,5 @@
 mod ascii;
+mod execution;
 mod grid;
 mod mermaid;
 mod svg;
@@ -10,6 +11,17 @@ pub use self::mermaid::render_mermaid;
 pub use self::svg::render_svg;
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::layout::{Layout, Slot};
+use crate::plan::NodePlan;
+
+/// Which graph a renderer draws.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
+pub enum RenderView {
+    /// The stages the pipeline declared.
+    #[default]
+    Stages,
+    /// How those stages will be run.
+    Execution,
+}
 
 /// What a rendered graph shows.
 #[derive(Debug, Clone)]
@@ -18,6 +30,8 @@ pub struct RenderOptions {
     pub show_identifier: bool,
     /// Label each edge with the input param it fills.
     pub show_param_names: bool,
+    /// Which graph to draw.
+    pub view: RenderView,
 }
 
 impl Default for RenderOptions {
@@ -25,16 +39,29 @@ impl Default for RenderOptions {
         Self {
             show_identifier: true,
             show_param_names: true,
+            view: RenderView::default(),
         }
     }
 }
 
 /// The lines of text a node's box holds.
-pub(crate) fn labels_for(node: &Node, options: &RenderOptions) -> Vec<String> {
+///
+/// When the node carries a plan, a final line names how it will run, its width included whenever
+/// that width is above one.
+pub(crate) fn labels_for(node: &Node, plan: Option<&NodePlan>, options: &RenderOptions) -> Vec<String> {
     let mut lines = vec![node.name().to_string()];
 
     if options.show_identifier {
         lines.push(node.identifier().to_string());
+    }
+
+    if let Some(plan) = plan {
+        let label = match plan.width() {
+            1 => plan.parallelism().to_string(),
+            width => format!("{} x{width}", plan.parallelism()),
+        };
+
+        lines.push(label);
     }
 
     lines

@@ -136,7 +136,8 @@ mod tests {
     fn node(index: usize, name: &str, kind: StageKind, inputs: &[usize]) -> Node {
         let edges = inputs
             .iter()
-            .map(|source| Edge::new(None, None, NodeId::new(*source), Span::unknown()))
+            .enumerate()
+            .map(|(slot, source)| Edge::new(None, None, slot, NodeId::new(*source), Span::unknown()))
             .collect();
 
         Node::new(NodeParts {
@@ -147,6 +148,7 @@ mod tests {
             args: json!({}),
             args_span: Span::unknown(),
             inputs: edges,
+            workers: None,
             span: Span::unknown(),
         })
     }
