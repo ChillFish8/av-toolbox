@@ -46,6 +46,7 @@ use av_toolbox_gpu::{
     StreamItem,
     StreamTemplate,
     Subsampling,
+    testing_context,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -1455,5 +1456,14 @@ mod tests {
         assert!(identifiers.contains(&"test/temporal-merge"));
         assert!(identifiers.contains(&"test/gather"));
         assert!(identifiers.contains(&"test/widening-source"));
+    }
+
+    #[test]
+    fn testing_context_allocates_a_frame_carrying_its_metadata() {
+        let context = testing_context();
+
+        let frame = context.alloc_frame(&frame_format(), FrameMeta::at(4));
+
+        assert_eq!(frame.meta().index, 4);
     }
 }

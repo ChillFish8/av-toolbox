@@ -1,14 +1,11 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
+mod aggregate;
+mod disperse;
+mod error;
+mod protocol;
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use self::aggregate::Aggregate;
+pub use self::disperse::{Dispatch, Disperse, RoundRobin, Routed};
+pub use self::error::ExchangeError;
+pub use self::protocol::{Assignment, WorkItem, WorkResult};

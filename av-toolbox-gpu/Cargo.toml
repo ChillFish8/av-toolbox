@@ -22,6 +22,8 @@ cuda = ["cubecl/cuda"]
 rocm = ["cubecl/hip"]
 # Tests that need a real device. Not enabled in CI, which has no accelerator.
 gpu-tests = []
+# Exposes a device-free context for crates above this one to test against.
+test-support = []
 
 [package.metadata.docs.rs]
 features = ["vulkan"]

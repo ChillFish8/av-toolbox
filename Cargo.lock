@@ -149,6 +149,10 @@ dependencies = [
 [[package]]
 name = "av-toolbox-runtime"
 version = "0.1.0"
+dependencies = [
+ "av-toolbox-gpu",
+ "thiserror",
+]
 
 [[package]]
 name = "backtrace"

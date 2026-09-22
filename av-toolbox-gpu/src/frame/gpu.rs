@@ -201,6 +201,13 @@ impl Frame {
         &self.meta
     }
 
+    /// Moves this to `index` in the stream.
+    ///
+    /// The chunk it belongs to and its timestamp are unchanged.
+    pub fn set_index(&mut self, index: u64) {
+        self.meta.index = index;
+    }
+
     pub fn plane(&self, channel: Channel) -> Option<&Plane> {
         let index = self
             .format
@@ -282,6 +289,13 @@ impl Mask {
         &self.meta
     }
 
+    /// Moves this to `index` in the stream.
+    ///
+    /// The chunk it belongs to is unchanged.
+    pub fn set_index(&mut self, index: u64) {
+        self.meta.index = index;
+    }
+
     pub const fn plane(&self) -> &Plane {
         &self.plane
     }
@@ -344,6 +358,13 @@ impl StreamItem {
         match self {
             Self::Frame(frame) => frame.meta(),
             Self::Mask(mask) => mask.meta(),
+        }
+    }
+
+    pub fn set_index(&mut self, index: u64) {
+        match self {
+            Self::Frame(frame) => frame.set_index(index),
+            Self::Mask(mask) => mask.set_index(index),
         }
     }
 
@@ -667,5 +688,85 @@ mod tests {
 
         assert_eq!(meta.index, 7);
         assert_eq!(meta.chunk, 3);
+    }
+
+    #[test]
+    fn renumbering_a_frame_leaves_its_chunk_and_timestamp_alone() {
+        let format = format();
+        let planes = vec![plane(64, 64), plane(32, 32), plane(32, 32)];
+        let meta = FrameMeta {
+            index: 7,
+            chunk: 3,
+            timestamp: Some(Duration::from_millis(500)),
+        };
+        let mut frame = Frame::new(format, planes, meta);
+
+        frame.set_index(11);
+
+        assert_eq!(frame.meta().index, 11);
+        assert_eq!(frame.meta().chunk, 3);
+        assert_eq!(frame.meta().timestamp, Some(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn renumbering_a_mask_leaves_its_chunk_and_timestamp_alone() {
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+        };
+        let meta = FrameMeta {
+            index: 7,
+            chunk: 3,
+            timestamp: Some(Duration::from_millis(500)),
+        };
+        let mut mask = Mask::new(format, plane(64, 64), meta);
+
+        mask.set_index(11);
+
+        assert_eq!(mask.meta().index, 11);
+        assert_eq!(mask.meta().chunk, 3);
+        assert_eq!(mask.meta().timestamp, Some(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn renumbering_a_stream_item_holding_a_frame_reaches_it() {
+        let format = format();
+        let planes = vec![plane(64, 64), plane(32, 32), plane(32, 32)];
+        let meta = FrameMeta {
+            index: 7,
+            chunk: 3,
+            timestamp: Some(Duration::from_millis(500)),
+        };
+        let frame = Frame::new(format, planes, meta);
+        let mut item = StreamItem::Frame(frame);
+
+        item.set_index(11);
+
+        assert_eq!(item.meta().index, 11);
+        assert_eq!(item.meta().chunk, 3);
+        assert_eq!(item.meta().timestamp, Some(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn renumbering_a_stream_item_holding_a_mask_reaches_it() {
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+        };
+        let meta = FrameMeta {
+            index: 7,
+            chunk: 3,
+            timestamp: Some(Duration::from_millis(500)),
+        };
+        let mask = Mask::new(format, plane(64, 64), meta);
+        let mut item = StreamItem::Mask(mask);
+
+        item.set_index(11);
+
+        assert_eq!(item.meta().index, 11);
+        assert_eq!(item.meta().chunk, 3);
+        assert_eq!(item.meta().timestamp, Some(Duration::from_millis(500)));
     }
 }

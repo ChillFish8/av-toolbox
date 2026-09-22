@@ -1,21 +1,21 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use cubecl::bytes::Bytes;
 use cubecl::server::Handle;
 use cubecl::stream_id::StreamId;
 
-use crate::DeviceAllocator;
 use crate::memory::DeviceRead;
+use crate::{BufferPool, Capabilities, DeviceAllocator, FrameContext, default_accelerators};
 
 /// The wgpu-backed accelerator this build tests against.
 ///
 /// Which one it is follows the enabled backend feature, so the same tests run against Vulkan on a
 /// Linux machine and against Metal on a macOS one. The two features are mutually exclusive, so it
 /// is never defined twice. A build with neither does not define it at all.
-#[cfg(feature = "vulkan")]
+#[cfg(all(test, feature = "vulkan"))]
 pub(crate) const TEST_ACCELERATOR: crate::Accelerator = crate::Accelerator::Vulkan;
 
-#[cfg(feature = "metal")]
+#[cfg(all(test, feature = "metal"))]
 pub(crate) const TEST_ACCELERATOR: crate::Accelerator = crate::Accelerator::Metal;
 
 /// A [DeviceAllocator](crate::DeviceAllocator) that reserves nothing and remembers what it was
@@ -42,6 +42,7 @@ impl CountingAllocator {
     }
 
     /// The sizes asked for, in order.
+    #[cfg(test)]
     pub(crate) fn requests(&self) -> Vec<usize> {
         self.requests
             .lock()
@@ -50,6 +51,7 @@ impl CountingAllocator {
     }
 
     /// How many reservations were asked for.
+    #[cfg(test)]
     pub(crate) fn count(&self) -> usize {
         self.requests
             .lock()
@@ -58,6 +60,7 @@ impl CountingAllocator {
     }
 
     /// The sizes read back, in the order the handles were given.
+    #[cfg(test)]
     pub(crate) fn reads(&self) -> Vec<usize> {
         self.reads
             .lock()
@@ -66,6 +69,7 @@ impl CountingAllocator {
     }
 
     /// The bytes uploaded, in order.
+    #[cfg(test)]
     pub(crate) fn uploads(&self) -> Vec<Vec<u8>> {
         self.uploads
             .lock()
@@ -121,4 +125,21 @@ impl DeviceAllocator for CountingAllocator {
 
         Box::pin(async move { Ok(buffers) })
     }
+}
+
+/// A [FrameContext] over a fake allocator, for tests with no device.
+///
+/// Allocations are counted rather than reserved, so anything above the allocator seam can be
+/// exercised without an accelerator.
+#[cfg(any(test, feature = "test-support"))]
+pub fn testing_context() -> FrameContext {
+    let allocator = Arc::new(CountingAllocator::new(64));
+    let accelerator = default_accelerators()[0];
+    let capabilities = Capabilities::builder(accelerator)
+        .plane_size(16, 16)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .build();
+
+    FrameContext::new(BufferPool::new(allocator), capabilities)
 }

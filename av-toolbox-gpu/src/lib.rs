@@ -33,7 +33,7 @@ mod sniff;
 mod stack;
 mod warmup;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod testing;
 #[cfg(test)]
 mod tests;
@@ -96,4 +96,6 @@ pub use self::memory::{
 pub use self::negotiate::{FormatSet, Offered, OutputFormats, ResolvedFormats, StreamTemplate};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::testing::testing_context;
 pub use self::warmup::WarmUp;

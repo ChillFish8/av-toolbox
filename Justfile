@@ -2,7 +2,7 @@
 test_backend := env("AVTB_TEST_BACKEND", "vulkan")
 
 # Backend features across every crate that forwards them.
-backend_features := "av-toolbox-gpu/" + test_backend + ",av-toolbox-core/" + test_backend + ",av-toolbox-graph/" + test_backend
+backend_features := "av-toolbox-gpu/" + test_backend + ",av-toolbox-core/" + test_backend + ",av-toolbox-graph/" + test_backend + ",av-toolbox-runtime/" + test_backend
 
 # The above plus the device tests those crates gate behind gpu-tests.
 device_features := backend_features + ",av-toolbox-gpu/gpu-tests,av-toolbox-core/gpu-tests,av-toolbox-graph/gpu-tests"
