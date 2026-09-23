@@ -1,0 +1,188 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::sync::Once;
+
+use av_toolbox_core::StageError;
+use ffms2::IndexErrorHandling;
+use ffms2::index::{Index, Indexer};
+
+static INIT: Once = Once::new();
+
+/// Initialises FFMS2 once per process.
+pub(crate) fn init() {
+    INIT.call_once(ffms2::FFMS2::Init);
+}
+
+/// The path an index for a source file lives at.
+///
+/// Without an index directory the index sits beside the source. With one, the source's
+/// canonical path is hashed into the name so files sharing a name in different folders do not
+/// collide.
+pub(crate) fn index_path(source: &Path, index_dir: Option<&Path>) -> Result<PathBuf, StageError> {
+    let Some(index_dir) = index_dir else {
+        let mut beside_source = source.as_os_str().to_owned();
+        beside_source.push(".ffindex");
+
+        return Ok(PathBuf::from(beside_source));
+    };
+
+    let canonicalized = source.canonicalize();
+    let canonical = canonicalized.map_err(|error| {
+        let display = source.display();
+        let message = format!("could not canonicalise {display}: {error}");
+
+        StageError::msg(message)
+    })?;
+
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let file_name = source.file_name().ok_or_else(|| {
+        let display = source.display();
+        let message = format!("{display} has no file name");
+
+        StageError::msg(message)
+    })?;
+    let name = file_name.to_string_lossy();
+    let indexed_name = format!("{name}.{hash:016x}.ffindex");
+
+    Ok(index_dir.join(indexed_name))
+}
+
+fn indexing_error(source: &Path, error: ffms2::Error) -> StageError {
+    let display = source.display();
+    let message = format!("ffms2 could not index {display}: {error:?}");
+
+    StageError::msg(message)
+}
+
+/// Loads a usable index for the source file, building and writing one when needed.
+///
+/// An existing index is reused when FFMS2 confirms it still belongs to the source. Otherwise the
+/// source is indexed again. When the rebuilt index cannot be written, it is still returned and
+/// used from memory.
+pub(crate) fn load_or_build(source: &Path, index_dir: Option<&Path>) -> Result<Index, StageError> {
+    init();
+
+    let path = index_path(source, index_dir)?;
+
+    if path.exists() {
+        let existing = Index::new(&path);
+
+        if let Ok(existing) = existing {
+            let belongs = existing.IndexBelongsToFile(source);
+
+            if belongs.is_ok() {
+                return Ok(existing);
+            }
+        }
+    }
+
+    let created = Indexer::new(source);
+    let indexer = created.map_err(|error| indexing_error(source, error))?;
+
+    let indexed = indexer.DoIndexing2(IndexErrorHandling::IEH_ABORT);
+    let index = indexed.map_err(|error| indexing_error(source, error))?;
+
+    let written = index.WriteIndex(&path);
+
+    if written.is_err() {
+        let path_display = path.display();
+        tracing::warn!(path = %path_display, "the ffms2 index could not be written, continuing with it in memory");
+    }
+
+    Ok(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn media(name: &str) -> PathBuf {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        manifest.join("tests").join("media").join(name)
+    }
+
+    fn copied(folder: &tempfile::TempDir, name: &str) -> PathBuf {
+        let target = folder.path().join(name);
+        std::fs::copy(media(name), &target).expect("copies the media");
+
+        target
+    }
+
+    #[test]
+    fn the_index_is_written_beside_the_file_by_default() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let source = copied(&folder, "yuv420p.mkv");
+
+        load_or_build(&source, None).expect("indexes");
+
+        assert!(folder.path().join("yuv420p.mkv.ffindex").exists());
+    }
+
+    #[test]
+    fn an_existing_index_is_reused_unchanged() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let source = copied(&folder, "yuv420p.mkv");
+        load_or_build(&source, None).expect("indexes");
+        let index_file = folder.path().join("yuv420p.mkv.ffindex");
+        let written = std::fs::metadata(&index_file)
+            .expect("exists")
+            .modified()
+            .expect("mtime");
+
+        load_or_build(&source, None).expect("reuses");
+
+        let after = std::fs::metadata(&index_file)
+            .expect("exists")
+            .modified()
+            .expect("mtime");
+        assert_eq!(written, after);
+    }
+
+    #[test]
+    fn an_index_dir_holds_a_name_keyed_by_the_source_path() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let index_dir = tempfile::tempdir().expect("an index dir");
+        let source = copied(&folder, "yuv420p.mkv");
+
+        let path = index_path(&source, Some(index_dir.path())).expect("a path");
+
+        assert_eq!(path.parent(), Some(index_dir.path()));
+        let name = path.file_name().expect("a name").to_string_lossy().to_string();
+        assert!(name.starts_with("yuv420p.mkv."));
+        assert!(name.ends_with(".ffindex"));
+    }
+
+    #[test]
+    fn a_stale_index_is_rebuilt() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let source = copied(&folder, "yuv420p.mkv");
+        let other = copied(&folder, "nv12.nut");
+        load_or_build(&other, None).expect("indexes the other file");
+        std::fs::copy(
+            folder.path().join("nv12.nut.ffindex"),
+            folder.path().join("yuv420p.mkv.ffindex"),
+        )
+        .expect("plants an index for the wrong file");
+
+        let index = load_or_build(&source, None);
+
+        assert!(index.is_ok());
+    }
+
+    #[test]
+    fn an_unwritable_index_dir_still_opens_the_file() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let source = copied(&folder, "yuv420p.mkv");
+        let missing = folder.path().join("does-not-exist");
+
+        let index = load_or_build(&source, Some(&missing));
+
+        assert!(index.is_ok());
+    }
+}
