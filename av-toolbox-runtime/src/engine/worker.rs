@@ -1,6 +1,6 @@
 use std::sync::mpsc::SyncSender;
 
-use av_toolbox_gpu::StreamItem;
+use av_toolbox_gpu::AnyItem;
 
 use super::region::WorkerSlot;
 use crate::{RunError, WorkItem, WorkResult};
@@ -97,7 +97,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
 }
 
 /// The chunk a bundle belongs to, taken from the first slot carrying an item.
-fn bundle_chunk(bundle: &[Option<StreamItem>]) -> Option<u64> {
+fn bundle_chunk(bundle: &[Option<AnyItem>]) -> Option<u64> {
     let item = bundle.iter().flatten().next()?;
 
     Some(item.meta().chunk)
@@ -111,7 +111,7 @@ fn named_chunk(error: RunError, chunk: Option<u64>) -> RunError {
     }
 }
 
-fn send_results(result_sender: &SyncSender<WorkResult>, items: Vec<StreamItem>) -> Result<(), ()> {
+fn send_results(result_sender: &SyncSender<WorkResult>, items: Vec<AnyItem>) -> Result<(), ()> {
     for item in items {
         result_sender.send(WorkResult::Item(item)).map_err(|_| ())?;
     }

@@ -1,4 +1,4 @@
-use av_toolbox_gpu::{Frame, Mask, StreamItem};
+use av_toolbox_gpu::{DeviceSide, Side, StreamItem};
 
 use crate::{BindInputsError, StreamType};
 
@@ -287,30 +287,39 @@ impl BoundInputs {
 /// What a stage was handed this step, one slot per parameter followed by one per variadic input,
 /// the same order [ResolvedFormats](av_toolbox_gpu::ResolvedFormats) uses.
 ///
-/// A slot is empty when an optional input was never bound, and once taken it stays empty.
+/// Every item is from the stage's own side, so a stage never holds anything it would have to move
+/// between host and device itself. A slot is empty when an optional input was never bound, and
+/// once taken it stays empty.
 #[derive(Debug)]
-pub struct Inputs {
-    slots: Vec<Option<StreamItem>>,
+pub struct Inputs<S: Side = DeviceSide> {
+    slots: Vec<Option<S::Item>>,
 }
 
-impl Inputs {
+impl Inputs<DeviceSide> {
     pub fn new(slots: Vec<Option<StreamItem>>) -> Self {
         Self { slots }
     }
+}
 
-    pub fn take(&mut self, index: usize) -> Option<StreamItem> {
+impl<S: Side> Inputs<S> {
+    pub fn from_slots(slots: Vec<Option<S::Item>>) -> Self {
+        Self { slots }
+    }
+
+    pub fn take(&mut self, index: usize) -> Option<S::Item> {
         self.slots.get_mut(index)?.take()
     }
 
     /// The frame at `index`, leaving the slot empty.
     ///
-    /// Returns `None` when the slot was empty and when it held a mask, and leaves a mask in
-    /// place rather than consuming it.
-    pub fn take_frame(&mut self, index: usize) -> Option<Frame> {
+    /// Returns `None` when the slot was empty and when it held a mask, and leaves a mask in place
+    /// rather than consuming it.
+    pub fn take_frame(&mut self, index: usize) -> Option<S::Frame> {
         let slot = self.slots.get_mut(index)?;
-        match slot.take()? {
-            StreamItem::Frame(frame) => Some(frame),
-            other => {
+
+        match S::into_frame(slot.take()?) {
+            Ok(frame) => Some(frame),
+            Err(other) => {
                 *slot = Some(other);
                 None
             },
@@ -319,13 +328,14 @@ impl Inputs {
 
     /// The mask at `index`, leaving the slot empty.
     ///
-    /// Returns `None` when the slot was empty and when it held a frame, and leaves a frame in
-    /// place rather than consuming it.
-    pub fn take_mask(&mut self, index: usize) -> Option<Mask> {
+    /// Returns `None` when the slot was empty and when it held a frame, and leaves a frame in place
+    /// rather than consuming it.
+    pub fn take_mask(&mut self, index: usize) -> Option<S::Mask> {
         let slot = self.slots.get_mut(index)?;
-        match slot.take()? {
-            StreamItem::Mask(mask) => Some(mask),
-            other => {
+
+        match S::into_mask(slot.take()?) {
+            Ok(mask) => Some(mask),
+            Err(other) => {
                 *slot = Some(other);
                 None
             },

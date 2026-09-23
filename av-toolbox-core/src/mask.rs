@@ -1,9 +1,11 @@
-use av_toolbox_gpu::{FrameContext, Mask as GpuMask};
+use av_toolbox_gpu::{DeviceSide, FrameContext, Side};
 
 use crate::{Inputs, StageError, StageInstance};
 
 /// A [Mask] takes some input and produces a selection mask used for selecting pixels
 /// from two or more sources.
-pub trait Mask: StageInstance {
-    fn select(&mut self, context: &mut FrameContext, inputs: Inputs) -> Result<GpuMask, StageError>;
+///
+/// The side defaults to the device, so `impl Mask for X` still means a device mask.
+pub trait Mask<S: Side = DeviceSide>: StageInstance {
+    fn select(&mut self, context: &mut FrameContext, inputs: Inputs<S>) -> Result<S::Mask, StageError>;
 }

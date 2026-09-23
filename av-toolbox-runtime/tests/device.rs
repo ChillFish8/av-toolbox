@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use av_toolbox_core::{
     BoundInputs,
+    DeviceSide,
     Filter,
     FilterDefinition,
     InputParam,
@@ -117,6 +118,8 @@ impl StageDefinition for Frames {
 }
 
 impl SourceDefinition for Frames {
+    type Side = DeviceSide;
+
     fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
         let format = StreamFormat::Frames(frame_format());
 
@@ -176,6 +179,8 @@ impl StageDefinition for Pass {
 }
 
 impl FilterDefinition for Pass {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -257,6 +262,8 @@ impl StageDefinition for Recording {
 }
 
 impl SinkDefinition for Recording {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,

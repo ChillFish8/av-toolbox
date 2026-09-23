@@ -2,26 +2,26 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use av_toolbox_core::{Inputs, Sink, Source, StageError, StageInstance};
-use av_toolbox_gpu::{Frame, FrameContext};
+use av_toolbox_gpu::{FrameContext, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
 /// Wraps a source so the engine can tell, from outside, when it has produced its last frame.
 ///
 /// `Source::next` only ever returns `None` once, per its own contract, so storing that once is
 /// enough to know the source will never be called again.
-pub(super) struct WatchedSource {
-    inner: Box<dyn Source>,
+pub(super) struct WatchedSource<S: Side> {
+    inner: Box<dyn Source<S>>,
     exhausted: Arc<AtomicBool>,
 }
 
-impl StageInstance for WatchedSource {
+impl<S: Side> StageInstance for WatchedSource<S> {
     fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
         self.inner.start_of_stream(context)
     }
 }
 
-impl Source for WatchedSource {
-    fn next(&mut self, context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+impl<S: Side> Source<S> for WatchedSource<S> {
+    fn next(&mut self, context: &mut FrameContext) -> Result<Option<S::Frame>, StageError> {
         let frame = self.inner.next(context)?;
         if frame.is_none() {
             self.exhausted.store(true, Ordering::SeqCst);
@@ -34,19 +34,19 @@ impl Source for WatchedSource {
 /// Wraps a sink so the engine can count what reached it, for [RunReport::frames].
 ///
 /// [RunReport::frames]: super::RunReport::frames
-struct CountingSink {
-    inner: Box<dyn Sink>,
+struct CountingSink<S: Side> {
+    inner: Box<dyn Sink<S>>,
     frames: Arc<AtomicU64>,
 }
 
-impl StageInstance for CountingSink {
+impl<S: Side> StageInstance for CountingSink<S> {
     fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
         self.inner.start_of_stream(context)
     }
 }
 
-impl Sink for CountingSink {
-    fn consume(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<(), StageError> {
+impl<S: Side> Sink<S> for CountingSink<S> {
+    fn consume(&mut self, context: &mut FrameContext, mut inputs: Inputs<S>) -> Result<(), StageError> {
         let mut slots = Vec::with_capacity(inputs.len());
         let mut seen = 0u64;
 
@@ -59,7 +59,7 @@ impl Sink for CountingSink {
         }
 
         self.frames.fetch_add(seen, Ordering::SeqCst);
-        self.inner.consume(context, Inputs::new(slots))
+        self.inner.consume(context, Inputs::from_slots(slots))
     }
 
     fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
@@ -76,16 +76,21 @@ pub(super) fn wrap_head_source(
         .into_iter()
         .enumerate()
         .map(|(index, (id, stage))| {
-            if index == 0
-                && let StageBox::Source(inner) = stage
-            {
-                return (
-                    id,
-                    StageBox::Source(Box::new(WatchedSource {
-                        inner,
-                        exhausted: exhausted.clone(),
-                    })),
-                );
+            if index == 0 {
+                match stage {
+                    StageBox::Source(inner) => {
+                        let exhausted = exhausted.clone();
+                        return (id, StageBox::Source(Box::new(WatchedSource { inner, exhausted })));
+                    },
+                    StageBox::HostSource(inner) => {
+                        let exhausted = exhausted.clone();
+                        return (
+                            id,
+                            StageBox::HostSource(Box::new(WatchedSource { inner, exhausted })),
+                        );
+                    },
+                    other => return (id, other),
+                }
             }
 
             (id, stage)
@@ -101,6 +106,13 @@ pub(super) fn wrap_sinks(nodes: Vec<(NodeId, StageBox)>, frames: Arc<AtomicU64>)
             StageBox::Sink(inner) => (
                 id,
                 StageBox::Sink(Box::new(CountingSink {
+                    inner,
+                    frames: frames.clone(),
+                })),
+            ),
+            StageBox::HostSink(inner) => (
+                id,
+                StageBox::HostSink(Box::new(CountingSink {
                     inner,
                     frames: frames.clone(),
                 })),

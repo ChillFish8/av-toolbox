@@ -8,8 +8,10 @@ use crate::{
     FilterDefinition,
     InputArgument,
     MaskDefinition,
+    MetaTransformDefinition,
     PreparedFilter,
     PreparedMask,
+    PreparedMetaTransform,
     PreparedSink,
     PreparedSource,
     PreparedStage,
@@ -35,6 +37,7 @@ pub struct PipelineRegistry {
     filters: Factories<dyn PreparedFilter>,
     masks: Factories<dyn PreparedMask>,
     transforms: Factories<dyn PreparedTransform>,
+    meta_transforms: Factories<dyn PreparedMetaTransform>,
     sinks: Factories<dyn PreparedSink>,
 }
 
@@ -69,8 +72,27 @@ impl PipelineRegistry {
 
     pub fn register_transform<D: TransformDefinition>(&mut self) -> Result<(), RegistryError> {
         let definition = Definition::<D>::new(StageKind::Transform)?;
+        if self.meta_transforms.contains_key(definition.full_identifier()) {
+            return Err(RegistryError::DuplicateStage {
+                kind: StageKind::Transform,
+                identifier: definition.full_identifier().to_string(),
+            });
+        }
 
         insert(&mut self.transforms, definition)
+    }
+
+    /// Registers a metadata-only transform, which shares the transform identifiers.
+    pub fn register_meta_transform<D: MetaTransformDefinition>(&mut self) -> Result<(), RegistryError> {
+        let definition = Definition::<D>::new(StageKind::Transform)?;
+        if self.transforms.contains_key(definition.full_identifier()) {
+            return Err(RegistryError::DuplicateStage {
+                kind: StageKind::Transform,
+                identifier: definition.full_identifier().to_string(),
+            });
+        }
+
+        insert(&mut self.meta_transforms, definition)
     }
 
     pub fn register_sink<D: SinkDefinition>(&mut self) -> Result<(), RegistryError> {
@@ -95,6 +117,10 @@ impl PipelineRegistry {
                 prepare(&self.filters, kind, identifier, args, inputs).map(PreparedStage::Filter)
             },
             StageKind::Mask => prepare(&self.masks, kind, identifier, args, inputs).map(PreparedStage::Mask),
+            StageKind::Transform if self.meta_transforms.contains_key(identifier) => {
+                prepare(&self.meta_transforms, kind, identifier, args, inputs)
+                    .map(PreparedStage::MetaTransform)
+            },
             StageKind::Transform => {
                 prepare(&self.transforms, kind, identifier, args, inputs).map(PreparedStage::Transform)
             },
@@ -108,9 +134,15 @@ impl PipelineRegistry {
         let filters = self.filters.values().map(|factory| factory.info());
         let masks = self.masks.values().map(|factory| factory.info());
         let transforms = self.transforms.values().map(|factory| factory.info());
+        let meta_transforms = self.meta_transforms.values().map(|factory| factory.info());
         let sinks = self.sinks.values().map(|factory| factory.info());
 
-        sources.chain(filters).chain(masks).chain(transforms).chain(sinks)
+        sources
+            .chain(filters)
+            .chain(masks)
+            .chain(transforms)
+            .chain(meta_transforms)
+            .chain(sinks)
     }
 }
 
@@ -157,6 +189,7 @@ mod tests {
     use av_toolbox_gpu::{
         BuildContext,
         Capabilities,
+        DeviceSide,
         FormatSet,
         Frame,
         FrameContext,
@@ -171,9 +204,22 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::{BoundInputs, Filter, InputParam, InputSignature, Inputs, Source, StageError, StageInstance};
-    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
-    use crate::{StageHandle, StreamType};
+    use crate::{
+        BoundInputs,
+        Filter,
+        InputParam,
+        InputSignature,
+        Inputs,
+        MetaInputs,
+        MetaItem,
+        MetaTransform,
+        Residency,
+        Source,
+        StageError,
+        StageHandle,
+        StageInstance,
+        StreamType,
+    };
 
     #[derive(Debug, Deserialize, JsonSchema)]
     struct DenoiseArgs {
@@ -230,6 +276,8 @@ mod tests {
     }
 
     impl SourceDefinition for FileSourceDefinition {
+        type Side = DeviceSide;
+
         fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
             unreachable!("not exercised by these tests")
         }
@@ -265,6 +313,8 @@ mod tests {
     }
 
     impl SourceDefinition for GreedySource {
+        type Side = DeviceSide;
+
         fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
             unreachable!("not exercised by these tests")
         }
@@ -280,6 +330,8 @@ mod tests {
     }
 
     impl FilterDefinition for Denoise {
+        type Side = DeviceSide;
+
         fn accepts_input(
             _capabilities: &Capabilities,
             _args: &Self::Args,
@@ -400,6 +452,111 @@ mod tests {
         ));
     }
 
+    struct Restamp;
+
+    impl StageInstance for Restamp {}
+
+    impl MetaTransform for Restamp {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: MetaInputs,
+        ) -> Result<Vec<MetaItem>, StageError> {
+            Ok(inputs.take(0).into_iter().collect())
+        }
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema)]
+    struct NoArgs {}
+
+    struct RestampDefinition;
+
+    impl StageDefinition for RestampDefinition {
+        type Args = NoArgs;
+
+        fn package() -> &'static str {
+            "builtin"
+        }
+
+        fn identifier() -> &'static str {
+            "restamp"
+        }
+
+        fn inputs() -> &'static InputSignature {
+            const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
+            SIGNATURE
+        }
+    }
+
+    impl MetaTransformDefinition for RestampDefinition {
+        fn accepts_input(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            _index: usize,
+            offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            Ok(FormatSet::of([offered.sample()]))
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            chosen: &[Option<StreamFormat>],
+        ) -> Result<OutputFormats, StageError> {
+            let format = chosen.iter().flatten().next().copied().expect("an input");
+            Ok(OutputFormats {
+                template: StreamTemplate::from_format(&format),
+                samples: FormatSet::of([format.sample()]),
+            })
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn MetaTransform>, StageError> {
+            Ok(Box::new(Restamp))
+        }
+    }
+
+    #[test]
+    fn a_meta_transform_prepares_as_a_transform_that_runs_on_either_side() {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_meta_transform::<RestampDefinition>()
+            .expect("should register");
+        let input = vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)];
+
+        let prepared = registry
+            .prepare(
+                StageKind::Transform,
+                "builtin/restamp",
+                &serde_json::json!({}),
+                &input,
+            )
+            .expect("should prepare");
+
+        assert_eq!(prepared.kind(), StageKind::Transform);
+        assert_eq!(prepared.residency(), Residency::Either);
+        assert!(matches!(prepared, PreparedStage::MetaTransform(_)));
+    }
+
+    #[test]
+    fn a_meta_transform_cannot_share_an_identifier_with_a_transform() {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_meta_transform::<RestampDefinition>()
+            .expect("should register");
+
+        let error = registry
+            .register_meta_transform::<RestampDefinition>()
+            .expect_err("should not register twice");
+
+        assert!(matches!(error, RegistryError::DuplicateStage { .. }));
+    }
+
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     mod device_tests {
         use av_toolbox_gpu::{Backend, Device};
@@ -429,6 +586,7 @@ mod tests {
             };
 
             let filter = prepared.build(&backend, &formats).expect("should build");
+            let filter = filter.into_device().expect("a device filter");
             drop(filter);
 
             let recorded_sigma_scale = f32::from_bits(RECORDED_SIGMA_SCALE.load(Ordering::SeqCst));

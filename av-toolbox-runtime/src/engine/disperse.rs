@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
-use av_toolbox_gpu::StreamItem;
+use av_toolbox_gpu::AnyItem;
 
 use super::channel::{AggregateSignal, ExitMessage, send_routed};
 use super::freedom::{FirstIdle, WorkerFreedom};
@@ -59,7 +59,7 @@ pub(super) fn drive_disperse(
         head,
     } = side;
 
-    let mut queues: HashMap<usize, VecDeque<StreamItem>> =
+    let mut queues: HashMap<usize, VecDeque<AnyItem>> =
         slots.iter().map(|&slot| (slot, VecDeque::new())).collect();
     let mut done: HashSet<usize> = HashSet::new();
     let mut authority_chunked = false;

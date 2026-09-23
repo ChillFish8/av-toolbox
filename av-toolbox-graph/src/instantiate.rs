@@ -3,28 +3,39 @@ use std::fmt;
 use av_toolbox_core::{
     ArgsError,
     BuildStageError,
+    Crossing,
     Filter,
     InputArgument,
     Mask,
+    MetaTransform,
     PipelineRegistry,
     PreparedStage,
+    Sided,
     Sink,
     Source,
     Transform,
 };
-use av_toolbox_gpu::{Backend, ResolvedFormats};
+use av_toolbox_gpu::{Backend, HostSide, ResolvedFormats};
 
 use crate::diagnostic::{args_path, stage_path};
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics, Region, SolvedFormats};
 
-/// A built stage, in whichever of the five kinds it belongs to.
+/// A built stage, in whichever kind and on whichever side it belongs to.
 pub enum StageBox {
     Source(Box<dyn Source>),
     Filter(Box<dyn Filter>),
     Mask(Box<dyn Mask>),
     Transform(Box<dyn Transform>),
+    MetaTransform(Box<dyn MetaTransform>),
     Sink(Box<dyn Sink>),
+    HostSource(Box<dyn Source<HostSide>>),
+    HostFilter(Box<dyn Filter<HostSide>>),
+    HostMask(Box<dyn Mask<HostSide>>),
+    HostTransform(Box<dyn Transform<HostSide>>),
+    HostSink(Box<dyn Sink<HostSide>>),
+    /// A crossing that moves one item between host and device.
+    Crossing(Crossing),
 }
 
 impl fmt::Debug for StageBox {
@@ -34,7 +45,14 @@ impl fmt::Debug for StageBox {
             Self::Filter(_) => "Filter",
             Self::Mask(_) => "Mask",
             Self::Transform(_) => "Transform",
+            Self::MetaTransform(_) => "MetaTransform",
             Self::Sink(_) => "Sink",
+            Self::HostSource(_) => "HostSource",
+            Self::HostFilter(_) => "HostFilter",
+            Self::HostMask(_) => "HostMask",
+            Self::HostTransform(_) => "HostTransform",
+            Self::HostSink(_) => "HostSink",
+            Self::Crossing(_) => "Crossing",
         };
 
         write!(formatter, "StageBox::{name}")
@@ -191,11 +209,28 @@ fn build_stage(
     formats: &ResolvedFormats,
 ) -> Result<StageBox, BuildStageError> {
     let stage = match prepared {
-        PreparedStage::Source(prepared) => StageBox::Source(prepared.build(backend, formats)?),
-        PreparedStage::Filter(prepared) => StageBox::Filter(prepared.build(backend, formats)?),
-        PreparedStage::Mask(prepared) => StageBox::Mask(prepared.build(backend, formats)?),
-        PreparedStage::Transform(prepared) => StageBox::Transform(prepared.build(backend, formats)?),
-        PreparedStage::Sink(prepared) => StageBox::Sink(prepared.build(backend, formats)?),
+        PreparedStage::Source(prepared) => match prepared.build(backend, formats)? {
+            Sided::Device(stage) => StageBox::Source(stage),
+            Sided::Host(stage) => StageBox::HostSource(stage),
+        },
+        PreparedStage::Filter(prepared) => match prepared.build(backend, formats)? {
+            Sided::Device(stage) => StageBox::Filter(stage),
+            Sided::Host(stage) => StageBox::HostFilter(stage),
+        },
+        PreparedStage::Mask(prepared) => match prepared.build(backend, formats)? {
+            Sided::Device(stage) => StageBox::Mask(stage),
+            Sided::Host(stage) => StageBox::HostMask(stage),
+        },
+        PreparedStage::Transform(prepared) => match prepared.build(backend, formats)? {
+            Sided::Device(stage) => StageBox::Transform(stage),
+            Sided::Host(stage) => StageBox::HostTransform(stage),
+        },
+        PreparedStage::MetaTransform(prepared) => StageBox::MetaTransform(prepared.build(backend, formats)?),
+        PreparedStage::Sink(prepared) => match prepared.build(backend, formats)? {
+            Sided::Device(stage) => StageBox::Sink(stage),
+            Sided::Host(stage) => StageBox::HostSink(stage),
+        },
+        PreparedStage::Crossing(crossing) => StageBox::Crossing(crossing),
     };
 
     Ok(stage)

@@ -1,39 +1,93 @@
-use av_toolbox_core::{Filter, Inputs, Mask, Sink, Source, Transform};
-use av_toolbox_gpu::{FrameContext, StreamItem};
+use av_toolbox_core::{
+    Crossing,
+    Filter,
+    Inputs,
+    Mask,
+    Sink,
+    Source,
+    Transform,
+    end_meta_transform,
+    run_meta_transform,
+};
+use av_toolbox_gpu::{AnyItem, FrameContext, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
 use crate::RunError;
 
 /// Runs one stage against one bundle of inputs, producing what it emits.
 ///
-/// A source ignores `inputs` and produces at most one item, a filter and a mask each produce
+/// A source ignores `slots` and produces at most one item, a filter and a mask each produce
 /// exactly one, a transform produces however many it returns, and a sink produces nothing.
 pub fn run_node(
     node: NodeId,
     stage: &mut StageBox,
     context: &mut FrameContext,
-    inputs: Inputs,
-) -> Result<Vec<StreamItem>, RunError> {
+    slots: Vec<Option<AnyItem>>,
+) -> Result<Vec<AnyItem>, RunError> {
     match stage {
         StageBox::Source(source) => run_source(node, source.as_mut(), context),
-        StageBox::Filter(filter) => run_filter(node, filter.as_mut(), context, inputs),
-        StageBox::Mask(mask) => run_mask(node, mask.as_mut(), context, inputs),
-        StageBox::Transform(transform) => run_transform(node, transform.as_mut(), context, inputs),
-        StageBox::Sink(sink) => run_sink(node, sink.as_mut(), context, inputs),
+        StageBox::Filter(filter) => run_filter(node, filter.as_mut(), context, narrow(node, slots)),
+        StageBox::Mask(mask) => run_mask(node, mask.as_mut(), context, narrow(node, slots)),
+        StageBox::Transform(transform) => {
+            run_transform(node, transform.as_mut(), context, narrow(node, slots))
+        },
+        StageBox::MetaTransform(transform) => run_meta_transform(transform.as_mut(), context, slots)
+            .map_err(|source| RunError::Stage { node, source }),
+        StageBox::Sink(sink) => run_sink(node, sink.as_mut(), context, narrow(node, slots)),
+        StageBox::HostSource(source) => run_source(node, source.as_mut(), context),
+        StageBox::HostFilter(filter) => run_filter(node, filter.as_mut(), context, narrow(node, slots)),
+        StageBox::HostMask(mask) => run_mask(node, mask.as_mut(), context, narrow(node, slots)),
+        StageBox::HostTransform(transform) => {
+            run_transform(node, transform.as_mut(), context, narrow(node, slots))
+        },
+        StageBox::HostSink(sink) => run_sink(node, sink.as_mut(), context, narrow(node, slots)),
+        StageBox::Crossing(crossing) => run_crossing(node, *crossing, context, slots),
     }
 }
 
+/// Narrows the engine's items to the ones a stage on side `S` takes.
+///
+/// An item from the other side reaching a stage means the graph placed no crossing where it had
+/// to, which is a bug in the planner rather than anything the pipeline did, so this panics, and
+/// the catch on every engine thread turns that into a failed run.
+fn narrow<S: Side>(node: NodeId, slots: Vec<Option<AnyItem>>) -> Inputs<S> {
+    let slots = slots
+        .into_iter()
+        .map(|slot| {
+            slot.map(|item| {
+                S::from_any(item).unwrap_or_else(|_| {
+                    panic!(
+                        "node {node:?} runs on the {} side but was handed an item from the other side, so a crossing is missing in front of it",
+                        S::NAME,
+                    )
+                })
+            })
+        })
+        .collect();
+
+    Inputs::from_slots(slots)
+}
+
 /// Signals the start of a chunk to whichever of the five kinds `stage` is.
+///
+/// A crossing has no start-of-stream signal of its own, since it holds nothing between items, so
+/// this joins the others' `Ok(())` without calling into anything.
 pub fn start_node(node: NodeId, stage: &mut StageBox, context: &mut FrameContext) -> Result<(), RunError> {
-    let result = match stage {
+    match stage {
         StageBox::Source(source) => source.start_of_stream(context),
         StageBox::Filter(filter) => filter.start_of_stream(context),
         StageBox::Mask(mask) => mask.start_of_stream(context),
         StageBox::Transform(transform) => transform.start_of_stream(context),
+        StageBox::MetaTransform(transform) => transform.start_of_stream(context),
         StageBox::Sink(sink) => sink.start_of_stream(context),
-    };
-
-    result.map_err(|source| RunError::Stage { node, source })
+        StageBox::HostSource(source) => source.start_of_stream(context),
+        StageBox::HostFilter(filter) => filter.start_of_stream(context),
+        StageBox::HostMask(mask) => mask.start_of_stream(context),
+        StageBox::HostTransform(transform) => transform.start_of_stream(context),
+        StageBox::HostSink(sink) => sink.start_of_stream(context),
+        StageBox::Crossing(_) => Ok(()),
+    }
+    .map_err(|source| RunError::Stage { node, source })
 }
 
 /// Signals the end of a chunk, returning whatever the stage flushes.
@@ -44,103 +98,160 @@ pub fn end_node(
     node: NodeId,
     stage: &mut StageBox,
     context: &mut FrameContext,
-) -> Result<Vec<StreamItem>, RunError> {
+) -> Result<Vec<AnyItem>, RunError> {
     match stage {
-        StageBox::Source(_) | StageBox::Mask(_) => Ok(Vec::new()),
+        StageBox::Source(_)
+        | StageBox::Mask(_)
+        | StageBox::HostSource(_)
+        | StageBox::HostMask(_)
+        | StageBox::Crossing(_) => Ok(Vec::new()),
         StageBox::Filter(filter) => end_filter(node, filter.as_mut(), context),
         StageBox::Transform(transform) => end_transform(node, transform.as_mut(), context),
+        StageBox::MetaTransform(transform) => {
+            end_meta_transform(transform.as_mut(), context).map_err(|source| RunError::Stage { node, source })
+        },
         StageBox::Sink(sink) => end_sink(node, sink.as_mut(), context),
+        StageBox::HostFilter(filter) => end_filter(node, filter.as_mut(), context),
+        StageBox::HostTransform(transform) => end_transform(node, transform.as_mut(), context),
+        StageBox::HostSink(sink) => end_sink(node, sink.as_mut(), context),
     }
 }
 
-fn run_source(
+/// Moves one item across to the side the crossing leads to.
+///
+/// An item already on the far side means the graph placed this crossing wrongly, which is a bug
+/// in the planner, so it panics like any other wrong-side item.
+fn run_crossing(
     node: NodeId,
-    source: &mut dyn Source,
+    crossing: Crossing,
     context: &mut FrameContext,
-) -> Result<Vec<StreamItem>, RunError> {
+    mut slots: Vec<Option<AnyItem>>,
+) -> Result<Vec<AnyItem>, RunError> {
+    let item = slots
+        .first_mut()
+        .and_then(Option::take)
+        .expect("a crossing reads exactly one input, in slot 0");
+
+    let crossed = match (crossing, item) {
+        (Crossing::Upload, AnyItem::Host(item)) => {
+            let loaded = context
+                .load_host(&item)
+                .map_err(|source| RunError::Transfer { node, source })?;
+
+            AnyItem::Device(loaded)
+        },
+        (Crossing::Unload, AnyItem::Device(item)) => {
+            let landed = context
+                .unload_host(item)
+                .map_err(|source| RunError::Transfer { node, source })?;
+
+            AnyItem::Host(landed)
+        },
+        (crossing, _) => panic!(
+            "node {node:?} is an {} crossing but was handed an item already on the far side, so the graph placed it wrongly",
+            crossing.verb(),
+        ),
+    };
+
+    Ok(vec![crossed])
+}
+
+fn emitted<S: Side>(items: impl IntoIterator<Item = S::Item>) -> Vec<AnyItem> {
+    items.into_iter().map(S::into_any).collect()
+}
+
+fn run_source<S: Side>(
+    node: NodeId,
+    source: &mut dyn Source<S>,
+    context: &mut FrameContext,
+) -> Result<Vec<AnyItem>, RunError> {
     let frame = source
         .next(context)
         .map_err(|source| RunError::Stage { node, source })?;
 
-    Ok(frame.into_iter().map(StreamItem::Frame).collect())
+    Ok(emitted::<S>(frame.map(S::frame_item)))
 }
 
-fn run_filter(
+fn run_filter<S: Side>(
     node: NodeId,
-    filter: &mut dyn Filter,
+    filter: &mut dyn Filter<S>,
     context: &mut FrameContext,
-    inputs: Inputs,
-) -> Result<Vec<StreamItem>, RunError> {
+    inputs: Inputs<S>,
+) -> Result<Vec<AnyItem>, RunError> {
     let frame = filter
         .process(context, inputs)
         .map_err(|source| RunError::Stage { node, source })?;
 
-    Ok(vec![StreamItem::Frame(frame)])
+    Ok(emitted::<S>([S::frame_item(frame)]))
 }
 
-fn run_mask(
+fn run_mask<S: Side>(
     node: NodeId,
-    mask: &mut dyn Mask,
+    mask: &mut dyn Mask<S>,
     context: &mut FrameContext,
-    inputs: Inputs,
-) -> Result<Vec<StreamItem>, RunError> {
+    inputs: Inputs<S>,
+) -> Result<Vec<AnyItem>, RunError> {
     let selected = mask
         .select(context, inputs)
         .map_err(|source| RunError::Stage { node, source })?;
 
-    Ok(vec![StreamItem::Mask(selected)])
+    Ok(emitted::<S>([S::mask_item(selected)]))
 }
 
-fn run_transform(
+fn run_transform<S: Side>(
     node: NodeId,
-    transform: &mut dyn Transform,
+    transform: &mut dyn Transform<S>,
     context: &mut FrameContext,
-    inputs: Inputs,
-) -> Result<Vec<StreamItem>, RunError> {
-    transform
+    inputs: Inputs<S>,
+) -> Result<Vec<AnyItem>, RunError> {
+    let items = transform
         .process(context, inputs)
-        .map_err(|source| RunError::Stage { node, source })
+        .map_err(|source| RunError::Stage { node, source })?;
+
+    Ok(emitted::<S>(items))
 }
 
-fn run_sink(
+fn run_sink<S: Side>(
     node: NodeId,
-    sink: &mut dyn Sink,
+    sink: &mut dyn Sink<S>,
     context: &mut FrameContext,
-    inputs: Inputs,
-) -> Result<Vec<StreamItem>, RunError> {
+    inputs: Inputs<S>,
+) -> Result<Vec<AnyItem>, RunError> {
     sink.consume(context, inputs)
         .map_err(|source| RunError::Stage { node, source })?;
 
     Ok(Vec::new())
 }
 
-fn end_filter(
+fn end_filter<S: Side>(
     node: NodeId,
-    filter: &mut dyn Filter,
+    filter: &mut dyn Filter<S>,
     context: &mut FrameContext,
-) -> Result<Vec<StreamItem>, RunError> {
+) -> Result<Vec<AnyItem>, RunError> {
     let flushed = filter
         .end_of_stream(context)
         .map_err(|source| RunError::Stage { node, source })?;
 
-    Ok(flushed.into_iter().map(StreamItem::Frame).collect())
+    Ok(emitted::<S>(flushed.into_iter().map(S::frame_item)))
 }
 
-fn end_transform(
+fn end_transform<S: Side>(
     node: NodeId,
-    transform: &mut dyn Transform,
+    transform: &mut dyn Transform<S>,
     context: &mut FrameContext,
-) -> Result<Vec<StreamItem>, RunError> {
-    transform
+) -> Result<Vec<AnyItem>, RunError> {
+    let flushed = transform
         .end_of_stream(context)
-        .map_err(|source| RunError::Stage { node, source })
+        .map_err(|source| RunError::Stage { node, source })?;
+
+    Ok(emitted::<S>(flushed))
 }
 
-fn end_sink(
+fn end_sink<S: Side>(
     node: NodeId,
-    sink: &mut dyn Sink,
+    sink: &mut dyn Sink<S>,
     context: &mut FrameContext,
-) -> Result<Vec<StreamItem>, RunError> {
+) -> Result<Vec<AnyItem>, RunError> {
     sink.end_of_stream(context)
         .map_err(|source| RunError::Stage { node, source })?;
 
@@ -153,16 +264,22 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use av_toolbox_core::{StageError, StageInstance};
+    use av_toolbox_core::{Crossing, MetaInputs, MetaItem, MetaTransform, StageError, StageInstance};
     use av_toolbox_gpu::{
+        AnyItem,
         ColourInfo,
         Frame,
         FrameFormat,
         FrameLayout,
         FrameMeta,
+        HostFrame,
+        HostSide,
+        HostStreamItem,
         Mask as GpuMask,
         MaskFormat,
         SampleFormat,
+        StreamFormat,
+        StreamItem,
         Subsampling,
         testing_context,
     };
@@ -181,9 +298,9 @@ mod tests {
         }
     }
 
-    fn item(context: &FrameContext, index: u64, chunk: u64) -> StreamItem {
+    fn item(context: &FrameContext, index: u64, chunk: u64) -> AnyItem {
         let meta = FrameMeta::at(index).in_chunk(chunk);
-        StreamItem::Frame(context.alloc_frame(&format(), meta))
+        StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
     }
 
     fn mask_format() -> MaskFormat {
@@ -210,6 +327,26 @@ mod tests {
                 .take_frame(0)
                 .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
         }
+    }
+
+    struct HostPassThrough;
+
+    impl StageInstance for HostPassThrough {}
+
+    impl Filter<HostSide> for HostPassThrough {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: Inputs<HostSide>,
+        ) -> Result<HostFrame, StageError> {
+            inputs
+                .take_frame(0)
+                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+        }
+    }
+
+    fn host_item(context: &FrameContext, index: u64) -> AnyItem {
+        HostStreamItem::Frame(context.alloc_host_frame(&format(), FrameMeta::at(index)).freeze()).into()
     }
 
     /// A filter that keeps a copy of what it is given and flushes it again when its chunk ends.
@@ -331,7 +468,7 @@ mod tests {
     fn a_filter_produces_one_item_from_its_inputs() {
         let context = testing_context();
         let mut stage = StageBox::Filter(Box::new(PassThrough));
-        let inputs = Inputs::new(vec![Some(item(&context, 4, 0))]);
+        let inputs = vec![Some(item(&context, 4, 0))];
 
         let produced =
             run_node(NodeId::new(0), &mut stage, &mut context_of(&context), inputs).expect("should run");
@@ -344,7 +481,7 @@ mod tests {
     fn a_transform_produces_what_it_returns() {
         let context = testing_context();
         let mut stage = StageBox::Transform(Box::new(Multiply { copies: 3 }));
-        let inputs = Inputs::new(vec![Some(item(&context, 0, 0))]);
+        let inputs = vec![Some(item(&context, 0, 0))];
 
         let produced =
             run_node(NodeId::new(0), &mut stage, &mut context_of(&context), inputs).expect("should run");
@@ -356,7 +493,7 @@ mod tests {
     fn a_transform_producing_nothing_produces_nothing() {
         let context = testing_context();
         let mut stage = StageBox::Transform(Box::new(Multiply { copies: 0 }));
-        let inputs = Inputs::new(vec![Some(item(&context, 0, 0))]);
+        let inputs = vec![Some(item(&context, 0, 0))];
 
         let produced =
             run_node(NodeId::new(0), &mut stage, &mut context_of(&context), inputs).expect("should run");
@@ -369,7 +506,7 @@ mod tests {
         let context = testing_context();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut stage = StageBox::Sink(Box::new(Recording { seen: seen.clone() }));
-        let inputs = Inputs::new(vec![Some(item(&context, 7, 0))]);
+        let inputs = vec![Some(item(&context, 7, 0))];
 
         let produced =
             run_node(NodeId::new(0), &mut stage, &mut context_of(&context), inputs).expect("should run");
@@ -382,7 +519,7 @@ mod tests {
     fn a_mask_produces_one_item_as_a_mask() {
         let context = testing_context();
         let mut stage = StageBox::Mask(Box::new(FixedMask));
-        let inputs = Inputs::new(vec![Some(item(&context, 0, 0))]);
+        let inputs = vec![Some(item(&context, 0, 0))];
 
         let produced =
             run_node(NodeId::new(0), &mut stage, &mut context_of(&context), inputs).expect("should run");
@@ -400,27 +537,12 @@ mod tests {
         ]);
         let mut stage = StageBox::Source(Box::new(Listed { remaining: frames }));
 
-        let first = run_node(
-            NodeId::new(0),
-            &mut stage,
-            &mut context_of(&context),
-            Inputs::new(vec![]),
-        )
-        .expect("should run");
-        let second = run_node(
-            NodeId::new(0),
-            &mut stage,
-            &mut context_of(&context),
-            Inputs::new(vec![]),
-        )
-        .expect("should run");
-        let third = run_node(
-            NodeId::new(0),
-            &mut stage,
-            &mut context_of(&context),
-            Inputs::new(vec![]),
-        )
-        .expect("should run");
+        let first =
+            run_node(NodeId::new(0), &mut stage, &mut context_of(&context), vec![]).expect("should run");
+        let second =
+            run_node(NodeId::new(0), &mut stage, &mut context_of(&context), vec![]).expect("should run");
+        let third =
+            run_node(NodeId::new(0), &mut stage, &mut context_of(&context), vec![]).expect("should run");
 
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
@@ -431,7 +553,7 @@ mod tests {
     fn a_stage_failure_names_the_node_it_came_from() {
         let context = testing_context();
         let mut stage = StageBox::Filter(Box::new(Failing));
-        let inputs = Inputs::new(vec![Some(item(&context, 0, 0))]);
+        let inputs = vec![Some(item(&context, 0, 0))];
 
         let result = run_node(NodeId::new(3), &mut stage, &mut context_of(&context), inputs);
 
@@ -449,7 +571,7 @@ mod tests {
     fn ending_a_filter_flushes_what_it_held() {
         let context = testing_context();
         let mut stage = StageBox::Filter(Box::new(Holding { held: None }));
-        let inputs = Inputs::new(vec![Some(item(&context, 9, 0))]);
+        let inputs = vec![Some(item(&context, 9, 0))];
 
         let during =
             run_node(NodeId::new(0), &mut stage, &mut context_of(&context), inputs).expect("should run");
@@ -480,6 +602,153 @@ mod tests {
         let flushed = end_node(NodeId::new(0), &mut stage, &mut context_of(&context)).expect("should end");
 
         assert!(flushed.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "crossing is missing")]
+    fn a_device_stage_handed_a_host_item_is_a_planner_bug() {
+        let context = testing_context();
+        let host = context.alloc_host_frame(&format(), FrameMeta::at(0)).freeze();
+        let mut stage = StageBox::Filter(Box::new(PassThrough));
+
+        let mut context = context_of(&context);
+        let _ = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut context,
+            vec![Some(AnyItem::from(HostStreamItem::Frame(host)))],
+        );
+    }
+
+    #[test]
+    fn a_host_filter_runs_on_host_items_and_emits_host_items() {
+        let context = testing_context();
+        let mut stage = StageBox::HostFilter(Box::new(HostPassThrough));
+
+        let mut run_context = context_of(&context);
+        let out = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut run_context,
+            vec![Some(host_item(&context, 3))],
+        )
+        .expect("runs");
+
+        assert_eq!(out.len(), 1);
+        assert!(out[0].is_host());
+        assert_eq!(out[0].meta().index, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "crossing is missing")]
+    fn a_host_stage_handed_a_device_item_is_a_planner_bug() {
+        let context = testing_context();
+        let mut stage = StageBox::HostFilter(Box::new(HostPassThrough));
+
+        let mut run_context = context_of(&context);
+        let _ = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut run_context,
+            vec![Some(item(&context, 0, 0))],
+        );
+    }
+
+    struct Rechunk;
+
+    impl StageInstance for Rechunk {}
+
+    impl MetaTransform for Rechunk {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: MetaInputs,
+        ) -> Result<Vec<MetaItem>, StageError> {
+            let mut item = inputs.take(0).expect("an item");
+            item.meta_mut().chunk += 1;
+
+            Ok(vec![item])
+        }
+    }
+
+    #[test]
+    fn a_meta_transform_runs_on_items_from_either_side() {
+        let context = testing_context();
+        let mut stage = StageBox::MetaTransform(Box::new(Rechunk));
+        let mut run_context = context_of(&context);
+
+        let device = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut run_context,
+            vec![Some(item(&context, 0, 4))],
+        )
+        .expect("runs");
+        let host = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut run_context,
+            vec![Some(host_item(&context, 1))],
+        )
+        .expect("runs");
+
+        assert!(!device[0].is_host());
+        assert_eq!(device[0].meta().chunk, 5);
+        assert!(host[0].is_host());
+        assert_eq!(host[0].meta().chunk, 1);
+    }
+
+    #[test]
+    fn an_upload_turns_a_host_item_into_a_device_item_in_the_same_place() {
+        let context = testing_context();
+        let mut stage = StageBox::Crossing(Crossing::Upload);
+        let mut run_context = context_of(&context);
+
+        let out = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut run_context,
+            vec![Some(host_item(&context, 6))],
+        )
+        .expect("uploads");
+
+        assert!(!out[0].is_host());
+        assert_eq!(out[0].meta().index, 6);
+    }
+
+    #[test]
+    fn an_unload_turns_a_device_item_into_a_host_item_in_the_same_place() {
+        let context = testing_context();
+        let mut stage = StageBox::Crossing(Crossing::Unload);
+        let mut run_context = context_of(&context);
+
+        let out = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut run_context,
+            vec![Some(item(&context, 9, 2))],
+        )
+        .expect("unloads");
+
+        assert!(out[0].is_host());
+        assert_eq!(out[0].meta().index, 9);
+        assert_eq!(out[0].meta().chunk, 2);
+        assert_eq!(out[0].format(), StreamFormat::Frames(format()));
+    }
+
+    #[test]
+    #[should_panic(expected = "already on the far side")]
+    fn an_unload_handed_a_host_item_is_a_planner_bug() {
+        let context = testing_context();
+        let mut stage = StageBox::Crossing(Crossing::Unload);
+        let mut run_context = context_of(&context);
+
+        let _ = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut run_context,
+            vec![Some(host_item(&context, 0))],
+        );
     }
 
     #[test]

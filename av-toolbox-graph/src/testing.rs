@@ -28,6 +28,7 @@ use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
     Depth,
+    DeviceSide,
     ElementType,
     FormatSet,
     Frame,
@@ -149,6 +150,8 @@ macro_rules! fixture_source {
         }
 
         impl SourceDefinition for $definition {
+            type Side = DeviceSide;
+
             fn produces(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
@@ -251,6 +254,8 @@ macro_rules! fixture_stage {
         }
 
         impl $definition_trait for $definition {
+            type Side = DeviceSide;
+
             fn accepts_input(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
@@ -325,6 +330,8 @@ macro_rules! fixture_sink {
         }
 
         impl SinkDefinition for $definition {
+            type Side = DeviceSide;
+
             fn accepts_input(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
@@ -445,6 +452,8 @@ impl StageDefinition for Failing {
 }
 
 impl FilterDefinition for Failing {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -515,6 +524,8 @@ impl StageDefinition for Recording {
 }
 
 impl FilterDefinition for Recording {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -587,6 +598,8 @@ macro_rules! opinionated_source {
         }
 
         impl SourceDefinition for $definition {
+            type Side = DeviceSide;
+
             fn produces(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
@@ -649,6 +662,8 @@ macro_rules! opinionated_filter {
         }
 
         impl FilterDefinition for $definition {
+            type Side = DeviceSide;
+
             fn accepts_input(
                 _capabilities: &Capabilities,
                 _args: &Self::Args,
@@ -752,6 +767,8 @@ impl StageDefinition for Prefers16 {
 }
 
 impl FilterDefinition for Prefers16 {
+    type Side = DeviceSide;
+
     fn accepts_input(
         capabilities: &Capabilities,
         _args: &Self::Args,
@@ -827,6 +844,8 @@ impl StageDefinition for Matched {
 }
 
 impl MaskDefinition for Matched {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -899,6 +918,8 @@ impl StageDefinition for Anchored {
 }
 
 impl MaskDefinition for Anchored {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -973,6 +994,8 @@ impl StageDefinition for Mislabelled {
 }
 
 impl MaskDefinition for Mislabelled {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1052,6 +1075,8 @@ impl StageDefinition for Sparse {
 }
 
 impl FilterDefinition for Sparse {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1150,6 +1175,8 @@ impl StageDefinition for Temporal {
 }
 
 impl FilterDefinition for Temporal {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1227,6 +1254,8 @@ impl StageDefinition for TemporalMerge {
 }
 
 impl MaskDefinition for TemporalMerge {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1297,6 +1326,8 @@ impl StageDefinition for Gather {
 }
 
 impl MaskDefinition for Gather {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1365,6 +1396,8 @@ impl StageDefinition for WideningSource {
 }
 
 impl SourceDefinition for WideningSource {
+    type Side = DeviceSide;
+
     fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
         let format = fixture_format();
 

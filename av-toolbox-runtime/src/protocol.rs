@@ -1,4 +1,4 @@
-use av_toolbox_gpu::StreamItem;
+use av_toolbox_gpu::AnyItem;
 
 /// What a disperse sends one of its workers.
 #[derive(Debug)]
@@ -6,12 +6,12 @@ pub enum WorkItem {
     /// One slot per input of the region's head node, paired by frame index.
     ///
     /// A slot is empty where an optional input was never bound.
-    Bundle(Vec<Option<StreamItem>>),
+    Bundle(Vec<Option<AnyItem>>),
     /// A bundle that is a whole unit of work on its own, carrying the id its aggregate expects.
     ///
     /// Frame routing sends these. The worker runs the bundle and closes the unit without
     /// flushing its region, since a frame mode stage has nothing to carry between frames.
-    Unit(u64, Vec<Option<StreamItem>>),
+    Unit(u64, Vec<Option<AnyItem>>),
     /// Every item of this chunk has been sent.
     EndOfChunk(u64),
     /// Every chunk has been sent.
@@ -21,7 +21,7 @@ pub enum WorkItem {
 /// What a worker sends its aggregate.
 #[derive(Debug)]
 pub enum WorkResult {
-    Item(StreamItem),
+    Item(AnyItem),
     /// Everything this worker had for the unit has been sent, which may be nothing.
     EndOfUnit(u64),
     EndOfStream,

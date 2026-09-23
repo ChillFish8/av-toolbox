@@ -1,4 +1,5 @@
 use av_toolbox_core::StageError;
+use av_toolbox_gpu::RuntimeError;
 use av_toolbox_graph::NodeId;
 use thiserror::Error;
 
@@ -10,6 +11,13 @@ pub enum RunError {
         node: NodeId,
         #[source]
         source: StageError,
+    },
+    /// Moving an item between host and device failed on the device.
+    #[error("node {node:?} could not move its item between host and device: {source}")]
+    Transfer {
+        node: NodeId,
+        #[source]
+        source: RuntimeError,
     },
     /// A node's feeds disagreed about how many items they supplied.
     ///
@@ -63,6 +71,7 @@ impl RunError {
     pub fn node(&self) -> Option<NodeId> {
         match self {
             Self::Stage { node, .. } => Some(*node),
+            Self::Transfer { node, .. } => Some(*node),
             Self::MismatchedFeeds { node, .. } => Some(*node),
             Self::InChunk { source, .. } => source.node(),
             Self::Panicked { .. }

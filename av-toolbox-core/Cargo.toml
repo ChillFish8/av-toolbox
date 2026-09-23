@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 cubecl = { workspace = true }
+av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 
 [features]
 vulkan = ["av-toolbox-gpu/vulkan"]

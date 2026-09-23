@@ -28,6 +28,7 @@ use av_toolbox_gpu::{
     Channel,
     ColourInfo,
     Device,
+    DeviceSide,
     FormatSet,
     Frame,
     FrameContext,
@@ -198,6 +199,8 @@ impl StageDefinition for Brighten {
 }
 
 impl FilterDefinition for Brighten {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -271,6 +274,8 @@ fn built_filter(backend: &Backend) -> Box<dyn Filter> {
     prepared
         .build(backend, &resolved_formats())
         .expect("should build")
+        .into_device()
+        .expect("a device filter")
 }
 
 /// A frame whose luma and chroma each hold one known value.

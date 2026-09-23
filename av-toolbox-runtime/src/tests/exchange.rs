@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use av_toolbox_gpu::{
+    AnyItem,
     ColourInfo,
     FrameFormat,
     FrameLayout,
@@ -30,14 +31,14 @@ fn format() -> FrameFormat {
 ///
 /// The aggregate renumbers `index` as it emits, so `index` cannot identify a frame once it comes
 /// back out. `timestamp` is never touched, so it is what a test can use to tell frames apart.
-fn item(index: u64, chunk: u64, position: u64) -> StreamItem {
+fn item(index: u64, chunk: u64, position: u64) -> AnyItem {
     let context = testing_context();
     let mut meta = FrameMeta::at(index).in_chunk(chunk);
     meta.timestamp = Some(Duration::from_secs(position));
-    StreamItem::Frame(context.alloc_frame(&format(), meta))
+    StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
 }
 
-fn stream(pairs: &[(u64, u64)]) -> Vec<StreamItem> {
+fn stream(pairs: &[(u64, u64)]) -> Vec<AnyItem> {
     pairs
         .iter()
         .enumerate()
@@ -45,11 +46,11 @@ fn stream(pairs: &[(u64, u64)]) -> Vec<StreamItem> {
         .collect()
 }
 
-fn indices(output: &[StreamItem]) -> Vec<u64> {
+fn indices(output: &[AnyItem]) -> Vec<u64> {
     output.iter().map(|item| item.meta().index).collect()
 }
 
-fn chunks(output: &[StreamItem]) -> Vec<u64> {
+fn chunks(output: &[AnyItem]) -> Vec<u64> {
     output.iter().map(|item| item.meta().chunk).collect()
 }
 
@@ -57,7 +58,7 @@ fn chunks(output: &[StreamItem]) -> Vec<u64> {
 ///
 /// Unlike `index`, this survives the aggregate untouched, so it is a true identity check on which
 /// physical frame came out where, not just on how many frames came out.
-fn timestamps(output: &[StreamItem]) -> Vec<u64> {
+fn timestamps(output: &[AnyItem]) -> Vec<u64> {
     output
         .iter()
         .map(|item| {
@@ -69,13 +70,13 @@ fn timestamps(output: &[StreamItem]) -> Vec<u64> {
         .collect()
 }
 
-fn identity(item: StreamItem) -> Vec<StreamItem> {
+fn identity(item: AnyItem) -> Vec<AnyItem> {
     vec![item]
 }
 
-/// `StreamItem` derives `Clone`, and so do both variants it wraps, so duplicating one is a
-/// plain clone rather than something that needs rebuilding from its index and chunk.
-fn copy(item: &StreamItem) -> StreamItem {
+/// `AnyItem` derives `Clone`, and so do both sides it wraps, so duplicating one is a plain clone
+/// rather than something that needs rebuilding from its index and chunk.
+fn copy(item: &AnyItem) -> AnyItem {
     item.clone()
 }
 
@@ -108,9 +109,9 @@ impl Dispatch for Scripted {
     }
 }
 
-fn run<F>(input: Vec<StreamItem>, workers: usize, transform: F) -> Vec<StreamItem>
+fn run<F>(input: Vec<AnyItem>, workers: usize, transform: F) -> Vec<AnyItem>
 where
-    F: Fn(StreamItem) -> Vec<StreamItem>,
+    F: Fn(AnyItem) -> Vec<AnyItem>,
 {
     drive(input, RoundRobin::new(workers), transform)
 }
@@ -120,10 +121,10 @@ where
 /// Every step is sequential. The disperse routes every input item into one queue per worker,
 /// each worker's queue is turned into a queue of results, and the aggregate drains those result
 /// queues in the order its assignments name.
-fn drive<D, F>(input: Vec<StreamItem>, dispatch: D, transform: F) -> Vec<StreamItem>
+fn drive<D, F>(input: Vec<AnyItem>, dispatch: D, transform: F) -> Vec<AnyItem>
 where
     D: Dispatch,
-    F: Fn(StreamItem) -> Vec<StreamItem>,
+    F: Fn(AnyItem) -> Vec<AnyItem>,
 {
     let workers = dispatch.workers();
     let mut disperse = Disperse::new(&[true], 0, dispatch);
@@ -192,7 +193,7 @@ fn enqueue(queues: &mut [VecDeque<WorkItem>], routed: Vec<Routed>) {
 /// never changes chunk or stream boundaries.
 fn play_worker<F>(queue: VecDeque<WorkItem>, transform: &F) -> VecDeque<WorkResult>
 where
-    F: Fn(StreamItem) -> Vec<StreamItem>,
+    F: Fn(AnyItem) -> Vec<AnyItem>,
 {
     let mut results = VecDeque::new();
 
@@ -222,10 +223,7 @@ where
     results
 }
 
-fn drain_aggregate(
-    mut aggregate: Aggregate,
-    mut result_queues: Vec<VecDeque<WorkResult>>,
-) -> Vec<StreamItem> {
+fn drain_aggregate(mut aggregate: Aggregate, mut result_queues: Vec<VecDeque<WorkResult>>) -> Vec<AnyItem> {
     let mut output = Vec::new();
 
     while let Some(worker) = aggregate.next_worker() {

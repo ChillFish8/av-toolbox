@@ -1,4 +1,4 @@
-use av_toolbox_gpu::StreamItem;
+use av_toolbox_gpu::AnyItem;
 
 use crate::{Assignment, ExchangeError, WorkResult};
 
@@ -56,7 +56,7 @@ impl Aggregate {
     /// not that the merged stream itself is over, so it neither emits anything nor moves the
     /// aggregate on to the next assignment, unless it is the worker holding the current, undrained
     /// unit, which means it ended without ever sending that unit's close.
-    pub fn accept(&mut self, worker: usize, result: WorkResult) -> Result<Vec<StreamItem>, ExchangeError> {
+    pub fn accept(&mut self, worker: usize, result: WorkResult) -> Result<Vec<AnyItem>, ExchangeError> {
         match result {
             WorkResult::Item(mut item) => {
                 self.check_worker(worker)?;
@@ -144,10 +144,10 @@ mod tests {
         }
     }
 
-    fn item(index: u64, chunk: u64) -> StreamItem {
+    fn item(index: u64, chunk: u64) -> AnyItem {
         let context = testing_context();
         let meta = FrameMeta::at(index).in_chunk(chunk);
-        StreamItem::Frame(context.alloc_frame(&format(), meta))
+        StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
     }
 
     #[test]

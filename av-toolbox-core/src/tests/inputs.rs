@@ -10,6 +10,10 @@ use av_toolbox_gpu::{
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    HostFrame,
+    HostPool,
+    HostSide,
+    HostStreamItem,
     Mask,
     MaskFormat,
     SampleFormat,
@@ -550,4 +554,67 @@ fn a_stage_with_no_inputs_has_no_authority() {
     let bound = bind_inputs(&InputSignature::EMPTY, &[]).expect("should bind");
 
     assert_eq!(bound.chunk_authority(), None);
+}
+
+fn host_frame(index: u64) -> HostStreamItem {
+    let format = FrameFormat {
+        width: 16,
+        height: 16,
+        layout: FrameLayout::Grey,
+        sample: SampleFormat::U8,
+        colour: ColourInfo::default(),
+    };
+
+    HostStreamItem::Frame(
+        HostPool::new()
+            .alloc_frame(&format, FrameMeta::at(index))
+            .freeze(),
+    )
+}
+
+#[test]
+fn host_inputs_hand_out_host_frames() {
+    let mut inputs = Inputs::<HostSide>::from_slots(vec![None, Some(host_frame(6))]);
+
+    let frame = inputs.take_frame(1).expect("a host frame in slot 1");
+
+    assert_eq!(frame.meta().index, 6);
+    assert!(inputs.take_frame(1).is_none());
+}
+
+#[test]
+fn a_host_filter_is_written_against_host_frames() {
+    struct Brighten;
+
+    impl crate::StageInstance for Brighten {}
+
+    impl crate::Filter<HostSide> for Brighten {
+        fn process(
+            &mut self,
+            _context: &mut av_toolbox_gpu::FrameContext,
+            mut inputs: Inputs<HostSide>,
+        ) -> Result<HostFrame, crate::StageError> {
+            let frame = inputs.take_frame(0).expect("a frame");
+            let mut frame = frame.try_into_mut().expect("nothing else holds it");
+            frame
+                .plane_mut(av_toolbox_gpu::Channel::Y)
+                .expect("grey")
+                .fill(200);
+
+            Ok(frame.freeze())
+        }
+    }
+
+    let mut context = av_toolbox_gpu::testing_context();
+    let inputs = Inputs::<HostSide>::from_slots(vec![Some(host_frame(0))]);
+
+    let out = crate::Filter::process(&mut Brighten, &mut context, inputs).expect("processes");
+
+    assert!(
+        out.plane(av_toolbox_gpu::Channel::Y)
+            .expect("grey")
+            .bytes()
+            .iter()
+            .all(|&byte| byte == 200)
+    );
 }

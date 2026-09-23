@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use av_toolbox_core::Inputs;
-use av_toolbox_gpu::{FrameContext, StreamItem};
+use av_toolbox_gpu::{AnyItem, FrameContext};
 use av_toolbox_graph::{NodeId, StageBox};
 
 use super::node::{end_node, run_node, start_node};
@@ -70,12 +69,12 @@ impl RegionRunner {
     pub fn run(
         &mut self,
         context: &mut FrameContext,
-        bundle: Vec<Option<StreamItem>>,
-    ) -> Result<Vec<StreamItem>, RunError> {
-        let mut outputs: Vec<Vec<StreamItem>> = Vec::with_capacity(self.nodes.len());
+        bundle: Vec<Option<AnyItem>>,
+    ) -> Result<Vec<AnyItem>, RunError> {
+        let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
         let (head_id, head_stage) = &mut self.nodes[0];
-        let head_output = run_node(*head_id, head_stage, context, Inputs::new(bundle))?;
+        let head_output = run_node(*head_id, head_stage, context, bundle)?;
         outputs.push(head_output);
 
         for index in 1..self.nodes.len() {
@@ -92,8 +91,8 @@ impl RegionRunner {
     /// A node downstream of the flushing one is run on whatever the upstream flush produced,
     /// exactly like a normal step, before its own flush is taken. That way anything the
     /// downstream node ends up holding because of the upstream flush is captured too.
-    pub fn end(&mut self, context: &mut FrameContext) -> Result<Vec<StreamItem>, RunError> {
-        let mut outputs: Vec<Vec<StreamItem>> = Vec::with_capacity(self.nodes.len());
+    pub fn end(&mut self, context: &mut FrameContext) -> Result<Vec<AnyItem>, RunError> {
+        let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
         let (head_id, head_stage) = &mut self.nodes[0];
         let head_flush = end_node(*head_id, head_stage, context)?;
@@ -114,11 +113,11 @@ impl RegionRunner {
 /// See [ready_count] for how many times that is.
 fn run_fed(
     feeds: &[Feed],
-    outputs: &[Vec<StreamItem>],
+    outputs: &[Vec<AnyItem>],
     positions: &HashMap<NodeId, usize>,
     node: &mut (NodeId, StageBox),
     context: &mut FrameContext,
-) -> Result<Vec<StreamItem>, RunError> {
+) -> Result<Vec<AnyItem>, RunError> {
     let (id, stage) = node;
     let count = ready_count(*id, feeds, outputs, positions)?;
 
@@ -135,11 +134,11 @@ fn run_fed(
 /// Feeds a node whatever its producers flushed, then flushes the node itself.
 fn end_fed(
     feeds: &[Feed],
-    outputs: &[Vec<StreamItem>],
+    outputs: &[Vec<AnyItem>],
     positions: &HashMap<NodeId, usize>,
     node: &mut (NodeId, StageBox),
     context: &mut FrameContext,
-) -> Result<Vec<StreamItem>, RunError> {
+) -> Result<Vec<AnyItem>, RunError> {
     let mut forwarded = run_fed(feeds, outputs, positions, node, context)?;
     let (id, stage) = node;
     let flushed = end_node(*id, stage, context)?;
@@ -157,7 +156,7 @@ fn end_fed(
 fn ready_count(
     node: NodeId,
     feeds: &[Feed],
-    outputs: &[Vec<StreamItem>],
+    outputs: &[Vec<AnyItem>],
     positions: &HashMap<NodeId, usize>,
 ) -> Result<usize, RunError> {
     if feeds.is_empty() {
@@ -180,30 +179,30 @@ fn ready_count(
     Err(RunError::MismatchedFeeds { node, counts })
 }
 
-/// Builds one `Inputs` from a node's feeds, taking the `item_index`th item each names.
+/// Builds one node's slots from its feeds, taking the `item_index`th item each names.
 fn inputs_for(
     feeds: &[Feed],
-    outputs: &[Vec<StreamItem>],
+    outputs: &[Vec<AnyItem>],
     positions: &HashMap<NodeId, usize>,
     item_index: usize,
-) -> Inputs {
+) -> Vec<Option<AnyItem>> {
     let width = feeds.iter().map(|feed| feed.slot + 1).max().unwrap_or(0);
-    let mut slots: Vec<Option<StreamItem>> = vec![None; width];
+    let mut slots: Vec<Option<AnyItem>> = vec![None; width];
 
     for feed in feeds {
         let position = positions[&feed.producer];
         slots[feed.slot] = Some(outputs[position][item_index].clone());
     }
 
-    Inputs::new(slots)
+    slots
 }
 
 /// Concatenates what every exit node produced, in the order the region names them.
 fn collect_exits(
     exits: &[NodeId],
     positions: &HashMap<NodeId, usize>,
-    outputs: &[Vec<StreamItem>],
-) -> Vec<StreamItem> {
+    outputs: &[Vec<AnyItem>],
+) -> Vec<AnyItem> {
     let mut collected = Vec::new();
 
     for exit in exits {
@@ -219,7 +218,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use av_toolbox_core::{Filter, Sink, StageError, StageInstance, Transform};
+    use av_toolbox_core::{Filter, Inputs, Sink, StageError, StageInstance, Transform};
     use av_toolbox_gpu::{
         ColourInfo,
         Frame,
@@ -227,6 +226,7 @@ mod tests {
         FrameLayout,
         FrameMeta,
         SampleFormat,
+        StreamItem,
         Subsampling,
         testing_context,
     };
@@ -250,8 +250,8 @@ mod tests {
         context.alloc_frame(&format(), meta)
     }
 
-    fn item(context: &FrameContext, index: u64, chunk: u64) -> StreamItem {
-        StreamItem::Frame(frame(context, index, chunk))
+    fn item(context: &FrameContext, index: u64, chunk: u64) -> AnyItem {
+        StreamItem::Frame(frame(context, index, chunk)).into()
     }
 
     /// A fresh context for a call, since `FrameContext` cannot be cloned or shared mutably

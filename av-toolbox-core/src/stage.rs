@@ -19,10 +19,12 @@ use crate::{
     Filter,
     InputSignature,
     Mask,
+    MetaTransform,
     Parallelism,
     Sink,
     Source,
     StageError,
+    StageSide,
     StreamType,
     Tag,
     Transform,
@@ -99,6 +101,7 @@ pub trait StageInstance: Send + 'static {
 /// use av_toolbox_gpu::{
 ///     BuildContext,
 ///     Capabilities,
+///     DeviceSide,
 ///     FormatSet,
 ///     Frame,
 ///     FrameContext,
@@ -151,6 +154,8 @@ pub trait StageInstance: Send + 'static {
 /// }
 ///
 /// impl FilterDefinition for Denoise {
+///     type Side = DeviceSide;
+///
 ///     fn accepts_input(
 ///         _capabilities: &Capabilities,
 ///         _args: &Self::Args,
@@ -179,7 +184,7 @@ pub trait StageInstance: Send + 'static {
 ///         args: Self::Args,
 ///         _inputs: BoundInputs,
 ///         _formats: &ResolvedFormats,
-///     ) -> Result<Box<dyn Filter>, StageError> {
+///     ) -> Result<Box<dyn Filter<DeviceSide>>, StageError> {
 ///         Ok(Box::new(DenoiseFilter {
 ///             sigma_scale: args.sigma_scale,
 ///         }))
@@ -214,6 +219,9 @@ pub trait StageDefinition: 'static {
 
 /// A stage that produces frames from something outside the pipeline.
 pub trait SourceDefinition: StageDefinition {
+    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    type Side: StageSide;
+
     /// What it could produce.
     ///
     /// A source has no inputs to base this on, so it follows from its arguments and the
@@ -225,11 +233,14 @@ pub trait SourceDefinition: StageDefinition {
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Source>, StageError>;
+    ) -> Result<Box<dyn Source<Self::Side>>, StageError>;
 }
 
 /// A stage that changes the frames passing through it.
 pub trait FilterDefinition: StageDefinition {
+    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    type Side: StageSide;
+
     /// Which sample formats this stage will take on one input, most preferred first.
     ///
     /// The offered layout, dimensions and colour information are the stage's to validate, and an
@@ -267,11 +278,14 @@ pub trait FilterDefinition: StageDefinition {
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Filter>, StageError>;
+    ) -> Result<Box<dyn Filter<Self::Side>>, StageError>;
 }
 
 /// A stage that selects pixels from two or more inputs.
 pub trait MaskDefinition: StageDefinition {
+    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    type Side: StageSide;
+
     /// Which sample formats this stage will take on one input, most preferred first.
     ///
     /// The offered layout, dimensions and colour information are the stage's to validate, and an
@@ -309,11 +323,14 @@ pub trait MaskDefinition: StageDefinition {
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Mask>, StageError>;
+    ) -> Result<Box<dyn Mask<Self::Side>>, StageError>;
 }
 
 /// A stage that changes the pipeline stream rather than the frames within it.
 pub trait TransformDefinition: StageDefinition {
+    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    type Side: StageSide;
+
     /// Which sample formats this stage will take on one input, most preferred first.
     ///
     /// The offered layout, dimensions and colour information are the stage's to validate, and an
@@ -351,11 +368,44 @@ pub trait TransformDefinition: StageDefinition {
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Transform>, StageError>;
+    ) -> Result<Box<dyn Transform<Self::Side>>, StageError>;
+}
+
+/// A transform that only touches where items sit in the stream, and so runs on either side.
+pub trait MetaTransformDefinition: StageDefinition {
+    /// Which sample formats this stage will take on one input, most preferred first.
+    ///
+    /// The same contract as [TransformDefinition::accepts_input].
+    fn accepts_input(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError>;
+
+    /// What it could produce, given what it will be given.
+    fn produces(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError>;
+
+    /// Builds the instance, which is never asked which side to build for, since a metadata-only
+    /// transform never allocates a plane and so has no side of its own to build on.
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaTransform>, StageError>;
 }
 
 /// A stage that consumes the finished stream.
 pub trait SinkDefinition: StageDefinition {
+    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    type Side: StageSide;
+
     /// Which sample formats this stage will take on one input, most preferred first.
     ///
     /// The offered layout, dimensions and colour information are the stage's to validate, and an
@@ -386,14 +436,14 @@ pub trait SinkDefinition: StageDefinition {
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Sink>, StageError>;
+    ) -> Result<Box<dyn Sink<Self::Side>>, StageError>;
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use av_toolbox_gpu::{Frame, StreamTemplate};
+    use av_toolbox_gpu::{DeviceSide, Frame, StreamTemplate};
     use schemars::JsonSchema;
     use serde::Deserialize;
 
@@ -441,6 +491,8 @@ mod tests {
     }
 
     impl FilterDefinition for ExampleDefinition {
+        type Side = DeviceSide;
+
         fn accepts_input(
             _capabilities: &Capabilities,
             _args: &Self::Args,

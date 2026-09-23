@@ -1,4 +1,4 @@
-use av_toolbox_gpu::StreamItem;
+use av_toolbox_gpu::AnyItem;
 
 use crate::{Assignment, ExchangeError, WorkItem};
 
@@ -68,9 +68,9 @@ pub struct Finished {
 #[derive(Debug)]
 pub enum Dropped {
     /// Some slots held items but the bundle never completed.
-    Partial(Vec<Option<StreamItem>>),
+    Partial(Vec<Option<AnyItem>>),
     /// The bundle completed but no worker was ever chosen for it.
-    Unplaced(Vec<Option<StreamItem>>),
+    Unplaced(Vec<Option<AnyItem>>),
 }
 
 /// The chunk currently being routed, and the worker holding it.
@@ -83,7 +83,7 @@ struct Current {
 /// A completed bundle waiting for `place` to give it a worker.
 struct HeldBundle {
     unit: u64,
-    bundle: Vec<Option<StreamItem>>,
+    bundle: Vec<Option<AnyItem>>,
 }
 
 /// What a disperse needs to remember, which differs by how it routes.
@@ -106,7 +106,7 @@ pub struct Disperse<D> {
     bound: Vec<bool>,
     routing: RoutingState,
     dispatch: D,
-    pending: Vec<Option<StreamItem>>,
+    pending: Vec<Option<AnyItem>>,
     held: Option<HeldBundle>,
     assignments: Vec<Assignment>,
     finished: bool,
@@ -176,7 +176,7 @@ impl<D: Dispatch> Disperse<D> {
     /// instead, so [Disperse::place] can choose once a worker is free without a boundary's close
     /// sitting undelivered while a policy decides. Offering again before placing that bundle is an
     /// error.
-    pub fn offer(&mut self, slot: usize, item: StreamItem) -> Result<Vec<Routed>, ExchangeError> {
+    pub fn offer(&mut self, slot: usize, item: AnyItem) -> Result<Vec<Routed>, ExchangeError> {
         if self.finished {
             return Err(ExchangeError::AlreadyFinished);
         }
@@ -394,7 +394,7 @@ impl<D: Dispatch> Disperse<D> {
 }
 
 /// Checks every bound, filled slot in `pending` carries the same frame index.
-fn check_frame_indices(pending: &[Option<StreamItem>], bound: &[bool]) -> Result<(), ExchangeError> {
+fn check_frame_indices(pending: &[Option<AnyItem>], bound: &[bool]) -> Result<(), ExchangeError> {
     let mut expected: Option<(usize, u64)> = None;
 
     for (slot, item) in pending.iter().enumerate() {
@@ -455,13 +455,13 @@ mod tests {
         }
     }
 
-    fn item(index: u64, chunk: u64) -> StreamItem {
+    fn item(index: u64, chunk: u64) -> AnyItem {
         let context = testing_context();
         let meta = FrameMeta::at(index).in_chunk(chunk);
-        StreamItem::Frame(context.alloc_frame(&format(), meta))
+        StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
     }
 
-    fn item_in_chunk(index: u64, chunk: u64) -> StreamItem {
+    fn item_in_chunk(index: u64, chunk: u64) -> AnyItem {
         item(index, chunk)
     }
 

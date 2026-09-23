@@ -17,6 +17,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     ColourInfo,
+    DeviceSide,
     FormatSet,
     Frame,
     FrameContext,
@@ -79,6 +80,8 @@ impl StageDefinition for Read {
 }
 
 impl SourceDefinition for Read {
+    type Side = DeviceSide;
+
     fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
         let format = fixture_format();
 
@@ -128,6 +131,8 @@ impl StageDefinition for Write {
 }
 
 impl SinkDefinition for Write {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,

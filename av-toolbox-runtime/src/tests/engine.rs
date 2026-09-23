@@ -28,9 +28,11 @@ use av_toolbox_core::{
     TransformDefinition,
 };
 use av_toolbox_gpu::{
+    AnyItem,
     BuildContext,
     Capabilities,
     ColourInfo,
+    DeviceSide,
     FormatSet,
     Frame,
     FrameBudget,
@@ -409,6 +411,8 @@ impl StageDefinition for Listed {
 }
 
 impl SourceDefinition for Listed {
+    type Side = DeviceSide;
+
     fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
         let stream_format = StreamFormat::Frames(format());
 
@@ -501,6 +505,8 @@ impl StageDefinition for Pass {
 }
 
 impl FilterDefinition for Pass {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -608,6 +614,8 @@ impl StageDefinition for Flushing {
 }
 
 impl FilterDefinition for Flushing {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -696,6 +704,8 @@ impl StageDefinition for Allocating {
 }
 
 impl FilterDefinition for Allocating {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -791,6 +801,8 @@ impl StageDefinition for Masking {
 }
 
 impl MaskDefinition for Masking {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -894,6 +906,8 @@ impl StageDefinition for Multiplying {
 }
 
 impl TransformDefinition for Multiplying {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -990,6 +1004,8 @@ impl StageDefinition for Join {
 }
 
 impl FilterDefinition for Join {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1087,6 +1103,8 @@ impl StageDefinition for Referring {
 }
 
 impl FilterDefinition for Referring {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1211,6 +1229,8 @@ impl StageDefinition for Slow {
 }
 
 impl FilterDefinition for Slow {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1323,6 +1343,8 @@ impl StageDefinition for Tracked {
 }
 
 impl FilterDefinition for Tracked {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1442,6 +1464,8 @@ impl StageDefinition for Matching {
 }
 
 impl FilterDefinition for Matching {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1556,6 +1580,8 @@ impl StageDefinition for Recording {
 }
 
 impl SinkDefinition for Recording {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1713,6 +1739,8 @@ impl StageDefinition for Failing {
 }
 
 impl FilterDefinition for Failing {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1795,6 +1823,8 @@ impl StageDefinition for Panicking {
 }
 
 impl FilterDefinition for Panicking {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1898,6 +1928,8 @@ impl StageDefinition for Hoarding {
 }
 
 impl SinkDefinition for Hoarding {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -1974,6 +2006,8 @@ impl StageDefinition for Pairing {
 }
 
 impl SinkDefinition for Pairing {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -2069,6 +2103,8 @@ impl StageDefinition for Gated {
 }
 
 impl SinkDefinition for Gated {
+    type Side = DeviceSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -3232,9 +3268,11 @@ fn a_stage_gets_no_start_without_a_matching_end() {
 
 /// A one-slot bundle carrying a single frame, for driving [run_worker] directly with a
 /// [WorkItem::Unit] rather than through a disperse.
-fn unit_bundle(context: &FrameContext, index: u64, chunk: u64) -> Vec<Option<StreamItem>> {
+fn unit_bundle(context: &FrameContext, index: u64, chunk: u64) -> Vec<Option<AnyItem>> {
     let meta = FrameMeta::at(index).in_chunk(chunk);
-    vec![Some(StreamItem::Frame(context.alloc_frame(&format(), meta)))]
+    vec![Some(
+        StreamItem::Frame(context.alloc_frame(&format(), meta)).into(),
+    )]
 }
 
 /// A worker slot around one fixture stage, with no disperse or aggregate in front of it, for
@@ -3330,7 +3368,7 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
             chunk: unit + 900,
             timestamp: Some(Duration::from_secs(unit)),
         };
-        let item = StreamItem::Frame(build_context.alloc_frame(&format(), meta));
+        let item = AnyItem::from(StreamItem::Frame(build_context.alloc_frame(&format(), meta)));
         work_sender
             .send(WorkItem::Unit(unit, vec![Some(item)]))
             .expect("the worker should still be receiving");
