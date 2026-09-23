@@ -17,6 +17,7 @@ use av_toolbox_graph::{
     NodeId,
     Region,
     RegionId,
+    Routing,
     SolvedFormats,
     StageBox,
 };
@@ -93,41 +94,58 @@ pub(crate) enum AggregateSignal {
     Finished,
 }
 
-/// Tracks which of a region's workers are free, so a disperse can ask for one without blocking
-/// and a caller can wait for the answer to change.
+/// Tracks how many units each of a region's workers currently holds, so a disperse can ask for
+/// one without blocking and a caller can wait for the answer to change.
 ///
-/// Free means the worker's aggregate has drained its last assigned chunk, not merely that the
-/// worker has sent it. [WorkerFreedom::mark_free] is called from the aggregate thread for exactly
-/// that reason.
+/// A worker is claimable while it holds fewer units than its capacity. Held means the worker's
+/// aggregate has not yet drained the unit, not merely that the worker has sent it.
+/// [WorkerFreedom::mark_free] is called from the aggregate thread for exactly that reason.
 pub(crate) struct WorkerFreedom {
-    free: Mutex<Vec<bool>>,
+    /// How many units each worker holds that its aggregate has not drained yet.
+    outstanding: Mutex<Vec<usize>>,
+    capacity: usize,
     changed: Condvar,
 }
 
 impl WorkerFreedom {
-    pub(crate) fn new(workers: usize) -> Self {
+    pub(crate) fn new(workers: usize, capacity: usize) -> Self {
+        assert!(
+            capacity > 0,
+            "a worker that may hold nothing can never be given work"
+        );
+
         Self {
-            free: Mutex::new(vec![true; workers]),
+            outstanding: Mutex::new(vec![0; workers]),
+            capacity,
             changed: Condvar::new(),
         }
     }
 
     fn workers(&self) -> usize {
-        self.free.lock().expect("not poisoned").len()
+        self.outstanding.lock().expect("not poisoned").len()
     }
 
-    /// Claims the first free worker and marks it busy, or answers `None` when every worker is
-    /// currently busy. Never blocks.
-    fn try_claim(&self) -> Option<usize> {
-        let mut free = self.free.lock().expect("not poisoned");
-        let worker = free.iter().position(|&is_free| is_free)?;
-        free[worker] = false;
+    /// Claims the least loaded worker with room and charges it one unit, or answers `None` when
+    /// every worker is full. Never blocks.
+    ///
+    /// Ties go to the lowest index. At capacity one this is exactly the first free worker, since
+    /// every worker with room ties at zero held units. At a higher capacity it spreads claims
+    /// across workers before stacking a second unit onto one that already has one.
+    pub(crate) fn try_claim(&self) -> Option<usize> {
+        let mut outstanding = self.outstanding.lock().expect("not poisoned");
+        let worker = outstanding
+            .iter()
+            .enumerate()
+            .filter(|&(_, held)| *held < self.capacity)
+            .min_by_key(|&(_, held)| held)
+            .map(|(worker, _)| worker)?;
+        outstanding[worker] += 1;
         Some(worker)
     }
 
     pub(crate) fn mark_free(&self, worker: usize) {
-        let mut free = self.free.lock().expect("not poisoned");
-        free[worker] = true;
+        let mut outstanding = self.outstanding.lock().expect("not poisoned");
+        outstanding[worker] = outstanding[worker].saturating_sub(1);
         self.changed.notify_all();
     }
 
@@ -137,39 +155,41 @@ impl WorkerFreedom {
     /// other way out. The notify goes out under the same lock the wait holds, so a waiter that
     /// has checked its condition but not yet slept cannot miss it.
     fn wake_everyone(&self) {
-        let held = self.free.lock().expect("not poisoned");
+        let held = self.outstanding.lock().expect("not poisoned");
         self.changed.notify_all();
         drop(held);
     }
 
-    /// Blocks until at least one worker is free, or the run stops.
+    /// Blocks until at least one worker has room, or the run stops.
     ///
     /// A stop ends this wait as surely as a worker freeing up does, because a thread waiting on
     /// workers that have stopped has nothing else coming. The wait re-checks its condition every
     /// time it wakes, so a `mark_free` call landing between a failed claim and this call is never
     /// lost, and neither is a stop.
     fn wait_for_a_free_worker(&self, cancel: &Cancel) {
-        let free = self.free.lock().expect("not poisoned");
+        let outstanding = self.outstanding.lock().expect("not poisoned");
         drop(
             self.changed
-                .wait_while(free, |free| {
-                    !cancel.is_stopped() && !free.iter().any(|&is_free| is_free)
+                .wait_while(outstanding, |outstanding| {
+                    !cancel.is_stopped() && outstanding.iter().all(|held| *held >= self.capacity)
                 })
                 .expect("not poisoned"),
         );
     }
 }
 
-/// Hands a chunk to the first worker whose aggregate has drained everything it was given.
+/// Hands a unit to whichever worker holds the fewest units its aggregate has not yet drained.
 ///
-/// Answers `None` rather than blocking when nothing is free yet, which is exactly what
-/// [Disperse::place] needs to defer choosing without stalling the exchange it drives.
+/// A worker stays claimable up to its capacity, so this can still hand out a unit to a worker
+/// that is already holding one. Answers `None` rather than blocking when every worker is full,
+/// which is exactly what [Disperse::place] needs to defer choosing without stalling the exchange
+/// it drives.
 struct FirstIdle {
     freedom: Arc<WorkerFreedom>,
 }
 
 impl Dispatch for FirstIdle {
-    fn choose(&mut self, _chunk: u64) -> Option<usize> {
+    fn choose(&mut self, _unit: u64) -> Option<usize> {
         self.freedom.try_claim()
     }
 
@@ -328,8 +348,9 @@ fn is_source_region(graph: &CompiledGraph, region: &Region) -> bool {
 /// needs one aggregate per exit to keep each of its output streams in order on its own, which
 /// this engine does not build, so broadcasting every exit's output to every consumer would
 /// silently duplicate frames instead. The last two shapes are ones the wiring below cannot make
-/// sense of at all: a region that reads nothing and produces nothing, and a disperse whose chunk
-/// authority names a slot no input was bound to.
+/// sense of at all: a region that reads nothing and produces nothing, and a chunk routed disperse
+/// whose authority names a slot no input was bound to. A frame routed disperse reads no chunk id,
+/// so an authority it never looks at is left alone.
 fn region_is_supported(graph: &CompiledGraph, region: &Region, diagnostics: &mut Diagnostics) -> bool {
     let mut supported = true;
 
@@ -352,7 +373,8 @@ fn region_is_supported(graph: &CompiledGraph, region: &Region, diagnostics: &mut
         supported = false;
     }
 
-    if region.has_disperse() && !authority_is_bound(graph, region) {
+    let routes_by_chunk = region.routing() == Routing::ByChunk;
+    if routes_by_chunk && region.has_disperse() && !authority_is_bound(graph, region) {
         let head = graph.node(region.head());
         let message = format!(
             "{} routes its chunks by an input slot nothing was bound to",
@@ -443,7 +465,13 @@ fn largest_item_bytes(formats: &SolvedFormats) -> usize {
 }
 
 /// How many items a source may hold outstanding on top of the ones its own region holds.
-const HEADROOM_ITEMS_PER_WORKER: usize = 4;
+pub(crate) const HEADROOM_ITEMS_PER_WORKER: usize = 4;
+
+/// How many units a frame routed worker may hold that its aggregate has not drained.
+///
+/// Matched to the budget's per worker headroom, so a frame routed region at full stretch holds
+/// what the budget was sized for rather than something it never counted.
+pub(crate) const FRAME_UNITS_IN_FLIGHT: usize = HEADROOM_ITEMS_PER_WORKER;
 
 /// How many nodes the longest source region runs.
 ///
@@ -528,11 +556,11 @@ struct PassthroughRegion {
 }
 
 /// One worker of an [ExchangedRegion], before its thread is spawned.
-struct WorkerSlot {
-    runner: RegionRunner,
-    context: FrameContext,
-    work_receiver: Receiver<WorkItem>,
-    result_sender: SyncSender<WorkResult>,
+pub(crate) struct WorkerSlot {
+    pub(crate) runner: RegionRunner,
+    pub(crate) context: FrameContext,
+    pub(crate) work_receiver: Receiver<WorkItem>,
+    pub(crate) result_sender: SyncSender<WorkResult>,
 }
 
 /// A region routed through a disperse, and merged back through an aggregate.
@@ -574,12 +602,13 @@ struct DisperseSide {
     freedom: Arc<WorkerFreedom>,
     work_senders: Vec<Sender<WorkItem>>,
     assignment_sender: Sender<AggregateSignal>,
-    /// The slot the disperse routes every bundle by.
-    authority: usize,
+    /// The slot the disperse routes every bundle by, for a region routed by chunk. A frame
+    /// routed region reads no chunk id at all, so it has none.
+    authority: Option<usize>,
     /// How many workers the region runs, for telling a genuine width-one join from one that
     /// simply has nothing else to spread work across.
     width: usize,
-    /// The region's head node, named if [RunWarning::NeverChunked] fires.
+    /// The region's head node, named if a [RunWarning] about missing chunks fires.
     head: NodeId,
 }
 
@@ -775,9 +804,16 @@ impl Engine {
             }
 
             let width = workers.len();
-            let authority = region
-                .chunk_authority()
-                .expect("a disperse with no chunk authority is refused before anything is wired");
+            let routing = region.routing();
+            let authority = match routing {
+                Routing::ByChunk => {
+                    let slot = region.chunk_authority().expect(
+                        "a chunk routed disperse with no chunk authority is refused before anything is wired",
+                    );
+                    Some(slot)
+                },
+                Routing::ByFrame => None,
+            };
             let bound = bound_slots(graph, region.head());
             let slots: Vec<usize> = bound
                 .iter()
@@ -785,14 +821,25 @@ impl Engine {
                 .filter(|&(_, &is_bound)| is_bound)
                 .map(|(slot, _)| slot)
                 .collect();
-            let freedom = Arc::new(WorkerFreedom::new(width));
+            // One local sizes both how many units the dispatch policy hands a worker and how deep
+            // that worker's results channel is. They are one number because both describe the
+            // same thing, how far a worker may run ahead of its aggregate before it has to wait.
+            let capacity = match routing {
+                Routing::ByChunk => 1,
+                Routing::ByFrame => FRAME_UNITS_IN_FLIGHT,
+            };
+
+            let freedom = Arc::new(WorkerFreedom::new(width, capacity));
             let woken = freedom.clone();
             cancel.on_stop(move || woken.wake_everyone());
 
             let dispatch = FirstIdle {
                 freedom: freedom.clone(),
             };
-            let disperse = Disperse::new(&bound, authority, dispatch);
+            let disperse = match authority {
+                Some(authority) => Disperse::new(&bound, authority, dispatch),
+                None => Disperse::by_frame(&bound, dispatch),
+            };
             let upstream = inbound
                 .remove(&region.id())
                 .expect("a region with a disperse reads at least one input");
@@ -818,7 +865,7 @@ impl Engine {
                 let nodes = wrap_sinks(nodes, frames.clone());
                 let runner = RegionRunner::new(nodes, build_region_edges(graph, region));
                 let context = make_context();
-                let (result_sender, result_receiver) = mpsc::sync_channel(1);
+                let (result_sender, result_receiver) = mpsc::sync_channel(capacity);
 
                 result_receivers.push(result_receiver);
                 worker_slots.push(WorkerSlot {
@@ -1138,10 +1185,13 @@ fn run_passthrough(region: PassthroughRegion) -> Result<(), RunError> {
 /// still queued or still held has missed its run, so it is counted into `dropped` rather than
 /// going quietly.
 ///
-/// This is also where [RunWarning::NeverChunked] is noticed. Every slot's item is visible here
-/// before it is offered, which is the one place both the authority's chunk id and every other
-/// slot's can be read from the same bundle. A region with only one slot never runs the branch
-/// that could mark another slot chunked, since there is no other slot to read.
+/// This is also where [RunWarning::DetectorOnWrongBranch] and [RunWarning::NothingChunked] are
+/// noticed. Every slot's item is visible here before it is offered, which is the one place both
+/// the authority's chunk id and every other slot's can be read from the same bundle. A region
+/// with only one slot never runs the branch that could mark another slot chunked, since there is
+/// no other slot to read. A frame routed region routes by no slot's chunk id, so nothing there
+/// is observed at all, and no warning follows from an authority that was never there to begin
+/// with.
 fn drive_disperse(
     side: DisperseSide,
     cancel: &Cancel,
@@ -1179,13 +1229,15 @@ fn drive_disperse(
                     .pop_front()
                     .expect("this slot's queue was just confirmed non-empty");
 
-                note_chunk(
-                    slot,
-                    authority,
-                    item.meta().chunk,
-                    &mut authority_chunked,
-                    &mut other_chunked,
-                );
+                if let Some(authority) = authority {
+                    note_chunk(
+                        slot,
+                        authority,
+                        item.meta().chunk,
+                        &mut authority_chunked,
+                        &mut other_chunked,
+                    );
+                }
 
                 let offered = disperse.offer(slot, item);
                 let routed = offered.map_err(refused_offer)?;
@@ -1218,17 +1270,26 @@ fn drive_disperse(
     }
 
     let finished = disperse.finish();
+    for assignment in finished.assignments {
+        assignment_sender
+            .send(AggregateSignal::Assignment(assignment))
+            .ok();
+    }
+
     send_routed(&work_senders, finished.routed);
     assignment_sender.send(AggregateSignal::Finished).ok();
 
     let queued: usize = queues.values().map(VecDeque::len).sum();
     dropped.fetch_add(queued + dropped_items(finished.dropped), Ordering::SeqCst);
 
-    if width > 1 && !authority_chunked && other_chunked && !cancel.is_stopped() {
-        warnings
-            .lock()
-            .expect("not poisoned")
-            .push(RunWarning::NeverChunked { node: head });
+    if width > 1 && authority.is_some() && !authority_chunked && !cancel.is_stopped() {
+        let warning = if other_chunked {
+            RunWarning::DetectorOnWrongBranch { node: head }
+        } else {
+            RunWarning::NothingChunked { node: head }
+        };
+
+        warnings.lock().expect("not poisoned").push(warning);
     }
 
     Ok(())
@@ -1310,21 +1371,21 @@ fn drain_holding(
     true
 }
 
-/// Runs one worker of an exchanged region, one chunk at a time.
+/// Runs one worker of an exchanged region, one unit at a time.
 ///
-/// Every chunk after the first is started by its own first bundle arriving rather than by the
-/// chunk before it closing, so a worker whose stream ends on a chunk close never leaves its
+/// Every unit after the first is started by its own first bundle arriving rather than by the
+/// unit before it closing, so a worker whose stream ends on a unit close never leaves its
 /// stages holding a start they will never see the end of.
 ///
 /// Nothing here reads the stop flag. Everything a worker waits on is a channel: its disperse
 /// closes the work channel when it winds down, and its aggregate dropping the other end closes
-/// the results one. Walking out part way through a chunk instead would leave the aggregate
+/// the results one. Walking out part way through a unit instead would leave the aggregate
 /// waiting on a close that never comes.
 ///
 /// An aggregate that has already gone ends this the same way an `EndOfStream` does, by leaving
 /// the loop, so the flush below still runs. Returning from inside the loop instead would leave
 /// every stage in this worker holding a start it never sees the end of.
-fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
+pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
     let WorkerSlot {
         mut runner,
         mut context,
@@ -1352,6 +1413,24 @@ fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                     break;
                 }
             },
+            Ok(WorkItem::Unit(unit, bundle)) => {
+                if !started {
+                    runner.start(&mut context)?;
+                    started = true;
+                }
+
+                chunk_in_hand = bundle_chunk(&bundle);
+
+                let run = runner.run(&mut context, bundle);
+                let produced = run.map_err(|error| named_chunk(error, chunk_in_hand))?;
+                if send_results(&result_sender, produced).is_err() {
+                    break;
+                }
+
+                if result_sender.send(WorkResult::EndOfUnit(unit)).is_err() {
+                    break;
+                }
+            },
             Ok(WorkItem::EndOfChunk(chunk)) => {
                 chunk_in_hand = Some(chunk);
 
@@ -1365,7 +1444,7 @@ fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                     }
                 }
 
-                if result_sender.send(WorkResult::EndOfChunk(chunk)).is_err() {
+                if result_sender.send(WorkResult::EndOfUnit(chunk)).is_err() {
                     break;
                 }
             },
@@ -1409,7 +1488,7 @@ fn send_results(result_sender: &SyncSender<WorkResult>, items: Vec<StreamItem>) 
 /// Carries one worker's output straight downstream, for a region with no aggregate.
 ///
 /// A region of one worker has nothing to merge back into order, so nothing here renumbers what
-/// it produced. Marking the worker free as each chunk closes is what lets its disperse hand it
+/// it produced. Marking the worker free as each unit closes is what lets its disperse hand it
 /// the next one, and is the one job this shares with an aggregate.
 fn run_relay(
     result_receivers: Vec<Receiver<WorkResult>>,
@@ -1424,7 +1503,7 @@ fn run_relay(
     while let Ok(result) = results.recv() {
         match result {
             WorkResult::Item(item) => forward(&downstream, vec![item]),
-            WorkResult::EndOfChunk(_) => freedom.mark_free(0),
+            WorkResult::EndOfUnit(_) => freedom.mark_free(0),
             WorkResult::EndOfStream => break,
         }
     }
@@ -1457,7 +1536,7 @@ pub(crate) fn run_aggregate(
                 let Ok(result) = result_receivers[worker].recv() else {
                     break;
                 };
-                let is_end_of_chunk = matches!(result, WorkResult::EndOfChunk(_));
+                let is_end_of_unit = matches!(result, WorkResult::EndOfUnit(_));
 
                 let accepted = aggregate.accept(worker, result);
                 let emitted = match accepted {
@@ -1465,7 +1544,7 @@ pub(crate) fn run_aggregate(
                     // A worker that ends still owing a chunk has either failed or been stopped,
                     // and its own thread reports that. Nothing is left to merge in order, so this
                     // winds down rather than raising a second failure derived from the first.
-                    Err(ExchangeError::WorkerEndedOwingChunk { .. }) if cancel.is_stopped() => break,
+                    Err(ExchangeError::WorkerEndedOwingUnit { .. }) if cancel.is_stopped() => break,
                     // The stop a failure raises is recorded a moment after the thread that failed
                     // has dropped its senders, so the arm above can lose that race and land here
                     // instead. Reporting rather than panicking leaves the real cause the first
@@ -1473,7 +1552,7 @@ pub(crate) fn run_aggregate(
                     Err(error) => return Err(RunError::Exchange { source: error }),
                 };
 
-                if is_end_of_chunk {
+                if is_end_of_unit {
                     freedom.mark_free(worker);
                 }
 

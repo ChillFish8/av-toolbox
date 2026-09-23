@@ -7,6 +7,11 @@ pub enum WorkItem {
     ///
     /// A slot is empty where an optional input was never bound.
     Bundle(Vec<Option<StreamItem>>),
+    /// A bundle that is a whole unit of work on its own, carrying the id its aggregate expects.
+    ///
+    /// Frame routing sends these. The worker runs the bundle and closes the unit without
+    /// flushing its region, since a frame mode stage has nothing to carry between frames.
+    Unit(u64, Vec<Option<StreamItem>>),
     /// Every item of this chunk has been sent.
     EndOfChunk(u64),
     /// Every chunk has been sent.
@@ -17,15 +22,17 @@ pub enum WorkItem {
 #[derive(Debug)]
 pub enum WorkResult {
     Item(StreamItem),
-    /// Everything this worker had for the chunk has been sent, which may be nothing.
-    EndOfChunk(u64),
+    /// Everything this worker had for the unit has been sent, which may be nothing.
+    EndOfUnit(u64),
     EndOfStream,
 }
 
-/// Which worker a disperse gave a chunk to.
+/// Which worker a disperse gave one unit of work to.
+///
+/// A unit is a chunk under chunk routing and a single bundle under frame routing.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Assignment {
-    pub chunk: u64,
+    pub unit: u64,
     pub worker: usize,
 }
 
@@ -34,10 +41,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_assignment_names_a_chunk_and_the_worker_that_holds_it() {
-        let assignment = Assignment { chunk: 4, worker: 2 };
+    fn an_assignment_names_a_unit_and_the_worker_that_holds_it() {
+        let assignment = Assignment { unit: 4, worker: 2 };
 
-        assert_eq!(assignment.chunk, 4);
+        assert_eq!(assignment.unit, 4);
         assert_eq!(assignment.worker, 2);
     }
 }

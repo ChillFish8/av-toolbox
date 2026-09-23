@@ -2,18 +2,18 @@ use av_toolbox_gpu::StreamItem;
 
 use crate::{Assignment, ExchangeError, WorkItem};
 
-/// Chooses which worker takes the next chunk.
+/// Chooses which worker takes the next unit.
 pub trait Dispatch {
-    /// Picks a worker for `chunk`, or `None` if no worker is free yet.
+    /// Picks a worker for `unit`, or `None` if no worker is free yet.
     ///
     /// A policy that hands out workers by availability answers `None` until one frees up. The
     /// caller is expected to try again later rather than treat `None` as an error.
-    fn choose(&mut self, chunk: u64) -> Option<usize>;
+    fn choose(&mut self, unit: u64) -> Option<usize>;
 
     /// How many workers this policy can choose between.
     ///
     /// A disperse needs this to end every worker when the stream finishes, including one that
-    /// was never assigned a chunk.
+    /// was never assigned a unit.
     fn workers(&self) -> usize;
 }
 
@@ -32,7 +32,7 @@ impl RoundRobin {
 }
 
 impl Dispatch for RoundRobin {
-    fn choose(&mut self, _chunk: u64) -> Option<usize> {
+    fn choose(&mut self, _unit: u64) -> Option<usize> {
         let chosen = self.next;
         self.next = (self.next + 1) % self.workers;
         Some(chosen)
@@ -59,6 +59,8 @@ pub struct Placed {
 /// What `finish` produced, including anything the stream ending left unrouted.
 pub struct Finished {
     pub routed: Vec<Routed>,
+    /// The units `finish` handed out itself, which an aggregate has not been told about yet.
+    pub assignments: Vec<Assignment>,
     pub dropped: Option<Dropped>,
 }
 
@@ -80,21 +82,31 @@ struct Current {
 
 /// A completed bundle waiting for `place` to give it a worker.
 struct HeldBundle {
-    chunk: u64,
+    unit: u64,
     bundle: Vec<Option<StreamItem>>,
 }
 
-/// Gathers one item per bound input slot into a bundle, then routes each chunk to one worker.
+/// What a disperse needs to remember, which differs by how it routes.
+enum RoutingState {
+    /// Routes by the authority slot's chunk id, keeping one worker for a whole chunk.
+    ByChunk {
+        authority: usize,
+        current: Option<Current>,
+    },
+    /// Routes each bundle on its own, numbering units as it goes.
+    ByFrame { next_unit: u64 },
+}
+
+/// Gathers one item per bound input slot into a bundle, then routes it to one worker.
 ///
 /// A slot the signature never bound stays `None` in every bundle. A bundle is complete once every
-/// bound slot holds an item, and it is only routed once a worker has been chosen for its chunk.
+/// bound slot holds an item, and it is only routed once a worker has been chosen for it.
 pub struct Disperse<D> {
     slots: usize,
     bound: Vec<bool>,
-    authority: usize,
+    routing: RoutingState,
     dispatch: D,
     pending: Vec<Option<StreamItem>>,
-    current: Option<Current>,
     held: Option<HeldBundle>,
     assignments: Vec<Assignment>,
     finished: bool,
@@ -105,7 +117,7 @@ impl<D: Dispatch> Disperse<D> {
     ///
     /// `bound.len()` sets how many slots every bundle carries, one per signature param and one
     /// per variadic input, with `false` for a slot no input was ever bound to. `authority` must
-    /// name a bound slot.
+    /// name a bound slot, and its chunk id decides which worker keeps a whole chunk.
     pub fn new(bound: &[bool], authority: usize, dispatch: D) -> Self {
         assert!(
             authority < bound.len(),
@@ -113,20 +125,38 @@ impl<D: Dispatch> Disperse<D> {
         );
         assert!(bound[authority], "the chunk authority slot must be bound");
 
+        Self::with_routing(
+            bound,
+            dispatch,
+            RoutingState::ByChunk {
+                authority,
+                current: None,
+            },
+        )
+    }
+
+    /// Builds a disperse that routes each bundle to whichever worker has room.
+    ///
+    /// Frame routing reads no chunk id, so it needs no authority. An authority declared on the
+    /// head node's signature is simply not used.
+    pub fn by_frame(bound: &[bool], dispatch: D) -> Self {
+        Self::with_routing(bound, dispatch, RoutingState::ByFrame { next_unit: 0 })
+    }
+
+    fn with_routing(bound: &[bool], dispatch: D, routing: RoutingState) -> Self {
         Self {
             slots: bound.len(),
             bound: bound.to_vec(),
-            authority,
+            routing,
             dispatch,
             pending: vec![None; bound.len()],
-            current: None,
             held: None,
             assignments: Vec::new(),
             finished: false,
         }
     }
 
-    /// The chunk given to each worker, in the order it was dispatched.
+    /// The unit given to each worker, in the order it was dispatched.
     pub fn assignments(&self) -> &[Assignment] {
         &self.assignments
     }
@@ -189,59 +219,93 @@ impl<D: Dispatch> Disperse<D> {
     /// caller sees `None` for the second reason as "not yet" and is expected to try again later.
     pub fn place(&mut self) -> Option<Placed> {
         let held = self.held.as_ref()?;
-        let worker = self.dispatch.choose(held.chunk)?;
+        let worker = self.dispatch.choose(held.unit)?;
         let held = self.held.take().expect("just confirmed a bundle is held");
 
         let assignment = Assignment {
-            chunk: held.chunk,
+            unit: held.unit,
             worker,
         };
         self.assignments.push(assignment);
-        self.current = Some(Current {
-            chunk: held.chunk,
-            worker,
-        });
+
+        let item = match &mut self.routing {
+            RoutingState::ByChunk { current, .. } => {
+                *current = Some(Current {
+                    chunk: held.unit,
+                    worker,
+                });
+                WorkItem::Bundle(held.bundle)
+            },
+            RoutingState::ByFrame { .. } => WorkItem::Unit(held.unit, held.bundle),
+        };
 
         Some(Placed {
             assignment,
-            routed: Routed {
-                worker,
-                item: WorkItem::Bundle(held.bundle),
-            },
+            routed: Routed { worker, item },
         })
     }
 
-    /// Closes the chunk in flight and ends every worker, once the input streams are over.
+    /// Closes whatever is in flight and ends every worker, once the input streams are over.
     ///
     /// A second call is a no-op, since the first already closed everything. Whatever the stream
     /// ended in the middle of, a partially gathered bundle or a complete one still waiting for
-    /// `place`, is reported as [Dropped] rather than silently discarded. A chunk whose close was
-    /// already sent when a held bundle arrived is not closed a second time.
+    /// `place`, is reported as [Dropped] rather than silently discarded. Under chunk routing, a
+    /// chunk whose close was already sent when a held bundle arrived is not closed a second time.
+    ///
+    /// Frame routing has no chunk in flight to close, since every bundle already closed its own
+    /// unit as it was placed. Every worker is given one last unit of its own instead, so whatever
+    /// it emits as its stream ends arrives under an assignment its aggregate is still waiting on.
+    /// A worker that was never given a bundle gets one too, since it was told its stream started
+    /// and so has an end of its own to deliver.
     pub fn finish(&mut self) -> Finished {
         if self.finished {
             return Finished {
                 routed: Vec::new(),
+                assignments: Vec::new(),
                 dropped: None,
             };
         }
 
         self.finished = true;
 
+        let workers = self.dispatch.workers();
         let mut routed = Vec::new();
+        let mut assignments = Vec::new();
 
         // A held bundle already closed the chunk in flight as it arrived, since that is what a
         // new chunk id does, so closing it again here would hand one worker two ends for the
         // same chunk.
-        if let Some(current) = self.current
-            && self.held.is_none()
-        {
+        let chunk_in_flight = match &self.routing {
+            RoutingState::ByChunk {
+                current: Some(current),
+                ..
+            } if self.held.is_none() => Some(*current),
+            _ => None,
+        };
+
+        if let Some(current) = chunk_in_flight {
             routed.push(Routed {
                 worker: current.worker,
                 item: WorkItem::EndOfChunk(current.chunk),
             });
         }
 
-        for worker in 0..self.dispatch.workers() {
+        if let RoutingState::ByFrame { next_unit } = &mut self.routing {
+            for worker in 0..workers {
+                let unit = *next_unit;
+                *next_unit += 1;
+
+                assignments.push(Assignment { unit, worker });
+                routed.push(Routed {
+                    worker,
+                    item: WorkItem::EndOfChunk(unit),
+                });
+            }
+        }
+
+        self.assignments.extend(&assignments);
+
+        for worker in 0..workers {
             routed.push(Routed {
                 worker,
                 item: WorkItem::EndOfStream,
@@ -250,7 +314,11 @@ impl<D: Dispatch> Disperse<D> {
 
         let dropped = self.take_dropped();
 
-        Finished { routed, dropped }
+        Finished {
+            routed,
+            assignments,
+            dropped,
+        }
     }
 
     fn take_dropped(&mut self) -> Option<Dropped> {
@@ -276,39 +344,52 @@ impl<D: Dispatch> Disperse<D> {
     fn route_bundle(&mut self) -> Result<Vec<Routed>, ExchangeError> {
         check_frame_indices(&self.pending, &self.bound)?;
 
-        let chunk = self.pending[self.authority]
-            .as_ref()
-            .expect("the authority slot is bound and filled once a bundle is complete")
-            .meta()
-            .chunk;
+        match &mut self.routing {
+            RoutingState::ByChunk { authority, current } => {
+                let chunk = self.pending[*authority]
+                    .as_ref()
+                    .expect("the authority slot is bound and filled once a bundle is complete")
+                    .meta()
+                    .chunk;
 
-        let bundle = std::mem::replace(&mut self.pending, vec![None; self.slots]);
+                let bundle = std::mem::replace(&mut self.pending, vec![None; self.slots]);
 
-        let Some(current) = self.current else {
-            self.held = Some(HeldBundle { chunk, bundle });
-            return Ok(Vec::new());
-        };
+                let Some(current) = *current else {
+                    self.held = Some(HeldBundle { unit: chunk, bundle });
+                    return Ok(Vec::new());
+                };
 
-        if chunk < current.chunk {
-            return Err(ExchangeError::ChunkWentBackwards {
-                previous: current.chunk,
-                found: chunk,
-            });
+                if chunk < current.chunk {
+                    return Err(ExchangeError::ChunkWentBackwards {
+                        previous: current.chunk,
+                        found: chunk,
+                    });
+                }
+
+                if chunk == current.chunk {
+                    return Ok(vec![Routed {
+                        worker: current.worker,
+                        item: WorkItem::Bundle(bundle),
+                    }]);
+                }
+
+                self.held = Some(HeldBundle { unit: chunk, bundle });
+
+                Ok(vec![Routed {
+                    worker: current.worker,
+                    item: WorkItem::EndOfChunk(current.chunk),
+                }])
+            },
+            RoutingState::ByFrame { next_unit } => {
+                let unit = *next_unit;
+                *next_unit += 1;
+
+                let bundle = std::mem::replace(&mut self.pending, vec![None; self.slots]);
+                self.held = Some(HeldBundle { unit, bundle });
+
+                Ok(Vec::new())
+            },
         }
-
-        if chunk == current.chunk {
-            return Ok(vec![Routed {
-                worker: current.worker,
-                item: WorkItem::Bundle(bundle),
-            }]);
-        }
-
-        self.held = Some(HeldBundle { chunk, bundle });
-
-        Ok(vec![Routed {
-            worker: current.worker,
-            item: WorkItem::EndOfChunk(current.chunk),
-        }])
     }
 }
 
@@ -400,7 +481,7 @@ mod tests {
     }
 
     impl Dispatch for ScriptedChoice {
-        fn choose(&mut self, _chunk: u64) -> Option<usize> {
+        fn choose(&mut self, _unit: u64) -> Option<usize> {
             self.script
                 .pop_front()
                 .expect("the script names an answer for every choose call")
@@ -532,7 +613,7 @@ mod tests {
             .place()
             .expect("the policy frees a worker on its second try");
 
-        assert_eq!(placed.assignment, Assignment { chunk: 8, worker: 1 });
+        assert_eq!(placed.assignment, Assignment { unit: 8, worker: 1 });
         assert_eq!(disperse.assignments().len(), 2);
         assert!(!disperse.is_holding());
     }
@@ -554,7 +635,7 @@ mod tests {
             .place()
             .expect("the policy frees a worker on its second try");
 
-        assert_eq!(placed.assignment, Assignment { chunk: 7, worker: 0 });
+        assert_eq!(placed.assignment, Assignment { unit: 7, worker: 0 });
     }
 
     #[test]
@@ -794,8 +875,8 @@ mod tests {
         assert_eq!(
             disperse.assignments(),
             &[
-                Assignment { chunk: 7, worker: 0 },
-                Assignment { chunk: 8, worker: 1 },
+                Assignment { unit: 7, worker: 0 },
+                Assignment { unit: 8, worker: 1 },
             ]
         );
     }
@@ -819,5 +900,160 @@ mod tests {
                 offered: 1,
             }
         );
+    }
+
+    #[test]
+    fn frame_routing_gives_consecutive_bundles_to_different_workers() {
+        let mut disperse = Disperse::by_frame(&[true], RoundRobin::new(3));
+
+        disperse.offer(0, item(0, 0)).expect("should accept");
+        let first = disperse.place().expect("round robin always has a free worker");
+
+        disperse.offer(0, item(1, 0)).expect("should accept");
+        let second = disperse.place().expect("round robin always has a free worker");
+
+        disperse.offer(0, item(2, 0)).expect("should accept");
+        let third = disperse.place().expect("round robin always has a free worker");
+
+        let workers = [first.routed.worker, second.routed.worker, third.routed.worker];
+        assert_ne!(workers[0], workers[1]);
+        assert_ne!(workers[1], workers[2]);
+        assert_ne!(workers[0], workers[2]);
+    }
+
+    #[test]
+    fn frame_routing_numbers_its_units_from_zero() {
+        let mut disperse = Disperse::by_frame(&[true], RoundRobin::new(3));
+
+        disperse.offer(0, item(0, 40)).expect("should accept");
+        disperse.place().expect("round robin always has a free worker");
+
+        disperse.offer(0, item(1, 41)).expect("should accept");
+        disperse.place().expect("round robin always has a free worker");
+
+        disperse.offer(0, item(2, 9)).expect("should accept");
+        disperse.place().expect("round robin always has a free worker");
+
+        let units: Vec<u64> = disperse
+            .assignments()
+            .iter()
+            .map(|assignment| assignment.unit)
+            .collect();
+        assert_eq!(units, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn frame_routing_ignores_a_chunk_id_that_goes_backwards() {
+        let mut disperse = Disperse::by_frame(&[true], RoundRobin::new(2));
+
+        disperse.offer(0, item(0, 5)).expect("should accept");
+        disperse.place().expect("round robin always has a free worker");
+
+        let result = disperse.offer(0, item(1, 1));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn frame_routing_sends_a_unit_rather_than_a_bare_bundle() {
+        let mut disperse = Disperse::by_frame(&[true], RoundRobin::new(1));
+        disperse.offer(0, item(0, 0)).expect("should accept");
+
+        let placed = disperse.place().expect("round robin always has a free worker");
+
+        let WorkItem::Unit(unit, bundle) = &placed.routed.item else {
+            panic!("frame routing should have sent a unit rather than a bare bundle");
+        };
+        assert_eq!(*unit, 0);
+        assert!(bundle[0].is_some());
+    }
+
+    /// A frame routed worker starts once and ends once, so finishing gives every one of them a
+    /// last unit, which is the assignment whatever it flushes is delivered under.
+    #[test]
+    fn frame_routing_gives_every_worker_a_last_unit_to_close() {
+        let mut disperse = Disperse::by_frame(&[true], RoundRobin::new(3));
+        disperse.offer(0, item(0, 0)).expect("should accept");
+        disperse.place().expect("round robin always has a free worker");
+
+        let finished = disperse.finish();
+
+        let closed: Vec<(usize, u64)> = finished
+            .routed
+            .iter()
+            .filter_map(|routed| match routed.item {
+                WorkItem::EndOfChunk(unit) => Some((routed.worker, unit)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(closed, vec![(0, 1), (1, 2), (2, 3)]);
+
+        let expected = vec![
+            Assignment { unit: 1, worker: 0 },
+            Assignment { unit: 2, worker: 1 },
+            Assignment { unit: 3, worker: 2 },
+        ];
+        assert_eq!(finished.assignments, expected);
+
+        let ends = finished
+            .routed
+            .iter()
+            .filter(|routed| matches!(routed.item, WorkItem::EndOfStream))
+            .count();
+        assert_eq!(ends, 3);
+        assert_eq!(finished.routed.len(), 6);
+    }
+
+    /// A worker that was never given a bundle was still told its stream started, so it has an end
+    /// of its own to deliver and needs a unit to deliver it under.
+    #[test]
+    fn frame_routing_gives_a_worker_that_ran_nothing_a_last_unit_too() {
+        let mut disperse = Disperse::by_frame(&[true], RoundRobin::new(2));
+
+        let finished = disperse.finish();
+
+        let expected = vec![
+            Assignment { unit: 0, worker: 0 },
+            Assignment { unit: 1, worker: 1 },
+        ];
+        assert_eq!(finished.assignments, expected);
+    }
+
+    /// Chunk routing closes the chunk in flight under the unit it was already assigned, so
+    /// finishing invents no unit of its own the way frame routing does.
+    #[test]
+    fn chunk_routing_invents_no_unit_when_it_finishes() {
+        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(3));
+        disperse.offer(0, item(0, 7)).expect("should accept");
+        disperse.place().expect("round robin always has a free worker");
+
+        let finished = disperse.finish();
+
+        assert!(finished.assignments.is_empty());
+        assert_eq!(disperse.assignments(), &[Assignment { unit: 7, worker: 0 }]);
+    }
+
+    /// Guards the split between `new` and `by_frame`: the chunk path must still behave exactly
+    /// as it did before frame routing existed.
+    #[test]
+    fn chunk_routing_is_unchanged_by_the_frame_path() {
+        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(4));
+        disperse.offer(0, item(0, 7)).expect("should accept");
+        let first = disperse.place().expect("round robin always has a free worker");
+
+        let second = disperse.offer(0, item(1, 7)).expect("should accept");
+        assert_eq!(second.len(), 1);
+        assert!(matches!(second[0].item, WorkItem::Bundle(_)));
+        assert_eq!(first.routed.worker, second[0].worker);
+
+        let boundary = disperse.offer(0, item(2, 8)).expect("should accept");
+        let WorkItem::EndOfChunk(closed) = &boundary[0].item else {
+            panic!("a new chunk should still close the one before it");
+        };
+        assert_eq!(*closed, 7);
+
+        let placed = disperse.place().expect("round robin always has a free worker");
+        assert_ne!(placed.routed.worker, first.routed.worker);
+        assert!(matches!(placed.routed.item, WorkItem::Bundle(_)));
     }
 }

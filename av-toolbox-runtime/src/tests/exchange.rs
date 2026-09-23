@@ -186,8 +186,10 @@ fn enqueue(queues: &mut [VecDeque<WorkItem>], routed: Vec<Routed>) {
 
 /// Turns one worker's queue of `WorkItem`s into a queue of `WorkResult`s.
 ///
-/// A bundle becomes whatever `transform` produces for it. `EndOfChunk` and `EndOfStream` are
-/// carried straight through, since a worker never changes chunk or stream boundaries.
+/// A bundle becomes whatever `transform` produces for it. A unit does the same, then closes
+/// itself immediately, since frame routing never sends a separate close. `WorkItem::EndOfChunk`
+/// becomes `WorkResult::EndOfUnit`, and `EndOfStream` is carried straight through, since a worker
+/// never changes chunk or stream boundaries.
 fn play_worker<F>(queue: VecDeque<WorkItem>, transform: &F) -> VecDeque<WorkResult>
 where
     F: Fn(StreamItem) -> Vec<StreamItem>,
@@ -203,7 +205,16 @@ where
                     results.push_back(WorkResult::Item(produced));
                 }
             },
-            WorkItem::EndOfChunk(chunk) => results.push_back(WorkResult::EndOfChunk(chunk)),
+            WorkItem::Unit(unit, mut bundle) => {
+                let bundled_item = bundle.remove(0).expect("the only slot is always filled");
+
+                for produced in transform(bundled_item) {
+                    results.push_back(WorkResult::Item(produced));
+                }
+
+                results.push_back(WorkResult::EndOfUnit(unit));
+            },
+            WorkItem::EndOfChunk(chunk) => results.push_back(WorkResult::EndOfUnit(chunk)),
             WorkItem::EndOfStream => results.push_back(WorkResult::EndOfStream),
         }
     }

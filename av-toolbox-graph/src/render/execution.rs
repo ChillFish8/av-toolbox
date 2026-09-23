@@ -1,4 +1,4 @@
-use super::RenderOptions;
+use super::{RenderOptions, routing_text};
 use crate::graph::{CompiledGraph, NodeId};
 use crate::plan::{ExecutionPlan, Narrowed, Region};
 
@@ -15,9 +15,9 @@ const EXCHANGE_COLUMN: usize = 40;
 /// Reports what the engine will actually run, rather than the graph the pipeline declared.
 ///
 /// Regions are walked in the order they run. Each one prints its width, the granularity that
-/// set it, its nodes, and its exchanges marked bounded or unbounded. A node held at width one
-/// names why, from [Narrowed](crate::plan::Narrowed), whenever the reason is more than nothing
-/// having asked for more.
+/// set it, how it routes above width one, its nodes, and its exchanges marked bounded or
+/// unbounded. A node held at width one names why, from [Narrowed](crate::plan::Narrowed),
+/// whenever the reason is more than nothing having asked for more.
 pub(crate) fn render_execution(graph: &CompiledGraph, options: &RenderOptions) -> String {
     let Some(plan) = graph.execution_plan() else {
         return String::from(NOT_PLANNED_MESSAGE);
@@ -53,11 +53,16 @@ fn region_report(
 
 fn region_header(plan: &ExecutionPlan, region: &Region, shared_reason: Option<Narrowed>) -> String {
     let granularity = plan.node(region.head()).parallelism();
-    let header = format!(
+    let mut header = format!(
         "region {}  x{}  {granularity}",
         region.id().index(),
         region.width()
     );
+
+    if region.width() > 1 {
+        let routing = routing_text(region.routing());
+        header.push_str(&format!("  {routing}"));
+    }
 
     match shared_reason.and_then(reason_text) {
         Some(reason) => format!("{header}    ({reason})"),
@@ -209,6 +214,30 @@ mod tests {
         render_svg(&planned_graph(), &execution_options())
     }
 
+    /// `test/widening-source` is frame mode, unlike every other fixture source, so widening it
+    /// is the one way to get a frame mode node above width one.
+    fn frame_planned_graph() -> CompiledGraph {
+        let mut source = testing::spec(StageKind::Source, "input", "test/widening-source");
+        source.workers = Some(4);
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("input")];
+
+        let registry = testing::registry();
+        let mut graph = build(&registry, &[source, sink])
+            .expect("should build")
+            .into_graph();
+
+        let made = crate::plan::plan(&graph, &registry).expect("should plan");
+        graph.set_execution_plan(made);
+
+        graph
+    }
+
+    fn render_frame_planned_execution() -> String {
+        render_ascii(&frame_planned_graph(), &execution_options())
+    }
+
     /// A stage explicitly pinned to one worker, rather than one that simply never asked for
     /// more, so its narrowing reason is `Declared` rather than the deliberately unprinted
     /// `NotAsked`.
@@ -307,7 +336,16 @@ mod tests {
         let report = render_planned_execution();
 
         assert!(report.contains("x4"));
-        assert!(report.contains("chunk"));
+        assert!(report.contains("by chunk"));
+    }
+
+    /// A chunk routed plan alone cannot tell this view apart from one that always reports
+    /// `"by chunk"` regardless of how a region actually routes.
+    #[test]
+    fn a_frame_routed_region_is_reported_as_routing_by_frame() {
+        let report = render_frame_planned_execution();
+
+        assert!(report.contains("by frame"));
     }
 
     #[test]

@@ -12,15 +12,6 @@ fn widened_join_spec(name: &str, base: &str, overlay: &str, workers: usize) -> S
     join
 }
 
-fn warned_nodes(warnings: &[RunWarning]) -> Vec<NodeId> {
-    warnings
-        .iter()
-        .map(|warning| match warning {
-            RunWarning::NeverChunked { node } => *node,
-        })
-        .collect()
-}
-
 #[test]
 fn a_widened_join_whose_authority_never_chunked_is_warned_about() {
     let specs = vec![
@@ -36,7 +27,10 @@ fn a_widened_join_whose_authority_never_chunked_is_warned_about() {
         "a_widened_join_whose_authority_never_chunked_is_warned_about",
     );
 
-    assert_eq!(warned_nodes(&report.warnings), vec![NodeId::new(2)]);
+    assert_eq!(
+        report.warnings,
+        vec![RunWarning::DetectorOnWrongBranch { node: NodeId::new(2) }]
+    );
 }
 
 #[test]
@@ -78,8 +72,10 @@ fn an_authority_that_chunked_while_another_input_never_did_is_not_warned_about()
     assert!(report.warnings.is_empty());
 }
 
+/// A chunk routed join has no other option for spreading its work, so a stream nobody ever
+/// chunked is now a mistake worth naming rather than a silent choice.
 #[test]
-fn a_pipeline_with_no_chunk_ids_at_all_is_not_warned_about() {
+fn a_widened_join_with_no_chunk_ids_at_all_is_warned_about() {
     let specs = vec![
         engine::source_spec("base_input", &[0, 0, 0, 0], 0),
         engine::source_spec("overlay_input", &[0, 0, 0, 0], 1),
@@ -90,8 +86,27 @@ fn a_pipeline_with_no_chunk_ids_at_all_is_not_warned_about() {
 
     let report = engine::run_with_watchdog(
         run_engine,
-        "a_pipeline_with_no_chunk_ids_at_all_is_not_warned_about",
+        "a_widened_join_with_no_chunk_ids_at_all_is_warned_about",
     );
+
+    assert_eq!(
+        report.warnings,
+        vec![RunWarning::NothingChunked { node: NodeId::new(2) }]
+    );
+}
+
+/// A frame mode stage needs no chunk boundaries to spread, so the same unchunked stream reaching
+/// one four wide is working exactly as declared.
+#[test]
+fn a_frame_routed_region_is_never_warned_about() {
+    let specs = vec![
+        engine::source_spec("input", &[0, 0, 0, 0], 0),
+        engine::filter_spec("filter", "input", Some(4)),
+        engine::sink_spec("out", "filter"),
+    ];
+    let run_engine = engine::build_engine(&specs, Settings::default());
+
+    let report = engine::run_with_watchdog(run_engine, "a_frame_routed_region_is_never_warned_about");
 
     assert!(report.warnings.is_empty());
 }

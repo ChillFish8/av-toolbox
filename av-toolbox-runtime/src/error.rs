@@ -111,9 +111,9 @@ pub enum ExchangeError {
     #[error("chunk {found} followed chunk {previous}, and a chunk id never goes backwards")]
     ChunkWentBackwards { previous: u64, found: u64 },
     /// An aggregate was given something from a worker it was not reading.
-    #[error("worker {found} answered while worker {expected} held chunk {chunk}")]
+    #[error("worker {found} answered while worker {expected} held unit {unit}")]
     WrongWorker {
-        chunk: u64,
+        unit: u64,
         expected: usize,
         found: usize,
     },
@@ -135,14 +135,14 @@ pub enum ExchangeError {
     /// An aggregate was asked to accept something before it had any assignment to read against.
     #[error("worker {worker} answered but the aggregate has no assignment to read against")]
     NothingAssigned { worker: usize },
-    /// A worker's `EndOfChunk` named a different chunk than the assignment it is draining.
-    #[error("worker {worker} closed chunk {found} while draining chunk {expected}")]
-    ChunkMismatch {
+    /// A worker's `EndOfUnit` named a different unit than the assignment it is draining.
+    #[error("worker {worker} closed unit {found} while draining unit {expected}")]
+    UnitMismatch {
         worker: usize,
         expected: u64,
         found: u64,
     },
-    /// A worker ended its stream while still owing the chunk it was assigned.
-    #[error("worker {worker} ended its stream while still owing chunk {chunk}")]
-    WorkerEndedOwingChunk { worker: usize, chunk: u64 },
+    /// A worker ended its stream while still owing the unit it was assigned.
+    #[error("worker {worker} ended its stream while still owing unit {unit}")]
+    WorkerEndedOwingUnit { worker: usize, unit: u64 },
 }

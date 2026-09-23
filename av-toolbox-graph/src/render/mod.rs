@@ -11,7 +11,7 @@ pub use self::mermaid::render_mermaid;
 pub use self::svg::render_svg;
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::layout::{Layout, Slot};
-use crate::plan::NodePlan;
+use crate::plan::{NodePlan, Routing};
 
 /// Which graph a renderer draws.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
@@ -46,8 +46,8 @@ impl Default for RenderOptions {
 
 /// The lines of text a node's box holds.
 ///
-/// When the node carries a plan, a final line names how it will run, its width included whenever
-/// that width is above one.
+/// When the node carries a plan, a final line names how it will run, its width and routing mode
+/// included whenever that width is above one.
 pub(crate) fn labels_for(node: &Node, plan: Option<&NodePlan>, options: &RenderOptions) -> Vec<String> {
     let mut lines = vec![node.name().to_string()];
 
@@ -56,15 +56,23 @@ pub(crate) fn labels_for(node: &Node, plan: Option<&NodePlan>, options: &RenderO
     }
 
     if let Some(plan) = plan {
+        let routing = routing_text(plan.routing());
         let label = match plan.width() {
             1 => plan.parallelism().to_string(),
-            width => format!("{} x{width}", plan.parallelism()),
+            width => format!("{} x{width} {routing}", plan.parallelism()),
         };
 
         lines.push(label);
     }
 
     lines
+}
+
+fn routing_text(routing: Routing) -> &'static str {
+    match routing {
+        Routing::ByFrame => "by frame",
+        Routing::ByChunk => "by chunk",
+    }
 }
 
 /// Lays each rank out left to right, then centres it against the widest rank.

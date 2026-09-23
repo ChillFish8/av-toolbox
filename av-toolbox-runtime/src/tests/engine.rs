@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -58,6 +58,7 @@ use av_toolbox_graph::{
     InputRef,
     NodeId,
     Region,
+    Routing,
     SolvedFormats,
     Span,
     Spanned,
@@ -71,16 +72,27 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::engine::{AggregateSide, WorkerFreedom, run_aggregate};
+use crate::engine::{
+    AggregateSide,
+    FRAME_UNITS_IN_FLIGHT,
+    HEADROOM_ITEMS_PER_WORKER,
+    WorkerFreedom,
+    WorkerSlot,
+    run_aggregate,
+    run_worker,
+};
 use crate::{
     Aggregate,
     Assignment,
     Cancel,
     Engine,
     ExchangeError,
+    RegionEdges,
+    RegionRunner,
     RunError,
     RunReport,
     Settings,
+    WorkItem,
     WorkResult,
 };
 
@@ -132,6 +144,132 @@ impl Drop for StageLife {
     fn drop(&mut self) {
         STAGES_DROPPED.fetch_add(1, Ordering::SeqCst);
     }
+}
+
+/// The id the next fixture instance takes.
+///
+/// A worker owns private instances of every node in its region, so an instance's own id stands in
+/// for the worker running it without anything having to plumb a worker index through the engine.
+static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Every frame a recording fixture processed, as `(instance_id, timestamp)` pairs, in the order
+/// they were processed.
+static ASSIGNED: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+/// Tells one fixture instance apart from every other one built in this process.
+struct InstanceId(u64);
+
+impl InstanceId {
+    fn new() -> Self {
+        Self(NEXT_INSTANCE_ID.fetch_add(1, Ordering::SeqCst))
+    }
+
+    fn processed(&self, timestamp: u64) {
+        ASSIGNED.lock().expect("not poisoned").push((self.0, timestamp));
+    }
+}
+
+/// Taken by the gated fixture's worker of the matching index, which waits there on its first
+/// call before it has recorded anything. `None` means run unblocked, which is every worker of
+/// every test that never sets one.
+///
+/// One set is shared by every gated fixture, since no test gates two stages at once. A second
+/// gated stage in one graph would find the gates already taken and run open, so [GATE_TAKEN]
+/// turns that into a panic rather than a quietly wrong count.
+pub(super) static GATE_HOLDS: [Mutex<Option<mpsc::Receiver<()>>>; 4] = [
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+];
+
+/// Signalled by a gated worker the moment before it waits on its gate.
+pub(super) static GATE_REACHED: [Mutex<Option<mpsc::Sender<()>>>; 4] = [
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+];
+
+/// Signalled by any gated worker each time it finishes a frame, so a test can wait for one worker
+/// to produce while another is still held.
+pub(super) static GATE_PROCESSED: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
+
+/// Whether each worker's gate has been claimed by a stage already.
+///
+/// Only one gated stage per graph can be held, since the gates are one shared set. A second one
+/// would take nothing and run open, and its arrivals would be counted against the first, which
+/// is a wrong answer rather than a failure. Claiming twice panics instead.
+static GATE_TAKEN: [AtomicBool; 4] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+];
+
+/// Holds one fixture instance inside its own `process` call until a test releases it.
+///
+/// A held worker is never marked free, so a dispatch policy choosing the least loaded worker has
+/// to look elsewhere. That is what turns a test about spreading from a hope into a certainty.
+struct WorkerGate {
+    reached: Option<mpsc::Sender<()>>,
+    hold: Option<mpsc::Receiver<()>>,
+}
+
+impl WorkerGate {
+    /// A gate nothing holds back, for the registry build path no test drives.
+    fn open() -> Self {
+        Self {
+            reached: None,
+            hold: None,
+        }
+    }
+
+    /// The gate for `worker`, holding whichever signal and release that worker was given.
+    fn for_worker(worker: usize) -> Self {
+        let reached = GATE_REACHED
+            .get(worker)
+            .and_then(|reached| reached.lock().expect("not poisoned").take());
+        let hold = GATE_HOLDS
+            .get(worker)
+            .and_then(|hold| hold.lock().expect("not poisoned").take());
+
+        if hold.is_some() {
+            GATE_TAKEN[worker].store(true, Ordering::SeqCst);
+        } else if worker < GATE_TAKEN.len() {
+            assert!(
+                !GATE_TAKEN[worker].load(Ordering::SeqCst),
+                "worker {worker}'s gate was already taken by another stage, so this one would run open and its arrivals would be counted against the wrong stage"
+            );
+        }
+
+        Self { reached, hold }
+    }
+
+    /// Waits here on the first call, when a test gave this worker a gate.
+    fn wait(&mut self) {
+        if let Some(reached) = self.reached.take() {
+            reached.send(()).ok();
+        }
+
+        if let Some(hold) = self.hold.take() {
+            hold.recv().ok();
+        }
+    }
+
+    /// Announces that a frame came all the way through a gated stage.
+    fn processed() {
+        if let Some(sender) = GATE_PROCESSED.lock().expect("not poisoned").as_ref() {
+            sender.send(()).ok();
+        }
+    }
+}
+
+/// The second a test frame's timestamp names, which is how every fixture tells frames apart.
+fn frame_second(meta: &FrameMeta) -> u64 {
+    meta.timestamp
+        .expect("every test frame carries a timestamp")
+        .as_secs()
 }
 
 // A source that plays back a fixed list of chunk ids, one frame each, timestamped by the
@@ -394,6 +532,112 @@ impl FilterDefinition for Pass {
     ) -> Result<Box<dyn Filter>, StageError> {
         PASS_BUILD_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(PassInstance::new()))
+    }
+}
+
+// A pass through filter that also emits one frame of its own from `end_of_stream`, so a run that
+// never delivers a region's flush loses a frame a test can see. Declared per chunk or per frame
+// by its args, so one fixture covers both routings.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct FlushingArgs {
+    /// Declares the stage per chunk rather than per frame.
+    #[serde(default)]
+    per_chunk: bool,
+}
+
+/// The timestamp every frame a `Flushing` instance emits from `end_of_stream` carries.
+///
+/// It sits far above anything a source in these tests produces, so a flushed frame is
+/// unmistakable wherever it lands in the recorded output.
+pub(super) const FLUSHED_TIMESTAMP: u64 = 999;
+
+struct FlushingInstance {
+    _life: StageLife,
+}
+
+impl FlushingInstance {
+    fn new() -> Self {
+        Self {
+            _life: StageLife::new(),
+        }
+    }
+}
+
+impl StageInstance for FlushingInstance {}
+
+impl Filter for FlushingInstance {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+    }
+
+    fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
+        let mut meta = FrameMeta::at(0);
+        meta.timestamp = Some(Duration::from_secs(FLUSHED_TIMESTAMP));
+
+        Ok(vec![context.alloc_frame(&format(), meta)])
+    }
+}
+
+struct Flushing;
+
+impl StageDefinition for Flushing {
+    type Args = FlushingArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "flushing"
+    }
+
+    fn parallelism(args: &Self::Args) -> Parallelism {
+        match args.per_chunk {
+            true => Parallelism::Chunk,
+            false => Parallelism::Frame,
+        }
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Flushing {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = chosen.iter().flatten().next().copied().expect("an input");
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(FlushingInstance::new()))
     }
 }
 
@@ -729,8 +973,11 @@ impl StageDefinition for Join {
         "join"
     }
 
+    // Per chunk, so a region headed by one routes by chunk. `RunWarning::DetectorOnWrongBranch`
+    // and `RunWarning::NothingChunked` are only ever noticed on that path, and this is the
+    // fixture every test of them is written around.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Frame
+        Parallelism::Chunk
     }
 
     fn inputs() -> &'static InputSignature {
@@ -773,6 +1020,103 @@ impl FilterDefinition for Join {
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter>, StageError> {
         Ok(Box::new(JoinInstance::new()))
+    }
+}
+
+// A filter that passes its first input through and marks its second, optional one as the chunk
+// authority. Leaving that optional input unbound is how a pipeline declares an authority nothing
+// ever fills, which a frame routed region reads nothing from at all.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct ReferringArgs {
+    /// Declares the stage per chunk rather than per frame, so one fixture covers both routings.
+    #[serde(default)]
+    per_chunk: bool,
+}
+
+struct ReferringInstance {
+    _life: StageLife,
+}
+
+impl ReferringInstance {
+    fn new() -> Self {
+        Self {
+            _life: StageLife::new(),
+        }
+    }
+}
+
+impl StageInstance for ReferringInstance {}
+
+impl Filter for ReferringInstance {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+    }
+}
+
+struct Referring;
+
+impl StageDefinition for Referring {
+    type Args = ReferringArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "referring"
+    }
+
+    fn parallelism(args: &Self::Args) -> Parallelism {
+        match args.per_chunk {
+            true => Parallelism::Chunk,
+            false => Parallelism::Frame,
+        }
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[
+            InputParam::required("input").accepting(StreamType::Frames),
+            InputParam::optional("reference")
+                .accepting(StreamType::Frames)
+                .chunk_authority(),
+        ]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Referring {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = chosen.iter().flatten().next().copied().expect("an input");
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(ReferringInstance::new()))
     }
 }
 
@@ -853,8 +1197,10 @@ impl StageDefinition for Slow {
         "slow"
     }
 
+    // Per chunk, so a held worker is holding a whole chunk. Every test that gates one of these
+    // is written about a chunk taking far longer than the rest.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Frame
+        Parallelism::Chunk
     }
 
     fn inputs() -> &'static InputSignature {
@@ -895,6 +1241,237 @@ impl FilterDefinition for Slow {
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter>, StageError> {
         Ok(Box::new(SlowInstance::unblocked()))
+    }
+}
+
+// A filter that passes its input through and records which of its own instances processed each
+// frame, so a test can count how many workers a region really used. Declared per chunk or per
+// frame by its args, so one fixture covers both routings.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct TrackedArgs {
+    /// Declares the stage per chunk rather than per frame.
+    #[serde(default)]
+    per_chunk: bool,
+}
+
+struct TrackedInstance {
+    _life: StageLife,
+    id: InstanceId,
+    gate: WorkerGate,
+}
+
+impl TrackedInstance {
+    fn unblocked() -> Self {
+        Self {
+            _life: StageLife::new(),
+            id: InstanceId::new(),
+            gate: WorkerGate::open(),
+        }
+    }
+
+    fn for_worker(worker: usize) -> Self {
+        Self {
+            _life: StageLife::new(),
+            id: InstanceId::new(),
+            gate: WorkerGate::for_worker(worker),
+        }
+    }
+}
+
+impl StageInstance for TrackedInstance {}
+
+impl Filter for TrackedInstance {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        self.gate.wait();
+
+        let frame = inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        self.id.processed(frame_second(frame.meta()));
+        WorkerGate::processed();
+
+        Ok(frame)
+    }
+}
+
+struct Tracked;
+
+impl StageDefinition for Tracked {
+    type Args = TrackedArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "tracked"
+    }
+
+    fn parallelism(args: &Self::Args) -> Parallelism {
+        match args.per_chunk {
+            true => Parallelism::Chunk,
+            false => Parallelism::Frame,
+        }
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Tracked {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = chosen.iter().flatten().next().copied().expect("an input");
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(TrackedInstance::unblocked()))
+    }
+}
+
+// A frame mode filter of two inputs, recording the pair each bundle handed it. A bundle whose
+// slots crossed would still produce a frame, so the pair itself is the only place it shows.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct MatchingArgs {}
+
+/// Every pair a `Matching` instance was given, as `(base, overlay)` timestamps.
+static MATCHED: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+struct MatchingInstance {
+    _life: StageLife,
+    id: InstanceId,
+    gate: WorkerGate,
+}
+
+impl MatchingInstance {
+    fn unblocked() -> Self {
+        Self {
+            _life: StageLife::new(),
+            id: InstanceId::new(),
+            gate: WorkerGate::open(),
+        }
+    }
+
+    fn for_worker(worker: usize) -> Self {
+        Self {
+            _life: StageLife::new(),
+            id: InstanceId::new(),
+            gate: WorkerGate::for_worker(worker),
+        }
+    }
+}
+
+impl StageInstance for MatchingInstance {}
+
+impl Filter for MatchingInstance {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        self.gate.wait();
+
+        let base = inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+        let overlay = inputs
+            .take_frame(1)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 1"))?;
+
+        let base_second = frame_second(base.meta());
+        let overlay_second = frame_second(overlay.meta());
+
+        MATCHED
+            .lock()
+            .expect("not poisoned")
+            .push((base_second, overlay_second));
+        self.id.processed(base_second);
+        WorkerGate::processed();
+
+        Ok(base)
+    }
+}
+
+struct Matching;
+
+impl StageDefinition for Matching {
+    type Args = MatchingArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "matching"
+    }
+
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Frame
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[
+            InputParam::required("base").accepting(StreamType::Frames),
+            InputParam::required("overlay").accepting(StreamType::Frames),
+        ]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Matching {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = chosen.iter().flatten().next().copied().expect("an input");
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(MatchingInstance::unblocked()))
     }
 }
 
@@ -1517,12 +2094,16 @@ fn registry() -> PipelineRegistry {
     registry.register_source::<Listed>().expect("should register");
     registry.register_filter::<Pass>().expect("should register");
     registry.register_filter::<Allocating>().expect("should register");
+    registry.register_filter::<Flushing>().expect("should register");
     registry.register_mask::<Masking>().expect("should register");
     registry
         .register_transform::<Multiplying>()
         .expect("should register");
     registry.register_filter::<Join>().expect("should register");
+    registry.register_filter::<Referring>().expect("should register");
     registry.register_filter::<Slow>().expect("should register");
+    registry.register_filter::<Tracked>().expect("should register");
+    registry.register_filter::<Matching>().expect("should register");
     registry.register_filter::<Failing>().expect("should register");
     registry.register_filter::<Panicking>().expect("should register");
     registry.register_sink::<Recording>().expect("should register");
@@ -1537,9 +2118,9 @@ fn registry() -> PipelineRegistry {
 ///
 /// This is what [Engine::build_with] calls instead of `instantiate_region`, so the whole engine
 /// runs against these fixtures with no backend and no registry lookup at run time. `worker` is
-/// this region's own worker index, which only `test/slow` reads: the first idle dispatch policy
-/// always hands a region's very first chunk to its worker `0`, so gating worker `0` alone is
-/// enough to hold up a whole widened branch until a test releases it.
+/// this region's own worker index, read by `test/slow` for its own gates and by every fixture
+/// carrying a [WorkerGate] for theirs. Holding a worker is how a test forces where work lands,
+/// since a held worker is never drained and so is never claimed again.
 fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, StageBox) {
     let node = graph.node(id);
 
@@ -1553,10 +2134,14 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
             StageBox::Filter(Box::new(PassInstance::new()))
         },
         "test/allocating" => StageBox::Filter(Box::new(AllocatingInstance::new())),
+        "test/flushing" => StageBox::Filter(Box::new(FlushingInstance::new())),
         "test/masking" => StageBox::Mask(Box::new(MaskingInstance::new())),
         "test/multiplying" => StageBox::Transform(Box::new(MultiplyingInstance::new())),
         "test/join" => StageBox::Filter(Box::new(JoinInstance::new())),
+        "test/referring" => StageBox::Filter(Box::new(ReferringInstance::new())),
         "test/slow" => StageBox::Filter(Box::new(SlowInstance::for_worker(worker))),
+        "test/tracked" => StageBox::Filter(Box::new(TrackedInstance::for_worker(worker))),
+        "test/matching" => StageBox::Filter(Box::new(MatchingInstance::for_worker(worker))),
         "test/failing" => {
             let args: FailingArgs = serde_json::from_value(node.args().clone()).expect("valid failing args");
             StageBox::Filter(Box::new(FailingInstance::for_worker(args, worker)))
@@ -1630,6 +2215,15 @@ pub(super) fn filter_spec(name: &str, input: &str, workers: Option<usize>) -> St
     filter
 }
 
+/// A filter emitting one frame of its own from `end_of_stream`, at `workers` of them.
+pub(super) fn flushing_spec(name: &str, input: &str, workers: usize, per_chunk: bool) -> StageSpec {
+    let mut flushing = spec(StageKind::Filter, name, "test/flushing");
+    flushing.inputs = vec![positional(input)];
+    flushing.args = Spanned::unknown(json!({ "per_chunk": per_chunk }));
+    flushing.workers = Some(workers);
+    flushing
+}
+
 /// A filter that allocates its own output rather than passing its input through.
 fn allocating_spec(name: &str, input: &str) -> StageSpec {
     let mut filter = spec(StageKind::Filter, name, "test/allocating");
@@ -1657,11 +2251,37 @@ pub(super) fn join_spec(name: &str, base: &str, overlay: &str) -> StageSpec {
     join
 }
 
+/// A stage whose chunk authority is an optional input this never binds.
+fn referring_spec(name: &str, input: &str, workers: usize, per_chunk: bool) -> StageSpec {
+    let mut referring = spec(StageKind::Filter, name, "test/referring");
+    referring.inputs = vec![positional(input)];
+    referring.args = Spanned::unknown(json!({ "per_chunk": per_chunk }));
+    referring.workers = Some(workers);
+    referring
+}
+
 pub(super) fn slow_spec(name: &str, input: &str, workers: usize) -> StageSpec {
     let mut slow = spec(StageKind::Filter, name, "test/slow");
     slow.inputs = vec![positional(input)];
     slow.workers = Some(workers);
     slow
+}
+
+/// A filter recording which of its instances processed each frame, at `workers` of them.
+pub(super) fn tracked_spec(name: &str, input: &str, workers: usize, per_chunk: bool) -> StageSpec {
+    let mut tracked = spec(StageKind::Filter, name, "test/tracked");
+    tracked.inputs = vec![positional(input)];
+    tracked.args = Spanned::unknown(json!({ "per_chunk": per_chunk }));
+    tracked.workers = Some(workers);
+    tracked
+}
+
+/// A frame mode filter of two inputs, recording the pair each bundle handed it.
+pub(super) fn matching_spec(name: &str, base: &str, overlay: &str, workers: usize) -> StageSpec {
+    let mut matching = spec(StageKind::Filter, name, "test/matching");
+    matching.inputs = vec![positional(base), positional(overlay)];
+    matching.workers = Some(workers);
+    matching
 }
 
 fn failing_spec(name: &str, input: &str, id: usize, fail_at: u32, workers: Option<usize>) -> StageSpec {
@@ -1721,7 +2341,7 @@ pub(super) fn gated_spec(name: &str, input: &str) -> StageSpec {
 
 /// Builds and plans `specs` into a graph carrying a solved [av_toolbox_graph::ExecutionPlan],
 /// without ever touching a backend.
-fn planned_graph(specs: &[StageSpec]) -> (CompiledGraph, SolvedFormats) {
+pub(super) fn planned_graph(specs: &[StageSpec]) -> (CompiledGraph, SolvedFormats) {
     let registry = registry();
     let mut graph = build(&registry, specs).expect("should build").into_graph();
 
@@ -1743,7 +2363,7 @@ pub(super) fn build_engine(specs: &[StageSpec], settings: Settings) -> Engine {
 }
 
 /// The same, for a test that needs the graph itself as well, to name the node it asserts on.
-fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, settings: Settings) -> Engine {
+pub(super) fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, settings: Settings) -> Engine {
     Engine::build_with(
         graph,
         solved,
@@ -1763,8 +2383,39 @@ fn node_id(graph: &CompiledGraph, name: &str) -> NodeId {
         .unwrap_or_else(|| panic!("the graph has no node named {name}"))
 }
 
+/// The routing the plan settled on for the region `head` leads.
+pub(super) fn routing_of(graph: &CompiledGraph, head: &str) -> Routing {
+    let plan = graph.execution_plan().expect("a planned graph");
+    let node = node_id(graph, head);
+
+    plan.region(plan.node(node).region()).routing()
+}
+
+/// The width the plan advertises for the region `head` leads.
+pub(super) fn planned_width(graph: &CompiledGraph, head: &str) -> usize {
+    let plan = graph.execution_plan().expect("a planned graph");
+    let node = node_id(graph, head);
+
+    plan.region(plan.node(node).region()).width()
+}
+
+/// The chunk authority the plan settled on for the region `head` leads.
+fn authority_of(graph: &CompiledGraph, head: &str) -> Option<usize> {
+    let plan = graph.execution_plan().expect("a planned graph");
+    let node = node_id(graph, head);
+
+    plan.region(plan.node(node).region()).chunk_authority()
+}
+
 /// How long any of these tests will wait for a run before calling it hung.
 pub(super) const WATCHDOG: Duration = Duration::from_secs(10);
+
+/// How long to wait when a test is proving something does **not** arrive.
+///
+/// A [WATCHDOG] length wait costs its full ten seconds every run, since timing out is the passing
+/// path rather than the failing one. This is long enough that an over eager dispatch would have
+/// been seen and short enough not to dominate the suite.
+pub(super) const NOTHING_MORE_COMING: Duration = Duration::from_millis(250);
 
 /// Runs `engine` on its own thread and waits for it with a generous timeout, so a design mistake
 /// that hangs the exchange reports as a named failure instead of a stalled suite.
@@ -1840,6 +2491,28 @@ pub(super) fn recorded_indices() -> Vec<u64> {
 
 pub(super) fn clear_recorded() {
     RECORDED.lock().expect("not poisoned").clear();
+}
+
+/// How many distinct fixture instances processed at least one frame, which is the width the run
+/// actually achieved.
+pub(super) fn achieved_width() -> usize {
+    let assigned = ASSIGNED.lock().expect("not poisoned");
+    let instances: HashSet<u64> = assigned.iter().map(|(instance, _)| *instance).collect();
+
+    instances.len()
+}
+
+pub(super) fn clear_assigned() {
+    ASSIGNED.lock().expect("not poisoned").clear();
+}
+
+/// Every pair a `Matching` instance was given, in the order it was given them.
+pub(super) fn matched() -> Vec<(u64, u64)> {
+    MATCHED.lock().expect("not poisoned").clone()
+}
+
+pub(super) fn clear_matched() {
+    MATCHED.lock().expect("not poisoned").clear();
 }
 
 #[test]
@@ -2557,6 +3230,176 @@ fn a_stage_gets_no_start_without_a_matching_end() {
     assert_eq!(starts, ends, "{starts} starts against {ends} ends");
 }
 
+/// A one-slot bundle carrying a single frame, for driving [run_worker] directly with a
+/// [WorkItem::Unit] rather than through a disperse.
+fn unit_bundle(context: &FrameContext, index: u64, chunk: u64) -> Vec<Option<StreamItem>> {
+    let meta = FrameMeta::at(index).in_chunk(chunk);
+    vec![Some(StreamItem::Frame(context.alloc_frame(&format(), meta)))]
+}
+
+/// A worker slot around one fixture stage, with no disperse or aggregate in front of it, for
+/// sending [WorkItem]s to [run_worker] directly.
+fn one_node_worker(
+    stage: StageBox,
+    work_receiver: mpsc::Receiver<WorkItem>,
+    result_sender: mpsc::SyncSender<WorkResult>,
+) -> WorkerSlot {
+    let head = NodeId::new(0);
+    let nodes = vec![(head, stage)];
+    let edges = RegionEdges::new(vec![], vec![head]);
+
+    WorkerSlot {
+        runner: RegionRunner::new(nodes, edges),
+        context: testing_context(),
+        work_receiver,
+        result_sender,
+    }
+}
+
+/// Fails every unit it is given.
+struct AlwaysFailing;
+
+impl StageInstance for AlwaysFailing {}
+
+impl Filter for AlwaysFailing {
+    fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Frame, StageError> {
+        Err(StageError::msg("this filter always fails"))
+    }
+}
+
+#[test]
+fn a_frame_routed_worker_starts_its_region_once_for_the_whole_run() {
+    PASS_STARTS.store(0, Ordering::SeqCst);
+    PASS_ENDS.store(0, Ordering::SeqCst);
+
+    let (work_sender, work_receiver) = mpsc::channel();
+    let (result_sender, result_receiver) = mpsc::sync_channel(64);
+    let worker = one_node_worker(
+        StageBox::Filter(Box::new(PassInstance::new())),
+        work_receiver,
+        result_sender,
+    );
+    let build_context = testing_context();
+    let handle = thread::spawn(move || run_worker(worker));
+
+    for unit in 0..8 {
+        let bundle = unit_bundle(&build_context, unit, unit);
+        work_sender
+            .send(WorkItem::Unit(unit, bundle))
+            .expect("the worker should still be receiving");
+    }
+    work_sender
+        .send(WorkItem::EndOfStream)
+        .expect("the worker should still be receiving");
+
+    let result = handle.join().expect("worker thread should not panic");
+    result.expect("a frame routed worker with no failures should not error");
+    drop(result_receiver);
+
+    let starts = PASS_STARTS.load(Ordering::SeqCst);
+    let ends = PASS_ENDS.load(Ordering::SeqCst);
+
+    assert_eq!(
+        starts, 1,
+        "a frame routed worker started its region {starts} times over eight units",
+    );
+    assert_eq!(
+        ends, 1,
+        "a frame routed worker ended its region {ends} times over eight units",
+    );
+}
+
+/// Copies the unit's timestamp modulo three, so a third of the units produce nothing at all.
+/// An `EndOfUnit` is only worth trusting if it arrives whether or not its unit produced an item.
+#[test]
+fn a_frame_routed_worker_closes_every_unit_it_is_given() {
+    let (work_sender, work_receiver) = mpsc::channel();
+    let (result_sender, result_receiver) = mpsc::sync_channel(64);
+    let worker = one_node_worker(
+        StageBox::Transform(Box::new(MultiplyingInstance::new())),
+        work_receiver,
+        result_sender,
+    );
+    let build_context = testing_context();
+    let handle = thread::spawn(move || run_worker(worker));
+
+    let unit_ids: Vec<u64> = (100..108).collect();
+    for &unit in &unit_ids {
+        let meta = FrameMeta {
+            index: unit,
+            chunk: unit + 900,
+            timestamp: Some(Duration::from_secs(unit)),
+        };
+        let item = StreamItem::Frame(build_context.alloc_frame(&format(), meta));
+        work_sender
+            .send(WorkItem::Unit(unit, vec![Some(item)]))
+            .expect("the worker should still be receiving");
+    }
+    work_sender
+        .send(WorkItem::EndOfStream)
+        .expect("the worker should still be receiving");
+
+    handle
+        .join()
+        .expect("worker thread should not panic")
+        .expect("a frame routed worker with no failures should not error");
+
+    let mut closed_units = Vec::new();
+    let mut item_count = 0;
+    let mut saw_end_of_stream = false;
+
+    while let Ok(result) = result_receiver.recv_timeout(WATCHDOG) {
+        match result {
+            WorkResult::Item(_) => item_count += 1,
+            WorkResult::EndOfUnit(unit) => closed_units.push(unit),
+            WorkResult::EndOfStream => {
+                saw_end_of_stream = true;
+                break;
+            },
+        }
+    }
+
+    assert_eq!(
+        closed_units, unit_ids,
+        "every unit should close exactly once, in order"
+    );
+    assert_eq!(
+        item_count, 9,
+        "a third of the units should have produced nothing, so items should not equal units",
+    );
+    assert!(
+        saw_end_of_stream,
+        "the worker should still report the end of the stream"
+    );
+}
+
+/// Chunk 42 comes from the failing unit's own bundle, not from its unit id of zero, so a worker
+/// that named the chunk from the unit id instead would report the wrong number here.
+#[test]
+fn a_frame_routed_worker_names_the_chunk_a_failing_units_error_came_from() {
+    let (work_sender, work_receiver) = mpsc::channel();
+    let (result_sender, _result_receiver) = mpsc::sync_channel(64);
+    let worker = one_node_worker(
+        StageBox::Filter(Box::new(AlwaysFailing)),
+        work_receiver,
+        result_sender,
+    );
+    let build_context = testing_context();
+    let handle = thread::spawn(move || run_worker(worker));
+
+    let bundle = unit_bundle(&build_context, 0, 42);
+    work_sender
+        .send(WorkItem::Unit(0, bundle))
+        .expect("the worker should still be receiving");
+
+    let result = handle.join().expect("worker thread should not panic");
+    let Err(error) = result else {
+        panic!("a failing stage should have failed the worker");
+    };
+
+    assert_eq!(error.chunk(), Some(42), "the run reported {error}");
+}
+
 /// Four allocating filters between a source and its sink, every one of them at width one, so all
 /// six nodes run in the source's own region and share its one budgeted context.
 ///
@@ -2733,7 +3576,7 @@ fn an_aggregate_whose_worker_ends_owing_a_chunk_reports_rather_than_panics() {
     let (result_sender, result_receiver) = mpsc::sync_channel(1);
     let (assignment_sender, assignment_receiver) = mpsc::channel();
     let mut aggregate = Aggregate::new();
-    aggregate.assign(Assignment { chunk: 0, worker: 0 });
+    aggregate.assign(Assignment { unit: 0, worker: 0 });
 
     result_sender.send(WorkResult::EndOfStream).expect("should send");
     drop(assignment_sender);
@@ -2742,7 +3585,7 @@ fn an_aggregate_whose_worker_ends_owing_a_chunk_reports_rather_than_panics() {
         aggregate,
         assignment_receiver,
     };
-    let freedom = WorkerFreedom::new(1);
+    let freedom = WorkerFreedom::new(1, 1);
     let cancel = Cancel::new();
 
     let result = run_aggregate(side, vec![result_receiver], &freedom, &cancel, Vec::new());
@@ -2754,11 +3597,83 @@ fn an_aggregate_whose_worker_ends_owing_a_chunk_reports_rather_than_panics() {
         matches!(
             error,
             RunError::Exchange {
-                source: ExchangeError::WorkerEndedOwingChunk { .. }
+                source: ExchangeError::WorkerEndedOwingUnit { .. }
             }
         ),
         "the aggregate reported {error}",
     );
+}
+
+#[test]
+fn a_capacity_of_one_claims_each_worker_once() {
+    let freedom = WorkerFreedom::new(2, 1);
+
+    assert_eq!(freedom.try_claim(), Some(0));
+    assert_eq!(freedom.try_claim(), Some(1));
+    assert_eq!(freedom.try_claim(), None);
+}
+
+#[test]
+fn a_worker_below_its_capacity_can_be_claimed_again() {
+    let freedom = WorkerFreedom::new(1, 3);
+
+    assert_eq!(freedom.try_claim(), Some(0));
+    assert_eq!(freedom.try_claim(), Some(0));
+    assert_eq!(freedom.try_claim(), Some(0));
+    assert_eq!(freedom.try_claim(), None);
+}
+
+/// A frame routed worker takes more than one unit before it is full, which is the entire
+/// difference between it and a chunk routed one, and it takes exactly as many as the source
+/// budget's per worker headroom was sized for.
+#[test]
+fn a_frame_routed_worker_holds_the_units_its_headroom_was_sized_for() {
+    assert_eq!(
+        FRAME_UNITS_IN_FLIGHT, HEADROOM_ITEMS_PER_WORKER,
+        "the budget counts this many items per worker, so a worker holding more goes uncounted",
+    );
+
+    let freedom = WorkerFreedom::new(1, FRAME_UNITS_IN_FLIGHT);
+
+    assert_eq!(freedom.try_claim(), Some(0));
+    assert_eq!(
+        freedom.try_claim(),
+        Some(0),
+        "a frame routed worker that may hold only one unit is a chunk routed worker",
+    );
+
+    for unit in 2..FRAME_UNITS_IN_FLIGHT {
+        assert_eq!(freedom.try_claim(), Some(0), "unit {unit} should have had room");
+    }
+
+    assert_eq!(freedom.try_claim(), None);
+}
+
+#[test]
+fn draining_a_unit_returns_one_place_and_no_more() {
+    let freedom = WorkerFreedom::new(1, 2);
+
+    freedom.try_claim();
+    freedom.try_claim();
+    assert_eq!(freedom.try_claim(), None);
+
+    freedom.mark_free(0);
+
+    assert_eq!(freedom.try_claim(), Some(0));
+    assert_eq!(freedom.try_claim(), None);
+}
+
+/// With three workers at capacity two, the first three claims must land on three different
+/// workers rather than stacking two onto worker zero. A frame routed region that stacked would
+/// be serial with extra steps.
+#[test]
+fn claims_spread_across_workers_before_stacking_on_one() {
+    let freedom = WorkerFreedom::new(3, 2);
+
+    assert_eq!(freedom.try_claim(), Some(0));
+    assert_eq!(freedom.try_claim(), Some(1));
+    assert_eq!(freedom.try_claim(), Some(2));
+    assert_eq!(freedom.try_claim(), Some(0));
 }
 
 /// Two sources of different lengths feeding one join, which can only pair as many as the shorter
@@ -2833,4 +3748,202 @@ fn settings_and_reports_carry_the_derives_a_caller_needs() {
     assert!(copied_settings.stall_deadline.is_none());
     assert_eq!(copied_report.frames, 2);
     assert!(format!("{report:?}").contains("frames"));
+}
+
+/// Eight frames, every one of them in chunk zero, through a frame mode stage four workers wide.
+///
+/// Chunk routing keeps a whole chunk on one worker, so this is the shape that used to run all
+/// eight on worker zero. Which worker ran what is not asserted here, only that the run finishes
+/// and hands its frames back in the order they went in.
+#[test]
+fn a_frame_mode_stage_spreads_across_workers_with_no_chunk_ids_at_all() {
+    let property = "a_frame_mode_stage_spreads_across_workers_with_no_chunk_ids_at_all";
+    clear_recorded();
+
+    let chunks = vec![0; 8];
+    let specs = vec![
+        source_spec("input", &chunks, 0),
+        filter_spec("filter", "input", Some(4)),
+        sink_spec("out", "filter"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "filter"), Routing::ByFrame);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+
+    assert_eq!(recorded(), (0..8).collect::<Vec<u64>>());
+    assert_eq!(report.frames, 8);
+    assert_every_thread_exited(property);
+}
+
+/// A frame routed head declaring its chunk authority on an optional input nothing bound.
+///
+/// Frame routing reads no chunk id, so an authority the disperse never looks at must not stand
+/// in the way of the region being built.
+#[test]
+fn a_frame_routed_head_may_declare_an_authority_it_never_reads() {
+    let property = "a_frame_routed_head_may_declare_an_authority_it_never_reads";
+    clear_recorded();
+
+    let specs = vec![
+        source_spec("input", &[0, 0, 0, 0], 0),
+        referring_spec("referring", "input", 4, false),
+        sink_spec("out", "referring"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "referring"), Routing::ByFrame);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+
+    assert_eq!(recorded(), (0..4).collect::<Vec<u64>>());
+    assert_eq!(report.frames, 4);
+    assert_every_thread_exited(property);
+}
+
+/// The same head declared per chunk, so the region routes by chunk and the build check a frame
+/// routed region skips is the one that runs.
+///
+/// Binding resolves an unbound authority onto the first bound slot rather than leaving it
+/// dangling, so this shape is accepted on the chunk path too.
+#[test]
+fn a_chunk_routed_head_resolves_an_unbound_authority_onto_a_bound_slot() {
+    let property = "a_chunk_routed_head_resolves_an_unbound_authority_onto_a_bound_slot";
+    clear_recorded();
+
+    let specs = vec![
+        source_spec("input", &[0, 1, 2, 3], 0),
+        referring_spec("referring", "input", 4, true),
+        sink_spec("out", "referring"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "referring"), Routing::ByChunk);
+    assert_eq!(authority_of(&graph, "referring"), Some(0));
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+
+    assert_eq!(recorded(), (0..4).collect::<Vec<u64>>());
+    assert_eq!(report.frames, 4);
+    assert_every_thread_exited(property);
+}
+
+/// Eight frames through a frame mode stage four workers wide, where every worker's instance emits
+/// one frame of its own as its stream ends.
+///
+/// A frame routed worker starts once and ends once, so its flush arrives after the last unit it
+/// was assigned. The output carries one flushed frame per worker on top of the eight that went in.
+#[test]
+fn a_frame_routed_region_delivers_every_workers_flush() {
+    let property = "a_frame_routed_region_delivers_every_workers_flush";
+    clear_recorded();
+
+    let width = 4;
+    let specs = vec![
+        source_spec("input", &[0; 8], 0),
+        flushing_spec("flush", "input", width, false),
+        sink_spec("out", "flush"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "flush"), Routing::ByFrame);
+    assert_eq!(planned_width(&graph, "flush"), width);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+
+    let mut expected: Vec<u64> = (0..8).collect();
+    expected.extend(vec![FLUSHED_TIMESTAMP; width]);
+
+    assert_eq!(recorded(), expected);
+    assert_eq!(report.frames, expected.len() as u64);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}
+
+/// Two frames and eight workers, so six of them are never given anything to run.
+///
+/// A worker that got no bundle was still told its stream started, so it still has a flush to
+/// deliver and its frame still belongs in the output.
+#[test]
+fn a_frame_routed_worker_given_no_work_still_delivers_its_flush() {
+    let property = "a_frame_routed_worker_given_no_work_still_delivers_its_flush";
+    clear_recorded();
+
+    let width = 8;
+    let specs = vec![
+        source_spec("input", &[0; 2], 0),
+        flushing_spec("flush", "input", width, false),
+        sink_spec("out", "flush"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "flush"), Routing::ByFrame);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+
+    let mut expected: Vec<u64> = (0..2).collect();
+    expected.extend(vec![FLUSHED_TIMESTAMP; width]);
+
+    assert_eq!(recorded(), expected);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}
+
+/// The same fixture at width one, which runs as a single region with no exchange at all.
+///
+/// This is the sequential reference the widened runs are worth comparing against, so it has to be
+/// delivering its own flush for that comparison to mean anything.
+#[test]
+fn a_width_one_region_delivers_its_flush() {
+    let property = "a_width_one_region_delivers_its_flush";
+    clear_recorded();
+
+    let specs = vec![
+        source_spec("input", &[0; 8], 0),
+        flushing_spec("flush", "input", 1, false),
+        sink_spec("out", "flush"),
+    ];
+    let engine = build_engine(&specs, Settings::default());
+
+    let report = run_with_watchdog(engine, property);
+
+    let mut expected: Vec<u64> = (0..8).collect();
+    expected.push(FLUSHED_TIMESTAMP);
+
+    assert_eq!(recorded(), expected);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}
+
+/// A chunk routed worker restarts its region at every chunk boundary, so it flushes once per
+/// chunk and each flushed frame lands inside the chunk that produced it.
+#[test]
+fn a_chunk_routed_region_delivers_every_chunks_flush() {
+    let property = "a_chunk_routed_region_delivers_every_chunks_flush";
+    clear_recorded();
+
+    let specs = vec![
+        source_spec("input", &[0, 0, 1, 1, 2, 2, 3, 3], 0),
+        flushing_spec("flush", "input", 4, true),
+        sink_spec("out", "flush"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "flush"), Routing::ByChunk);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+
+    let flushed = FLUSHED_TIMESTAMP;
+    let expected = vec![0, 1, flushed, 2, 3, flushed, 4, 5, flushed, 6, 7, flushed];
+
+    assert_eq!(recorded(), expected);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
 }

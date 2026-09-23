@@ -388,11 +388,38 @@ mod tests {
         render_mermaid(&planned_graph(), options)
     }
 
+    /// `test/widening-source` is frame mode, unlike every other fixture source, so widening it
+    /// is the one way to get a frame mode node above width one.
+    fn frame_planned_graph() -> CompiledGraph {
+        let mut source = testing::spec(StageKind::Source, "input", "test/widening-source");
+        source.workers = Some(4);
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("input")];
+
+        let registry = testing::registry();
+        let mut graph = build(&registry, &[source, sink])
+            .expect("should build")
+            .into_graph();
+
+        let made = crate::plan::plan(&graph, &registry).expect("should plan");
+        graph.set_execution_plan(made);
+
+        graph
+    }
+
     #[test]
     fn a_planned_node_shows_its_granularity_and_width() {
         let rendered = render_planned(&RenderOptions::default());
 
-        assert!(rendered.contains("chunk x4"));
+        assert!(rendered.contains("chunk x4 by chunk"));
+    }
+
+    #[test]
+    fn a_frame_mode_node_shows_it_routes_by_frame() {
+        let rendered = render_mermaid(&frame_planned_graph(), &RenderOptions::default());
+
+        assert!(rendered.contains("frame x4 by frame"));
     }
 
     #[test]

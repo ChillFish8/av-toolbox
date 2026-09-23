@@ -31,6 +31,15 @@ pub enum Narrowed {
     NotAsked,
 }
 
+/// How a region's disperse picks a worker for each bundle.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Routing {
+    /// By the authority input's chunk id, so one worker holds a whole chunk.
+    ByChunk,
+    /// By whichever worker has room, one bundle at a time.
+    ByFrame,
+}
+
 /// How one node will be run.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct NodePlan {
@@ -38,6 +47,7 @@ pub struct NodePlan {
     width: usize,
     region: RegionId,
     narrowed: Option<Narrowed>,
+    routing: Routing,
 }
 
 impl NodePlan {
@@ -48,6 +58,7 @@ impl NodePlan {
             width: 1,
             region: RegionId::new(0),
             narrowed: Some(Narrowed::NotAsked),
+            routing: Routing::ByChunk,
         }
     }
 
@@ -66,6 +77,10 @@ impl NodePlan {
     pub fn narrowed(&self) -> Option<Narrowed> {
         self.narrowed
     }
+
+    pub fn routing(&self) -> Routing {
+        self.routing
+    }
 }
 
 /// A set of nodes one worker runs a private copy of.
@@ -76,6 +91,7 @@ pub struct Region {
     head: NodeId,
     nodes: Vec<NodeId>,
     chunk_authority: Option<usize>,
+    routing: Routing,
     disperse: bool,
     aggregate: bool,
     exits: Vec<NodeId>,
@@ -105,6 +121,10 @@ impl Region {
     /// authority is the one whose slot equals this index.
     pub fn chunk_authority(&self) -> Option<usize> {
         self.chunk_authority
+    }
+
+    pub fn routing(&self) -> Routing {
+        self.routing
     }
 
     pub fn has_disperse(&self) -> bool {
@@ -172,6 +192,7 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
     }
 
     planner.compute_exits();
+    planner.compute_routing();
 
     planner.finish()
 }
@@ -220,6 +241,7 @@ impl Planner<'_> {
             width,
             region: RegionId::new(0),
             narrowed,
+            routing: Routing::ByChunk,
         });
     }
 
@@ -332,6 +354,7 @@ impl Planner<'_> {
             head,
             nodes: vec![head],
             chunk_authority,
+            routing: Routing::ByChunk,
             disperse: head_inputs > 0 && (width > 1 || head_inputs > 1),
             aggregate: width > 1,
             exits: Vec::new(),
@@ -374,6 +397,40 @@ impl Planner<'_> {
                         .any(|consumer| regions_of[consumer.index()] != Some(region_id))
                 })
                 .collect();
+        }
+    }
+
+    /// Settles how each region routes, once every node has joined one.
+    ///
+    /// A region routes by frame only when every node in it is frame mode, since its nodes run
+    /// inside one worker as a unit and the most demanding of them decides what that unit needs.
+    fn compute_routing(&mut self) {
+        let mut modes = Vec::with_capacity(self.regions.len());
+
+        for region in &self.regions {
+            let greatest = region
+                .nodes
+                .iter()
+                .filter_map(|id| self.nodes[id.index()].as_ref())
+                .map(NodePlan::parallelism)
+                .max();
+
+            let mode = match greatest {
+                Some(Parallelism::Frame) => Routing::ByFrame,
+                _ => Routing::ByChunk,
+            };
+
+            modes.push(mode);
+        }
+
+        for (region, mode) in self.regions.iter_mut().zip(modes) {
+            region.routing = mode;
+
+            for &id in &region.nodes {
+                if let Some(node) = self.nodes[id.index()].as_mut() {
+                    node.routing = mode;
+                }
+            }
         }
     }
 
@@ -772,6 +829,47 @@ mod tests {
             .expect("an edge fills the authority slot");
 
         assert_eq!(routed.param(), None);
+    }
+
+    #[test]
+    fn a_region_of_only_frame_nodes_routes_by_frame() {
+        // a source into a frame mode node, widened, so the two share a region
+        let mut wide_source = testing::spec(StageKind::Source, "input", "test/widening-source");
+        wide_source.workers = Some(4);
+
+        let mut merge = testing::spec(StageKind::Mask, "merge", "test/temporal-merge");
+        merge.inputs = vec![testing::positional("input"), testing::positional("input")];
+        merge.args = Spanned::unknown(json!({ "radius": 0 }));
+
+        let plan = plan_of(&[wide_source, merge, sink("out", "merge")]);
+
+        let region = plan.node(NodeId::new(1)).region();
+        assert_eq!(plan.region(region).routing(), Routing::ByFrame);
+    }
+
+    #[test]
+    fn one_chunk_node_makes_the_whole_region_route_by_chunk() {
+        // a frame mode node and a chunk mode node at the same width in one region
+        let mut wide_source = testing::spec(StageKind::Source, "input", "test/widening-source");
+        wide_source.workers = Some(4);
+
+        let mut merge = testing::spec(StageKind::Mask, "merge", "test/temporal-merge");
+        merge.inputs = vec![testing::positional("input"), testing::positional("input")];
+        merge.args = Spanned::unknown(json!({ "radius": 1 }));
+
+        let plan = plan_of(&[wide_source, merge, sink("out", "merge")]);
+
+        let region = plan.node(NodeId::new(1)).region();
+        assert_eq!(plan.region(region).routing(), Routing::ByChunk);
+    }
+
+    #[test]
+    fn a_stream_region_routes_by_chunk() {
+        // routing is meaningless at width one, and ByChunk is the answer that changes nothing
+        let plan = plan_of(&[source("input"), sink("out", "input")]);
+
+        let region = plan.node(NodeId::new(0)).region();
+        assert_eq!(plan.region(region).routing(), Routing::ByChunk);
     }
 
     #[test]

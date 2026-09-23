@@ -4,7 +4,7 @@ use crate::{Assignment, ExchangeError, WorkResult};
 
 /// Merges workers' outputs back into one stream, in the order the disperse sent them out.
 ///
-/// It reads from the specific worker holding the next chunk, never whichever speaks first, and
+/// It reads from the specific worker holding the next unit, never whichever speaks first, and
 /// renumbers every item it emits densely from zero as it goes.
 pub struct Aggregate {
     assignments: Vec<Assignment>,
@@ -23,7 +23,7 @@ impl Aggregate {
         }
     }
 
-    /// Records which worker holds a chunk, in the order the disperse assigned them.
+    /// Records which worker holds a unit, in the order the disperse assigned them.
     pub fn assign(&mut self, assignment: Assignment) {
         self.assignments.push(assignment);
     }
@@ -41,7 +41,7 @@ impl Aggregate {
         self.finished && self.position >= self.assignments.len()
     }
 
-    /// The worker the caller should take from next, or `None` once every assigned chunk is drained.
+    /// The worker the caller should take from next, or `None` once every assigned unit is drained.
     pub fn next_worker(&self) -> Option<usize> {
         self.assignments
             .get(self.position)
@@ -50,12 +50,12 @@ impl Aggregate {
 
     /// Takes one message from `worker` and returns whatever is now ready to emit.
     ///
-    /// Only the worker holding the current chunk may answer with an item or close it. A chunk
+    /// Only the worker holding the current unit may answer with an item or close it. A unit
     /// that produced nothing still moves the aggregate on to the next assignment once its
-    /// `EndOfChunk` arrives. A worker's `EndOfStream` means that worker has nothing left to send,
+    /// `EndOfUnit` arrives. A worker's `EndOfStream` means that worker has nothing left to send,
     /// not that the merged stream itself is over, so it neither emits anything nor moves the
     /// aggregate on to the next assignment, unless it is the worker holding the current, undrained
-    /// chunk, which means it ended without ever sending that chunk's close.
+    /// unit, which means it ended without ever sending that unit's close.
     pub fn accept(&mut self, worker: usize, result: WorkResult) -> Result<Vec<StreamItem>, ExchangeError> {
         match result {
             WorkResult::Item(mut item) => {
@@ -64,14 +64,14 @@ impl Aggregate {
                 self.next_index += 1;
                 Ok(vec![item])
             },
-            WorkResult::EndOfChunk(chunk) => {
+            WorkResult::EndOfUnit(unit) => {
                 let current = self.check_worker(worker)?;
 
-                if chunk != current.chunk {
-                    return Err(ExchangeError::ChunkMismatch {
+                if unit != current.unit {
+                    return Err(ExchangeError::UnitMismatch {
                         worker,
-                        expected: current.chunk,
-                        found: chunk,
+                        expected: current.unit,
+                        found: unit,
                     });
                 }
 
@@ -85,8 +85,8 @@ impl Aggregate {
                     .is_some_and(|current| current.worker == worker);
 
                 if owing {
-                    let chunk = self.assignments[self.position].chunk;
-                    return Err(ExchangeError::WorkerEndedOwingChunk { worker, chunk });
+                    let unit = self.assignments[self.position].unit;
+                    return Err(ExchangeError::WorkerEndedOwingUnit { worker, unit });
                 }
 
                 Ok(Vec::new())
@@ -101,7 +101,7 @@ impl Aggregate {
 
         if current.worker != worker {
             return Err(ExchangeError::WrongWorker {
-                chunk: current.chunk,
+                unit: current.unit,
                 expected: current.worker,
                 found: worker,
             });
@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn it_reads_the_worker_the_assignment_names() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 2 });
+        aggregate.assign(Assignment { unit: 7, worker: 2 });
 
         assert_eq!(aggregate.next_worker(), Some(2));
     }
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn output_is_renumbered_densely_from_zero() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
 
         let first = aggregate
             .accept(0, WorkResult::Item(item(40, 7)))
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn renumbering_leaves_the_chunk_id_alone() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
 
         let emitted = aggregate
             .accept(0, WorkResult::Item(item(40, 7)))
@@ -194,13 +194,13 @@ mod tests {
     }
 
     #[test]
-    fn a_chunk_that_produced_nothing_still_moves_it_on() {
+    fn a_unit_that_produced_nothing_still_moves_it_on() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
-        aggregate.assign(Assignment { chunk: 8, worker: 1 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 8, worker: 1 });
 
         let emitted = aggregate
-            .accept(0, WorkResult::EndOfChunk(7))
+            .accept(0, WorkResult::EndOfUnit(7))
             .expect("should accept");
 
         assert!(emitted.is_empty());
@@ -208,16 +208,16 @@ mod tests {
     }
 
     #[test]
-    fn numbering_carries_across_a_chunk_boundary() {
+    fn numbering_carries_across_a_unit_boundary() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
-        aggregate.assign(Assignment { chunk: 8, worker: 1 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 8, worker: 1 });
 
         aggregate
             .accept(0, WorkResult::Item(item(40, 7)))
             .expect("should accept");
         aggregate
-            .accept(0, WorkResult::EndOfChunk(7))
+            .accept(0, WorkResult::EndOfUnit(7))
             .expect("should accept");
         let emitted = aggregate
             .accept(1, WorkResult::Item(item(90, 8)))
@@ -229,8 +229,8 @@ mod tests {
     #[test]
     fn a_worker_speaking_out_of_turn_is_an_error() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
-        aggregate.assign(Assignment { chunk: 8, worker: 1 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 8, worker: 1 });
 
         let result = aggregate.accept(1, WorkResult::Item(item(90, 8)));
 
@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(
             error,
             ExchangeError::WrongWorker {
-                chunk: 7,
+                unit: 7,
                 expected: 0,
                 found: 1,
             }
@@ -249,24 +249,24 @@ mod tests {
     }
 
     #[test]
-    fn it_runs_out_of_workers_to_read_once_every_chunk_is_drained() {
+    fn it_runs_out_of_workers_to_read_once_every_unit_is_drained() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
 
         aggregate
-            .accept(0, WorkResult::EndOfChunk(7))
+            .accept(0, WorkResult::EndOfUnit(7))
             .expect("should accept");
 
         assert_eq!(aggregate.next_worker(), None);
     }
 
-    /// Worker 1 is not the worker holding the current, undrained chunk, so its own end of stream
+    /// Worker 1 is not the worker holding the current, undrained unit, so its own end of stream
     /// is harmless and must not move the aggregate on or end the merge early.
     #[test]
     fn a_workers_end_of_stream_does_not_end_the_merged_stream_early() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
-        aggregate.assign(Assignment { chunk: 8, worker: 1 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 8, worker: 1 });
 
         let emitted = aggregate
             .accept(1, WorkResult::EndOfStream)
@@ -277,36 +277,33 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_ending_while_it_still_owes_a_chunk_is_an_error() {
+    fn a_worker_ending_while_it_still_owes_a_unit_is_an_error() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
 
         let result = aggregate.accept(0, WorkResult::EndOfStream);
 
         let Err(error) = result else {
-            panic!("the aggregate should have refused a worker that ended while owing its chunk");
+            panic!("the aggregate should have refused a worker that ended while owing its unit");
         };
 
-        assert_eq!(
-            error,
-            ExchangeError::WorkerEndedOwingChunk { worker: 0, chunk: 7 }
-        );
+        assert_eq!(error, ExchangeError::WorkerEndedOwingUnit { worker: 0, unit: 7 });
     }
 
     #[test]
-    fn an_end_of_chunk_naming_the_wrong_chunk_is_an_error() {
+    fn an_end_of_unit_naming_the_wrong_unit_is_an_error() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
 
-        let result = aggregate.accept(0, WorkResult::EndOfChunk(9));
+        let result = aggregate.accept(0, WorkResult::EndOfUnit(9));
 
         let Err(error) = result else {
-            panic!("the aggregate should have refused an end of chunk naming the wrong chunk");
+            panic!("the aggregate should have refused an end of unit naming the wrong unit");
         };
 
         assert_eq!(
             error,
-            ExchangeError::ChunkMismatch {
+            ExchangeError::UnitMismatch {
                 worker: 0,
                 expected: 7,
                 found: 9,
@@ -330,9 +327,9 @@ mod tests {
     #[test]
     fn a_finished_aggregate_says_so() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
         aggregate
-            .accept(0, WorkResult::EndOfChunk(7))
+            .accept(0, WorkResult::EndOfUnit(7))
             .expect("should accept");
 
         aggregate.finish();
@@ -350,7 +347,7 @@ mod tests {
     #[test]
     fn finishing_with_undrained_assignments_is_not_finished_yet() {
         let mut aggregate = Aggregate::new();
-        aggregate.assign(Assignment { chunk: 7, worker: 0 });
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
 
         aggregate.finish();
 
