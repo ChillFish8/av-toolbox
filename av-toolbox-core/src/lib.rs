@@ -25,6 +25,7 @@ mod filter;
 mod inputs;
 mod mask;
 mod meta;
+mod open;
 mod parallelism;
 mod registry;
 mod residency;
@@ -73,6 +74,7 @@ pub use self::inputs::{
 };
 pub use self::mask::Mask;
 pub use self::meta::{MetaInputs, MetaItem, MetaTransform, end_meta_transform, run_meta_transform};
+pub use self::open::OpenSlot;
 pub use self::parallelism::Parallelism;
 pub use self::registry::PipelineRegistry;
 pub use self::residency::{

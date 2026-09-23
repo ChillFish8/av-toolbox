@@ -222,15 +222,18 @@ pub trait SourceDefinition: StageDefinition {
     /// The side this stage runs on.
     type Side: StageSide;
 
-    /// What it could produce.
-    ///
-    /// A source has no inputs to base this on, so it follows from its arguments and the
-    /// accelerator's capabilities alone.
-    fn produces(capabilities: &Capabilities, args: &Self::Args) -> Result<OutputFormats, StageError>;
+    /// What opening the input yields, handed from `produces` to `build`.
+    type Opened: Send + 'static;
+
+    /// Opens the input, which happens once per graph.
+    fn open(args: &Self::Args) -> Result<Self::Opened, StageError>;
+
+    /// What it could produce, given what opening the input found.
+    fn produces(capabilities: &Capabilities, opened: &Self::Opened) -> Result<OutputFormats, StageError>;
 
     fn build<R: Runtime>(
         context: &BuildContext<R>,
-        args: Self::Args,
+        opened: Self::Opened,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn Source<Self::Side>>, StageError>;

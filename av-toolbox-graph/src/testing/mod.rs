@@ -1,5 +1,6 @@
 #[macro_use]
 mod macros;
+mod counted;
 mod endpoints;
 mod filters;
 mod host;
@@ -9,6 +10,8 @@ mod specs;
 
 use av_toolbox_core::PipelineRegistry;
 
+pub(crate) use self::counted::COUNTED_OPENS;
+use self::counted::{Counted, Unopenable};
 use self::endpoints::{Deep, File, FloatFirst, Stdout, Wide, WideningSource};
 use self::filters::{
     Blur,
@@ -38,6 +41,8 @@ pub(crate) use self::specs::{named, positional, spec};
 pub(crate) fn registry() -> PipelineRegistry {
     let mut registry = PipelineRegistry::new();
 
+    registry.register_source::<Counted>().expect("should register");
+    registry.register_source::<Unopenable>().expect("should register");
     registry.register_source::<File>().expect("should register");
     registry.register_filter::<Blur>().expect("should register");
     registry.register_filter::<Failing>().expect("should register");
@@ -87,7 +92,9 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 27);
+        assert_eq!(identifiers.len(), 29);
+        assert!(identifiers.contains(&"test/counted"));
+        assert!(identifiers.contains(&"test/unopenable"));
         assert!(identifiers.contains(&"test/blur"));
         assert!(identifiers.contains(&"test/failing"));
         assert!(identifiers.contains(&"test/recording"));

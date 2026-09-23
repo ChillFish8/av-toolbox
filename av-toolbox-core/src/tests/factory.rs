@@ -1,20 +1,25 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
+    ColourInfo,
     DeviceSide,
     FormatSet,
     Frame,
     FrameContext,
+    FrameFormat,
+    FrameLayout,
     HostFrame,
     HostSide,
     Offered,
     OutputFormats,
     ResolvedFormats,
     Runtime,
+    SampleFormat,
     StreamFormat,
     StreamTemplate,
+    Subsampling,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -31,11 +36,15 @@ use crate::{
     InputParam,
     InputSignature,
     Inputs,
+    OpenSlot,
     Parallelism,
     PreparedFilter,
+    PreparedSource,
     PreparedStage,
     RegistryError,
     Residency,
+    Source,
+    SourceDefinition,
     StageDefinition,
     StageError,
     StageFactory,
@@ -212,6 +221,7 @@ fn a_prepared_stage_reports_the_granularity_its_arguments_asked_for() {
         &definition,
         &serde_json::json!({ "radius": 0 }),
         &reference_input(),
+        &OpenSlot::new(),
     )
     .expect("should prepare");
 
@@ -219,6 +229,7 @@ fn a_prepared_stage_reports_the_granularity_its_arguments_asked_for() {
         &definition,
         &serde_json::json!({ "radius": 4 }),
         &reference_input(),
+        &OpenSlot::new(),
     )
     .expect("should prepare");
 
@@ -300,9 +311,13 @@ fn two_inputs() -> Vec<InputArgument> {
 fn chunk_authority_survives_type_erasure_when_a_later_input_is_marked() {
     let definition = Definition::<ChunkAuthorityExample>::new(StageKind::Filter).expect("should build");
 
-    let prepared: Box<dyn PreparedFilter> =
-        StageFactory::<dyn PreparedFilter>::prepare(&definition, &serde_json::json!({}), &two_inputs())
-            .expect("should prepare");
+    let prepared: Box<dyn PreparedFilter> = StageFactory::<dyn PreparedFilter>::prepare(
+        &definition,
+        &serde_json::json!({}),
+        &two_inputs(),
+        &OpenSlot::new(),
+    )
+    .expect("should prepare");
 
     assert_eq!(prepared.chunk_authority(), Some(1));
 }
@@ -324,7 +339,11 @@ fn arguments_are_rejected_without_a_backend() {
     let definition = Definition::<ExampleDefinition>::new(StageKind::Filter).expect("should build");
     let factory: &dyn StageFactory<dyn PreparedFilter> = &definition;
 
-    let result = factory.prepare(&serde_json::json!({ "sigma_scale": "wide" }), &reference_input());
+    let result = factory.prepare(
+        &serde_json::json!({ "sigma_scale": "wide" }),
+        &reference_input(),
+        &OpenSlot::new(),
+    );
     let Err(error) = result else {
         panic!("the stage should not have been prepared");
     };
@@ -337,7 +356,8 @@ fn arguments_that_break_the_schema_are_rejected_before_deserialization() {
     let definition = definition();
     let args = serde_json::json!({ "sigma_scale": "not a number" });
 
-    let result = StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &reference_input());
+    let result =
+        StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &reference_input(), &OpenSlot::new());
     let Err(error) = result else {
         panic!("the stage should not have been prepared");
     };
@@ -360,7 +380,7 @@ fn inputs_that_break_the_signature_are_rejected() {
     let definition = definition();
     let args = serde_json::json!({ "sigma_scale": 0.8 });
 
-    let result = StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &[]);
+    let result = StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &[], &OpenSlot::new());
     let Err(error) = result else {
         panic!("the stage should not have been prepared");
     };
@@ -390,8 +410,13 @@ mod device_tests {
         let backend = backend();
         let formats = formats();
 
-        let prepared = StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &reference_input())
-            .expect("should prepare");
+        let prepared = StageFactory::<dyn PreparedFilter>::prepare(
+            &definition,
+            &args,
+            &reference_input(),
+            &OpenSlot::new(),
+        )
+        .expect("should prepare");
         let filter = prepared.build(&backend, &formats).expect("should build");
         let filter = filter.into_device().expect("a device filter");
         drop(filter);
@@ -407,8 +432,13 @@ mod device_tests {
         let backend = backend();
         let formats = formats();
 
-        let prepared = StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &reference_input())
-            .expect("should prepare");
+        let prepared = StageFactory::<dyn PreparedFilter>::prepare(
+            &definition,
+            &args,
+            &reference_input(),
+            &OpenSlot::new(),
+        )
+        .expect("should prepare");
         let result = prepared.build(&backend, &formats);
         let Err(error) = result else {
             panic!("the stage should not have been built");
@@ -497,8 +527,9 @@ fn a_host_definition_prepares_as_a_host_stage() {
     let definition = Definition::<HostDefinition>::new(StageKind::Filter).expect("should build");
     let args = serde_json::json!({ "sigma_scale": 1.0 });
 
-    let prepared = StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &reference_input())
-        .expect("should prepare");
+    let prepared =
+        StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &reference_input(), &OpenSlot::new())
+            .expect("should prepare");
 
     assert_eq!(prepared.residency(), Residency::Host);
     assert_eq!(PreparedStage::Filter(prepared).residency(), Residency::Host);
@@ -508,8 +539,10 @@ fn a_host_definition_prepares_as_a_host_stage() {
 fn a_definition_on_the_device_side_prepares_as_a_device_stage() {
     let args = serde_json::json!({ "sigma_scale": 1.0 });
 
-    let prepared = StageFactory::<dyn PreparedFilter>::prepare(&definition(), &args, &reference_input())
-        .expect("should prepare");
+    let definition = definition();
+    let prepared =
+        StageFactory::<dyn PreparedFilter>::prepare(&definition, &args, &reference_input(), &OpenSlot::new())
+            .expect("should prepare");
 
     assert_eq!(prepared.residency(), Residency::Device);
 }
@@ -591,4 +624,127 @@ fn a_crossing_passes_its_one_input_through_and_runs_frame_by_frame() {
     assert_eq!(crossing.chunk_authority(), Some(0));
     assert_eq!(crossing.residency(), Residency::Host);
     assert_eq!(crossing.kind(), StageKind::Transform);
+}
+
+fn frame_format() -> FrameFormat {
+    FrameFormat {
+        width: 64,
+        height: 64,
+        layout: FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv420,
+        },
+        sample: SampleFormat::U8,
+        colour: ColourInfo::default(),
+    }
+}
+
+static COUNTED_OPENS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CountedArgs {
+    fail: bool,
+}
+
+struct CountedStage;
+
+impl StageInstance for CountedStage {}
+
+impl Source for CountedStage {
+    fn next(&mut self, _context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+        Ok(None)
+    }
+}
+
+struct Counted;
+
+impl StageDefinition for Counted {
+    type Args = CountedArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "counted"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        &InputSignature::EMPTY
+    }
+}
+
+impl SourceDefinition for Counted {
+    type Side = DeviceSide;
+    type Opened = StreamFormat;
+
+    fn open(args: &Self::Args) -> Result<Self::Opened, StageError> {
+        COUNTED_OPENS.fetch_add(1, Ordering::SeqCst);
+
+        if args.fail {
+            return Err(StageError::msg("the input could not be opened"));
+        }
+
+        Ok(StreamFormat::Frames(frame_format()))
+    }
+
+    fn produces(_capabilities: &Capabilities, opened: &Self::Opened) -> Result<OutputFormats, StageError> {
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(opened),
+            samples: FormatSet::of([opened.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _opened: Self::Opened,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Source>, StageError> {
+        Ok(Box::new(CountedStage))
+    }
+}
+
+fn counted(slot: &OpenSlot, fail: bool) -> Box<dyn PreparedSource> {
+    let definition = Definition::<Counted>::new(StageKind::Source).expect("should build");
+    let args = serde_json::json!({ "fail": fail });
+
+    StageFactory::<dyn PreparedSource>::prepare(&definition, &args, &[], slot).expect("should prepare")
+}
+
+#[test]
+fn a_source_prepared_twice_on_one_slot_opens_once() {
+    COUNTED_OPENS.store(0, Ordering::SeqCst);
+    let slot = OpenSlot::new();
+    let capabilities = capabilities();
+
+    counted(&slot, false).produces(&capabilities).expect("produces");
+    counted(&slot, false)
+        .produces(&capabilities)
+        .expect("produces again");
+
+    assert_eq!(COUNTED_OPENS.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_source_on_a_fresh_slot_opens_again() {
+    COUNTED_OPENS.store(0, Ordering::SeqCst);
+    let capabilities = capabilities();
+
+    counted(&OpenSlot::new(), false)
+        .produces(&capabilities)
+        .expect("produces");
+    counted(&OpenSlot::new(), false)
+        .produces(&capabilities)
+        .expect("produces");
+
+    assert_eq!(COUNTED_OPENS.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_failed_open_is_the_error_produces_returns() {
+    let error = counted(&OpenSlot::new(), true)
+        .produces(&capabilities())
+        .expect_err("the open fails");
+
+    assert!(error.to_string().contains("could not be opened"));
 }

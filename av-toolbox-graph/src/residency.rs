@@ -447,6 +447,101 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_source_opens_once_across_every_pass() {
+        crate::testing::COUNTED_OPENS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let registry = testing::registry();
+        let specs = [
+            stage(StageKind::Source, "input", "test/counted", &[]),
+            stage(StageKind::Sink, "out", "test/stdout", &["input"]),
+        ];
+        let mut graph = build(&registry, &specs).expect("should build").into_graph();
+
+        let capabilities = capabilities();
+        let mut formats = solve(&graph, &registry, &capabilities).expect("should solve");
+        place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+        let made_plan = crate::plan::plan(&graph, &registry).expect("should plan");
+        graph.set_execution_plan(made_plan);
+
+        // Preparing again after solve, place and plan is exactly what building does. If that pass
+        // opened through a fresh slot instead of the node's own, asking the prepared source what it
+        // produces here would open the input a second time.
+        let mut diagnostics = Diagnostics::new();
+        let prepared = graph.prepare_stages(&registry, &mut diagnostics);
+        let input = named(&graph, "input").id();
+        let prepared_source = prepared
+            .into_iter()
+            .nth(input.index())
+            .flatten()
+            .expect("the source should have prepared");
+        prepared_source
+            .produces(&capabilities, &[])
+            .expect("should produce again");
+
+        assert_eq!(
+            crate::testing::COUNTED_OPENS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[test]
+    fn a_source_that_cannot_open_is_reported_on_its_node() {
+        let registry = testing::registry();
+        let specs = [
+            stage(StageKind::Source, "input", "test/unopenable", &[]),
+            stage(StageKind::Sink, "out", "test/stdout", &["input"]),
+        ];
+        let graph = build(&registry, &specs).expect("should build").into_graph();
+
+        let diagnostics = solve(&graph, &registry, &capabilities()).expect_err("the open fails");
+
+        let reported = diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path().contains("input"));
+        assert!(reported);
+    }
+
+    #[test]
+    fn two_identical_sources_merged_by_deduplication_open_once() {
+        crate::testing::COUNTED_OPENS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let registry = testing::registry();
+        let specs = [
+            stage(StageKind::Source, "first", "test/counted", &[]),
+            stage(StageKind::Source, "second", "test/counted", &[]),
+            stage(StageKind::Sink, "a", "test/stdout", &["first"]),
+            stage(StageKind::Sink, "b", "test/stdout", &["second"]),
+        ];
+        let mut graph = build(&registry, &specs).expect("should build").into_graph();
+        crate::optimise(&mut graph, &crate::default_passes());
+
+        let capabilities = capabilities();
+        solve(&graph, &registry, &capabilities).expect("should solve");
+
+        // The same double check as the single-source test above, now against whichever of the two
+        // duplicate nodes deduplication kept.
+        let mut diagnostics = Diagnostics::new();
+        let prepared = graph.prepare_stages(&registry, &mut diagnostics);
+        let merged = graph
+            .nodes()
+            .iter()
+            .find(|node| node.kind() == StageKind::Source)
+            .expect("one source survives deduplication")
+            .id();
+        let prepared_source = prepared
+            .into_iter()
+            .nth(merged.index())
+            .flatten()
+            .expect("the surviving source should have prepared");
+        prepared_source
+            .produces(&capabilities, &[])
+            .expect("should produce again");
+
+        assert_eq!(
+            crate::testing::COUNTED_OPENS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[test]
     fn a_host_stage_that_never_left_the_device_is_not_named_in_a_round_trip() {
         let (_, warnings) = placed(&[
             stage(StageKind::Source, "input", "test/file", &[]),

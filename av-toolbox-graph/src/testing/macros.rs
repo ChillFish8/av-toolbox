@@ -38,10 +38,15 @@ macro_rules! fixture_source {
 
         impl SourceDefinition for $definition {
             type Side = DeviceSide;
+            type Opened = ();
+
+            fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+                Ok(())
+            }
 
             fn produces(
                 _capabilities: &Capabilities,
-                _args: &Self::Args,
+                _opened: &Self::Opened,
             ) -> Result<OutputFormats, StageError> {
                 let format = fixture_format();
 
@@ -53,7 +58,7 @@ macro_rules! fixture_source {
 
             fn build<R: Runtime>(
                 _context: &BuildContext<R>,
-                _args: Self::Args,
+                _opened: Self::Opened,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,
             ) -> Result<Box<dyn Source>, StageError> {
@@ -275,10 +280,15 @@ macro_rules! opinionated_source {
 
         impl SourceDefinition for $definition {
             type Side = DeviceSide;
+            type Opened = ();
+
+            fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+                Ok(())
+            }
 
             fn produces(
                 _capabilities: &Capabilities,
-                _args: &Self::Args,
+                _opened: &Self::Opened,
             ) -> Result<OutputFormats, StageError> {
                 Ok(OutputFormats {
                     template: StreamTemplate::Frames(frame_format()),
@@ -288,7 +298,7 @@ macro_rules! opinionated_source {
 
             fn build<R: Runtime>(
                 _context: &BuildContext<R>,
-                _args: Self::Args,
+                _opened: Self::Opened,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,
             ) -> Result<Box<dyn Source>, StageError> {

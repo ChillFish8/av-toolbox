@@ -38,7 +38,7 @@ use crate::engine::tests::support::{StageLife, format};
 // A source that plays back a fixed list of chunk ids, one frame each, timestamped by the
 // position it was built at, so a test can tell frames apart after the aggregate renumbers
 // their indices.
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Clone, Deserialize, JsonSchema)]
 pub(crate) struct ListedArgs {
     #[serde(default)]
     chunks: Vec<u64>,
@@ -173,8 +173,13 @@ impl StageDefinition for Listed {
 
 impl SourceDefinition for Listed {
     type Side = DeviceSide;
+    type Opened = ListedArgs;
 
-    fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+    fn open(args: &Self::Args) -> Result<Self::Opened, StageError> {
+        Ok(args.clone())
+    }
+
+    fn produces(_capabilities: &Capabilities, _opened: &Self::Opened) -> Result<OutputFormats, StageError> {
         let stream_format = StreamFormat::Frames(format());
 
         Ok(OutputFormats {
@@ -185,11 +190,11 @@ impl SourceDefinition for Listed {
 
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
-        args: Self::Args,
+        opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Source>, StageError> {
-        Ok(Box::new(ListedInstance::from_args(args)))
+        Ok(Box::new(ListedInstance::from_args(opened)))
     }
 }
 
@@ -278,8 +283,13 @@ impl StageDefinition for HostListed {
 
 impl SourceDefinition for HostListed {
     type Side = HostSide;
+    type Opened = ListedArgs;
 
-    fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+    fn open(args: &Self::Args) -> Result<Self::Opened, StageError> {
+        Ok(args.clone())
+    }
+
+    fn produces(_capabilities: &Capabilities, _opened: &Self::Opened) -> Result<OutputFormats, StageError> {
         let stream_format = StreamFormat::Frames(format());
 
         Ok(OutputFormats {
@@ -290,10 +300,10 @@ impl SourceDefinition for HostListed {
 
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
-        args: Self::Args,
+        opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Source<HostSide>>, StageError> {
-        Ok(Box::new(HostListedInstance::from_args(args)))
+        Ok(Box::new(HostListedInstance::from_args(opened)))
     }
 }

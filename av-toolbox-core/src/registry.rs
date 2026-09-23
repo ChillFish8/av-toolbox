@@ -10,6 +10,7 @@ use crate::{
     InputArgument,
     MaskDefinition,
     MetaTransformDefinition,
+    OpenSlot,
     PreparedFilter,
     PreparedMask,
     PreparedMetaTransform,
@@ -113,22 +114,40 @@ impl PipelineRegistry {
         args: &Value,
         inputs: &[InputArgument],
     ) -> Result<PreparedStage, BuildStageError> {
+        let slot = OpenSlot::new();
+
+        self.prepare_with(kind, identifier, args, inputs, &slot)
+    }
+
+    /// The same, opening a source into `slot` so every pass sharing it opens the input once.
+    pub fn prepare_with(
+        &self,
+        kind: StageKind,
+        identifier: &str,
+        args: &Value,
+        inputs: &[InputArgument],
+        slot: &OpenSlot,
+    ) -> Result<PreparedStage, BuildStageError> {
         match kind {
             StageKind::Source => {
-                prepare(&self.sources, kind, identifier, args, inputs).map(PreparedStage::Source)
+                prepare(&self.sources, kind, identifier, args, inputs, slot).map(PreparedStage::Source)
             },
             StageKind::Filter => {
-                prepare(&self.filters, kind, identifier, args, inputs).map(PreparedStage::Filter)
+                prepare(&self.filters, kind, identifier, args, inputs, slot).map(PreparedStage::Filter)
             },
-            StageKind::Mask => prepare(&self.masks, kind, identifier, args, inputs).map(PreparedStage::Mask),
+            StageKind::Mask => {
+                prepare(&self.masks, kind, identifier, args, inputs, slot).map(PreparedStage::Mask)
+            },
             StageKind::Transform if self.meta_transforms.contains_key(identifier) => {
-                prepare(&self.meta_transforms, kind, identifier, args, inputs)
+                prepare(&self.meta_transforms, kind, identifier, args, inputs, slot)
                     .map(PreparedStage::MetaTransform)
             },
             StageKind::Transform => {
-                prepare(&self.transforms, kind, identifier, args, inputs).map(PreparedStage::Transform)
+                prepare(&self.transforms, kind, identifier, args, inputs, slot).map(PreparedStage::Transform)
             },
-            StageKind::Sink => prepare(&self.sinks, kind, identifier, args, inputs).map(PreparedStage::Sink),
+            StageKind::Sink => {
+                prepare(&self.sinks, kind, identifier, args, inputs, slot).map(PreparedStage::Sink)
+            },
         }
     }
 
@@ -182,6 +201,7 @@ fn prepare<P: ?Sized>(
     identifier: &str,
     args: &Value,
     inputs: &[InputArgument],
+    slot: &OpenSlot,
 ) -> Result<Box<P>, BuildStageError> {
     let factory = factories
         .get(identifier)
@@ -190,7 +210,7 @@ fn prepare<P: ?Sized>(
             identifier: identifier.to_string(),
         })?;
 
-    factory.prepare(args, inputs)
+    factory.prepare(args, inputs, slot)
 }
 
 #[cfg(test)]
@@ -289,14 +309,22 @@ mod tests {
 
     impl SourceDefinition for FileSourceDefinition {
         type Side = DeviceSide;
+        type Opened = ();
 
-        fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+        fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+            Ok(())
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _opened: &Self::Opened,
+        ) -> Result<OutputFormats, StageError> {
             unreachable!("not exercised by these tests")
         }
 
         fn build<R: Runtime>(
             _context: &BuildContext<R>,
-            _args: Self::Args,
+            _opened: Self::Opened,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
         ) -> Result<Box<dyn Source>, StageError> {
@@ -326,14 +354,22 @@ mod tests {
 
     impl SourceDefinition for GreedySource {
         type Side = DeviceSide;
+        type Opened = ();
 
-        fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+        fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+            Ok(())
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _opened: &Self::Opened,
+        ) -> Result<OutputFormats, StageError> {
             unreachable!("not exercised by these tests")
         }
 
         fn build<R: Runtime>(
             _context: &BuildContext<R>,
-            _args: Self::Args,
+            _opened: Self::Opened,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
         ) -> Result<Box<dyn Source>, StageError> {
@@ -655,14 +691,22 @@ mod tests {
 
     impl<const UNLOAD: bool> SourceDefinition for CrossingImpostor<UNLOAD> {
         type Side = DeviceSide;
+        type Opened = ();
 
-        fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+        fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+            Ok(())
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _opened: &Self::Opened,
+        ) -> Result<OutputFormats, StageError> {
             unreachable!("not exercised by these tests")
         }
 
         fn build<R: Runtime>(
             _context: &BuildContext<R>,
-            _args: Self::Args,
+            _opened: Self::Opened,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
         ) -> Result<Box<dyn Source>, StageError> {

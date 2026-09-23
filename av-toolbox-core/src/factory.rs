@@ -34,6 +34,7 @@ use crate::{
     MaskDefinition,
     MetaTransform,
     MetaTransformDefinition,
+    OpenSlot,
     Parallelism,
     RegistryError,
     Residency,
@@ -96,7 +97,12 @@ pub trait StageFactory<P: ?Sized>: Send + Sync {
     fn info(&self) -> StageInfo<'_>;
 
     /// Validates and deserializes the arguments and binds the inputs, without needing a device.
-    fn prepare(&self, args: &Value, inputs: &[InputArgument]) -> Result<Box<P>, BuildStageError>;
+    fn prepare(
+        &self,
+        args: &Value,
+        inputs: &[InputArgument],
+        slot: &OpenSlot,
+    ) -> Result<Box<P>, BuildStageError>;
 }
 
 /// A source whose arguments are deserialized, ready to negotiate and build.
@@ -488,6 +494,7 @@ pub(crate) struct Prepared<D: StageDefinition> {
     identifier: String,
     args: D::Args,
     inputs: BoundInputs,
+    slot: OpenSlot,
 }
 
 macro_rules! impl_stage_factory {
@@ -566,6 +573,7 @@ macro_rules! impl_stage_factory {
                 &self,
                 args: &Value,
                 inputs: &[InputArgument],
+                slot: &OpenSlot,
             ) -> Result<Box<dyn $prepared_trait>, BuildStageError> {
                 let args = self.deserialize_args(args)?;
                 let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
@@ -574,6 +582,7 @@ macro_rules! impl_stage_factory {
                     identifier: self.full_identifier().to_string(),
                     args,
                     inputs: bound,
+                    slot: slot.clone(),
                 }))
             }
         }
@@ -584,7 +593,7 @@ macro_rules! impl_stage_factory {
 macro_rules! impl_source_factory {
     ($task:ident) => {
         struct $task<'a, D: SourceDefinition> {
-            args: D::Args,
+            opened: D::Opened,
             inputs: BoundInputs,
             formats: &'a ResolvedFormats,
         }
@@ -593,7 +602,7 @@ macro_rules! impl_source_factory {
             type Output = Result<BuiltSource, StageError>;
 
             fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-                D::build::<R>(context, self.args, self.inputs, self.formats)
+                D::build::<R>(context, self.opened, self.inputs, self.formats)
                     .map(<D::Side as StageSide>::source)
             }
         }
@@ -608,7 +617,12 @@ macro_rules! impl_source_factory {
             }
 
             fn produces(&self, capabilities: &Capabilities) -> Result<OutputFormats, StageError> {
-                D::produces(capabilities, &self.args)
+                let open = || D::open(&self.args);
+                let produced = self
+                    .slot
+                    .read(open, |opened: &D::Opened| D::produces(capabilities, opened))?;
+
+                produced
             }
 
             fn residency(&self) -> Residency {
@@ -621,8 +635,17 @@ macro_rules! impl_source_factory {
                 formats: &ResolvedFormats,
             ) -> Result<BuiltSource, BuildStageError> {
                 let identifier = self.identifier;
+                let open = || D::open(&self.args);
+                let opened = self
+                    .slot
+                    .take(open)
+                    .map_err(|source| BuildStageError::Build {
+                        identifier: identifier.clone(),
+                        source,
+                    })?;
+
                 let task = $task::<D> {
-                    args: self.args,
+                    opened,
                     inputs: self.inputs,
                     formats,
                 };
@@ -642,6 +665,7 @@ macro_rules! impl_source_factory {
                 &self,
                 args: &Value,
                 inputs: &[InputArgument],
+                slot: &OpenSlot,
             ) -> Result<Box<dyn PreparedSource>, BuildStageError> {
                 let args = self.deserialize_args(args)?;
                 let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
@@ -650,6 +674,7 @@ macro_rules! impl_source_factory {
                     identifier: self.full_identifier().to_string(),
                     args,
                     inputs: bound,
+                    slot: slot.clone(),
                 }))
             }
         }
@@ -723,6 +748,7 @@ macro_rules! impl_sink_factory {
                 &self,
                 args: &Value,
                 inputs: &[InputArgument],
+                slot: &OpenSlot,
             ) -> Result<Box<dyn PreparedSink>, BuildStageError> {
                 let args = self.deserialize_args(args)?;
                 let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
@@ -731,6 +757,7 @@ macro_rules! impl_sink_factory {
                     identifier: self.full_identifier().to_string(),
                     args,
                     inputs: bound,
+                    slot: slot.clone(),
                 }))
             }
         }
@@ -825,6 +852,7 @@ impl<D: MetaTransformDefinition> StageFactory<dyn PreparedMetaTransform> for Def
         &self,
         args: &Value,
         inputs: &[InputArgument],
+        slot: &OpenSlot,
     ) -> Result<Box<dyn PreparedMetaTransform>, BuildStageError> {
         let args = self.deserialize_args(args)?;
         let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
@@ -833,6 +861,7 @@ impl<D: MetaTransformDefinition> StageFactory<dyn PreparedMetaTransform> for Def
             identifier: self.full_identifier().to_string(),
             args,
             inputs: bound,
+            slot: slot.clone(),
         }))
     }
 }

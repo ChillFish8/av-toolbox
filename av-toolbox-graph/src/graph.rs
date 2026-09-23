@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use av_toolbox_core::{Crossing, Residency, StageHandle, StageKind, StreamType};
+use av_toolbox_core::{Crossing, OpenSlot, Residency, StageHandle, StageKind, StreamType};
 use serde_json::Value;
 
 use crate::Span;
@@ -156,6 +156,9 @@ pub struct Node {
     residency: Option<Residency>,
     /// The stream type this node emits.
     stream: Option<StreamType>,
+    /// What a source's stage learned by opening its input, shared across every pass that prepares
+    /// this node.
+    open: OpenSlot,
 }
 
 impl Node {
@@ -174,6 +177,7 @@ impl Node {
             role: NodeRole::Stage,
             residency: None,
             stream: parts.kind.output(),
+            open: OpenSlot::new(),
         }
     }
 
@@ -239,6 +243,11 @@ impl Node {
 
     pub fn output_stream(&self) -> Option<StreamType> {
         self.stream
+    }
+
+    /// The slot a source opens its input into, shared by every pass that prepares this node.
+    pub fn open_slot(&self) -> &OpenSlot {
+        &self.open
     }
 }
 
@@ -360,6 +369,7 @@ impl CompiledGraph {
             role: NodeRole::Crossing(crossing),
             residency: Some(crossing.to_side()),
             stream: source.output_stream(),
+            open: OpenSlot::new(),
         };
 
         self.nodes.push(node);

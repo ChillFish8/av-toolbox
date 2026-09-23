@@ -82,7 +82,13 @@ impl CompiledGraph {
 
             let arguments = arguments_for(self, node);
 
-            match registry.prepare(node.kind(), node.identifier(), node.args(), &arguments) {
+            match registry.prepare_with(
+                node.kind(),
+                node.identifier(),
+                node.args(),
+                &arguments,
+                node.open_slot(),
+            ) {
                 Ok(stage) => prepared[id.index()] = Some(stage),
                 Err(error) => report(node, error, diagnostics),
             }
@@ -165,7 +171,13 @@ impl CompiledGraph {
 
             let arguments = arguments_for(self, node);
 
-            match registry.prepare(node.kind(), node.identifier(), node.args(), &arguments) {
+            match registry.prepare_with(
+                node.kind(),
+                node.identifier(),
+                node.args(),
+                &arguments,
+                node.open_slot(),
+            ) {
                 Ok(stage) => prepared[slot] = Some(stage),
                 Err(error) => report(node, error, &mut diagnostics),
             }

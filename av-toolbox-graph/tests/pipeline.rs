@@ -81,8 +81,13 @@ impl StageDefinition for Read {
 
 impl SourceDefinition for Read {
     type Side = DeviceSide;
+    type Opened = ();
 
-    fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+    fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+        Ok(())
+    }
+
+    fn produces(_capabilities: &Capabilities, _opened: &Self::Opened) -> Result<OutputFormats, StageError> {
         let format = fixture_format();
 
         Ok(OutputFormats {
@@ -93,7 +98,7 @@ impl SourceDefinition for Read {
 
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
-        _args: Self::Args,
+        _opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Source>, StageError> {

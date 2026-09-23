@@ -119,8 +119,13 @@ impl StageDefinition for Frames {
 
 impl SourceDefinition for Frames {
     type Side = DeviceSide;
+    type Opened = ();
 
-    fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+    fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+        Ok(())
+    }
+
+    fn produces(_capabilities: &Capabilities, _opened: &Self::Opened) -> Result<OutputFormats, StageError> {
         let format = StreamFormat::Frames(frame_format());
 
         Ok(OutputFormats {
@@ -131,7 +136,7 @@ impl SourceDefinition for Frames {
 
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
-        _args: Self::Args,
+        _opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Source>, StageError> {
