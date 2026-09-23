@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use av_toolbox_core::StageKind;
 
 use super::{Metrics, Placement, Placements, RenderOptions, RenderView, chain_of, labels_for, place_slots};
-use crate::graph::{CompiledGraph, NodeId};
+use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
 use crate::layout::{Layout, Slot};
 
 const CHARACTER_WIDTH: usize = 8;
@@ -24,6 +24,7 @@ const STYLE: &str = "\
 .node.mask { fill: #fef3c7; stroke: #92400e; }
 .node.transform { fill: #ede9fe; stroke: #5b21b6; }
 .node.sink { fill: #fee2e2; stroke: #991b1b; }
+.node.transfer { stroke-dasharray: 4 3; }
 .label { font: 13px monospace; fill: #111827; text-anchor: middle; }
 .edge { fill: none; stroke: #4b5563; stroke-width: 1.5; }
 .edge-label { font: 11px monospace; fill: #4b5563; text-anchor: middle; }";
@@ -64,7 +65,7 @@ pub fn render_svg(graph: &CompiledGraph, options: &RenderOptions) -> String {
         let rank = layout.rank_of_stage(node.id());
         let placement = placements.get(rank, Slot::Stage(node.id()));
 
-        out.push_str(&draw_box(placement, node.kind(), &labels[node.id().index()]));
+        out.push_str(&draw_box(placement, node, &labels[node.id().index()]));
     }
 
     for node in graph.nodes() {
@@ -100,8 +101,14 @@ fn sizes_of(graph: &CompiledGraph, labels: &[Vec<String>]) -> HashMap<NodeId, (u
         .collect()
 }
 
-fn draw_box(placement: Placement, kind: StageKind, labels: &[String]) -> String {
-    let class = class_of(kind);
+/// Draws one node's box, adding the `transfer` class when it is a crossing rather than a stage
+/// the pipeline declared.
+fn draw_box(placement: Placement, node: &Node, labels: &[String]) -> String {
+    let class = class_of(node.kind());
+    let class = match node.role() {
+        NodeRole::Crossing(_) => format!("{class} transfer"),
+        NodeRole::Stage => class.to_string(),
+    };
     let x = placement.x + MARGIN;
     let y = placement.top + MARGIN;
 
@@ -241,6 +248,17 @@ mod tests {
 
         assert_eq!(bounds.len(), 2);
         assert!(bounds[0] > 0 && bounds[1] > 0);
+    }
+
+    #[test]
+    fn a_crossing_carries_the_transfer_class() {
+        let rendered = render_svg(
+            &crate::render::ascii::tests::placed_round_trip(),
+            &RenderOptions::default(),
+        );
+
+        assert!(rendered.contains("transfer"));
+        assert!(rendered.contains("stroke-dasharray"));
     }
 
     #[test]

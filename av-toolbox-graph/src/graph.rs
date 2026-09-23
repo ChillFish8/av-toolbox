@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use av_toolbox_core::{StageHandle, StageKind};
+use av_toolbox_core::{Crossing, Residency, StageHandle, StageKind, StreamType};
 use serde_json::Value;
 
 use crate::Span;
@@ -117,6 +117,14 @@ impl Edge {
     }
 }
 
+/// What a node is: a stage the pipeline declared, or a crossing the graph inserted between two
+/// stages on different sides.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum NodeRole {
+    Stage,
+    Crossing(Crossing),
+}
+
 /// The pieces a node is built from.
 pub(crate) struct NodeParts {
     pub(crate) id: NodeId,
@@ -143,6 +151,11 @@ pub struct Node {
     consumers: Vec<NodeId>,
     workers: Option<usize>,
     span: Span,
+    role: NodeRole,
+    /// Where this node runs, once transfers have been placed.
+    residency: Option<Residency>,
+    /// What this node emits, which a crossing takes from its producer rather than its kind.
+    stream: Option<StreamType>,
 }
 
 impl Node {
@@ -158,6 +171,9 @@ impl Node {
             consumers: Vec::new(),
             workers: parts.workers,
             span: parts.span,
+            role: NodeRole::Stage,
+            residency: None,
+            stream: parts.kind.output(),
         }
     }
 
@@ -211,6 +227,21 @@ impl Node {
 
     pub(crate) fn inputs_mut(&mut self) -> &mut [Edge] {
         &mut self.inputs
+    }
+
+    /// Whether this node is a declared stage or a crossing the graph inserted.
+    pub fn role(&self) -> NodeRole {
+        self.role
+    }
+
+    /// Where this node runs, or `None` before transfers have been placed.
+    pub fn residency(&self) -> Option<Residency> {
+        self.residency
+    }
+
+    /// The stream type this node emits, or `None` for a sink.
+    pub fn output_stream(&self) -> Option<StreamType> {
+        self.stream
     }
 }
 
@@ -311,6 +342,53 @@ impl CompiledGraph {
         self.refresh();
     }
 
+    /// Appends a crossing reading `producer`'s output, and returns it.
+    ///
+    /// Nothing reads the crossing yet and the order is not recomputed, so a caller inserting
+    /// several points edges at them with [CompiledGraph::redirect] and then calls
+    /// [CompiledGraph::finish_edit] once.
+    pub(crate) fn push_crossing(&mut self, producer: NodeId, crossing: Crossing) -> NodeId {
+        let source = &self.nodes[producer.index()];
+        let id = NodeId::new(self.nodes.len());
+
+        let node = Node {
+            id,
+            name: format!("{}({})", crossing.verb(), source.name()),
+            kind: StageKind::Transform,
+            identifier: crossing.identifier().to_string(),
+            args: Value::Object(Default::default()),
+            args_span: source.span(),
+            inputs: vec![Edge::new(None, None, 0, producer, source.span())],
+            consumers: Vec::new(),
+            workers: None,
+            span: source.span(),
+            role: NodeRole::Crossing(crossing),
+            residency: Some(crossing.to_side()),
+            stream: source.output_stream(),
+        };
+
+        self.nodes.push(node);
+        id
+    }
+
+    /// Points `consumer`'s `edge`th input at `source` instead.
+    pub(crate) fn redirect(&mut self, consumer: NodeId, edge: usize, source: NodeId) {
+        self.nodes[consumer.index()].inputs[edge].set_source(source);
+    }
+
+    /// Records where a node has been placed, once transfers have decided.
+    pub(crate) fn set_residency(&mut self, id: NodeId, residency: Residency) {
+        self.nodes[id.index()].residency = Some(residency);
+    }
+
+    /// Recomputes consumers and order after nodes were added or edges moved.
+    ///
+    /// A stored plan was keyed to the old node list, so it is dropped.
+    pub(crate) fn finish_edit(&mut self) {
+        self.plan = None;
+        self.refresh();
+    }
+
     /// Recomputes consumers and the topological order after the node list changes.
     fn refresh(&mut self) {
         for node in self.nodes.iter_mut() {
@@ -380,10 +458,10 @@ fn topological_order(nodes: &[Node]) -> Vec<NodeId> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use av_toolbox_core::StageKind;
+    use av_toolbox_core::{Crossing, StageKind, StreamType};
     use serde_json::json;
 
     use super::*;
@@ -484,6 +562,108 @@ mod tests {
         let sinks: Vec<NodeId> = graph.sinks().collect();
 
         assert_eq!(sinks, vec![NodeId::new(0)]);
+    }
+
+    /// A source, a blur reading it and a stdout sink reading the blur.
+    pub(crate) fn file_blur_stdout() -> CompiledGraph {
+        let mut source = testing::spec(StageKind::Source, "input", "test/file");
+        source.args = crate::Spanned::unknown(serde_json::json!({ "path": "a.mkv" }));
+
+        let mut blur = testing::spec(StageKind::Filter, "blur", "test/blur");
+        blur.inputs = vec![testing::positional("input")];
+        blur.args = crate::Spanned::unknown(serde_json::json!({ "sigma": 1.0 }));
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("blur")];
+
+        build(&testing::registry(), &[source, blur, sink])
+            .expect("should build")
+            .into_graph()
+    }
+
+    /// The id of the node in `graph` whose name is `name`.
+    pub(crate) fn node_named(graph: &CompiledGraph, name: &str) -> NodeId {
+        graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == name)
+            .map(Node::id)
+            .expect("a node with that name")
+    }
+
+    #[test]
+    fn a_declared_stage_has_the_stage_role_and_no_residency_yet() {
+        let graph = file_blur_stdout();
+        let blur = graph.node(node_named(&graph, "blur"));
+
+        assert_eq!(blur.role(), NodeRole::Stage);
+        assert_eq!(blur.residency(), None);
+        assert_eq!(blur.output_stream(), Some(StreamType::Frames));
+    }
+
+    #[test]
+    fn a_crossing_reads_its_producer_and_is_named_after_it() {
+        let mut graph = file_blur_stdout();
+        let blur = node_named(&graph, "blur");
+
+        let crossing = graph.push_crossing(blur, Crossing::Unload);
+        graph.finish_edit();
+
+        let node = graph.node(crossing);
+        assert_eq!(node.name(), "unload(blur)");
+        assert_eq!(node.identifier(), "builtin/unload");
+        assert_eq!(node.role(), NodeRole::Crossing(Crossing::Unload));
+        assert_eq!(node.inputs()[0].source(), blur);
+        assert!(graph.node(blur).consumers().contains(&crossing));
+    }
+
+    #[test]
+    fn redirecting_an_edge_orders_the_crossing_before_its_new_consumer() {
+        let mut graph = file_blur_stdout();
+        let blur = node_named(&graph, "blur");
+        let out = node_named(&graph, "out");
+
+        let crossing = graph.push_crossing(blur, Crossing::Unload);
+        graph.redirect(out, 0, crossing);
+        graph.finish_edit();
+
+        let position = |id: NodeId| {
+            graph
+                .order()
+                .iter()
+                .position(|&each| each == id)
+                .expect("ordered")
+        };
+        assert!(position(crossing) < position(out));
+        assert_eq!(graph.node(out).inputs()[0].source(), crossing);
+        assert!(!graph.node(blur).consumers().contains(&out));
+    }
+
+    /// A crossing is kind `Transform`, whose own output would say frames, so a mask stream crossing
+    /// sides would silently become a frame stream if the crossing did not carry its producer's.
+    #[test]
+    fn a_crossing_carries_its_producers_stream_type() {
+        let mut source = testing::spec(StageKind::Source, "input", "test/file");
+        source.args = crate::Spanned::unknown(serde_json::json!({ "path": "a.mkv" }));
+
+        let mut merge = testing::spec(StageKind::Mask, "merge", "test/merge");
+        merge.inputs = vec![testing::positional("input"), testing::positional("input")];
+
+        let mut blur = testing::spec(StageKind::Filter, "deband", "test/deband");
+        blur.inputs = vec![testing::positional("input"), testing::named("overlay", "merge")];
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("deband")];
+
+        let mut graph = build(&testing::registry(), &[source, merge, blur, sink])
+            .expect("should build")
+            .into_graph();
+        let merge = node_named(&graph, "merge");
+
+        let crossing = graph.push_crossing(merge, Crossing::Unload);
+        graph.finish_edit();
+
+        assert_eq!(graph.node(crossing).output_stream(), Some(StreamType::Mask));
     }
 
     #[test]

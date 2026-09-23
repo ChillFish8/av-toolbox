@@ -39,6 +39,7 @@ pub enum DiagnosticCode {
     NoCommonFormat,
     StreamTypeMismatch,
     InvalidWorkers,
+    ResidencyRoundTrip,
 }
 
 impl DiagnosticCode {
@@ -59,6 +60,7 @@ impl DiagnosticCode {
             Self::NoCommonFormat => "no-common-format",
             Self::StreamTypeMismatch => "stream-type-mismatch",
             Self::InvalidWorkers => "invalid-workers",
+            Self::ResidencyRoundTrip => "residency-round-trip",
         }
     }
 }

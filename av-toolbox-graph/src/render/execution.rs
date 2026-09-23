@@ -442,6 +442,21 @@ mod tests {
     }
 
     #[test]
+    fn a_crossing_is_listed_inside_its_region() {
+        let mut graph = crate::render::ascii::tests::placed_round_trip();
+        let made = crate::plan::plan(&graph, &testing::registry()).expect("should plan");
+        graph.set_execution_plan(made);
+
+        let report = render_ascii(&graph, &execution_options());
+
+        assert!(
+            report
+                .lines()
+                .any(|line| line.trim_start().starts_with("unload(blur)"))
+        );
+    }
+
+    #[test]
     fn svg_has_no_execution_view_and_says_so() {
         let rendered = render_svg_execution();
 

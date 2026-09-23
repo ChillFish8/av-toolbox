@@ -9,6 +9,10 @@ use av_toolbox_core::{
     Inputs,
     Mask,
     MaskDefinition,
+    MetaInputs,
+    MetaItem,
+    MetaTransform,
+    MetaTransformDefinition,
     Parallelism,
     PipelineRegistry,
     Sink,
@@ -36,6 +40,8 @@ use av_toolbox_gpu::{
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    HostFrame,
+    HostSide,
     Mask as GpuMask,
     MaskFormat,
     Offered,
@@ -431,6 +437,258 @@ fixture_stage!(
     ]),
     frames_template
 );
+
+struct HostFileStage;
+
+impl StageInstance for HostFileStage {}
+
+impl Source<HostSide> for HostFileStage {
+    fn next(&mut self, _context: &mut FrameContext) -> Result<Option<HostFrame>, StageError> {
+        Ok(None)
+    }
+}
+
+struct HostFile;
+
+impl StageDefinition for HostFile {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "host-file"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        &InputSignature::EMPTY
+    }
+}
+
+impl SourceDefinition for HostFile {
+    type Side = HostSide;
+
+    fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+        let format = fixture_format();
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Source<HostSide>>, StageError> {
+        Ok(Box::new(HostFileStage))
+    }
+}
+
+struct HostBlurStage;
+
+impl StageInstance for HostBlurStage {}
+
+impl Filter<HostSide> for HostBlurStage {
+    fn process(
+        &mut self,
+        _context: &mut FrameContext,
+        mut inputs: Inputs<HostSide>,
+    ) -> Result<HostFrame, StageError> {
+        inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+    }
+}
+
+struct HostBlur;
+
+impl StageDefinition for HostBlur {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "host-blur"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for HostBlur {
+    type Side = HostSide;
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: frames_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter<HostSide>>, StageError> {
+        Ok(Box::new(HostBlurStage))
+    }
+}
+
+struct HostStdoutStage;
+
+impl StageInstance for HostStdoutStage {}
+
+impl Sink<HostSide> for HostStdoutStage {
+    fn consume(&mut self, _context: &mut FrameContext, _inputs: Inputs<HostSide>) -> Result<(), StageError> {
+        Ok(())
+    }
+}
+
+struct HostStdout;
+
+impl StageDefinition for HostStdout {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "host-stdout"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
+        SIGNATURE
+    }
+}
+
+impl SinkDefinition for HostStdout {
+    type Side = HostSide;
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Sink<HostSide>>, StageError> {
+        Ok(Box::new(HostStdoutStage))
+    }
+}
+
+struct RestampStage;
+
+impl StageInstance for RestampStage {}
+
+impl MetaTransform for RestampStage {
+    fn process(
+        &mut self,
+        _context: &mut FrameContext,
+        mut inputs: MetaInputs,
+    ) -> Result<Vec<MetaItem>, StageError> {
+        Ok(inputs.take(0).into_iter().collect())
+    }
+}
+
+struct Restamp;
+
+impl StageDefinition for Restamp {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "restamp"
+    }
+
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Frame
+    }
+
+    /// Two inputs, the second marked as the authority, so the rule that an `Either` stage follows
+    /// its authority rather than its first input can be told apart from the fallback.
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[
+            InputParam::required("input").accepting(StreamType::Frames),
+            InputParam::optional("guide")
+                .accepting(StreamType::Frames)
+                .chunk_authority(),
+        ]);
+        SIGNATURE
+    }
+}
+
+impl MetaTransformDefinition for Restamp {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: frames_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaTransform>, StageError> {
+        Ok(Box::new(RestampStage))
+    }
+}
 
 struct Failing;
 
@@ -1447,6 +1705,12 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry
         .register_source::<WideningSource>()
         .expect("should register");
+    registry.register_source::<HostFile>().expect("should register");
+    registry.register_filter::<HostBlur>().expect("should register");
+    registry.register_sink::<HostStdout>().expect("should register");
+    registry
+        .register_meta_transform::<Restamp>()
+        .expect("should register");
 
     registry
 }
@@ -1489,7 +1753,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 23);
+        assert_eq!(identifiers.len(), 27);
         assert!(identifiers.contains(&"test/blur"));
         assert!(identifiers.contains(&"test/failing"));
         assert!(identifiers.contains(&"test/recording"));
@@ -1497,6 +1761,10 @@ mod tests {
         assert!(identifiers.contains(&"test/temporal-merge"));
         assert!(identifiers.contains(&"test/gather"));
         assert!(identifiers.contains(&"test/widening-source"));
+        assert!(identifiers.contains(&"test/host-file"));
+        assert!(identifiers.contains(&"test/host-blur"));
+        assert!(identifiers.contains(&"test/host-stdout"));
+        assert!(identifiers.contains(&"test/restamp"));
     }
 
     #[test]

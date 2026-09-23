@@ -2,7 +2,7 @@ use av_toolbox_core::StageKind;
 
 use super::execution::{NOT_PLANNED_MESSAGE, reason_text, shared_narrowed_reason};
 use super::{RenderOptions, RenderView, labels_for};
-use crate::graph::{CompiledGraph, Node, NodeId};
+use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
 use crate::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId};
 
 /// Renders the graph as a mermaid flowchart.
@@ -49,7 +49,11 @@ pub fn render_mermaid(graph: &CompiledGraph, options: &RenderOptions) -> String 
 
     for node in graph.nodes() {
         let identity = identity(node.id().index());
-        lines.push(format!("    class {identity} {};", class_of(node.kind())));
+        let class = match node.role() {
+            NodeRole::Crossing(_) => "transfer",
+            NodeRole::Stage => class_of(node.kind()),
+        };
+        lines.push(format!("    class {identity} {class};"));
     }
 
     lines.join("\n")
@@ -61,6 +65,7 @@ const CLASS_DEFINITIONS: &[&str] = &[
     "classDef mask fill:#fef3c7,stroke:#92400e;",
     "classDef transform fill:#ede9fe,stroke:#5b21b6;",
     "classDef sink fill:#fee2e2,stroke:#991b1b;",
+    "classDef transfer fill:#f3f4f6,stroke:#4b5563,stroke-dasharray:5 5;",
 ];
 
 fn render_execution_view(graph: &CompiledGraph, options: &RenderOptions) -> String {
@@ -747,6 +752,21 @@ mod tests {
         let rendered = render(&RenderOptions::default());
 
         assert!(rendered.contains("input<br/>test/file"));
+    }
+
+    #[test]
+    fn a_crossing_is_classed_as_a_transfer() {
+        let rendered = render_mermaid(
+            &crate::render::ascii::tests::placed_round_trip(),
+            &RenderOptions::default(),
+        );
+
+        assert!(rendered.contains("classDef transfer"));
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_start().starts_with("class ") && line.ends_with("transfer;"))
+        );
     }
 
     #[test]

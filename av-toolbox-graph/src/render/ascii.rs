@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::execution::render_execution;
 use super::grid::Grid;
 use super::{Metrics, Placement, Placements, RenderOptions, RenderView, chain_of, labels_for, place_slots};
-use crate::graph::{CompiledGraph, NodeId};
+use crate::graph::{CompiledGraph, NodeId, NodeRole};
 use crate::layout::{Layout, Slot};
 
 /// Two spaces of padding inside a box, and a border either side of that.
@@ -86,23 +86,26 @@ fn draw_boxes(
     for node in graph.nodes() {
         let rank = layout.rank_of_stage(node.id());
         let placement = placements.get(rank, Slot::Stage(node.id()));
+        let dashed = node.role() != NodeRole::Stage;
 
-        draw_box(grid, placement, &labels[node.id().index()]);
+        draw_box(grid, placement, &labels[node.id().index()], dashed);
     }
 }
 
-fn draw_box(grid: &mut Grid, placement: Placement, labels: &[String]) {
+/// Draws one node's box, dashed when it is a crossing rather than a stage the pipeline declared.
+fn draw_box(grid: &mut Grid, placement: Placement, labels: &[String], dashed: bool) {
+    let (horizontal, vertical) = if dashed { ('┄', '┆') } else { ('─', '│') };
     let right = placement.x + placement.width - 1;
     let bottom = placement.bottom();
 
     for x in (placement.x + 1)..right {
-        grid.draw(x, placement.top, '─');
-        grid.draw(x, bottom, '─');
+        grid.draw(x, placement.top, horizontal);
+        grid.draw(x, bottom, horizontal);
     }
 
     for y in (placement.top + 1)..bottom {
-        grid.draw(placement.x, y, '│');
-        grid.draw(right, y, '│');
+        grid.draw(placement.x, y, vertical);
+        grid.draw(right, y, vertical);
     }
 
     grid.set(placement.x, placement.top, '┌');
@@ -188,7 +191,7 @@ fn draw_segment(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use av_toolbox_core::StageKind;
     use serde_json::json;
 
@@ -211,6 +214,64 @@ mod tests {
         let mut source = testing::spec(StageKind::Source, "input", "test/file");
         source.args = Spanned::unknown(json!({ "path": "a.mkv" }));
         source
+    }
+
+    /// A host source, a device filter and a host sink, placed all the way through, so an upload
+    /// and an unload both appear.
+    pub(crate) fn placed_round_trip() -> CompiledGraph {
+        let registry = testing::registry();
+        let mut source = testing::spec(StageKind::Source, "input", "test/host-file");
+        source.args = Spanned::unknown(json!({}));
+        let mut blur = testing::spec(StageKind::Filter, "blur", "test/blur");
+        blur.inputs = vec![testing::positional("input")];
+        blur.args = Spanned::unknown(json!({ "sigma": 1.0 }));
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/host-stdout");
+        sink.inputs = vec![testing::positional("blur")];
+
+        let mut graph = build(&registry, &[source, blur, sink])
+            .expect("should build")
+            .into_graph();
+        let capabilities = crate::residency::tests::capabilities();
+        let mut formats = crate::solve(&graph, &registry, &capabilities).expect("should solve");
+        crate::place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+
+        graph
+    }
+
+    #[test]
+    fn a_placed_graph_names_each_nodes_side() {
+        let rendered = render_ascii(&placed_round_trip(), &RenderOptions::default());
+
+        assert!(rendered.contains("host"));
+        assert!(rendered.contains("gpu"));
+    }
+
+    #[test]
+    fn a_crossing_is_drawn_dashed() {
+        let rendered = render_ascii(&placed_round_trip(), &RenderOptions::default());
+
+        assert!(rendered.contains("upload(input)"));
+        assert!(rendered.contains('┆'));
+    }
+
+    #[test]
+    fn an_unplaced_graph_draws_no_side_and_no_dashes() {
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("input")];
+
+        let registry = testing::registry();
+        let graph = build(&registry, &[source(), sink])
+            .expect("should build")
+            .into_graph();
+
+        let rendered = render_ascii(&graph, &RenderOptions::default());
+
+        assert!(!rendered.contains('┆'));
+        assert!(
+            !rendered
+                .lines()
+                .any(|line| line.trim_matches(|c| c == '│' || c == ' ') == "gpu")
+        );
     }
 
     #[test]

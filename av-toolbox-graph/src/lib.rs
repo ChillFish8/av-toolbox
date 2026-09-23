@@ -34,6 +34,7 @@ mod layout;
 mod optimise;
 mod plan;
 mod render;
+mod residency;
 mod solve;
 mod spec;
 #[cfg(test)]
@@ -41,7 +42,7 @@ mod testing;
 
 pub use self::build::{Built, build};
 pub use self::diagnostic::{Diagnostic, DiagnosticCode, Diagnostics, Note, Severity};
-pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, Sharing};
+pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, NodeRole, Sharing};
 pub use self::instantiate::StageBox;
 pub use self::layout::{Layout, Slot};
 pub use self::optimise::{
@@ -56,5 +57,6 @@ pub use self::optimise::{
 };
 pub use self::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId, Routing, plan};
 pub use self::render::{RenderOptions, RenderView, render_ascii, render_mermaid, render_svg};
+pub use self::residency::place_transfers;
 pub use self::solve::{SolvedFormats, solve};
 pub use self::spec::{InputRef, Span, Spanned, StageSpec};

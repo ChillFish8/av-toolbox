@@ -55,6 +55,10 @@ pub(crate) fn labels_for(node: &Node, plan: Option<&NodePlan>, options: &RenderO
         lines.push(node.identifier().to_string());
     }
 
+    if let Some(residency) = node.residency() {
+        lines.push(residency.to_string());
+    }
+
     if let Some(plan) = plan {
         let routing = routing_text(plan.routing());
         let label = match plan.width() {

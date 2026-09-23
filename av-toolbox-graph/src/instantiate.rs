@@ -18,7 +18,7 @@ use av_toolbox_core::{
 use av_toolbox_gpu::{Backend, HostSide, ResolvedFormats};
 
 use crate::diagnostic::{args_path, stage_path};
-use crate::graph::{CompiledGraph, Node, NodeId};
+use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics, Region, SolvedFormats};
 
 /// A built stage, in whichever kind and on whichever side it belongs to.
@@ -74,6 +74,12 @@ impl CompiledGraph {
 
         for id in self.order() {
             let node = self.node(*id);
+
+            if let NodeRole::Crossing(crossing) = node.role() {
+                prepared[id.index()] = Some(PreparedStage::Crossing(crossing));
+                continue;
+            }
+
             let arguments = arguments_for(self, node);
 
             match registry.prepare(node.kind(), node.identifier(), node.args(), &arguments) {
@@ -151,6 +157,12 @@ impl CompiledGraph {
 
         for (slot, id) in region.nodes().iter().enumerate() {
             let node = self.node(*id);
+
+            if let NodeRole::Crossing(crossing) = node.role() {
+                prepared[slot] = Some(PreparedStage::Crossing(crossing));
+                continue;
+            }
+
             let arguments = arguments_for(self, node);
 
             match registry.prepare(node.kind(), node.identifier(), node.args(), &arguments) {
@@ -191,8 +203,7 @@ fn arguments_for(graph: &CompiledGraph, node: &Node) -> Vec<InputArgument> {
             let handle = av_toolbox_core::StageHandle::new(edge.source().index() as u64);
             let stream = graph
                 .node(edge.source())
-                .kind()
-                .output()
+                .output_stream()
                 .expect("a sink cannot be an input");
 
             match edge.name() {
@@ -296,7 +307,7 @@ fn describe(error: &BuildStageError) -> String {
 /// rather than the device-gated module below.
 #[cfg(test)]
 mod diagnostics_tests {
-    use av_toolbox_core::StageKind;
+    use av_toolbox_core::{PreparedStage, StageKind};
     use serde_json::json;
 
     use crate::{Diagnostic, DiagnosticCode, Diagnostics, Span, Spanned, StageSpec, build, testing};
@@ -333,6 +344,23 @@ mod diagnostics_tests {
         assert_eq!(reported[0].code(), DiagnosticCode::InvalidArgs);
         assert!(reported[0].path().starts_with("filter.blur.args"));
         assert_eq!(reported[0].span(), Span::new(40, 60));
+    }
+
+    #[test]
+    fn a_crossing_prepares_without_the_registry() {
+        let mut graph = crate::graph::tests::file_blur_stdout();
+        let blur = crate::graph::tests::node_named(&graph, "blur");
+        let crossing = graph.push_crossing(blur, av_toolbox_core::Crossing::Unload);
+        graph.finish_edit();
+
+        let mut diagnostics = Diagnostics::new();
+        let prepared = graph.prepare_stages(&crate::testing::registry(), &mut diagnostics);
+
+        assert!(!diagnostics.has_errors());
+        assert!(matches!(
+            prepared[crossing.index()],
+            Some(PreparedStage::Crossing(av_toolbox_core::Crossing::Unload))
+        ));
     }
 
     #[test]
