@@ -7,6 +7,8 @@ mod plan;
 mod region;
 mod source;
 mod spawn;
+#[cfg(test)]
+pub(crate) mod tests;
 mod worker;
 mod wrap;
 
@@ -64,9 +66,7 @@ pub struct Settings {
     /// between them. `None` derives one from the plan itself.
     pub frame_budget: Option<usize>,
     /// How long a source may wait for room on its share before the run fails rather than hangs.
-    /// `None` leaves [FrameBudget] its own default.
-    ///
-    /// [FrameBudget]: av_toolbox_gpu::FrameBudget
+    /// `None` leaves [FrameBudget](av_toolbox_gpu::FrameBudget) its own default.
     pub stall_deadline: Option<Duration>,
 }
 

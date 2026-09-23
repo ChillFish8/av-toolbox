@@ -31,9 +31,8 @@ impl<S: Side> Source<S> for WatchedSource<S> {
     }
 }
 
-/// Wraps a sink so the engine can count what reached it, for [RunReport::frames].
-///
-/// [RunReport::frames]: super::RunReport::frames
+/// Wraps a sink so the engine can count what reached it, for
+/// [RunReport::frames](crate::engine::RunReport::frames).
 struct CountingSink<S: Side> {
     inner: Box<dyn Sink<S>>,
     frames: Arc<AtomicU64>,

@@ -1,10 +1,6 @@
 use crate::Residency;
 
 /// Moving a stream between host and device.
-///
-/// A pipeline never declares one. The graph inserts one wherever a stream's producer and a
-/// consumer run on different sides, once per producer and direction, so every transfer the run
-/// pays for is a node that can be seen.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Crossing {
     Upload,
@@ -12,7 +8,6 @@ pub enum Crossing {
 }
 
 impl Crossing {
-    /// The side the stream is on before it crosses.
     pub const fn from_side(self) -> Residency {
         match self {
             Self::Upload => Residency::Host,
@@ -20,7 +15,6 @@ impl Crossing {
         }
     }
 
-    /// The side the stream is on after it crosses.
     pub const fn to_side(self) -> Residency {
         match self {
             Self::Upload => Residency::Device,
@@ -28,8 +22,6 @@ impl Crossing {
         }
     }
 
-    /// The identifier this crossing is named by wherever a built-in stage needs one, such as a
-    /// diagnostic or a rendered graph.
     pub const fn identifier(self) -> &'static str {
         match self {
             Self::Upload => "builtin/upload",
@@ -37,7 +29,6 @@ impl Crossing {
         }
     }
 
-    /// The verb this crossing is described by in a message meant for a person.
     pub const fn verb(self) -> &'static str {
         match self {
             Self::Upload => "upload",

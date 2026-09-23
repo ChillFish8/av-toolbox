@@ -8,8 +8,7 @@
 //! - [Transform], which changes the stream rather than the frames.
 //! - [Sink], which consumes the finished stream.
 //!
-//! Every kind trait is typed over the side it runs on, defaulting to the device, so a plain
-//! `impl Filter for X` reads exactly as it did before sides existed.
+//! Every kind trait is typed over the side it runs on, defaulting to the device.
 //!
 //! A stage type is written as a [StageDefinition] plus the matching kind trait, one of
 //! [SourceDefinition], [FilterDefinition], [MaskDefinition], [TransformDefinition] or

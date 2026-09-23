@@ -46,7 +46,7 @@ impl SolvedFormats {
         self.per_node.is_empty()
     }
 
-    /// Adds formats for a node appended to the graph after solving, which is only ever a crossing.
+    /// Adds formats for a node appended to the graph after solving.
     pub(crate) fn push(&mut self, formats: ResolvedFormats) {
         self.per_node.push(formats);
     }

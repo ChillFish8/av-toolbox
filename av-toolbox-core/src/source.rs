@@ -4,7 +4,7 @@ use crate::{StageError, StageInstance};
 
 /// A [Source] produces video frames to be processed by the pipeline.
 ///
-/// The side defaults to the device, so `impl Source for X` still means a device source.
+/// The side defaults to the device.
 pub trait Source<S: Side = DeviceSide>: StageInstance {
     /// The next frame, or `None` once the stream has ended.
     ///

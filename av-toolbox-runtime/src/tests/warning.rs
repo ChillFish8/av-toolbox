@@ -2,7 +2,7 @@ use std::sync::mpsc;
 
 use av_toolbox_graph::{NodeId, StageSpec};
 
-use super::engine;
+use crate::engine::tests as engine;
 use crate::{RunWarning, Settings};
 
 /// `join_spec`, widened to `workers` instances.

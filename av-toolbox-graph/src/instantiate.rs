@@ -236,7 +236,11 @@ fn build_stage(
             Sided::Device(stage) => StageBox::Transform(stage),
             Sided::Host(stage) => StageBox::HostTransform(stage),
         },
-        PreparedStage::MetaTransform(prepared) => StageBox::MetaTransform(prepared.build(backend, formats)?),
+        PreparedStage::MetaTransform(prepared) => {
+            let stage = prepared.build(backend, formats)?;
+
+            StageBox::MetaTransform(stage)
+        },
         PreparedStage::Sink(prepared) => match prepared.build(backend, formats)? {
             Sided::Device(stage) => StageBox::Sink(stage),
             Sided::Host(stage) => StageBox::HostSink(stage),

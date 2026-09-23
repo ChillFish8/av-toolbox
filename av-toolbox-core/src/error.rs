@@ -43,6 +43,8 @@ pub enum RegistryError {
     SourceTakesInputs { identifier: String },
     #[error("the schema generated for stage {identifier} is not valid: {reason}")]
     InvalidSchema { identifier: String, reason: String },
+    #[error("the identifier {identifier} is reserved for the transfers the graph inserts")]
+    ReservedIdentifier { identifier: String },
 }
 
 /// A failure raised while binding a pipeline's inputs to a stage's signature.

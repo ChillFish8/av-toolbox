@@ -8,7 +8,7 @@ use crate::{Inputs, StageError, StageInstance};
 /// A transform may emit more frames than it was given, or fewer, or group them into chunks so they
 /// can be processed in parallel. What flows out of it is still frames.
 ///
-/// The side defaults to the device, so `impl Transform for X` still means a device transform.
+/// The side defaults to the device.
 pub trait Transform<S: Side = DeviceSide>: StageInstance {
     /// What this emits for one input, which may be nothing.
     fn process(&mut self, context: &mut FrameContext, inputs: Inputs<S>) -> Result<Vec<S::Item>, StageError>;

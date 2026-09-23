@@ -10,10 +10,6 @@ mod sealed {
 }
 
 /// Where a stage's items live, as a type, so a stage is only ever handed items from its own side.
-///
-/// A stage typed over one side has nothing it could convert the other side's items with, which is
-/// what keeps every upload and unload in the graph, where it can be seen, rather than inside a
-/// stage.
 pub trait Side: sealed::Sealed + fmt::Debug + Send + Sync + 'static {
     type Frame: fmt::Debug + Send + 'static;
     type Mask: fmt::Debug + Send + 'static;
@@ -114,7 +110,7 @@ impl Side for HostSide {
     }
 }
 
-/// An item from either side, which is what the engine carries between stages.
+/// An item from either side.
 #[derive(Debug, Clone)]
 pub enum AnyItem {
     Device(StreamItem),

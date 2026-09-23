@@ -219,7 +219,7 @@ pub trait StageDefinition: 'static {
 
 /// A stage that produces frames from something outside the pipeline.
 pub trait SourceDefinition: StageDefinition {
-    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    /// The side this stage runs on.
     type Side: StageSide;
 
     /// What it could produce.
@@ -238,7 +238,7 @@ pub trait SourceDefinition: StageDefinition {
 
 /// A stage that changes the frames passing through it.
 pub trait FilterDefinition: StageDefinition {
-    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    /// The side this stage runs on.
     type Side: StageSide;
 
     /// Which sample formats this stage will take on one input, most preferred first.
@@ -283,7 +283,7 @@ pub trait FilterDefinition: StageDefinition {
 
 /// A stage that selects pixels from two or more inputs.
 pub trait MaskDefinition: StageDefinition {
-    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    /// The side this stage runs on.
     type Side: StageSide;
 
     /// Which sample formats this stage will take on one input, most preferred first.
@@ -328,7 +328,7 @@ pub trait MaskDefinition: StageDefinition {
 
 /// A stage that changes the pipeline stream rather than the frames within it.
 pub trait TransformDefinition: StageDefinition {
-    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    /// The side this stage runs on.
     type Side: StageSide;
 
     /// Which sample formats this stage will take on one input, most preferred first.
@@ -375,7 +375,7 @@ pub trait TransformDefinition: StageDefinition {
 pub trait MetaTransformDefinition: StageDefinition {
     /// Which sample formats this stage will take on one input, most preferred first.
     ///
-    /// The same contract as [TransformDefinition::accepts_input].
+    /// The same contract as [TransformDefinition::accepts_input](crate::TransformDefinition::accepts_input).
     fn accepts_input(
         capabilities: &Capabilities,
         args: &Self::Args,
@@ -391,8 +391,7 @@ pub trait MetaTransformDefinition: StageDefinition {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError>;
 
-    /// Builds the instance, which is never asked which side to build for, since a metadata-only
-    /// transform never allocates a plane and so has no side of its own to build on.
+    /// Builds the instance. A metadata-only transform has no side to build for.
     fn build<R: Runtime>(
         context: &BuildContext<R>,
         args: Self::Args,
@@ -403,7 +402,7 @@ pub trait MetaTransformDefinition: StageDefinition {
 
 /// A stage that consumes the finished stream.
 pub trait SinkDefinition: StageDefinition {
-    /// The side this stage runs on, which every item it is handed and emits belongs to.
+    /// The side this stage runs on.
     type Side: StageSide;
 
     /// Which sample formats this stage will take on one input, most preferred first.

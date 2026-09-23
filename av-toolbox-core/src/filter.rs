@@ -4,7 +4,7 @@ use crate::{Inputs, StageError, StageInstance};
 
 /// A [Filter] applies a set of changes to a video stream.
 ///
-/// The side defaults to the device, so `impl Filter for X` still means a device filter.
+/// The side defaults to the device.
 pub trait Filter<S: Side = DeviceSide>: StageInstance {
     fn process(&mut self, context: &mut FrameContext, inputs: Inputs<S>) -> Result<S::Frame, StageError>;
 

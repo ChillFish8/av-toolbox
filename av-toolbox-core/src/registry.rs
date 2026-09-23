@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::factory::Definition;
 use crate::{
     BuildStageError,
+    Crossing,
     FilterDefinition,
     InputArgument,
     MaskDefinition,
@@ -30,7 +31,8 @@ type Factories<P> = HashMap<String, Box<dyn StageFactory<P>>>;
 
 /// The registry tracks all stages available for use within the pipeline.
 ///
-/// Stages are keyed by their fully qualified `package/stage` identifier.
+/// Stages are keyed by their fully qualified `package/stage` identifier. `builtin/upload` and
+/// `builtin/unload` name the crossings, so no stage may take either.
 #[derive(Default)]
 pub struct PipelineRegistry {
     sources: Factories<dyn PreparedSource>,
@@ -72,10 +74,11 @@ impl PipelineRegistry {
 
     pub fn register_transform<D: TransformDefinition>(&mut self) -> Result<(), RegistryError> {
         let definition = Definition::<D>::new(StageKind::Transform)?;
-        if self.meta_transforms.contains_key(definition.full_identifier()) {
+        let identifier = definition.full_identifier();
+        if self.meta_transforms.contains_key(identifier) {
             return Err(RegistryError::DuplicateStage {
                 kind: StageKind::Transform,
-                identifier: definition.full_identifier().to_string(),
+                identifier: identifier.to_string(),
             });
         }
 
@@ -85,10 +88,11 @@ impl PipelineRegistry {
     /// Registers a metadata-only transform, which shares the transform identifiers.
     pub fn register_meta_transform<D: MetaTransformDefinition>(&mut self) -> Result<(), RegistryError> {
         let definition = Definition::<D>::new(StageKind::Transform)?;
-        if self.transforms.contains_key(definition.full_identifier()) {
+        let identifier = definition.full_identifier();
+        if self.transforms.contains_key(identifier) {
             return Err(RegistryError::DuplicateStage {
                 kind: StageKind::Transform,
-                identifier: definition.full_identifier().to_string(),
+                identifier: identifier.to_string(),
             });
         }
 
@@ -153,6 +157,13 @@ where
     Definition<D>: StageFactory<P> + 'static,
 {
     let identifier = definition.full_identifier().to_string();
+    let reserved = [Crossing::Upload, Crossing::Unload]
+        .iter()
+        .any(|crossing| crossing.identifier() == identifier);
+    if reserved {
+        return Err(RegistryError::ReservedIdentifier { identifier });
+    }
+
     if factories.contains_key(&identifier) {
         return Err(RegistryError::DuplicateStage {
             kind: definition.kind(),
@@ -219,6 +230,7 @@ mod tests {
         StageHandle,
         StageInstance,
         StreamType,
+        Transform,
     };
 
     #[derive(Debug, Deserialize, JsonSchema)]
@@ -543,18 +555,143 @@ mod tests {
         assert!(matches!(prepared, PreparedStage::MetaTransform(_)));
     }
 
+    struct RestampTransformDefinition;
+
+    impl StageDefinition for RestampTransformDefinition {
+        type Args = NoArgs;
+
+        fn package() -> &'static str {
+            "builtin"
+        }
+
+        fn identifier() -> &'static str {
+            "restamp"
+        }
+
+        fn inputs() -> &'static InputSignature {
+            const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
+            SIGNATURE
+        }
+    }
+
+    impl TransformDefinition for RestampTransformDefinition {
+        type Side = DeviceSide;
+
+        fn accepts_input(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            _index: usize,
+            _offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            unreachable!("not exercised by these tests")
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            _chosen: &[Option<StreamFormat>],
+        ) -> Result<OutputFormats, StageError> {
+            unreachable!("not exercised by these tests")
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Transform>, StageError> {
+            unreachable!("not exercised by these tests")
+        }
+    }
+
     #[test]
     fn a_meta_transform_cannot_share_an_identifier_with_a_transform() {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_transform::<RestampTransformDefinition>()
+            .expect("should register");
+
+        let error = registry
+            .register_meta_transform::<RestampDefinition>()
+            .expect_err("should not register beside the transform");
+
+        assert!(matches!(error, RegistryError::DuplicateStage { .. }));
+    }
+
+    #[test]
+    fn a_transform_cannot_share_an_identifier_with_a_meta_transform() {
         let mut registry = PipelineRegistry::new();
         registry
             .register_meta_transform::<RestampDefinition>()
             .expect("should register");
 
         let error = registry
-            .register_meta_transform::<RestampDefinition>()
-            .expect_err("should not register twice");
+            .register_transform::<RestampTransformDefinition>()
+            .expect_err("should not register beside the meta transform");
 
         assert!(matches!(error, RegistryError::DuplicateStage { .. }));
+    }
+
+    /// A source named after a crossing, `builtin/unload` when `UNLOAD` is set and `builtin/upload`
+    /// otherwise.
+    struct CrossingImpostor<const UNLOAD: bool>;
+
+    impl<const UNLOAD: bool> StageDefinition for CrossingImpostor<UNLOAD> {
+        type Args = FileArgs;
+
+        fn package() -> &'static str {
+            "builtin"
+        }
+
+        fn identifier() -> &'static str {
+            if UNLOAD { "unload" } else { "upload" }
+        }
+
+        fn inputs() -> &'static InputSignature {
+            &InputSignature::EMPTY
+        }
+    }
+
+    impl<const UNLOAD: bool> SourceDefinition for CrossingImpostor<UNLOAD> {
+        type Side = DeviceSide;
+
+        fn produces(_capabilities: &Capabilities, _args: &Self::Args) -> Result<OutputFormats, StageError> {
+            unreachable!("not exercised by these tests")
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Source>, StageError> {
+            Ok(Box::new(FileSource))
+        }
+    }
+
+    #[test]
+    fn a_stage_named_after_a_crossing_is_rejected() {
+        let mut registry = PipelineRegistry::new();
+
+        let upload = registry
+            .register_source::<CrossingImpostor<false>>()
+            .expect_err("builtin/upload is reserved");
+        let unload = registry
+            .register_source::<CrossingImpostor<true>>()
+            .expect_err("builtin/unload is reserved");
+
+        assert!(matches!(upload, RegistryError::ReservedIdentifier { .. }));
+        assert!(matches!(unload, RegistryError::ReservedIdentifier { .. }));
+    }
+
+    #[test]
+    fn another_builtin_stage_still_registers() {
+        let mut registry = PipelineRegistry::new();
+
+        registry
+            .register_source::<FileSourceDefinition>()
+            .expect("only the crossing identifiers are reserved");
     }
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]

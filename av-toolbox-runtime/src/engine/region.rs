@@ -12,9 +12,8 @@ use crate::{Aggregate, Disperse, WorkItem, WorkResult};
 
 /// A region with no disperse and no aggregate, headed by a source.
 ///
-/// Nothing feeds it, so it drives itself until [WatchedSource] reports its head is exhausted.
-///
-/// [WatchedSource]: super::wrap::WatchedSource
+/// Nothing feeds it, so it drives itself until [WatchedSource](crate::engine::wrap::WatchedSource)
+/// reports its head is exhausted.
 pub(super) struct SourceRegion {
     pub(super) runner: RegionRunner,
     pub(super) context: FrameContext,
@@ -53,12 +52,11 @@ pub(crate) struct WorkerSlot {
 /// slot it fills, so exactly one thread ever touches `disperse`. That alone only removes the
 /// data race between producers: `Disperse` still accepts at most one pending item per slot
 /// before raising `SlotRanAhead`, so the driving thread cannot simply offer each message the
-/// instant it arrives. It keeps its own queue per slot in [drive_disperse], one item deep or
-/// more, and only offers once every slot has something waiting. A slot fed by a faster producer
-/// then queues up rather than panicking, and how far it may run ahead of a slower one is
-/// bounded by the frame budget rather than capped at one.
-///
-/// [drive_disperse]: super::disperse::drive_disperse
+/// instant it arrives. It keeps its own queue per slot in
+/// [drive_disperse](crate::engine::disperse::drive_disperse), one item deep or more, and only offers
+/// once every slot has something waiting. A slot fed by a faster producer then queues up rather
+/// than panicking, and how far it may run ahead of a slower one is bounded by the frame budget
+/// rather than capped at one.
 pub(super) struct ExchangedRegion {
     pub(super) disperse: DisperseSide,
     pub(super) freedom: Arc<WorkerFreedom>,
@@ -91,9 +89,8 @@ pub(super) struct DisperseSide {
     /// How many workers the region runs, for telling a genuine width-one join from one that
     /// simply has nothing else to spread work across.
     pub(super) width: usize,
-    /// The region's head node, named if a [RunWarning] about missing chunks fires.
-    ///
-    /// [RunWarning]: crate::RunWarning
+    /// The region's head node, named if a [RunWarning](crate::RunWarning) about missing chunks
+    /// fires.
     pub(super) head: NodeId,
 }
 

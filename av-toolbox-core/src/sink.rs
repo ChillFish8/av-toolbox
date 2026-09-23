@@ -4,7 +4,7 @@ use crate::{Inputs, StageError, StageInstance};
 
 /// A [Sink] consumes a filtered stream of frames from the pipeline.
 ///
-/// The side defaults to the device, so `impl Sink for X` still means a device sink.
+/// The side defaults to the device.
 pub trait Sink<S: Side = DeviceSide>: StageInstance {
     fn consume(&mut self, context: &mut FrameContext, inputs: Inputs<S>) -> Result<(), StageError>;
 

@@ -92,7 +92,7 @@ fn draw_boxes(
     }
 }
 
-/// Draws one node's box, dashed when it is a crossing rather than a stage the pipeline declared.
+/// Draws one node's box, dashed when it is a crossing.
 fn draw_box(grid: &mut Grid, placement: Placement, labels: &[String], dashed: bool) {
     let (horizontal, vertical) = if dashed { ('┄', '┆') } else { ('─', '│') };
     let right = placement.x + placement.width - 1;
@@ -216,8 +216,6 @@ pub(crate) mod tests {
         source
     }
 
-    /// A host source, a device filter and a host sink, placed all the way through, so an upload
-    /// and an unload both appear.
     pub(crate) fn placed_round_trip() -> CompiledGraph {
         let registry = testing::registry();
         let mut source = testing::spec(StageKind::Source, "input", "test/host-file");
@@ -270,7 +268,7 @@ pub(crate) mod tests {
         assert!(
             !rendered
                 .lines()
-                .any(|line| line.trim_matches(|c| c == '│' || c == ' ') == "gpu")
+                .any(|line| line.trim_matches(|character| character == '│' || character == ' ') == "gpu")
         );
     }
 

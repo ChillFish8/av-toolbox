@@ -16,15 +16,10 @@ use crate::frame::{
 };
 use crate::memory::budget::{FrameBudget, Room};
 
-/// Host memory for items on the host, recycled by size and charged to a budget the way device
-/// memory is.
-///
-/// A host stage runs frame after frame at the same size, so handing a dropped buffer to the next
-/// caller wanting that size means a steady run allocates nothing.
+/// Host memory for items on the host, recycled by size and charged to a budget.
 #[derive(Debug, Clone, Default)]
 pub struct HostPool {
     free: Arc<HostFree>,
-    /// Charged by every frame shaped allocation, the same as the device pool's.
     budget: Option<Arc<FrameBudget>>,
 }
 
@@ -34,6 +29,16 @@ struct HostFree {
 }
 
 impl HostFree {
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.lists
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .map(Vec::len)
+            .sum()
+    }
+
     fn take(&self, bytes: usize) -> Option<Vec<u8>> {
         self.lists
             .lock()
@@ -63,11 +68,16 @@ impl HostPool {
         self
     }
 
+    /// How many buffers sit on the free list waiting to be recycled.
+    #[cfg(test)]
+    pub(crate) fn free_buffers(&self) -> usize {
+        self.free.len()
+    }
+
     /// Waits until `bytes` fits under this pool's budget, or returns immediately when it has none.
     ///
-    /// Answers whether what follows should be charged, for the same reason the device pool does: a
-    /// released or stalled budget is a run that is over or failing, and charging it would leave a
-    /// total nothing ever credits back.
+    /// A released or stalled budget belongs to a run that is over or failing, so charging it would
+    /// leave a total nothing ever credits back.
     pub(crate) fn wait_for_room(&self, bytes: usize) -> bool {
         let Some(budget) = &self.budget else {
             return false;
@@ -79,8 +89,7 @@ impl HostPool {
     /// A buffer of exactly `bytes`, recycled when one that size is free.
     ///
     /// A recycled buffer still holds whatever was last written into it, so a caller that does not
-    /// write every byte has to fill the rest itself. This never waits: a caller allocating a whole
-    /// frame waits once for the frame's bytes before reserving any plane, as the device pool does.
+    /// write every byte has to fill the rest itself. This never waits.
     pub(crate) fn reserve(&self, bytes: usize, counted: bool) -> HostBuffer {
         let buffer = self.free.take(bytes).unwrap_or_else(|| vec![0; bytes]);
 
@@ -91,31 +100,23 @@ impl HostPool {
 
         HostBuffer {
             bytes: buffer,
-            pool: Arc::downgrade(&self.free),
+            pool: Some(Arc::downgrade(&self.free)),
             budget: budget.as_ref().map(Arc::downgrade),
         }
     }
 
-    /// Takes `bytes` over as a buffer that returns to this pool when it drops, without charging it.
-    ///
-    /// A readback lands in memory of its own, and moving it in here is what lets it be reused
-    /// rather than freed once the host item it became is done with.
-    pub(crate) fn adopt(&self, bytes: Vec<u8>) -> HostBuffer {
+    /// Takes `bytes` over as a buffer that is freed when it drops, without charging it.
+    pub(crate) fn adopt(bytes: Vec<u8>) -> HostBuffer {
         HostBuffer {
             bytes,
-            pool: Arc::downgrade(&self.free),
+            pool: None,
             budget: None,
         }
     }
 
-    /// A host item made from `planes`, moved rather than copied, each joining this pool once the
-    /// item is done with it.
-    pub(crate) fn adopt_item(
-        &self,
-        format: StreamFormat,
-        planes: Vec<Vec<u8>>,
-        meta: FrameMeta,
-    ) -> HostStreamItem {
+    /// A host item made from `planes`, moved rather than copied, each freed once the item is done
+    /// with it.
+    pub(crate) fn adopt_item(format: StreamFormat, planes: Vec<Vec<u8>>, meta: FrameMeta) -> HostStreamItem {
         match format {
             StreamFormat::Frames(format) => {
                 let planes = format
@@ -127,7 +128,9 @@ impl HostPool {
                             .channel_dimensions(*channel)
                             .expect("the layout carries every channel it lists");
 
-                        HostPlane::new(self.adopt(bytes), width, height)
+                        let buffer = Self::adopt(bytes);
+
+                        HostPlane::new(buffer, width, height)
                     })
                     .collect();
 
@@ -138,7 +141,8 @@ impl HostPool {
                     .into_iter()
                     .next()
                     .expect("a mask lands as exactly one plane");
-                let plane = HostPlane::new(self.adopt(bytes), format.width, format.height);
+                let buffer = Self::adopt(bytes);
+                let plane = HostPlane::new(buffer, format.width, format.height);
 
                 HostStreamItem::Mask(HostMask::new(format, plane, meta))
             },
@@ -147,8 +151,8 @@ impl HostPool {
 
     /// A writable frame of `format`, one buffer per channel.
     ///
-    /// Waits once for the whole frame's bytes before reserving any plane, for the same reason the
-    /// device pool does. Its planes are recycled memory holding an earlier frame's samples.
+    /// Waits once for the whole frame's bytes before reserving any plane. Its planes are recycled
+    /// memory holding an earlier frame's samples.
     pub fn alloc_frame(&self, format: &FrameFormat, meta: FrameMeta) -> HostFrameMut {
         let counted = self.wait_for_room(format.total_bytes());
 
@@ -161,7 +165,9 @@ impl HostPool {
                     .channel_dimensions(*channel)
                     .expect("the layout carries every channel it lists");
 
-                HostPlane::new(self.reserve(bytes, counted), width, height)
+                let buffer = self.reserve(bytes, counted);
+
+                HostPlane::new(buffer, width, height)
             })
             .collect();
 
@@ -173,7 +179,8 @@ impl HostPool {
     /// A writable mask of `format`, which is one buffer.
     pub fn alloc_mask(&self, format: &MaskFormat, meta: FrameMeta) -> HostMaskMut {
         let counted = self.wait_for_room(format.bytes());
-        let plane = HostPlane::new(self.reserve(format.bytes(), counted), format.width, format.height);
+        let buffer = self.reserve(format.bytes(), counted);
+        let plane = HostPlane::new(buffer, format.width, format.height);
 
         HostMask::new(*format, plane, meta)
             .try_into_mut()
@@ -184,7 +191,8 @@ impl HostPool {
 /// The host memory behind one plane.
 pub struct HostBuffer {
     bytes: Vec<u8>,
-    pool: Weak<HostFree>,
+    /// The free list these bytes return to on drop, if they came from one.
+    pool: Option<Weak<HostFree>>,
     /// The budget these bytes were charged to, credited back on drop.
     budget: Option<Weak<FrameBudget>>,
 }
@@ -224,7 +232,7 @@ impl Drop for HostBuffer {
             budget.credit(bytes.len());
         }
 
-        if let Some(free) = self.pool.upgrade() {
+        if let Some(free) = self.pool.as_ref().and_then(Weak::upgrade) {
             free.put(bytes);
         }
     }
@@ -278,20 +286,14 @@ mod tests {
         assert_eq!(budget.outstanding(), 0);
     }
 
-    /// A readback lands in memory the pool never handed out, and it should still come back to be
-    /// reused rather than being freed, without being charged to anything on the way.
     #[test]
-    fn an_adopted_buffer_joins_the_pool_without_being_charged() {
-        let budget = FrameBudget::new(1 << 20);
-        let pool = HostPool::new().with_budget(budget.clone());
+    fn an_adopted_buffer_keeps_the_memory_it_was_given() {
+        let bytes = vec![7; 16];
+        let address = bytes.as_ptr();
 
-        let adopted = pool.adopt(vec![7; 16]);
-        let address = adopted.bytes().as_ptr();
-        assert_eq!(budget.outstanding(), 0);
-        drop(adopted);
+        let adopted = HostPool::adopt(bytes);
 
-        let next = pool.reserve(16, false);
-        assert_eq!(next.bytes().as_ptr(), address);
+        assert_eq!(adopted.bytes().as_ptr(), address);
     }
 
     #[test]

@@ -117,7 +117,7 @@ impl Edge {
     }
 }
 
-/// What a node is: a stage the pipeline declared, or a crossing the graph inserted between two
+/// A node is either a stage the pipeline declared, or a crossing the graph inserted between two
 /// stages on different sides.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum NodeRole {
@@ -154,7 +154,7 @@ pub struct Node {
     role: NodeRole,
     /// Where this node runs, once transfers have been placed.
     residency: Option<Residency>,
-    /// What this node emits, which a crossing takes from its producer rather than its kind.
+    /// The stream type this node emits.
     stream: Option<StreamType>,
 }
 
@@ -229,17 +229,14 @@ impl Node {
         &mut self.inputs
     }
 
-    /// Whether this node is a declared stage or a crossing the graph inserted.
     pub fn role(&self) -> NodeRole {
         self.role
     }
 
-    /// Where this node runs, or `None` before transfers have been placed.
     pub fn residency(&self) -> Option<Residency> {
         self.residency
     }
 
-    /// The stream type this node emits, or `None` for a sink.
     pub fn output_stream(&self) -> Option<StreamType> {
         self.stream
     }
@@ -344,9 +341,7 @@ impl CompiledGraph {
 
     /// Appends a crossing reading `producer`'s output, and returns it.
     ///
-    /// Nothing reads the crossing yet and the order is not recomputed, so a caller inserting
-    /// several points edges at them with [CompiledGraph::redirect] and then calls
-    /// [CompiledGraph::finish_edit] once.
+    /// The order is not recomputed until [CompiledGraph::finish_edit](crate::CompiledGraph::finish_edit) is called.
     pub(crate) fn push_crossing(&mut self, producer: NodeId, crossing: Crossing) -> NodeId {
         let source = &self.nodes[producer.index()];
         let id = NodeId::new(self.nodes.len());
@@ -371,12 +366,10 @@ impl CompiledGraph {
         id
     }
 
-    /// Points `consumer`'s `edge`th input at `source` instead.
     pub(crate) fn redirect(&mut self, consumer: NodeId, edge: usize, source: NodeId) {
         self.nodes[consumer.index()].inputs[edge].set_source(source);
     }
 
-    /// Records where a node has been placed, once transfers have decided.
     pub(crate) fn set_residency(&mut self, id: NodeId, residency: Residency) {
         self.nodes[id.index()].residency = Some(residency);
     }
@@ -564,7 +557,6 @@ pub(crate) mod tests {
         assert_eq!(sinks, vec![NodeId::new(0)]);
     }
 
-    /// A source, a blur reading it and a stdout sink reading the blur.
     pub(crate) fn file_blur_stdout() -> CompiledGraph {
         let mut source = testing::spec(StageKind::Source, "input", "test/file");
         source.args = crate::Spanned::unknown(serde_json::json!({ "path": "a.mkv" }));
@@ -581,7 +573,6 @@ pub(crate) mod tests {
             .into_graph()
     }
 
-    /// The id of the node in `graph` whose name is `name`.
     pub(crate) fn node_named(graph: &CompiledGraph, name: &str) -> NodeId {
         graph
             .nodes()
@@ -639,8 +630,6 @@ pub(crate) mod tests {
         assert!(!graph.node(blur).consumers().contains(&out));
     }
 
-    /// A crossing is kind `Transform`, whose own output would say frames, so a mask stream crossing
-    /// sides would silently become a frame stream if the crossing did not carry its producer's.
     #[test]
     fn a_crossing_carries_its_producers_stream_type() {
         let mut source = testing::spec(StageKind::Source, "input", "test/file");

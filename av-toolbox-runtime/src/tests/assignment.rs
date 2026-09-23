@@ -2,7 +2,9 @@ use std::sync::mpsc;
 
 use av_toolbox_graph::Routing;
 
-use super::engine::{
+use crate::Settings;
+use crate::engine::FRAME_UNITS_IN_FLIGHT;
+use crate::engine::tests::{
     GATE_HOLDS,
     GATE_PROCESSED,
     GATE_REACHED,
@@ -27,8 +29,6 @@ use super::engine::{
     source_spec,
     tracked_spec,
 };
-use crate::Settings;
-use crate::engine::FRAME_UNITS_IN_FLIGHT;
 
 /// The channels a test uses to hold some of a region's workers inside their own stage.
 ///

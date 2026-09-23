@@ -1,7 +1,7 @@
-use av_toolbox_core::{Parallelism, PipelineRegistry, PreparedStage};
+use av_toolbox_core::{Parallelism, PipelineRegistry, PreparedStage, Residency};
 
 use crate::diagnostic::stage_path;
-use crate::graph::{CompiledGraph, NodeId};
+use crate::graph::{CompiledGraph, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 
 /// A region's position in the plan.
@@ -170,7 +170,8 @@ impl ExecutionPlan {
 ///
 /// Once every width is settled, nodes are grouped into regions in the same topological order. A
 /// node joins its producer's region when every input comes from that one region and the width
-/// matches, and heads a region of its own otherwise.
+/// matches, and heads a region of its own otherwise. A crossing only joins when it is its
+/// producer's only consumer.
 pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<ExecutionPlan, Diagnostics> {
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
@@ -184,6 +185,7 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
     };
 
     for id in graph.order() {
+        planner.check_side_settled(*id);
         planner.decide(*id);
     }
 
@@ -293,13 +295,13 @@ impl Planner<'_> {
     /// Places one node into a region, following a producer's region or opening a new one.
     fn place_in_region(&mut self, id: NodeId) {
         let width = self.width_of(id);
-        let sources: Vec<NodeId> = self
-            .graph
-            .node(id)
-            .inputs()
-            .iter()
-            .map(|edge| edge.source())
-            .collect();
+        let node = self.graph.node(id);
+        let sources: Vec<NodeId> = node.inputs().iter().map(|edge| edge.source()).collect();
+
+        if matches!(node.role(), NodeRole::Crossing(_)) && !self.is_only_consumer(id, &sources) {
+            self.open_region(id, width);
+            return;
+        }
 
         match self.shared_producer_region(&sources, width) {
             Some(region) => self.join_region(id, region),
@@ -307,6 +309,12 @@ impl Planner<'_> {
                 self.open_region(id, width);
             },
         }
+    }
+
+    fn is_only_consumer(&self, id: NodeId, sources: &[NodeId]) -> bool {
+        sources
+            .iter()
+            .all(|source| self.graph.node(*source).consumers() == [id])
     }
 
     /// The one region every input already shares, when its width matches this node's own.
@@ -434,6 +442,30 @@ impl Planner<'_> {
         }
     }
 
+    /// Reports a stage that runs off the device but has no side settled yet.
+    fn check_side_settled(&mut self, id: NodeId) {
+        let Some(stage) = self.prepared[id.index()].as_ref() else {
+            return;
+        };
+
+        let node = self.graph.node(id);
+        if stage.residency() == Residency::Device || node.residency().is_some() {
+            return;
+        }
+
+        let message = format!(
+            "{} does not run on the gpu, so transfers must be placed before planning",
+            node.name()
+        );
+
+        self.diagnostics.push(Diagnostic::error(
+            DiagnosticCode::TransfersNotPlaced,
+            stage_path(node.kind(), node.name()),
+            node.span(),
+            message,
+        ));
+    }
+
     fn report_zero_workers(&mut self, id: NodeId) {
         let node = self.graph.node(id);
         let message = format!(
@@ -512,7 +544,18 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{Diagnostics, Spanned, StageSpec, build, testing};
+    use crate::graph::Node;
+    use crate::{
+        Diagnostics,
+        Severity,
+        Spanned,
+        StageSpec,
+        build,
+        place_transfers,
+        residency,
+        solve,
+        testing,
+    };
 
     fn source(name: &str) -> StageSpec {
         testing::spec(StageKind::Source, name, "test/wide")
@@ -548,6 +591,26 @@ mod tests {
         let made = plan(&graph, &registry).expect("should plan");
 
         (graph, made)
+    }
+
+    fn placed_graph_and_plan_of(specs: &[StageSpec]) -> (CompiledGraph, ExecutionPlan) {
+        let registry = testing::registry();
+        let capabilities = residency::tests::capabilities();
+        let mut graph = build(&registry, specs).expect("should build").into_graph();
+        let mut formats = solve(&graph, &registry, &capabilities).expect("should solve");
+        place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+        let made = plan(&graph, &registry).expect("should plan");
+
+        (graph, made)
+    }
+
+    fn node_named(graph: &CompiledGraph, name: &str) -> NodeId {
+        graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == name)
+            .map(Node::id)
+            .expect("a node with that name")
     }
 
     fn plan_error(specs: &[StageSpec]) -> Diagnostics {
@@ -884,5 +947,60 @@ mod tests {
         graph.set_execution_plan(made);
 
         assert!(graph.execution_plan().is_some());
+    }
+
+    #[test]
+    fn a_crossing_beside_another_consumer_heads_a_region_of_its_own() {
+        let mut wide = temporal("wide", "input", 0);
+        wide.workers = Some(4);
+        let mut host = testing::spec(StageKind::Sink, "host", "test/host-stdout");
+        host.inputs = vec![testing::positional("wide")];
+
+        let (graph, plan) = placed_graph_and_plan_of(&[source("input"), wide, sink("gpu", "wide"), host]);
+
+        let wide_id = node_named(&graph, "wide");
+        let unload_id = node_named(&graph, "unload(wide)");
+        let wide_region = plan.node(wide_id).region();
+        let unload = plan.node(unload_id);
+        let unload_region = unload.region();
+
+        assert_ne!(unload_region, wide_region);
+        assert_eq!(plan.region(unload_region).head(), unload_id);
+        assert_eq!(unload.width(), 4);
+        assert_eq!(plan.region(wide_region).exits(), &[wide_id]);
+    }
+
+    #[test]
+    fn a_crossing_that_is_its_producers_only_consumer_joins_its_region() {
+        let mut wide = temporal("wide", "input", 0);
+        wide.workers = Some(4);
+        let mut host = testing::spec(StageKind::Sink, "host", "test/host-stdout");
+        host.inputs = vec![testing::positional("wide")];
+
+        let (graph, plan) = placed_graph_and_plan_of(&[source("input"), wide, host]);
+
+        let wide_id = node_named(&graph, "wide");
+        let unload_id = node_named(&graph, "unload(wide)");
+        assert_eq!(plan.node(unload_id).region(), plan.node(wide_id).region());
+    }
+
+    #[test]
+    fn planning_a_host_stage_before_transfers_are_placed_is_an_error() {
+        let mut host = testing::spec(StageKind::Sink, "host", "test/host-stdout");
+        host.inputs = vec![testing::positional("input")];
+
+        let diagnostics = plan_error(&[source("input"), host]);
+
+        let reported = diagnostics.iter().next().expect("a diagnostic");
+        assert_eq!(reported.code(), DiagnosticCode::TransfersNotPlaced);
+        assert_eq!(reported.severity(), Severity::Error);
+        assert!(reported.message().contains("host"));
+    }
+
+    #[test]
+    fn a_graph_of_device_stages_plans_before_transfers_are_placed() {
+        let plan = plan_of(&[source("input"), temporal("blur", "input", 0), sink("out", "blur")]);
+
+        assert_eq!(plan.regions().len(), 1);
     }
 }

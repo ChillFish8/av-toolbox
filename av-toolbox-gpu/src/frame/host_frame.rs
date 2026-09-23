@@ -7,8 +7,7 @@ use crate::memory::HostBuffer;
 
 /// One channel's samples on the host.
 ///
-/// Cloning shares the buffer rather than copying it, which is what makes handing a host frame to
-/// several consumers cheap.
+/// Cloning shares the buffer rather than copying it.
 #[derive(Debug, Clone)]
 pub struct HostPlane {
     buffer: Arc<HostBuffer>,
@@ -281,7 +280,7 @@ impl HostStreamItem {
         self.meta_mut().index = index;
     }
 
-    /// The bytes carrying `channel`, where a mask's one plane answers to [Channel::Y].
+    /// The bytes carrying `channel`, where a mask's one plane answers to [Channel::Y](crate::Channel::Y).
     pub(crate) fn plane_bytes(&self, channel: Channel) -> Option<&[u8]> {
         match self {
             Self::Frame(frame) => frame.plane(channel).map(HostPlane::bytes),
@@ -348,8 +347,6 @@ mod tests {
         assert_eq!(frame.meta().index, 3);
     }
 
-    /// The engine clones an item once for every consumer, so a clone that copied its planes would
-    /// copy a whole frame per extra sink.
     #[test]
     fn cloning_a_host_frame_shares_its_planes() {
         let frame = HostPool::new().alloc_frame(&format(), FrameMeta::at(0)).freeze();

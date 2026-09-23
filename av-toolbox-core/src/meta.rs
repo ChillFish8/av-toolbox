@@ -6,44 +6,34 @@ use crate::{StageError, StageInstance};
 
 /// An item a metadata-only transform holds, with its place in the stream reachable and its samples
 /// not.
-///
-/// Nothing outside this crate can make one, so a metadata-only transform can only ever emit items
-/// it was handed, on the side they were handed to it on.
 pub struct MetaItem {
     item: AnyItem,
 }
 
 impl MetaItem {
-    /// Where this item sits in its stream.
     pub const fn meta(&self) -> &FrameMeta {
         self.item.meta()
     }
 
-    /// Where this item sits in its stream, to restamp, reorder or otherwise rewrite.
     pub fn meta_mut(&mut self) -> &mut FrameMeta {
         self.item.meta_mut()
     }
 
-    /// Whether this item is a frame rather than a mask.
     pub const fn is_frame(&self) -> bool {
         self.item.is_frame()
     }
 
-    /// Whether this item is a mask rather than a frame.
     pub const fn is_mask(&self) -> bool {
         self.item.is_mask()
     }
 
-    /// The sample format of the item underneath, which a metadata-only transform may read to
-    /// decide how to route or group items without ever touching their planes.
     pub fn format(&self) -> StreamFormat {
         self.item.format()
     }
 }
 
 impl fmt::Debug for MetaItem {
-    /// Shows only the metadata, because a metadata-only transform has no business with the
-    /// samples underneath.
+    /// Shows only the metadata, not the samples.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("MetaItem")
@@ -60,17 +50,14 @@ pub struct MetaInputs {
 }
 
 impl MetaInputs {
-    /// Takes the item out of `index`, leaving that slot empty for the rest of this call.
     pub fn take(&mut self, index: usize) -> Option<MetaItem> {
         self.slots.get_mut(index)?.take()
     }
 
-    /// How many slots this call was given, whether or not each still holds an item.
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
-    /// Whether this call was given no slots at all.
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
@@ -78,9 +65,7 @@ impl MetaInputs {
 
 /// A transform that works only on where items sit in the stream, never on their samples.
 ///
-/// It can reorder, drop, hold and restamp items, which is what re-chunking needs. Having no way to
-/// reach a plane is what lets it run on whichever side its input is already on, so placing one
-/// never costs a transfer.
+/// Having no way to reach a plane is what lets it run on whichever side its input already sits on.
 pub trait MetaTransform: StageInstance {
     /// What this emits for one call, which may be nothing, once, or several items if it holds
     /// some back or replays earlier ones.
@@ -96,7 +81,6 @@ pub trait MetaTransform: StageInstance {
     }
 }
 
-/// Runs `transform` over `slots`, which is how the engine calls a metadata-only transform.
 pub fn run_meta_transform(
     transform: &mut dyn MetaTransform,
     context: &mut FrameContext,
@@ -112,7 +96,6 @@ pub fn run_meta_transform(
     Ok(emitted.into_iter().map(|meta| meta.item).collect())
 }
 
-/// Flushes `transform`, which is how the engine ends a metadata-only transform's stream.
 pub fn end_meta_transform(
     transform: &mut dyn MetaTransform,
     context: &mut FrameContext,
@@ -146,7 +129,6 @@ mod tests {
         }
     }
 
-    /// Puts every item in chunk 3.
     struct Restamp;
 
     impl StageInstance for Restamp {}
@@ -164,7 +146,6 @@ mod tests {
         }
     }
 
-    /// Emits each item one call late, and whatever it still holds at the end.
     struct Delay {
         held: Option<MetaItem>,
     }
@@ -190,12 +171,10 @@ mod tests {
     #[test]
     fn a_restamped_item_stays_on_the_side_it_arrived_on() {
         let mut context = testing_context();
-        let device = AnyItem::from(StreamItem::Frame(
-            context.alloc_frame(&format(), FrameMeta::at(0)),
-        ));
-        let host = AnyItem::from(HostStreamItem::Frame(
-            context.alloc_host_frame(&format(), FrameMeta::at(1)).freeze(),
-        ));
+        let device_frame = context.alloc_frame(&format(), FrameMeta::at(0));
+        let device = AnyItem::from(StreamItem::Frame(device_frame));
+        let host_frame = context.alloc_host_frame(&format(), FrameMeta::at(1)).freeze();
+        let host = AnyItem::from(HostStreamItem::Frame(host_frame));
 
         let out_device = run_meta_transform(&mut Restamp, &mut context, vec![Some(device)]).expect("runs");
         let out_host = run_meta_transform(&mut Restamp, &mut context, vec![Some(host)]).expect("runs");
@@ -210,12 +189,10 @@ mod tests {
     fn a_meta_transform_can_hold_an_item_across_calls() {
         let mut context = testing_context();
         let mut delay = Delay { held: None };
-        let first = AnyItem::from(StreamItem::Frame(
-            context.alloc_frame(&format(), FrameMeta::at(0)),
-        ));
-        let second = AnyItem::from(StreamItem::Frame(
-            context.alloc_frame(&format(), FrameMeta::at(1)),
-        ));
+        let first_frame = context.alloc_frame(&format(), FrameMeta::at(0));
+        let first = AnyItem::from(StreamItem::Frame(first_frame));
+        let second_frame = context.alloc_frame(&format(), FrameMeta::at(1));
+        let second = AnyItem::from(StreamItem::Frame(second_frame));
 
         let after_first = run_meta_transform(&mut delay, &mut context, vec![Some(first)]).expect("runs");
         let after_second = run_meta_transform(&mut delay, &mut context, vec![Some(second)]).expect("runs");

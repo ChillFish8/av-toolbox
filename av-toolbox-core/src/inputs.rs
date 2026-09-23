@@ -287,9 +287,8 @@ impl BoundInputs {
 /// What a stage was handed this step, one slot per parameter followed by one per variadic input,
 /// the same order [ResolvedFormats](av_toolbox_gpu::ResolvedFormats) uses.
 ///
-/// Every item is from the stage's own side, so a stage never holds anything it would have to move
-/// between host and device itself. A slot is empty when an optional input was never bound, and
-/// once taken it stays empty.
+/// Every item is from the stage's own side. A slot is empty when an optional input was never
+/// bound, and once taken it stays empty.
 #[derive(Debug)]
 pub struct Inputs<S: Side = DeviceSide> {
     slots: Vec<Option<S::Item>>,
@@ -316,8 +315,9 @@ impl<S: Side> Inputs<S> {
     /// rather than consuming it.
     pub fn take_frame(&mut self, index: usize) -> Option<S::Frame> {
         let slot = self.slots.get_mut(index)?;
+        let taken = slot.take()?;
 
-        match S::into_frame(slot.take()?) {
+        match S::into_frame(taken) {
             Ok(frame) => Some(frame),
             Err(other) => {
                 *slot = Some(other);
@@ -332,8 +332,9 @@ impl<S: Side> Inputs<S> {
     /// rather than consuming it.
     pub fn take_mask(&mut self, index: usize) -> Option<S::Mask> {
         let slot = self.slots.get_mut(index)?;
+        let taken = slot.take()?;
 
-        match S::into_mask(slot.take()?) {
+        match S::into_mask(taken) {
             Ok(mask) => Some(mask),
             Err(other) => {
                 *slot = Some(other);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use av_toolbox_core::{Crossing, PipelineRegistry, PreparedStage, Residency};
 use av_toolbox_gpu::ResolvedFormats;
@@ -9,19 +9,15 @@ use crate::{Diagnostic, DiagnosticCode, Diagnostics, SolvedFormats};
 
 /// Settles which side every node runs on and inserts a crossing wherever a stream has to move.
 ///
-/// Runs after the format solve and before planning. A crossing belongs to a producer's output, so
-/// a producer read by several consumers on the other side gets one crossing they all read, and
-/// same-side consumers keep reading it directly. Placing transfers a second time inserts nothing,
-/// because every edge outside a crossing already joins two nodes on the same side, and a
-/// crossing's own input is exempt: it crosses sides by design.
-///
-/// The `Ok` side carries warnings only. A stage that fails to prepare was already reported by the
-/// solve, so it is reported again here as an error rather than guessed at.
+/// Placing transfers a second time inserts nothing, because every edge outside a crossing already
+/// joins two nodes on the same side.
 pub fn place_transfers(
     graph: &mut CompiledGraph,
     registry: &PipelineRegistry,
     formats: &mut SolvedFormats,
 ) -> Result<Diagnostics, Diagnostics> {
+    debug_assert_eq!(formats.len(), graph.len(), "every node has solved formats");
+
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
     if diagnostics.has_errors() {
@@ -62,7 +58,8 @@ fn settle_sides(graph: &CompiledGraph, prepared: &[Option<PreparedStage>]) -> Ve
     sides
 }
 
-/// The side an `Either` node follows: its authority input's, or its first input's without one.
+/// The side an `Either` node follows, its authority input's side when there is one, or its first
+/// input's otherwise.
 fn follow_inputs(node: &Node, authority: Option<usize>, sides: &[Residency]) -> Residency {
     let by_authority = authority.and_then(|slot| node.inputs().iter().find(|edge| edge.slot() == slot));
     let edge = by_authority.or_else(|| node.inputs().first());
@@ -114,50 +111,37 @@ fn insert_crossings(graph: &mut CompiledGraph, sides: &[Residency], formats: &mu
 }
 
 /// Warns about every stream that leaves the device only to be uploaded again.
-///
-/// Each upload is walked back through the host stages feeding it. Reaching an unload means the
-/// stream was on the device, came off it for those stages, and is going back, which is two
-/// transfers the pipeline could avoid by moving those stages or choosing device versions of them.
-/// A stream that started on the host never reaches an unload, so a host source is never warned
-/// about.
 pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnostics) {
+    let off_the_device = streams_off_the_device(graph);
+
     for node in graph.nodes() {
         if node.role() != NodeRole::Crossing(Crossing::Upload) {
             continue;
         }
 
         let mut host_stages = Vec::new();
-        let mut came_off_the_device = false;
         let mut pending = vec![node.inputs()[0].source()];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
 
         while let Some(id) = pending.pop() {
-            if !seen.insert(id) {
+            if !seen.insert(id) || !off_the_device[id.index()] {
                 continue;
             }
 
             let producer = graph.node(id);
-            match producer.role() {
-                NodeRole::Crossing(Crossing::Unload) => came_off_the_device = true,
-                NodeRole::Crossing(Crossing::Upload) => {},
-                NodeRole::Stage => {
-                    host_stages.push(id);
-                    pending.extend(producer.inputs().iter().map(|edge| edge.source()));
-                },
+            if producer.role() == NodeRole::Stage {
+                host_stages.push(id);
+                pending.extend(producer.inputs().iter().map(|edge| edge.source()));
             }
         }
 
-        if !came_off_the_device {
-            continue;
-        }
-
         host_stages.sort_by_key(|id| graph.order().iter().position(|each| each == id));
+        let Some(last_id) = host_stages.last() else {
+            continue;
+        };
+
+        let last = graph.node(*last_id);
         let names: Vec<&str> = host_stages.iter().map(|id| graph.node(*id).name()).collect();
-        let last = graph.node(
-            *host_stages
-                .last()
-                .expect("an upload after an unload has a host stage between"),
-        );
 
         diagnostics.push(Diagnostic::warning(
             DiagnosticCode::ResidencyRoundTrip,
@@ -169,6 +153,25 @@ pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnost
             ),
         ));
     }
+}
+
+/// Whether each node's output came off the device through an unload, with no upload since.
+fn streams_off_the_device(graph: &CompiledGraph) -> Vec<bool> {
+    let mut off_the_device = vec![false; graph.len()];
+
+    for &id in graph.order() {
+        let node = graph.node(id);
+        off_the_device[id.index()] = match node.role() {
+            NodeRole::Crossing(Crossing::Unload) => true,
+            NodeRole::Crossing(Crossing::Upload) => false,
+            NodeRole::Stage => node
+                .inputs()
+                .iter()
+                .any(|edge| off_the_device[edge.source().index()]),
+        };
+    }
+
+    off_the_device
 }
 
 #[cfg(test)]
@@ -202,9 +205,11 @@ pub(crate) mod tests {
     fn stage(kind: StageKind, name: &str, stage_type: &str, inputs: &[&str]) -> StageSpec {
         let mut spec = testing::spec(kind, name, stage_type);
         spec.inputs = inputs.iter().map(|input| testing::positional(input)).collect();
+
         if stage_type == "test/file" {
             spec.args = Spanned::unknown(json!({ "path": "a.mkv" }));
         }
+
         if stage_type == "test/blur" {
             spec.args = Spanned::unknown(json!({ "sigma": 1.0 }));
         }
@@ -439,5 +444,33 @@ pub(crate) mod tests {
         ]);
 
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn a_host_stage_that_never_left_the_device_is_not_named_in_a_round_trip() {
+        let (_, warnings) = placed(&[
+            stage(StageKind::Source, "input", "test/file", &[]),
+            stage(StageKind::Source, "extra", "test/host-file", &[]),
+            stage(StageKind::Filter, "detect", "test/host-blur", &["input"]),
+            stage(
+                StageKind::Transform,
+                "restamp",
+                "test/restamp",
+                &["detect", "extra"],
+            ),
+            stage(StageKind::Filter, "blur", "test/blur", &["restamp"]),
+            stage(StageKind::Sink, "out", "test/stdout", &["blur"]),
+        ]);
+
+        let message = warnings
+            .iter()
+            .find(|diagnostic| diagnostic.code() == DiagnosticCode::ResidencyRoundTrip)
+            .expect("a round trip")
+            .message()
+            .to_string();
+
+        assert!(message.contains("detect"));
+        assert!(message.contains("restamp"));
+        assert!(!message.contains("extra"));
     }
 }

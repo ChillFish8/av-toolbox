@@ -565,11 +565,11 @@ fn host_frame(index: u64) -> HostStreamItem {
         colour: ColourInfo::default(),
     };
 
-    HostStreamItem::Frame(
-        HostPool::new()
-            .alloc_frame(&format, FrameMeta::at(index))
-            .freeze(),
-    )
+    let frame = HostPool::new()
+        .alloc_frame(&format, FrameMeta::at(index))
+        .freeze();
+
+    HostStreamItem::Frame(frame)
 }
 
 #[test]

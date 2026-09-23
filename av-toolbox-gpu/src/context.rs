@@ -66,12 +66,7 @@ impl FrameContext {
         Self::new(BufferPool::new(allocator), capabilities)
     }
 
-    /// This context, charging every frame shaped allocation to `budget`.
-    ///
-    /// Every frame shaped allocation on either side is charged to this budget. A source waits on
-    /// the budget before it emits a frame that would take its outstanding total past the limit.
-    /// Every other worker keeps whatever context it already has, which carries no budget and
-    /// allocates freely.
+    /// This context, charging every frame shaped allocation on either side to `budget`.
     pub fn with_budget(mut self, budget: Arc<FrameBudget>) -> Self {
         self.host = self.host.with_budget(budget.clone());
         self.pool = self.pool.with_budget(budget);
@@ -218,9 +213,6 @@ impl FrameContext {
 
     /// Reads a device item back as a host item in the same place in the stream, waiting for it to
     /// land.
-    ///
-    /// The landed bytes move into host buffers rather than being copied a second time, and those
-    /// buffers join this context's host pool once the host item is dropped.
     pub fn unload_host(&self, item: StreamItem) -> Result<HostStreamItem, RuntimeError> {
         let landed = self
             .unload_one(item)
@@ -232,7 +224,7 @@ impl FrameContext {
         let meta = *landed.meta();
         let (format, planes) = landed.into_planes().into_parts();
 
-        Ok(self.host.adopt_item(format, planes, meta))
+        Ok(HostPool::adopt_item(format, planes, meta))
     }
 
     /// Memory for one step's working set, returned to the pool when it drops.
@@ -717,8 +709,6 @@ mod tests {
         assert_eq!(loaded.meta().index, 5);
     }
 
-    /// The fake read fills buffer `position` with the byte `position`, so this also proves each
-    /// landed buffer went to the channel it was read for.
     #[test]
     fn an_unloaded_frame_lands_as_a_host_frame_in_the_same_place() {
         let allocator = Arc::new(CountingAllocator::new(64));
@@ -757,6 +747,42 @@ mod tests {
                 .iter()
                 .all(|&byte| byte == 2)
         );
+    }
+
+    #[test]
+    fn unloaded_frames_free_their_memory_rather_than_filling_the_host_pool() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities());
+
+        for index in 0..100 {
+            let frame = context.alloc_frame(&frame_format(), FrameMeta::at(index));
+            let landed = context
+                .unload_host(StreamItem::Frame(frame))
+                .expect("the fake lands");
+            drop(landed);
+        }
+
+        assert_eq!(context.host.free_buffers(), 0);
+    }
+
+    #[test]
+    fn a_reserved_host_frame_is_still_recycled_after_unloads() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities());
+        let frame = context.alloc_frame(&frame_format(), FrameMeta::at(0));
+        let landed = context
+            .unload_host(StreamItem::Frame(frame))
+            .expect("the fake lands");
+        drop(landed);
+
+        let reserved = context.alloc_host_frame(&frame_format(), FrameMeta::at(1));
+        let address = reserved.plane(Channel::Y).expect("luma").bytes().as_ptr();
+        drop(reserved);
+
+        let recycled = context.alloc_host_frame(&frame_format(), FrameMeta::at(2));
+        let recycled_address = recycled.plane(Channel::Y).expect("luma").bytes().as_ptr();
+        assert_eq!(recycled_address, address);
+        assert_eq!(context.host.free_buffers(), 0);
     }
 
     #[test]

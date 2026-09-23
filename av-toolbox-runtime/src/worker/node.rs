@@ -26,30 +26,48 @@ pub fn run_node(
 ) -> Result<Vec<AnyItem>, RunError> {
     match stage {
         StageBox::Source(source) => run_source(node, source.as_mut(), context),
-        StageBox::Filter(filter) => run_filter(node, filter.as_mut(), context, narrow(node, slots)),
-        StageBox::Mask(mask) => run_mask(node, mask.as_mut(), context, narrow(node, slots)),
+        StageBox::Filter(filter) => {
+            let inputs = narrow(node, slots);
+            run_filter(node, filter.as_mut(), context, inputs)
+        },
+        StageBox::Mask(mask) => {
+            let inputs = narrow(node, slots);
+            run_mask(node, mask.as_mut(), context, inputs)
+        },
         StageBox::Transform(transform) => {
-            run_transform(node, transform.as_mut(), context, narrow(node, slots))
+            let inputs = narrow(node, slots);
+            run_transform(node, transform.as_mut(), context, inputs)
         },
         StageBox::MetaTransform(transform) => run_meta_transform(transform.as_mut(), context, slots)
             .map_err(|source| RunError::Stage { node, source }),
-        StageBox::Sink(sink) => run_sink(node, sink.as_mut(), context, narrow(node, slots)),
-        StageBox::HostSource(source) => run_source(node, source.as_mut(), context),
-        StageBox::HostFilter(filter) => run_filter(node, filter.as_mut(), context, narrow(node, slots)),
-        StageBox::HostMask(mask) => run_mask(node, mask.as_mut(), context, narrow(node, slots)),
-        StageBox::HostTransform(transform) => {
-            run_transform(node, transform.as_mut(), context, narrow(node, slots))
+        StageBox::Sink(sink) => {
+            let inputs = narrow(node, slots);
+            run_sink(node, sink.as_mut(), context, inputs)
         },
-        StageBox::HostSink(sink) => run_sink(node, sink.as_mut(), context, narrow(node, slots)),
+        StageBox::HostSource(source) => run_source(node, source.as_mut(), context),
+        StageBox::HostFilter(filter) => {
+            let inputs = narrow(node, slots);
+            run_filter(node, filter.as_mut(), context, inputs)
+        },
+        StageBox::HostMask(mask) => {
+            let inputs = narrow(node, slots);
+            run_mask(node, mask.as_mut(), context, inputs)
+        },
+        StageBox::HostTransform(transform) => {
+            let inputs = narrow(node, slots);
+            run_transform(node, transform.as_mut(), context, inputs)
+        },
+        StageBox::HostSink(sink) => {
+            let inputs = narrow(node, slots);
+            run_sink(node, sink.as_mut(), context, inputs)
+        },
         StageBox::Crossing(crossing) => run_crossing(node, *crossing, context, slots),
     }
 }
 
 /// Narrows the engine's items to the ones a stage on side `S` takes.
 ///
-/// An item from the other side reaching a stage means the graph placed no crossing where it had
-/// to, which is a bug in the planner rather than anything the pipeline did, so this panics, and
-/// the catch on every engine thread turns that into a failed run.
+/// Panics if handed an item from the other side, since a crossing should have caught that first.
 fn narrow<S: Side>(node: NodeId, slots: Vec<Option<AnyItem>>) -> Inputs<S> {
     let slots = slots
         .into_iter()
@@ -68,10 +86,7 @@ fn narrow<S: Side>(node: NodeId, slots: Vec<Option<AnyItem>>) -> Inputs<S> {
     Inputs::from_slots(slots)
 }
 
-/// Signals the start of a chunk to whichever of the five kinds `stage` is.
-///
-/// A crossing has no start-of-stream signal of its own, since it holds nothing between items, so
-/// this joins the others' `Ok(())` without calling into anything.
+/// Signals the start of a chunk to whichever kind `stage` is.
 pub fn start_node(node: NodeId, stage: &mut StageBox, context: &mut FrameContext) -> Result<(), RunError> {
     match stage {
         StageBox::Source(source) => source.start_of_stream(context),
@@ -119,8 +134,7 @@ pub fn end_node(
 
 /// Moves one item across to the side the crossing leads to.
 ///
-/// An item already on the far side means the graph placed this crossing wrongly, which is a bug
-/// in the planner, so it panics like any other wrong-side item.
+/// Panics if the item is already on the far side, since the graph placed the crossing wrongly.
 fn run_crossing(
     node: NodeId,
     crossing: Crossing,

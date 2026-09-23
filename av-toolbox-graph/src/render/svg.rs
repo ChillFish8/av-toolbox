@@ -101,8 +101,7 @@ fn sizes_of(graph: &CompiledGraph, labels: &[Vec<String>]) -> HashMap<NodeId, (u
         .collect()
 }
 
-/// Draws one node's box, adding the `transfer` class when it is a crossing rather than a stage
-/// the pipeline declared.
+/// Draws one node's box, adding the `transfer` class when it is a crossing.
 fn draw_box(placement: Placement, node: &Node, labels: &[String]) -> String {
     let class = class_of(node.kind());
     let class = match node.role() {

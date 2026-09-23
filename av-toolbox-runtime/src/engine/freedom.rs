@@ -90,10 +90,8 @@ impl WorkerFreedom {
 ///
 /// A worker stays claimable up to its capacity, so this can still hand out a unit to a worker
 /// that is already holding one. Answers `None` rather than blocking when every worker is full,
-/// which is exactly what [Disperse::place] needs to defer choosing without stalling the exchange
-/// it drives.
-///
-/// [Disperse::place]: crate::Disperse::place
+/// which is exactly what [Disperse::place](crate::Disperse::place) needs to defer choosing
+/// without stalling the exchange it drives.
 pub(super) struct FirstIdle {
     pub(super) freedom: Arc<WorkerFreedom>,
 }

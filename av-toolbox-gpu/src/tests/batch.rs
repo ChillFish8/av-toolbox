@@ -16,6 +16,7 @@ use crate::{
     FrameMeta,
     HostItem,
     HostPlanes,
+    HostStreamItem,
     LoadItem,
     MaskFormat,
     PendingBatch,
@@ -151,6 +152,47 @@ fn a_frame_and_a_mask_in_one_batch_each_come_back_whole() {
     assert_eq!(returned[1].len(), 1, "a mask has one");
     assert_planes_match(&returned[0], &filled(&frame_format, 1), "the frame");
     assert_planes_match(&returned[1], &filled(&mask, 200), "the mask");
+}
+
+#[test]
+fn a_host_frame_keeps_its_bytes_and_place_through_an_upload_and_unload() {
+    let frames = backend().frame_context();
+    let format = frame_format();
+    let meta = FrameMeta {
+        index: 12,
+        chunk: 3,
+        timestamp: Some(Duration::from_millis(480)),
+    };
+
+    let mut host_frame = frames.alloc_host_frame(&format, meta);
+    for (offset, channel) in [Channel::Y, Channel::U, Channel::V].iter().enumerate() {
+        let plane = host_frame
+            .plane_mut(*channel)
+            .expect("a yuv frame carries every channel");
+        fill_pattern(plane, 1 + offset as u8 * 37);
+    }
+
+    let frozen = host_frame.freeze();
+    let uploaded = HostStreamItem::from(frozen);
+
+    let loaded = frames.load_host(&uploaded).expect("the frame should upload");
+    let landed = frames.unload_host(loaded).expect("the frame should come back");
+
+    assert_eq!(landed.meta(), &meta);
+
+    let original = uploaded.into_frame().expect("a frame went up");
+    let returned = landed.into_frame().expect("a frame came back");
+    for channel in [Channel::Y, Channel::U, Channel::V] {
+        let expected = original
+            .plane(channel)
+            .expect("a yuv frame carries every channel");
+        let actual = returned
+            .plane(channel)
+            .expect("a yuv frame carries every channel");
+        let what = format!("the {channel} plane");
+
+        assert_plane_matches(actual.bytes(), expected.bytes(), &what);
+    }
 }
 
 /// Loads a frame, writes indices across its luma plane, and unloads what the device then holds.

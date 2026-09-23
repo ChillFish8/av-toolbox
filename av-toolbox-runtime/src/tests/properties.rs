@@ -1,6 +1,7 @@
 use av_toolbox_graph::Routing;
 
-use super::engine::{
+use crate::Settings;
+use crate::engine::tests::{
     FLUSHED_TIMESTAMP,
     build_engine,
     clear_recorded,
@@ -16,7 +17,6 @@ use super::engine::{
     sink_spec,
     source_spec,
 };
-use crate::Settings;
 
 /// The stream that goes in is the stream that comes out, however many workers ran it.
 #[test]

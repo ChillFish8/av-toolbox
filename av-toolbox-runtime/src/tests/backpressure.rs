@@ -1,8 +1,8 @@
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 
-use super::engine;
 use crate::Settings;
+use crate::engine::tests as engine;
 
 /// One frame's worth of bytes, the unit every budget in this file is sized against.
 fn one_frame_bytes() -> usize {
@@ -56,6 +56,65 @@ fn chunk_skew_costs_parallelism_rather_than_memory() {
         waiting_receiver
             .recv_timeout(engine::WATCHDOG)
             .expect("the source should saturate the budget and park behind the held chunk");
+
+        gate_sender.send(()).ok();
+    })
+    .expect("a run with a held worker should still finish once it is released");
+
+    let peak = engine::SOURCE_BUDGET_PEAK.load(Ordering::SeqCst);
+
+    assert!(
+        peak <= budget,
+        "{property}: outstanding bytes reached {peak}, past the {budget} byte budget",
+    );
+    assert!(
+        peak > frame_bytes,
+        "{property}: outstanding bytes only reached {peak}, so the budget was never exercised",
+    );
+    assert_eq!(report.frames, 32, "{property}: not every chunk reached the sink");
+    engine::assert_every_thread_exited(property);
+}
+
+/// The slow consumer is on the host too, so the source parks in its own allocation rather than
+/// behind an upload.
+#[test]
+fn a_host_source_parks_on_its_budget_while_a_slow_consumer_holds_its_frames() {
+    let property = "a_host_source_parks_on_its_budget_while_a_slow_consumer_holds_its_frames";
+    engine::SOURCE_BUDGET_PEAK.store(0, Ordering::SeqCst);
+    engine::clear_recorded();
+
+    let (parked_sender, parked_receiver) = mpsc::channel();
+    let (gate_sender, gate_receiver) = mpsc::channel();
+    let (waiting_sender, waiting_receiver) = mpsc::channel();
+
+    *engine::SLOW_PARKED[0].lock().expect("not poisoned") = Some(parked_sender);
+    *engine::SLOW_GATES[0].lock().expect("not poisoned") = Some(gate_receiver);
+    *engine::SOURCE_WAITING.lock().expect("not poisoned") = Some(waiting_sender);
+
+    let frame_bytes = one_frame_bytes();
+    let budget = 4 * frame_bytes;
+    let chunks: Vec<u64> = (0..32).collect();
+    let specs = vec![
+        engine::host_source_spec("input", &chunks, 0),
+        engine::host_slow_spec("branch", "input", 4),
+        engine::host_sink_spec("out", "branch"),
+    ];
+    let run_engine = engine::build_engine(
+        &specs,
+        Settings {
+            frame_budget: Some(budget),
+            ..Settings::default()
+        },
+    );
+
+    let report = engine::run_driven_with_watchdog(run_engine, property, |_cancel| {
+        parked_receiver
+            .recv_timeout(engine::WATCHDOG)
+            .expect("the held worker should take its chunk and park inside it");
+
+        waiting_receiver
+            .recv_timeout(engine::WATCHDOG)
+            .expect("the host source should saturate the budget and park behind the held chunk");
 
         gate_sender.send(()).ok();
     })

@@ -151,10 +151,8 @@ pub(super) fn region_is_supported(
 
 /// Whether a region's chunk authority names one of the head's bound input slots.
 ///
-/// [Disperse] routes every bundle by the item in that slot, so a slot outside the head's own
-/// inputs, or one no edge fills, leaves it with nothing to read a chunk id from.
-///
-/// [Disperse]: crate::Disperse
+/// [Disperse](crate::Disperse) routes every bundle by the item in that slot, so a slot outside
+/// the head's own inputs, or one no edge fills, leaves it with nothing to read a chunk id from.
 fn authority_is_bound(graph: &CompiledGraph, region: &Region) -> bool {
     let Some(authority) = region.chunk_authority() else {
         return false;
@@ -200,10 +198,8 @@ pub(crate) const FRAME_UNITS_IN_FLIGHT: usize = HEADROOM_ITEMS_PER_WORKER;
 /// How many nodes the longest source region runs.
 ///
 /// A source region's nodes all share the source's one budgeted context, and
-/// [RegionRunner::run] holds every one of their outputs until it returns, so this is how many
-/// items that one share has to fit at once.
-///
-/// [RegionRunner::run]: crate::RegionRunner::run
+/// [RegionRunner::run](crate::RegionRunner::run) holds every one of their outputs until it
+/// returns, so this is how many items that one share has to fit at once.
 fn longest_source_region(graph: &CompiledGraph, regions: &[Region]) -> usize {
     regions
         .iter()

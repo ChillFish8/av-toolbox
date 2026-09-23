@@ -133,7 +133,7 @@ impl HostPlanes {
         }
     }
 
-    /// The format and the planes themselves, so a readback can move them rather than copy them.
+    /// The format and the planes themselves, moved rather than copied.
     pub(crate) fn into_parts(self) -> (StreamFormat, Vec<Vec<u8>>) {
         (self.format, self.planes)
     }

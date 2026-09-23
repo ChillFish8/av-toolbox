@@ -5,9 +5,6 @@ use av_toolbox_gpu::{DeviceSide, HostSide, Side};
 use crate::{Filter, Mask, Sink, Source, Transform};
 
 /// Where a stage runs.
-///
-/// `Either` is only ever reported by a metadata-only transform, which never touches pixels and so
-/// can follow whichever side its input is already on.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Residency {
     Host,
@@ -63,9 +60,6 @@ pub type BuiltTransform = Sided<dyn Transform<DeviceSide>, dyn Transform<HostSid
 pub type BuiltSink = Sided<dyn Sink<DeviceSide>, dyn Sink<HostSide>>;
 
 /// A side a stage can be built for, which knows how to file what was built for it.
-///
-/// A definition names its side as a type, and the registry has to hold stages of either side
-/// without knowing which, so each side answers for itself where its own stages go.
 pub trait StageSide: Side {
     const RESIDENCY: Residency;
 
