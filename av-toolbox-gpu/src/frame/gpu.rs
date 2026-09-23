@@ -216,6 +216,10 @@ impl Frame {
         &self.meta
     }
 
+    pub fn meta_mut(&mut self) -> &mut FrameMeta {
+        &mut self.meta
+    }
+
     /// Moves this to `index` in the stream.
     ///
     /// The chunk it belongs to and its timestamp are unchanged.
@@ -304,6 +308,10 @@ impl Mask {
         &self.meta
     }
 
+    pub fn meta_mut(&mut self) -> &mut FrameMeta {
+        &mut self.meta
+    }
+
     /// Moves this to `index` in the stream.
     ///
     /// The chunk it belongs to is unchanged.
@@ -373,6 +381,13 @@ impl StreamItem {
         match self {
             Self::Frame(frame) => frame.meta(),
             Self::Mask(mask) => mask.meta(),
+        }
+    }
+
+    pub fn meta_mut(&mut self) -> &mut FrameMeta {
+        match self {
+            Self::Frame(frame) => frame.meta_mut(),
+            Self::Mask(mask) => mask.meta_mut(),
         }
     }
 

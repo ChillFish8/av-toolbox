@@ -29,6 +29,7 @@ mod frame;
 mod memory;
 mod negotiate;
 mod probe;
+mod side;
 mod sniff;
 mod stack;
 mod warmup;
@@ -69,8 +70,14 @@ pub use self::frame::{
     FrameLayout,
     FrameMeta,
     FrameMut,
+    HostFrame,
+    HostFrameMut,
     HostItem,
+    HostMask,
+    HostMaskMut,
+    HostPlane,
     HostPlanes,
+    HostStreamItem,
     Mask,
     MaskFormat,
     Matrix,
@@ -89,6 +96,8 @@ pub use self::memory::{
     DeviceAllocator,
     DeviceRead,
     FrameBudget,
+    HostBuffer,
+    HostPool,
     Ring,
     RingGeometry,
     RingSpec,
@@ -96,6 +105,7 @@ pub use self::memory::{
     RuntimeError,
 };
 pub use self::negotiate::{FormatSet, Offered, OutputFormats, ResolvedFormats, StreamTemplate};
+pub use self::side::{AnyItem, DeviceSide, HostSide, Side};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};
 #[cfg(any(test, feature = "test-support"))]

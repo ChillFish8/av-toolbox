@@ -132,6 +132,11 @@ impl HostPlanes {
             StreamFormat::Mask(_) => (channel == Channel::Y).then_some(0),
         }
     }
+
+    /// The format and the planes themselves, so a readback can move them rather than copy them.
+    pub(crate) fn into_parts(self) -> (StreamFormat, Vec<Vec<u8>>) {
+        (self.format, self.planes)
+    }
 }
 
 #[cfg(test)]

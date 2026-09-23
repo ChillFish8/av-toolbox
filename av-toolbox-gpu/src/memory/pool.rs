@@ -10,6 +10,7 @@ use crate::frame::{
     FrameFormat,
     FrameMeta,
     HostPlanes,
+    HostStreamItem,
     Mask,
     MaskFormat,
     Plane,
@@ -34,6 +35,23 @@ pub struct BufferPool {
     /// Charged by every frame shaped allocation: `alloc_frame`, `alloc_like`, `alloc_mask`,
     /// `load_frame` and `load_mask`. Rings and scratch never touch it.
     budget: Option<Arc<FrameBudget>>,
+}
+
+/// Anything host side a plane can be uploaded from.
+pub(crate) trait HostPlaneSource {
+    fn plane_bytes(&self, channel: Channel) -> Option<&[u8]>;
+}
+
+impl HostPlaneSource for HostPlanes {
+    fn plane_bytes(&self, channel: Channel) -> Option<&[u8]> {
+        self.plane(channel)
+    }
+}
+
+impl HostPlaneSource for HostStreamItem {
+    fn plane_bytes(&self, channel: Channel) -> Option<&[u8]> {
+        HostStreamItem::plane_bytes(self, channel)
+    }
 }
 
 /// One plane of one item on its way to the device.
@@ -218,16 +236,28 @@ impl BufferPool {
     }
 
     /// Uploads `planes` as a frame of `format`, carrying `meta`.
-    ///
-    /// Channels are walked in the format's own order, the one
-    /// [FrameFormat::plane_sizes](crate::FrameFormat::plane_sizes) uses, so a plane lands against
-    /// the channel it belongs to rather than wherever `planes` happened to carry it. Waits once
-    /// for the whole frame's bytes first, for the same reason [BufferPool::alloc_frame] does.
     pub fn load_frame(
         &self,
         item: usize,
         format: &FrameFormat,
         planes: &HostPlanes,
+        meta: FrameMeta,
+    ) -> Result<Frame, RuntimeError> {
+        self.load_frame_from(item, format, planes, meta)
+    }
+
+    /// Uploads `planes` as a frame of `format`, carrying `meta`, from any host side source of
+    /// plane bytes.
+    ///
+    /// Channels are walked in the format's own order, the one
+    /// [FrameFormat::plane_sizes](crate::FrameFormat::plane_sizes) uses, so a plane lands against
+    /// the channel it belongs to rather than wherever `planes` happened to carry it. Waits once
+    /// for the whole frame's bytes first, for the same reason [BufferPool::alloc_frame] does.
+    pub(crate) fn load_frame_from(
+        &self,
+        item: usize,
+        format: &FrameFormat,
+        planes: &dyn HostPlaneSource,
         meta: FrameMeta,
     ) -> Result<Frame, RuntimeError> {
         let counted = self.wait_for_room(format.total_bytes());
@@ -265,6 +295,18 @@ impl BufferPool {
         planes: &HostPlanes,
         meta: FrameMeta,
     ) -> Result<Mask, RuntimeError> {
+        self.load_mask_from(item, format, planes, meta)
+    }
+
+    /// Uploads `planes` as a mask of `format`, carrying `meta`, from any host side source of plane
+    /// bytes.
+    pub(crate) fn load_mask_from(
+        &self,
+        item: usize,
+        format: &MaskFormat,
+        planes: &dyn HostPlaneSource,
+        meta: FrameMeta,
+    ) -> Result<Mask, RuntimeError> {
         let counted = self.wait_for_room(format.bytes());
 
         let upload = PlaneUpload {
@@ -286,7 +328,7 @@ impl BufferPool {
     /// `planes` is caller data, so a missing channel or a byte count that does not match the one
     /// expected is reported here rather than left to upload a short buffer, which would leave
     /// the plane holding whatever memory the device handed back.
-    fn load_plane(&self, upload: PlaneUpload, planes: &HostPlanes) -> Result<Plane, RuntimeError> {
+    fn load_plane(&self, upload: PlaneUpload, planes: &dyn HostPlaneSource) -> Result<Plane, RuntimeError> {
         let PlaneUpload {
             item,
             channel,
@@ -296,13 +338,15 @@ impl BufferPool {
             counted,
         } = upload;
 
-        let bytes = planes.plane(channel).ok_or(RuntimeError::HostPlaneMissing {
-            item,
-            channel,
-            width,
-            height,
-            expected,
-        })?;
+        let bytes = planes
+            .plane_bytes(channel)
+            .ok_or(RuntimeError::HostPlaneMissing {
+                item,
+                channel,
+                width,
+                height,
+                expected,
+            })?;
 
         if bytes.len() != expected {
             return Err(RuntimeError::HostPlaneSize {

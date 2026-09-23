@@ -12,14 +12,17 @@ use crate::frame::{
     Frame,
     FrameFormat,
     FrameMeta,
+    HostFrameMut,
+    HostMaskMut,
     HostPlanes,
+    HostStreamItem,
     Mask,
     MaskFormat,
     PlaneBuffer,
     StreamFormat,
     StreamItem,
 };
-use crate::memory::{BufferPool, FrameBudget, Ring, RingSpec, RuntimeError};
+use crate::memory::{BufferPool, FrameBudget, HostPool, Ring, RingSpec, RuntimeError};
 
 /// One item to put on the device.
 ///
@@ -44,12 +47,17 @@ impl<'a> LoadItem<'a> {
 /// this per call.
 pub struct FrameContext {
     pool: BufferPool,
+    host: HostPool,
     capabilities: Capabilities,
 }
 
 impl FrameContext {
     pub(crate) fn new(pool: BufferPool, capabilities: Capabilities) -> Self {
-        Self { pool, capabilities }
+        Self {
+            pool,
+            host: HostPool::new(),
+            capabilities,
+        }
     }
 
     /// A context over a fake allocator, for tests that need no device.
@@ -60,10 +68,12 @@ impl FrameContext {
 
     /// This context, charging every frame shaped allocation to `budget`.
     ///
-    /// A source waits on the budget before it emits a frame that would take its outstanding
-    /// total past the limit. Every other worker keeps whatever context it already has, which
-    /// carries no budget and allocates freely.
+    /// Every frame shaped allocation on either side is charged to this budget. A source waits on
+    /// the budget before it emits a frame that would take its outstanding total past the limit.
+    /// Every other worker keeps whatever context it already has, which carries no budget and
+    /// allocates freely.
     pub fn with_budget(mut self, budget: Arc<FrameBudget>) -> Self {
+        self.host = self.host.with_budget(budget.clone());
         self.pool = self.pool.with_budget(budget);
         self
     }
@@ -97,6 +107,19 @@ impl FrameContext {
     /// part of it has to fill the rest.
     pub fn alloc_mask(&self, format: &MaskFormat, meta: FrameMeta) -> Mask {
         self.pool.alloc_mask(format, meta)
+    }
+
+    /// A writable host frame of `format`, carrying `meta`, charged to this context's budget.
+    ///
+    /// Its planes are recycled memory holding an earlier frame's samples, so a stage that writes
+    /// only some of them has to fill the rest.
+    pub fn alloc_host_frame(&self, format: &FrameFormat, meta: FrameMeta) -> HostFrameMut {
+        self.host.alloc_frame(format, meta)
+    }
+
+    /// A writable host mask of `format`, carrying `meta`, charged to this context's budget.
+    pub fn alloc_host_mask(&self, format: &MaskFormat, meta: FrameMeta) -> HostMaskMut {
+        self.host.alloc_mask(format, meta)
     }
 
     /// Uploads every plane of every item and returns them as device items.
@@ -175,6 +198,43 @@ impl FrameContext {
         self.unload(vec![item])
     }
 
+    /// Uploads a host item as a device item in the same place in the stream.
+    pub fn load_host(&self, item: &HostStreamItem) -> Result<StreamItem, RuntimeError> {
+        let meta = *item.meta();
+
+        match item.format() {
+            StreamFormat::Frames(format) => {
+                let frame = self.pool.load_frame_from(0, &format, item, meta)?;
+
+                Ok(StreamItem::Frame(frame))
+            },
+            StreamFormat::Mask(format) => {
+                let mask = self.pool.load_mask_from(0, &format, item, meta)?;
+
+                Ok(StreamItem::Mask(mask))
+            },
+        }
+    }
+
+    /// Reads a device item back as a host item in the same place in the stream, waiting for it to
+    /// land.
+    ///
+    /// The landed bytes move into host buffers rather than being copied a second time, and those
+    /// buffers join this context's host pool once the host item is dropped.
+    pub fn unload_host(&self, item: StreamItem) -> Result<HostStreamItem, RuntimeError> {
+        let landed = self
+            .unload_one(item)
+            .wait()?
+            .into_iter()
+            .next()
+            .expect("a batch of one item lands as exactly one item");
+
+        let meta = *landed.meta();
+        let (format, planes) = landed.into_planes().into_parts();
+
+        Ok(self.host.adopt_item(format, planes, meta))
+    }
+
     /// Memory for one step's working set, returned to the pool when it drops.
     ///
     /// It arrives holding whatever was last written there, so read nothing from it that this step
@@ -242,7 +302,9 @@ mod tests {
     use crate::{
         Accelerator,
         ColourInfo,
+        FrameBudget,
         FrameLayout,
+        HostStreamItem,
         MaskFormat,
         SampleFormat,
         Subsampling,
@@ -598,5 +660,116 @@ mod tests {
         let context = FrameContext::for_testing(Arc::new(CountingAllocator::new(64)), capabilities);
 
         assert_eq!(context.cube_dim(), CubeDim::new_2d(8, 1));
+    }
+
+    #[test]
+    fn a_host_frame_from_a_budgeted_context_is_charged() {
+        let budget = FrameBudget::new(1 << 20);
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities()).with_budget(budget.clone());
+
+        let frame = context.alloc_host_frame(&frame_format(), FrameMeta::at(0));
+
+        assert_eq!(budget.outstanding(), frame_format().total_bytes());
+        drop(frame);
+        assert_eq!(budget.outstanding(), 0);
+    }
+
+    #[test]
+    fn a_host_frame_uploads_each_plane_in_channel_order_and_keeps_its_place() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator.clone(), capabilities());
+        let stamped = FrameMeta {
+            index: 12,
+            chunk: 3,
+            timestamp: Some(Duration::from_millis(40)),
+        };
+
+        let mut frame = context.alloc_host_frame(&frame_format(), stamped);
+        for (value, channel) in [Channel::Y, Channel::U, Channel::V].into_iter().enumerate() {
+            frame.plane_mut(channel).expect("carried").fill(value as u8 + 1);
+        }
+
+        let loaded = context
+            .load_host(&HostStreamItem::Frame(frame.freeze()))
+            .expect("the fake uploads");
+
+        assert_eq!(loaded.meta(), &stamped);
+        assert_eq!(loaded.format(), StreamFormat::Frames(frame_format()));
+        let uploads = allocator.uploads();
+        assert_eq!(uploads.len(), 3);
+        assert!(uploads[0].iter().all(|&byte| byte == 1));
+        assert!(uploads[1].iter().all(|&byte| byte == 2));
+        assert!(uploads[2].iter().all(|&byte| byte == 3));
+    }
+
+    #[test]
+    fn a_host_mask_uploads_as_a_device_mask() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities());
+        let mask = context.alloc_host_mask(&mask_format(), FrameMeta::at(5)).freeze();
+
+        let loaded = context
+            .load_host(&HostStreamItem::Mask(mask))
+            .expect("the fake uploads");
+
+        assert!(loaded.is_mask());
+        assert_eq!(loaded.meta().index, 5);
+    }
+
+    /// The fake read fills buffer `position` with the byte `position`, so this also proves each
+    /// landed buffer went to the channel it was read for.
+    #[test]
+    fn an_unloaded_frame_lands_as_a_host_frame_in_the_same_place() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities());
+        let stamped = FrameMeta::at(8).in_chunk(2);
+        let frame = context.alloc_frame(&frame_format(), stamped);
+
+        let landed = context
+            .unload_host(StreamItem::Frame(frame))
+            .expect("the fake lands");
+
+        assert_eq!(landed.meta(), &stamped);
+        assert_eq!(landed.format(), StreamFormat::Frames(frame_format()));
+        let frame = landed.into_frame().expect("a frame");
+        assert!(
+            frame
+                .plane(Channel::Y)
+                .expect("luma")
+                .bytes()
+                .iter()
+                .all(|&byte| byte == 0)
+        );
+        assert!(
+            frame
+                .plane(Channel::U)
+                .expect("chroma")
+                .bytes()
+                .iter()
+                .all(|&byte| byte == 1)
+        );
+        assert!(
+            frame
+                .plane(Channel::V)
+                .expect("chroma")
+                .bytes()
+                .iter()
+                .all(|&byte| byte == 2)
+        );
+    }
+
+    #[test]
+    fn an_unloaded_mask_lands_as_a_host_mask() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities());
+        let mask = context.alloc_mask(&mask_format(), FrameMeta::at(1));
+
+        let landed = context
+            .unload_host(StreamItem::Mask(mask))
+            .expect("the fake lands");
+
+        assert!(landed.is_mask());
+        assert_eq!(landed.meta().index, 1);
     }
 }
