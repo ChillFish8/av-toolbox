@@ -15,8 +15,8 @@ use av_toolbox_core::{
 use av_toolbox_gpu::{Backend, ResolvedFormats};
 
 use crate::diagnostic::{args_path, stage_path};
-use crate::graph::{CompiledGraph, Node};
-use crate::{Diagnostic, DiagnosticCode, Diagnostics, SolvedFormats};
+use crate::graph::{CompiledGraph, Node, NodeId};
+use crate::{Diagnostic, DiagnosticCode, Diagnostics, Region, SolvedFormats};
 
 /// A built stage, in whichever of the five kinds it belongs to.
 pub enum StageBox {
@@ -108,6 +108,58 @@ impl CompiledGraph {
             .into_iter()
             .map(|stage| stage.expect("every stage built without a diagnostic"))
             .collect();
+
+        Ok(stages)
+    }
+
+    /// Builds one instance of every stage in `region`, in `region.nodes()` order.
+    ///
+    /// A worker running that region calls this once per copy it needs, so every call builds its
+    /// own stages rather than sharing them with another call. Only the region's own nodes are
+    /// prepared and built, since building the whole graph for every worker would build every other
+    /// region's nodes too, and a source more than the one time it may exist.
+    ///
+    /// Every node in the region is attempted, so one call names every stage that could not be
+    /// prepared or built, rather than stopping at the first failure.
+    pub fn instantiate_region(
+        &self,
+        registry: &PipelineRegistry,
+        backend: &Backend,
+        formats: &SolvedFormats,
+        region: &Region,
+    ) -> Result<Vec<(NodeId, StageBox)>, Diagnostics> {
+        let mut diagnostics = Diagnostics::new();
+        let mut prepared: Vec<Option<PreparedStage>> = region.nodes().iter().map(|_| None).collect();
+
+        for (slot, id) in region.nodes().iter().enumerate() {
+            let node = self.node(*id);
+            let arguments = arguments_for(self, node);
+
+            match registry.prepare(node.kind(), node.identifier(), node.args(), &arguments) {
+                Ok(stage) => prepared[slot] = Some(stage),
+                Err(error) => report(node, error, &mut diagnostics),
+            }
+        }
+
+        let mut stages = Vec::with_capacity(region.nodes().len());
+
+        for (slot, id) in region.nodes().iter().enumerate() {
+            let Some(stage) = prepared[slot].take() else {
+                continue;
+            };
+
+            let node = self.node(*id);
+            let node_formats = formats.get(*id);
+
+            match build_stage(stage, backend, node_formats) {
+                Ok(stage_box) => stages.push((*id, stage_box)),
+                Err(error) => report(node, error, &mut diagnostics),
+            }
+        }
+
+        if diagnostics.has_errors() {
+            return Err(diagnostics);
+        }
 
         Ok(stages)
     }
@@ -272,6 +324,7 @@ mod diagnostics_tests {
 mod tests {
     use std::sync::atomic::Ordering;
 
+    use av_toolbox_core::StageKind;
     use av_toolbox_gpu::{
         ColourInfo,
         Device,
@@ -286,7 +339,7 @@ mod tests {
     use super::diagnostics_tests::pipeline;
     use super::*;
     use crate::solve::solve;
-    use crate::{DiagnosticCode, Spanned, build, testing};
+    use crate::{DiagnosticCode, Spanned, StageSpec, build, testing};
 
     fn backend() -> Backend {
         Backend::open_default(Device::Default).expect("should open")
@@ -433,5 +486,105 @@ mod tests {
             .expect("should instantiate");
 
         assert_eq!(stages.len(), 3);
+    }
+
+    /// A source, a filter widened to four workers, and a sink narrowed back to one.
+    ///
+    /// The widened filter's own granularity and width mismatch put it in a region of its own,
+    /// between the source's region and the sink's, so it lands alone in the middle.
+    fn region_pipeline() -> Vec<StageSpec> {
+        let mut source = testing::spec(StageKind::Source, "input", "test/file");
+        source.args = Spanned::unknown(json!({ "path": "example.mkv" }));
+
+        let mut wide = testing::spec(StageKind::Filter, "wide", "test/temporal");
+        wide.inputs = vec![testing::positional("input")];
+        wide.args = Spanned::unknown(json!({ "radius": 0 }));
+        wide.workers = Some(4);
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("wide")];
+
+        vec![source, wide, sink]
+    }
+
+    /// Builds, plans and solves [region_pipeline], and opens a real backend to build its stages
+    /// against.
+    fn region_fixture() -> (CompiledGraph, PipelineRegistry, SolvedFormats, Backend) {
+        let registry = testing::registry();
+        let mut graph = build(&registry, &region_pipeline())
+            .expect("should build")
+            .into_graph();
+        let backend = backend();
+        let made = crate::plan::plan(&graph, &registry).expect("should plan");
+        graph.set_execution_plan(made);
+        let solved = formats(&graph, &registry, &backend);
+
+        (graph, registry, solved, backend)
+    }
+
+    #[test]
+    fn a_region_builds_only_its_own_nodes() {
+        let (graph, registry, formats, backend) = region_fixture();
+        let plan = graph.execution_plan().expect("planned");
+        let middle = plan.region(plan.node(NodeId::new(1)).region());
+
+        let built = graph
+            .instantiate_region(&registry, &backend, &formats, middle)
+            .expect("should build");
+
+        assert_eq!(built.len(), middle.nodes().len());
+        let ids: Vec<NodeId> = built.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids.as_slice(), middle.nodes());
+    }
+
+    /// The point of `instantiate_region`. A worker calls it once per copy it needs, so two calls
+    /// must each build their own stages rather than one call's stages being handed back twice.
+    #[test]
+    fn building_a_region_twice_gives_two_independent_sets() {
+        let (graph, registry, formats, backend) = region_fixture();
+        let plan = graph.execution_plan().expect("planned");
+        let region = plan.region(plan.node(NodeId::new(1)).region());
+
+        testing::TEMPORAL_BUILD_CALLS.store(0, Ordering::SeqCst);
+
+        let first = graph
+            .instantiate_region(&registry, &backend, &formats, region)
+            .expect("should build");
+        let second = graph
+            .instantiate_region(&registry, &backend, &formats, region)
+            .expect("should build");
+
+        assert_eq!(first.len(), second.len());
+        assert_eq!(first[0].0, NodeId::new(1));
+        assert_eq!(second[0].0, NodeId::new(1));
+
+        // Each call built its own copy of the region's one node. A cached or shared box would
+        // leave this at one no matter how many times the region was instantiated.
+        assert_eq!(testing::TEMPORAL_BUILD_CALLS.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_region_that_fails_to_build_reports_its_diagnostics() {
+        let mut specs = pipeline();
+        specs[1].stage_type = Spanned::unknown(String::from("test/failing"));
+        specs[1].args = Spanned::unknown(json!({}));
+
+        let registry = testing::registry();
+        let mut graph = build(&registry, &specs).expect("should build").into_graph();
+        let backend = backend();
+        let solved = formats(&graph, &registry, &backend);
+        let made = crate::plan::plan(&graph, &registry).expect("should plan");
+        graph.set_execution_plan(made);
+
+        let plan = graph.execution_plan().expect("planned");
+        let region = plan.region(plan.node(NodeId::new(1)).region());
+
+        let diagnostics = graph
+            .instantiate_region(&registry, &backend, &solved, region)
+            .expect_err("should fail");
+        let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
+
+        assert_eq!(reported[0].code(), DiagnosticCode::StageBuildFailed);
+        assert!(reported[0].message().contains("this stage always fails"));
     }
 }

@@ -5,14 +5,19 @@ edition = "2024"
 description = "The av-toolbox filter graph runtime."
 
 [dependencies]
+av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-gpu = { workspace = true }
+av-toolbox-graph = { path = "../av-toolbox-graph" }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
-vulkan = ["av-toolbox-gpu/vulkan"]
-metal = ["av-toolbox-gpu/metal"]
-cuda = ["av-toolbox-gpu/cuda"]
-rocm = ["av-toolbox-gpu/rocm"]
+vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-graph/vulkan"]
+metal = ["av-toolbox-gpu/metal", "av-toolbox-graph/metal"]
+cuda = ["av-toolbox-gpu/cuda", "av-toolbox-graph/cuda"]
+rocm = ["av-toolbox-gpu/rocm", "av-toolbox-graph/rocm"]

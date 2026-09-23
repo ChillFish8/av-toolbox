@@ -1,4 +1,3 @@
-#[cfg(test)]
 use std::sync::Arc;
 
 use cubecl::prelude::{CubeCount, CubeDim};
@@ -20,7 +19,7 @@ use crate::frame::{
     StreamFormat,
     StreamItem,
 };
-use crate::memory::{BufferPool, Ring, RingSpec, RuntimeError};
+use crate::memory::{BufferPool, FrameBudget, Ring, RingSpec, RuntimeError};
 
 /// One item to put on the device.
 ///
@@ -57,6 +56,21 @@ impl FrameContext {
     #[cfg(test)]
     fn for_testing(allocator: Arc<dyn DeviceAllocator>, capabilities: Capabilities) -> Self {
         Self::new(BufferPool::new(allocator), capabilities)
+    }
+
+    /// This context, charging every frame shaped allocation to `budget`.
+    ///
+    /// A source waits on the budget before it emits a frame that would take its outstanding
+    /// total past the limit. Every other worker keeps whatever context it already has, which
+    /// carries no budget and allocates freely.
+    pub fn with_budget(mut self, budget: Arc<FrameBudget>) -> Self {
+        self.pool = self.pool.with_budget(budget);
+        self
+    }
+
+    /// The budget this context charges its allocations to, if it has one.
+    pub fn budget(&self) -> Option<&Arc<FrameBudget>> {
+        self.pool.budget()
     }
 
     /// A frame of `format`, carrying `meta`.
@@ -212,6 +226,12 @@ impl FrameContext {
         CubeDim::new_2d(width, rows)
     }
 }
+
+/// A context has to move into whichever worker thread runs its stage.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<FrameContext>();
+};
 
 #[cfg(test)]
 mod tests {

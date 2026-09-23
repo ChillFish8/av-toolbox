@@ -215,7 +215,8 @@ impl<D: Dispatch> Disperse<D> {
     ///
     /// A second call is a no-op, since the first already closed everything. Whatever the stream
     /// ended in the middle of, a partially gathered bundle or a complete one still waiting for
-    /// `place`, is reported as [Dropped] rather than silently discarded.
+    /// `place`, is reported as [Dropped] rather than silently discarded. A chunk whose close was
+    /// already sent when a held bundle arrived is not closed a second time.
     pub fn finish(&mut self) -> Finished {
         if self.finished {
             return Finished {
@@ -228,7 +229,12 @@ impl<D: Dispatch> Disperse<D> {
 
         let mut routed = Vec::new();
 
-        if let Some(current) = self.current {
+        // A held bundle already closed the chunk in flight as it arrived, since that is what a
+        // new chunk id does, so closing it again here would hand one worker two ends for the
+        // same chunk.
+        if let Some(current) = self.current
+            && self.held.is_none()
+        {
             routed.push(Routed {
                 worker: current.worker,
                 item: WorkItem::EndOfChunk(current.chunk),
@@ -723,6 +729,29 @@ mod tests {
             panic!("a bundle still waiting for a worker should have been reported as dropped");
         };
         assert!(bundle[0].is_some());
+    }
+
+    /// The chunk in flight was closed the moment the held bundle's own chunk arrived, so
+    /// finishing on top of that must not close it again.
+    #[test]
+    fn finishing_while_holding_a_bundle_does_not_close_a_chunk_twice() {
+        let mut disperse = Disperse::new(&[true], 0, ScriptedChoice::new(&[Some(0), None], 1));
+        disperse.offer(0, item(0, 7)).expect("should accept");
+        disperse.place().expect("the script hands out worker zero");
+
+        let closing = disperse.offer(0, item(1, 8)).expect("should accept");
+        assert!(matches!(closing[0].item, WorkItem::EndOfChunk(7)));
+        assert!(disperse.place().is_none(), "the script has no worker free");
+
+        let finished = disperse.finish();
+
+        let closes = finished
+            .routed
+            .iter()
+            .filter(|routed| matches!(routed.item, WorkItem::EndOfChunk(_)))
+            .count();
+        assert_eq!(closes, 0);
+        assert!(matches!(finished.dropped, Some(Dropped::Unplaced(_))));
     }
 
     #[test]

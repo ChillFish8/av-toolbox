@@ -88,9 +88,11 @@ pub use self::memory::{
     ClientAllocator,
     DeviceAllocator,
     DeviceRead,
+    FrameBudget,
     Ring,
     RingGeometry,
     RingSpec,
+    Room,
     RuntimeError,
 };
 pub use self::negotiate::{FormatSet, Offered, OutputFormats, ResolvedFormats, StreamTemplate};

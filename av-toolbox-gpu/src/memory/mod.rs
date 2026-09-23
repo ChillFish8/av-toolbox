@@ -4,9 +4,11 @@
 //! rather than code generic over a runtime.
 
 mod allocator;
+mod budget;
 mod pool;
 mod ring;
 
 pub use self::allocator::{ClientAllocator, DeviceAllocator, DeviceRead, RuntimeError};
+pub use self::budget::{FrameBudget, Room};
 pub use self::pool::BufferPool;
 pub use self::ring::{Ring, RingGeometry, RingSpec};

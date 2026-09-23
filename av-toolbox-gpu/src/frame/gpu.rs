@@ -6,6 +6,7 @@ use cubecl::server::Handle;
 
 use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat, StreamFormat};
 use crate::frame::layout::Channel;
+use crate::memory::FrameBudget;
 
 /// Where a plane's memory goes when its last holder drops it.
 pub(crate) trait Recycle: Send + Sync {
@@ -19,6 +20,8 @@ pub struct PlaneBuffer {
     handle: Option<Handle>,
     bytes: usize,
     recycle: Option<Weak<dyn Recycle>>,
+    /// The budget this buffer's bytes were charged to, credited back on drop.
+    budget: Option<Weak<FrameBudget>>,
     /// The allocation this is a window into, kept alive for as long as the window is.
     owner: Option<Arc<PlaneBuffer>>,
 }
@@ -33,16 +36,24 @@ impl PlaneBuffer {
             handle: Some(handle),
             bytes,
             recycle: None,
+            budget: None,
             owner,
         }
     }
 
-    /// Memory that goes back to `recycle` when its last holder drops it.
-    pub(crate) fn pooled(handle: Handle, bytes: usize, recycle: Weak<dyn Recycle>) -> Self {
+    /// Memory that goes back to `recycle` when its last holder drops it, crediting `budget` back
+    /// at the same time when there is one.
+    pub(crate) fn pooled(
+        handle: Handle,
+        bytes: usize,
+        recycle: Weak<dyn Recycle>,
+        budget: Option<Weak<FrameBudget>>,
+    ) -> Self {
         Self {
             handle: Some(handle),
             bytes,
             recycle: Some(recycle),
+            budget,
             owner: None,
         }
     }
@@ -73,6 +84,10 @@ impl Drop for PlaneBuffer {
         let Some(handle) = self.handle.take() else {
             return;
         };
+
+        if let Some(budget) = self.budget.as_ref().and_then(Weak::upgrade) {
+            budget.credit(self.bytes);
+        }
 
         let Some(recycle) = self.recycle.as_ref().and_then(Weak::upgrade) else {
             return;

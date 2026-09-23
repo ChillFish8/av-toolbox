@@ -150,7 +150,12 @@ dependencies = [
 name = "av-toolbox-runtime"
 version = "0.1.0"
 dependencies = [
+ "av-toolbox-core",
  "av-toolbox-gpu",
+ "av-toolbox-graph",
+ "schemars",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

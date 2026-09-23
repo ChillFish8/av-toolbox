@@ -1,4 +1,100 @@
+use av_toolbox_core::StageError;
+use av_toolbox_graph::NodeId;
 use thiserror::Error;
+
+/// A stage failure, naming the node it came from.
+#[derive(Debug, Error)]
+pub enum RunError {
+    #[error("node {node:?} failed: {source}")]
+    Stage {
+        node: NodeId,
+        #[source]
+        source: StageError,
+    },
+    /// A node's feeds disagreed about how many items they supplied.
+    ///
+    /// One feed short of the others is not a guess to make, it means the graph does not mean
+    /// what its author thought.
+    #[error("node {node:?} has feeds that disagree on how many items they supply: {counts:?}")]
+    MismatchedFeeds { node: NodeId, counts: Vec<usize> },
+    /// A thread of the run panicked.
+    ///
+    /// The panic is caught on the thread it happened on and reported here, so the run stops and
+    /// joins rather than the panic crossing into whoever called it.
+    #[error("a thread of the run panicked: {message}")]
+    Panicked { message: String },
+    /// An exchange was given something it could not make sense of.
+    ///
+    /// Two inputs of a join carrying different frames, or a chunk id going backwards, are things
+    /// the data did rather than bugs in the driver, so they fail the run instead of crashing it.
+    #[error("an exchange refused what it was given: {source}")]
+    Exchange {
+        #[source]
+        source: ExchangeError,
+    },
+    /// A source waited its whole deadline for room on its frame budget without any appearing.
+    ///
+    /// Nothing but a frame being dropped can free room, so a wait that long is one nothing is
+    /// going to end. The run fails naming the limit and what was outstanding, rather than hanging.
+    #[error(
+        "a source waited for room under a {limit} byte frame budget with {outstanding} bytes outstanding"
+    )]
+    BudgetStalled { limit: usize, outstanding: usize },
+    /// A run finished with items it never gave to a worker.
+    ///
+    /// Frames going nowhere is the hardest failure in a pipeline to notice afterwards, so a run
+    /// that was not cancelled reports it rather than answering with a report nobody reads.
+    #[error("the run finished with {dropped} items that never reached a worker")]
+    DroppedItems { dropped: usize },
+    /// A failure that happened while a worker was running one chunk.
+    ///
+    /// Which chunk is what localises a failure in a long encode, so a worker names it around
+    /// whatever its stages reported.
+    #[error("chunk {chunk}: {source}")]
+    InChunk {
+        chunk: u64,
+        #[source]
+        source: Box<RunError>,
+    },
+}
+
+impl RunError {
+    /// The node whose stage failed, where one can be named.
+    pub fn node(&self) -> Option<NodeId> {
+        match self {
+            Self::Stage { node, .. } => Some(*node),
+            Self::MismatchedFeeds { node, .. } => Some(*node),
+            Self::InChunk { source, .. } => source.node(),
+            Self::Panicked { .. }
+            | Self::Exchange { .. }
+            | Self::BudgetStalled { .. }
+            | Self::DroppedItems { .. } => None,
+        }
+    }
+
+    /// The chunk the failure came from, where one is known.
+    pub fn chunk(&self) -> Option<u64> {
+        match self {
+            Self::InChunk { chunk, .. } => Some(*chunk),
+            _ => None,
+        }
+    }
+
+    /// This failure, said to have come from `chunk`.
+    ///
+    /// One already naming a chunk keeps the one it has, since that is the closer of the two to
+    /// where it happened.
+    pub fn in_chunk(self, chunk: u64) -> Self {
+        if matches!(self, Self::InChunk { .. }) {
+            return self;
+        }
+
+        Self::InChunk {
+            chunk,
+            source: Box::new(self),
+        }
+    }
+}
 
 /// Something an exchange could not make sense of.
 #[derive(Debug, Error, Eq, PartialEq)]

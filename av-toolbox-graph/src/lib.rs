@@ -8,7 +8,8 @@
 //! A graph can then be taken four ways.
 //!
 //! - [solve()] chooses the sample format every edge carries.
-//! - [CompiledGraph::instantiate] builds the stages through the registry.
+//! - [CompiledGraph::instantiate] builds every stage through the registry, or
+//!   [CompiledGraph::instantiate_region] builds just one region's, for a worker's own copies.
 //! - [optimise()] runs passes over it, merging identical stages and working out which outputs have
 //!   to be shared.
 //! - [render_ascii], [render_svg] and [render_mermaid] draw it.

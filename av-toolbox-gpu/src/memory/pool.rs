@@ -16,6 +16,7 @@ use crate::frame::{
     PlaneBuffer,
 };
 use crate::memory::allocator::{DeviceAllocator, DeviceRead, RuntimeError};
+use crate::memory::budget::{FrameBudget, Room};
 use crate::memory::ring::{Ring, RingGeometry, RingSpec};
 
 /// Device buffers kept for reuse, keyed by size.
@@ -30,6 +31,20 @@ use crate::memory::ring::{Ring, RingGeometry, RingSpec};
 #[derive(Debug, Clone)]
 pub struct BufferPool {
     inner: Arc<PoolInner>,
+    /// Charged by every frame shaped allocation: `alloc_frame`, `alloc_like`, `alloc_mask`,
+    /// `load_frame` and `load_mask`. Rings and scratch never touch it.
+    budget: Option<Arc<FrameBudget>>,
+}
+
+/// One plane of one item on its way to the device.
+struct PlaneUpload {
+    item: usize,
+    channel: Channel,
+    width: u32,
+    height: u32,
+    expected: usize,
+    /// Whether this plane's bytes are charged to the pool's budget.
+    counted: bool,
 }
 
 #[derive(Debug)]
@@ -45,7 +60,19 @@ impl BufferPool {
                 allocator,
                 free: Mutex::new(HashMap::new()),
             }),
+            budget: None,
         }
+    }
+
+    /// This pool, charging every frame shaped allocation to `budget`.
+    pub(crate) fn with_budget(mut self, budget: Arc<FrameBudget>) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// The budget this pool charges, if it has one.
+    pub(crate) fn budget(&self) -> Option<&Arc<FrameBudget>> {
+        self.budget.as_ref()
     }
 
     /// A buffer of exactly `bytes`, reused if one is free and reserved otherwise.
@@ -53,6 +80,22 @@ impl BufferPool {
     /// A reused buffer still holds whatever was last written into it, so a caller that does not
     /// write every byte has to fill the rest itself.
     pub fn reserve(&self, bytes: usize) -> PlaneBuffer {
+        self.reserve_impl(bytes, false)
+    }
+
+    /// Reserves `bytes`, charging it to the budget when `counted` is set.
+    ///
+    /// Every allocation in the pool passes through here, but only a frame, mask or like-frame
+    /// allocation counts. A ring or scratch buffer is held for as long as the stage that owns it
+    /// lives rather than returning between frames, so charging it here would never be credited
+    /// back.
+    ///
+    /// This never waits on its own. A frame is several planes charged one call each, and a wait
+    /// per plane would block the second plane on room only the first plane's own caller could
+    /// ever free, since nothing else is holding it yet. Waiting once for a whole item's bytes,
+    /// before any of its planes are reserved, is the caller's job: see [BufferPool::alloc_frame],
+    /// [BufferPool::alloc_mask], [BufferPool::load_frame] and [BufferPool::load_mask].
+    fn reserve_impl(&self, bytes: usize, counted: bool) -> PlaneBuffer {
         let recycled = self
             .inner
             .free
@@ -66,15 +109,37 @@ impl BufferPool {
             None => self.inner.allocator.empty(bytes),
         };
 
-        self.recycle_handle(handle, bytes)
+        let budget = if counted { self.budget.clone() } else { None };
+        if let Some(budget) = &budget {
+            budget.charge(bytes);
+        }
+
+        self.recycle_handle(handle, bytes, budget)
     }
 
-    /// Wraps `handle` so it goes back to this pool's free lists when its last holder drops it.
-    fn recycle_handle(&self, handle: Handle, bytes: usize) -> PlaneBuffer {
+    /// Waits until `bytes` fits under this pool's budget, or returns immediately when it has
+    /// none.
+    ///
+    /// Answers whether what follows should be charged. A released budget is one whose run is
+    /// over, and one that gave up waiting is a run about to fail, so either way the allocation it
+    /// just stopped waiting for goes through uncounted rather than charging a total nothing will
+    /// ever credit back.
+    fn wait_for_room(&self, bytes: usize) -> bool {
+        let Some(budget) = &self.budget else {
+            return false;
+        };
+
+        matches!(budget.wait_for_room(bytes), Room::Available)
+    }
+
+    /// Wraps `handle` so it goes back to this pool's free lists when its last holder drops it,
+    /// crediting `budget` back at the same time when there is one.
+    fn recycle_handle(&self, handle: Handle, bytes: usize, budget: Option<Arc<FrameBudget>>) -> PlaneBuffer {
         let recyclable: Arc<dyn Recycle> = self.inner.clone();
         let recycle = Arc::downgrade(&recyclable);
+        let budget = budget.as_ref().map(Arc::downgrade);
 
-        PlaneBuffer::pooled(handle, bytes, recycle)
+        PlaneBuffer::pooled(handle, bytes, recycle, budget)
     }
 
     /// Transient memory for one stage's working set.
@@ -107,8 +172,13 @@ impl BufferPool {
     /// A frame of `format`, one buffer per channel.
     ///
     /// Its planes are recycled memory holding an earlier frame's samples, so a stage that writes
-    /// only some of them has to copy the rest from its input.
+    /// only some of them has to copy the rest from its input. Waits once for the whole frame's
+    /// bytes before reserving any of its planes, rather than once per plane, so a budget smaller
+    /// than one plane's share of a frame cannot leave an earlier plane of this same frame the
+    /// only thing that could ever free the room a later one is waiting for.
     pub fn alloc_frame(&self, format: &FrameFormat, meta: FrameMeta) -> Frame {
+        let counted = self.wait_for_room(format.total_bytes());
+
         let planes = format
             .channels()
             .iter()
@@ -117,7 +187,7 @@ impl BufferPool {
                 let (width, height) = format
                     .channel_dimensions(*channel)
                     .expect("the layout carries every channel it lists");
-                let buffer = self.reserve(bytes);
+                let buffer = self.reserve_impl(bytes, counted);
 
                 Plane::new(buffer, width, height)
             })
@@ -139,7 +209,9 @@ impl BufferPool {
     /// That buffer is recycled memory holding an earlier mask's samples, so a stage that writes
     /// only part of it has to fill the rest.
     pub fn alloc_mask(&self, format: &MaskFormat, meta: FrameMeta) -> Mask {
-        let buffer = self.reserve(format.bytes());
+        let counted = self.wait_for_room(format.bytes());
+
+        let buffer = self.reserve_impl(format.bytes(), counted);
         let plane = Plane::new(buffer, format.width, format.height);
 
         Mask::new(*format, plane, meta)
@@ -149,7 +221,8 @@ impl BufferPool {
     ///
     /// Channels are walked in the format's own order, the one
     /// [FrameFormat::plane_sizes](crate::FrameFormat::plane_sizes) uses, so a plane lands against
-    /// the channel it belongs to rather than wherever `planes` happened to carry it.
+    /// the channel it belongs to rather than wherever `planes` happened to carry it. Waits once
+    /// for the whole frame's bytes first, for the same reason [BufferPool::alloc_frame] does.
     pub fn load_frame(
         &self,
         item: usize,
@@ -157,6 +230,8 @@ impl BufferPool {
         planes: &HostPlanes,
         meta: FrameMeta,
     ) -> Result<Frame, RuntimeError> {
+        let counted = self.wait_for_room(format.total_bytes());
+
         let mut loaded = Vec::with_capacity(format.channels().len());
         for channel in format.channels() {
             let (width, height) = format
@@ -166,7 +241,16 @@ impl BufferPool {
                 .channel_bytes(*channel)
                 .expect("the layout carries every channel it lists");
 
-            let plane = self.load_plane(item, *channel, width, height, expected, planes)?;
+            let upload = PlaneUpload {
+                item,
+                channel: *channel,
+                width,
+                height,
+                expected,
+                counted,
+            };
+
+            let plane = self.load_plane(upload, planes)?;
             loaded.push(plane);
         }
 
@@ -181,32 +265,37 @@ impl BufferPool {
         planes: &HostPlanes,
         meta: FrameMeta,
     ) -> Result<Mask, RuntimeError> {
-        let plane = self.load_plane(
+        let counted = self.wait_for_room(format.bytes());
+
+        let upload = PlaneUpload {
             item,
-            Channel::Y,
-            format.width,
-            format.height,
-            format.bytes(),
-            planes,
-        )?;
+            channel: Channel::Y,
+            width: format.width,
+            height: format.height,
+            expected: format.bytes(),
+            counted,
+        };
+
+        let plane = self.load_plane(upload, planes)?;
 
         Ok(Mask::new(*format, plane, meta))
     }
 
-    /// The `channel` plane of `item`, uploaded from `planes`.
+    /// The plane `upload` names, uploaded from `planes`.
     ///
-    /// `planes` is caller data, so a missing channel or a byte count that does not match
-    /// `expected` is reported here rather than left to upload a short buffer, which would leave
+    /// `planes` is caller data, so a missing channel or a byte count that does not match the one
+    /// expected is reported here rather than left to upload a short buffer, which would leave
     /// the plane holding whatever memory the device handed back.
-    fn load_plane(
-        &self,
-        item: usize,
-        channel: Channel,
-        width: u32,
-        height: u32,
-        expected: usize,
-        planes: &HostPlanes,
-    ) -> Result<Plane, RuntimeError> {
+    fn load_plane(&self, upload: PlaneUpload, planes: &HostPlanes) -> Result<Plane, RuntimeError> {
+        let PlaneUpload {
+            item,
+            channel,
+            width,
+            height,
+            expected,
+            counted,
+        } = upload;
+
         let bytes = planes.plane(channel).ok_or(RuntimeError::HostPlaneMissing {
             item,
             channel,
@@ -227,7 +316,12 @@ impl BufferPool {
         }
 
         let handle = self.inner.allocator.upload(bytes);
-        let buffer = self.recycle_handle(handle, expected);
+        let budget = if counted { self.budget.clone() } else { None };
+        if let Some(budget) = &budget {
+            budget.charge(expected);
+        }
+
+        let buffer = self.recycle_handle(handle, expected, budget);
 
         Ok(Plane::new(buffer, width, height))
     }
@@ -259,6 +353,9 @@ impl Recycle for PoolInner {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::thread;
+    use std::time::Duration;
 
     use super::*;
     use crate::testing::CountingAllocator;
@@ -525,5 +622,86 @@ mod tests {
             1,
             "a cloned pool did not see the released buffer"
         );
+    }
+
+    /// The wait belongs immediately before the charge, not merely alongside it, so an
+    /// allocation that would take the budget past its limit genuinely blocks until something
+    /// credits room back, rather than charging past the limit and moving on.
+    #[test]
+    fn an_allocation_past_the_limit_waits_for_a_dropped_frame_to_credit_room() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+        };
+        let budget = FrameBudget::new(format.bytes());
+        let pool = pool(allocator).with_budget(budget);
+
+        let first = pool.alloc_mask(&format, FrameMeta::at(0));
+
+        let (result_sender, result_receiver) = mpsc::channel();
+        let waiting_pool = pool.clone();
+        thread::spawn(move || {
+            let second = waiting_pool.alloc_mask(&format, FrameMeta::at(1));
+            result_sender.send(second).ok();
+        });
+
+        // A generous grace period for the spawned thread to run. A blocked allocation can
+        // never answer inside it, since nothing has credited the budget back yet, so this
+        // cannot flake a passing run. It only ever catches a wait that was skipped.
+        assert!(
+            matches!(
+                result_receiver.recv_timeout(Duration::from_millis(200)),
+                Err(RecvTimeoutError::Timeout)
+            ),
+            "the second allocation completed before the budget had room for it"
+        );
+
+        drop(first);
+
+        result_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the allocation should complete once the first frame is dropped");
+    }
+
+    /// A released budget is a run that is over, so the frame it just let through is not charged
+    /// to a total nothing is ever going to credit back.
+    #[test]
+    fn a_released_budget_stops_charging_what_it_let_through() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let budget = FrameBudget::new(1 << 20);
+        let pool = pool(allocator).with_budget(budget.clone());
+        budget.release();
+
+        let frame = pool.alloc_frame(&frame_format(), FrameMeta::at(0));
+
+        assert_eq!(budget.outstanding(), 0);
+        drop(frame);
+    }
+
+    /// A budget too small to ever fit a whole frame is a misconfiguration, not a reason to
+    /// refuse the frame outright: `FrameBudget::wait_for_room` already always answers instantly
+    /// when nothing is outstanding, so this proceeds one frame at a time rather than deadlocking
+    /// or failing. Waiting once per frame is what makes that hold: a wait per plane would leave
+    /// a frame's own first plane, charged and held by this same call, as the only thing that
+    /// could ever free the room its second plane is waiting for.
+    #[test]
+    fn a_budget_smaller_than_one_frame_still_allocates_rather_than_hanging() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let budget = FrameBudget::new(1);
+        let pool = pool(allocator).with_budget(budget);
+
+        let (result_sender, result_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let first = pool.alloc_frame(&frame_format(), FrameMeta::at(0));
+            drop(first);
+            let second = pool.alloc_frame(&frame_format(), FrameMeta::at(1));
+            result_sender.send(second).ok();
+        });
+
+        result_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a budget smaller than one frame should still allocate rather than hang");
     }
 }

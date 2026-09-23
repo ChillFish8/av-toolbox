@@ -1104,6 +1104,12 @@ pub(crate) struct TemporalArgs {
     radius: u32,
 }
 
+/// How many times [Temporal]'s stage was actually built.
+///
+/// A cached or shared build would only ever move this once, so a test proving two builds are
+/// independent reads this rather than the stage's own state, which is empty.
+pub(crate) static TEMPORAL_BUILD_CALLS: AtomicU32 = AtomicU32::new(0);
+
 struct TemporalFilter;
 
 impl StageInstance for TemporalFilter {}
@@ -1173,6 +1179,8 @@ impl FilterDefinition for Temporal {
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter>, StageError> {
+        TEMPORAL_BUILD_CALLS.fetch_add(1, Ordering::SeqCst);
+
         Ok(Box::new(TemporalFilter))
     }
 }
