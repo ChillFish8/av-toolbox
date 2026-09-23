@@ -2,8 +2,10 @@
 resolver = "3"
 members = [
     "av-toolbox",
-    "av-toolbox-core", "av-toolbox-cubek",
-    "av-toolbox-graph", "av-toolbox-runtime",
+    "av-toolbox-core",
+    "av-toolbox-cubek",
+    "av-toolbox-graph",
+    "av-toolbox-runtime",
     "av-toolbox-gpu",
 ]
 
