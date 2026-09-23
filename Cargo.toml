@@ -7,6 +7,7 @@ members = [
     "av-toolbox-graph",
     "av-toolbox-runtime",
     "av-toolbox-gpu",
+    "av-toolbox-sources",
 ]
 
 [profile.test-release]
@@ -27,3 +28,5 @@ strum = "0.28"
 strum_macros = "0.28"
 tracing = "0.1"
 tempfile = "3"
+y4m = "0.8"
+ffms2 = "0.5"

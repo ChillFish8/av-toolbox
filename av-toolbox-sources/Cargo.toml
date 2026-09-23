@@ -1,0 +1,29 @@
+[package]
+name = "av-toolbox-sources"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-gpu = { workspace = true }
+ffms2 = { workspace = true, optional = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+y4m = { workspace = true }
+
+[dev-dependencies]
+av-toolbox-gpu = { workspace = true, features = ["test-support"] }
+av-toolbox-graph = { path = "../av-toolbox-graph" }
+av-toolbox-runtime = { path = "../av-toolbox-runtime" }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+default = ["ffms2"]
+ffms2 = ["dep:ffms2"]
+vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan"]
+metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal"]
+cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda"]
+rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm"]
+gpu-tests = ["av-toolbox-gpu/gpu-tests"]
