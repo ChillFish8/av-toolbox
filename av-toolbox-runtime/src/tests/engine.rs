@@ -24,6 +24,8 @@ use av_toolbox_core::{
     StageInstance,
     StageKind,
     StreamType,
+    Transform,
+    TransformDefinition,
 };
 use av_toolbox_gpu::{
     BuildContext,
@@ -578,6 +580,109 @@ impl MaskDefinition for Masking {
     }
 }
 
+// A transform whose fan-out depends on the frame it is given rather than on which call this is,
+// so a fixed identity always produces the same number of outputs however the run is chunked or
+// widened. It emits three copies, then none, then one, cycling by the input's own timestamp.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct MultiplyingArgs {}
+
+struct MultiplyingInstance {
+    _life: StageLife,
+}
+
+impl MultiplyingInstance {
+    fn new() -> Self {
+        Self {
+            _life: StageLife::new(),
+        }
+    }
+}
+
+impl StageInstance for MultiplyingInstance {}
+
+impl Transform for MultiplyingInstance {
+    fn process(
+        &mut self,
+        _context: &mut FrameContext,
+        mut inputs: Inputs,
+    ) -> Result<Vec<StreamItem>, StageError> {
+        let item = inputs
+            .take(0)
+            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+        let timestamp = item
+            .meta()
+            .timestamp
+            .expect("every test frame carries a timestamp")
+            .as_secs();
+
+        let copies = match timestamp % 3 {
+            0 => 3,
+            1 => 0,
+            _ => 1,
+        };
+
+        Ok((0..copies).map(|_| item.clone()).collect())
+    }
+}
+
+struct Multiplying;
+
+impl StageDefinition for Multiplying {
+    type Args = MultiplyingArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "multiplying"
+    }
+
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Frame
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl TransformDefinition for Multiplying {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = chosen.iter().flatten().next().copied().expect("an input");
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Transform>, StageError> {
+        Ok(Box::new(MultiplyingInstance::new()))
+    }
+}
+
 // A filter that reads two inputs and passes the first through, standing in for a mask-and-frame
 // filter, an overlay, or a composite: any two input stage whose producers can end up in
 // different regions.
@@ -622,6 +727,10 @@ impl StageDefinition for Join {
 
     fn identifier() -> &'static str {
         "join"
+    }
+
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Frame
     }
 
     fn inputs() -> &'static InputSignature {
@@ -793,15 +902,15 @@ impl FilterDefinition for Slow {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 struct RecordingArgs {}
 
-/// Every timestamp a `Recording` sink consumed, across the whole run, in consumption order.
-static RECORDED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
-
-/// The frame index of every item a `Recording` sink consumed, in the same order.
+/// Every frame a `Recording` sink consumed, as `(timestamp, index)` pairs, in consumption order.
+///
+/// Kept as one pair per frame rather than two separate lists, so the timestamp and the index
+/// recorded alongside it always describe the same frame.
 ///
 /// A timestamp is the source's own and survives everything, which is what makes it the right
 /// thing to check a stream's contents against. An index is renumbered by every aggregate it
 /// passes through, which is what makes it the right thing to check renumbering against.
-static RECORDED_INDICES: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+static RECORDED: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 
 /// Signalled once, when a `Recording` sink is told its stream has ended. Its region only reaches
 /// that once whatever feeds it has closed the stream, so a test waiting here knows the region
@@ -833,11 +942,10 @@ impl Sink for RecordingInstance {
             .expect("every test frame carries a timestamp")
             .as_secs();
 
-        RECORDED.lock().expect("not poisoned").push(timestamp);
-        RECORDED_INDICES
+        RECORDED
             .lock()
             .expect("not poisoned")
-            .push(item.meta().index);
+            .push((timestamp, item.meta().index));
 
         Ok(())
     }
@@ -1155,6 +1263,10 @@ static HOARDED: Mutex<Vec<StreamItem>> = Mutex::new(Vec::new());
 /// never dropped, so whatever budget it was charged to is never credited back.
 static HOARDED_ONE: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
 
+/// Signalled every time a `Hoarding` sink takes an item, so a test can wait for a specific count
+/// of items to have been permanently held rather than only the first.
+pub(super) static HOARDED_EVERY: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
+
 struct HoardingInstance {
     _life: StageLife,
 }
@@ -1178,6 +1290,10 @@ impl Sink for HoardingInstance {
         HOARDED.lock().expect("not poisoned").push(item);
 
         if let Some(sender) = HOARDED_ONE.lock().expect("not poisoned").take() {
+            sender.send(()).ok();
+        }
+
+        if let Some(sender) = HOARDED_EVERY.lock().expect("not poisoned").as_ref() {
             sender.send(()).ok();
         }
 
@@ -1402,6 +1518,9 @@ fn registry() -> PipelineRegistry {
     registry.register_filter::<Pass>().expect("should register");
     registry.register_filter::<Allocating>().expect("should register");
     registry.register_mask::<Masking>().expect("should register");
+    registry
+        .register_transform::<Multiplying>()
+        .expect("should register");
     registry.register_filter::<Join>().expect("should register");
     registry.register_filter::<Slow>().expect("should register");
     registry.register_filter::<Failing>().expect("should register");
@@ -1435,6 +1554,7 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
         },
         "test/allocating" => StageBox::Filter(Box::new(AllocatingInstance::new())),
         "test/masking" => StageBox::Mask(Box::new(MaskingInstance::new())),
+        "test/multiplying" => StageBox::Transform(Box::new(MultiplyingInstance::new())),
         "test/join" => StageBox::Filter(Box::new(JoinInstance::new())),
         "test/slow" => StageBox::Filter(Box::new(SlowInstance::for_worker(worker))),
         "test/failing" => {
@@ -1523,6 +1643,14 @@ fn masking_spec(name: &str, input: &str) -> StageSpec {
     mask
 }
 
+/// A transform emitting three frames, then none, then one, cycling with each input's timestamp.
+pub(super) fn multiplying_spec(name: &str, input: &str, workers: Option<usize>) -> StageSpec {
+    let mut transform = spec(StageKind::Transform, name, "test/multiplying");
+    transform.inputs = vec![positional(input)];
+    transform.workers = workers;
+    transform
+}
+
 pub(super) fn join_spec(name: &str, base: &str, overlay: &str) -> StageSpec {
     let mut join = spec(StageKind::Filter, name, "test/join");
     join.inputs = vec![positional(base), positional(overlay)];
@@ -1566,7 +1694,7 @@ fn panicking_spec(name: &str, input: &str, workers: usize) -> StageSpec {
     panicking
 }
 
-fn hoarding_spec(name: &str, input: &str) -> StageSpec {
+pub(super) fn hoarding_spec(name: &str, input: &str) -> StageSpec {
     let mut sink = spec(StageKind::Sink, name, "test/hoarding");
     sink.inputs = vec![positional(input)];
     sink
@@ -1692,16 +1820,26 @@ pub(super) fn assert_every_thread_exited(property: &str) {
 }
 
 pub(super) fn recorded() -> Vec<u64> {
-    RECORDED.lock().expect("not poisoned").clone()
+    RECORDED
+        .lock()
+        .expect("not poisoned")
+        .iter()
+        .map(|(timestamp, _)| *timestamp)
+        .collect()
 }
 
-fn recorded_indices() -> Vec<u64> {
-    RECORDED_INDICES.lock().expect("not poisoned").clone()
+/// The sibling of [recorded], reading the index half of the same recorded pairs.
+pub(super) fn recorded_indices() -> Vec<u64> {
+    RECORDED
+        .lock()
+        .expect("not poisoned")
+        .iter()
+        .map(|(_, index)| *index)
+        .collect()
 }
 
 pub(super) fn clear_recorded() {
     RECORDED.lock().expect("not poisoned").clear();
-    RECORDED_INDICES.lock().expect("not poisoned").clear();
 }
 
 #[test]
@@ -2685,6 +2823,7 @@ fn settings_and_reports_carry_the_derives_a_caller_needs() {
         frames: 2,
         cancelled: false,
         dropped: 0,
+        warnings: Vec::new(),
     };
 
     let copied_settings = settings.clone();

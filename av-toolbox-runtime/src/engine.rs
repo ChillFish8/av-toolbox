@@ -32,6 +32,7 @@ use crate::{
     ExchangeError,
     Routed,
     RunError,
+    RunWarning,
     WorkItem,
     WorkResult,
 };
@@ -63,6 +64,8 @@ pub struct RunReport {
     /// two of them. A run that was not cancelled never reports any, since losing items without
     /// being asked to stop fails the run instead.
     pub dropped: usize,
+    /// Things the run noticed that did not stop it.
+    pub warnings: Vec<RunWarning>,
 }
 
 /// A message crossing the unbounded channel between two regions.
@@ -571,6 +574,13 @@ struct DisperseSide {
     freedom: Arc<WorkerFreedom>,
     work_senders: Vec<Sender<WorkItem>>,
     assignment_sender: Sender<AggregateSignal>,
+    /// The slot the disperse routes every bundle by.
+    authority: usize,
+    /// How many workers the region runs, for telling a genuine width-one join from one that
+    /// simply has nothing else to spread work across.
+    width: usize,
+    /// The region's head node, named if [RunWarning::NeverChunked] fires.
+    head: NodeId,
 }
 
 enum PreparedRegion {
@@ -588,6 +598,7 @@ pub struct Engine {
     prepared: Vec<PreparedRegion>,
     frames: Arc<AtomicU64>,
     dropped: Arc<AtomicUsize>,
+    warnings: Arc<Mutex<Vec<RunWarning>>>,
     cancel: Arc<Cancel>,
 }
 
@@ -654,6 +665,7 @@ impl Engine {
         let mut diagnostics = Diagnostics::new();
         let frames = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicUsize::new(0));
+        let warnings = Arc::new(Mutex::new(Vec::new()));
         let cancel = Arc::new(Cancel::new());
 
         let mut built_regions = Vec::with_capacity(regions.len());
@@ -830,6 +842,9 @@ impl Engine {
                     freedom: freedom.clone(),
                     work_senders,
                     assignment_sender,
+                    authority,
+                    width,
+                    head: region.head(),
                 },
                 freedom,
                 aggregate,
@@ -843,6 +858,7 @@ impl Engine {
             prepared,
             frames,
             dropped,
+            warnings,
             cancel,
         })
     }
@@ -873,6 +889,7 @@ impl Engine {
             prepared,
             frames,
             dropped,
+            warnings,
             cancel,
         } = self;
 
@@ -892,7 +909,7 @@ impl Engine {
                     spawn(&mut handles, &outcome, move || run_passthrough(region));
                 },
                 PreparedRegion::Exchanged(region) => {
-                    spawn_exchanged(region, &mut handles, &outcome, &cancel, &dropped);
+                    spawn_exchanged(region, &mut handles, &outcome, &cancel, &dropped, &warnings);
                 },
             }
         }
@@ -915,10 +932,13 @@ impl Engine {
             return Err(RunError::DroppedItems { dropped });
         }
 
+        let warnings = warnings.lock().expect("not poisoned").clone();
+
         Ok(RunReport {
             frames: frames.load(Ordering::SeqCst),
             cancelled,
             dropped,
+            warnings,
         })
     }
 }
@@ -992,6 +1012,7 @@ fn spawn_exchanged(
     outcome: &Arc<Outcome>,
     cancel: &Arc<Cancel>,
     dropped: &Arc<AtomicUsize>,
+    warnings: &Arc<Mutex<Vec<RunWarning>>>,
 ) {
     let ExchangedRegion {
         disperse,
@@ -1004,8 +1025,9 @@ fn spawn_exchanged(
 
     let disperse_cancel = cancel.clone();
     let disperse_dropped = dropped.clone();
+    let disperse_warnings = warnings.clone();
     spawn(handles, outcome, move || {
-        drive_disperse(disperse, &disperse_cancel, &disperse_dropped)
+        drive_disperse(disperse, &disperse_cancel, &disperse_dropped, &disperse_warnings)
     });
 
     let merge_cancel = cancel.clone();
@@ -1115,7 +1137,17 @@ fn run_passthrough(region: PassthroughRegion) -> Result<(), RunError> {
 /// other wait is a receive that ends when its senders do. Once it gives up waiting, whatever is
 /// still queued or still held has missed its run, so it is counted into `dropped` rather than
 /// going quietly.
-fn drive_disperse(side: DisperseSide, cancel: &Cancel, dropped: &AtomicUsize) -> Result<(), RunError> {
+///
+/// This is also where [RunWarning::NeverChunked] is noticed. Every slot's item is visible here
+/// before it is offered, which is the one place both the authority's chunk id and every other
+/// slot's can be read from the same bundle. A region with only one slot never runs the branch
+/// that could mark another slot chunked, since there is no other slot to read.
+fn drive_disperse(
+    side: DisperseSide,
+    cancel: &Cancel,
+    dropped: &AtomicUsize,
+    warnings: &Mutex<Vec<RunWarning>>,
+) -> Result<(), RunError> {
     let DisperseSide {
         mut disperse,
         upstream,
@@ -1123,11 +1155,16 @@ fn drive_disperse(side: DisperseSide, cancel: &Cancel, dropped: &AtomicUsize) ->
         freedom,
         work_senders,
         assignment_sender,
+        authority,
+        width,
+        head,
     } = side;
 
     let mut queues: HashMap<usize, VecDeque<StreamItem>> =
         slots.iter().map(|&slot| (slot, VecDeque::new())).collect();
     let mut done: HashSet<usize> = HashSet::new();
+    let mut authority_chunked = false;
+    let mut other_chunked = false;
 
     'routing: loop {
         if cancel.is_stopped() {
@@ -1141,6 +1178,14 @@ fn drive_disperse(side: DisperseSide, cancel: &Cancel, dropped: &AtomicUsize) ->
                     .expect("every bound slot keeps its own queue")
                     .pop_front()
                     .expect("this slot's queue was just confirmed non-empty");
+
+                note_chunk(
+                    slot,
+                    authority,
+                    item.meta().chunk,
+                    &mut authority_chunked,
+                    &mut other_chunked,
+                );
 
                 let offered = disperse.offer(slot, item);
                 let routed = offered.map_err(refused_offer)?;
@@ -1179,7 +1224,34 @@ fn drive_disperse(side: DisperseSide, cancel: &Cancel, dropped: &AtomicUsize) ->
     let queued: usize = queues.values().map(VecDeque::len).sum();
     dropped.fetch_add(queued + dropped_items(finished.dropped), Ordering::SeqCst);
 
+    if width > 1 && !authority_chunked && other_chunked && !cancel.is_stopped() {
+        warnings
+            .lock()
+            .expect("not poisoned")
+            .push(RunWarning::NeverChunked { node: head });
+    }
+
     Ok(())
+}
+
+/// Folds one slot's chunk id into whether the authority, or some other slot, has been seen
+/// carrying a chunk above zero anywhere in the run so far.
+fn note_chunk(
+    slot: usize,
+    authority: usize,
+    chunk: u64,
+    authority_chunked: &mut bool,
+    other_chunked: &mut bool,
+) {
+    if chunk == 0 {
+        return;
+    }
+
+    if slot == authority {
+        *authority_chunked = true;
+    } else {
+        *other_chunked = true;
+    }
 }
 
 /// What a refused offer means for the run.
