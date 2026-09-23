@@ -1,10 +1,12 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 
 use av_toolbox_core::StageError;
 use ffms2::IndexErrorHandling;
 use ffms2::index::{Index, Indexer};
+
+use super::describe_error;
 
 static INIT: Once = Once::new();
 
@@ -34,25 +36,43 @@ pub(crate) fn index_path(source: &Path, index_dir: Option<&Path>) -> Result<Path
         StageError::msg(message)
     })?;
 
-    let mut hasher = DefaultHasher::new();
-    canonical.hash(&mut hasher);
-    let hash = hasher.finish();
-
     let file_name = source.file_name().ok_or_else(|| {
         let display = source.display();
         let message = format!("{display} has no file name");
 
         StageError::msg(message)
     })?;
-    let name = file_name.to_string_lossy();
-    let indexed_name = format!("{name}.{hash:016x}.ffindex");
+    let indexed_name = keyed_name(file_name, &canonical);
+    let path = index_dir.join(indexed_name);
 
-    Ok(index_dir.join(indexed_name))
+    Ok(path)
+}
+
+/// The index file name for `file_name`, keyed by a 64-bit FNV-1a hash of its canonical path.
+///
+/// The hash is written out here rather than taken from the standard library, whose hashers can
+/// change between Rust releases and would orphan every index already written.
+fn keyed_name(file_name: &OsStr, canonical: &Path) -> String {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let bytes = canonical.as_os_str().as_encoded_bytes();
+    let mut hash = OFFSET_BASIS;
+
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+
+    let name = file_name.to_string_lossy();
+
+    format!("{name}.{hash:016x}.ffindex")
 }
 
 fn indexing_error(source: &Path, error: ffms2::Error) -> StageError {
     let display = source.display();
-    let message = format!("ffms2 could not index {display}: {error:?}");
+    let described = describe_error(&error);
+    let message = format!("ffms2 could not index {display}: {described}");
 
     StageError::msg(message)
 }
@@ -97,6 +117,7 @@ pub(crate) fn load_or_build(source: &Path, index_dir: Option<&Path>) -> Result<I
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::path::PathBuf;
 
     use super::*;
@@ -109,7 +130,8 @@ mod tests {
 
     fn copied(folder: &tempfile::TempDir, name: &str) -> PathBuf {
         let target = folder.path().join(name);
-        std::fs::copy(media(name), &target).expect("copies the media");
+        let media = media(name);
+        std::fs::copy(media, &target).expect("copies the media");
 
         target
     }
@@ -159,20 +181,26 @@ mod tests {
     }
 
     #[test]
+    fn a_known_path_gives_a_known_index_name() {
+        let name = keyed_name(OsStr::new("clip.mkv"), Path::new("/media/clip.mkv"));
+
+        assert_eq!(name, "clip.mkv.90986a809d219fa1.ffindex");
+    }
+
+    #[test]
     fn a_stale_index_is_rebuilt() {
         let folder = tempfile::tempdir().expect("a temp dir");
         let source = copied(&folder, "yuv420p.mkv");
         let other = copied(&folder, "nv12.nut");
         load_or_build(&other, None).expect("indexes the other file");
-        std::fs::copy(
-            folder.path().join("nv12.nut.ffindex"),
-            folder.path().join("yuv420p.mkv.ffindex"),
-        )
-        .expect("plants an index for the wrong file");
+        let other_index = folder.path().join("nv12.nut.ffindex");
+        let planted = folder.path().join("yuv420p.mkv.ffindex");
+        std::fs::copy(other_index, planted).expect("plants an index for the wrong file");
 
-        let index = load_or_build(&source, None);
+        let index = load_or_build(&source, None).expect("rebuilds");
+        let belongs = index.IndexBelongsToFile(&source);
 
-        assert!(index.is_ok());
+        assert!(belongs.is_ok());
     }
 
     #[test]

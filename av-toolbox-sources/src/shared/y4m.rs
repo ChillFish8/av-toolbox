@@ -140,8 +140,19 @@ fn layout_of(colorspace: Colorspace) -> Result<(FrameLayout, SampleFormat), Stag
         Colorspace::Cmono | Colorspace::Cmono12 => None,
         Colorspace::C422 | Colorspace::C422p10 | Colorspace::C422p12 => Some(Subsampling::Yuv422),
         Colorspace::C444 | Colorspace::C444p10 | Colorspace::C444p12 => Some(Subsampling::Yuv444),
-        _ => Some(Subsampling::Yuv420),
+        Colorspace::C420
+        | Colorspace::C420p10
+        | Colorspace::C420p12
+        | Colorspace::C420jpeg
+        | Colorspace::C420paldv
+        | Colorspace::C420mpeg2 => Some(Subsampling::Yuv420),
+        unknown => {
+            let message = format!("the y4m colourspace {unknown:?} is not supported");
+
+            return Err(StageError::msg(message));
+        },
     };
+
     let layout = match subsampling {
         Some(subsampling) => FrameLayout::Yuv { subsampling },
         None => FrameLayout::Grey,
@@ -224,10 +235,11 @@ mod tests {
         let mut bytes = Vec::new();
         let mut builder = y4m::encode(4, 2, Ratio::new(25, 1)).with_colorspace(colorspace);
         if let Some(range) = range {
-            let extension =
-                VendorExtensionString::new(format!("COLORRANGE={range}").into_bytes()).expect("valid");
+            let field = format!("COLORRANGE={range}");
+            let extension = VendorExtensionString::new(field.into_bytes()).expect("valid");
             builder = builder.append_vendor_extension(extension);
         }
+
         let mut encoder = builder.write_header(&mut bytes).expect("writes the header");
 
         let sample_bytes = colorspace.get_bytes_per_sample();
@@ -363,10 +375,13 @@ mod tests {
 
     #[test]
     fn the_colour_range_extension_sets_the_range() {
-        let full = Y4mReader::open(Cursor::new(stream(Colorspace::C420, 0, Some("FULL")))).expect("opens");
-        let limited =
-            Y4mReader::open(Cursor::new(stream(Colorspace::C420, 0, Some("LIMITED")))).expect("opens");
-        let unset = Y4mReader::open(Cursor::new(stream(Colorspace::C420, 0, None))).expect("opens");
+        let full_stream = stream(Colorspace::C420, 0, Some("FULL"));
+        let limited_stream = stream(Colorspace::C420, 0, Some("LIMITED"));
+        let unset_stream = stream(Colorspace::C420, 0, None);
+
+        let full = Y4mReader::open(Cursor::new(full_stream)).expect("opens");
+        let limited = Y4mReader::open(Cursor::new(limited_stream)).expect("opens");
+        let unset = Y4mReader::open(Cursor::new(unset_stream)).expect("opens");
 
         assert_eq!(full.format().colour.range, ColourRange::Full);
         assert_eq!(limited.format().colour.range, ColourRange::Limited);
@@ -376,7 +391,8 @@ mod tests {
     #[test]
     fn frames_carry_their_bytes_index_and_timestamp() {
         let context = testing_context();
-        let mut reader = Y4mReader::open(Cursor::new(stream(Colorspace::C420, 3, None))).expect("opens");
+        let bytes = stream(Colorspace::C420, 3, None);
+        let mut reader = Y4mReader::open(Cursor::new(bytes)).expect("opens");
 
         let mut frames = Vec::new();
         while let Some(frame) = reader.read_frame(&context).expect("reads") {
@@ -406,11 +422,29 @@ mod tests {
     #[test]
     fn sixteen_bit_samples_keep_both_bytes() {
         let context = testing_context();
-        let mut reader = Y4mReader::open(Cursor::new(stream(Colorspace::C420p10, 1, None))).expect("opens");
+        let mut bytes = Vec::new();
+        let mut encoder = y4m::encode(4, 2, Ratio::new(25, 1))
+            .with_colorspace(Colorspace::C420p10)
+            .write_header(&mut bytes)
+            .expect("writes the header");
+        let y_plane = [0x34u8, 0x02].repeat(8);
+        let u_plane = [0x78u8, 0x01].repeat(2);
+        let v_plane = [0xbcu8, 0x03].repeat(2);
+        let frame = y4m::Frame::new([&y_plane, &u_plane, &v_plane], None);
+        encoder.write_frame(&frame).expect("writes a frame");
+        let mut reader = Y4mReader::open(Cursor::new(bytes)).expect("opens");
 
         let frame = reader.read_frame(&context).expect("reads").expect("a frame");
 
-        assert_eq!(frame.plane(Channel::Y).expect("luma").bytes().len(), 16);
+        assert_eq!(frame.plane(Channel::Y).expect("luma").bytes(), y_plane.as_slice());
+        assert_eq!(
+            frame.plane(Channel::U).expect("chroma").bytes(),
+            u_plane.as_slice()
+        );
+        assert_eq!(
+            frame.plane(Channel::V).expect("chroma").bytes(),
+            v_plane.as_slice()
+        );
     }
 
     #[test]
@@ -462,7 +496,8 @@ mod tests {
     #[test]
     fn a_clean_end_of_stream_ends_the_reader() {
         let context = testing_context();
-        let mut reader = Y4mReader::open(Cursor::new(stream(Colorspace::C420, 1, None))).expect("opens");
+        let bytes = stream(Colorspace::C420, 1, None);
+        let mut reader = Y4mReader::open(Cursor::new(bytes)).expect("opens");
 
         reader.read_frame(&context).expect("reads").expect("a frame");
 

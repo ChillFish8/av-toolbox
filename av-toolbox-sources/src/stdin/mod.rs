@@ -66,7 +66,8 @@ impl SourceDefinition for Stdin {
 
     fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
         let guard = StdinGuard::process();
-        let reader = BufReader::new(io::stdin());
+        let stdin = io::stdin();
+        let reader = BufReader::new(stdin);
 
         open_from(&guard, reader)
     }
@@ -120,8 +121,11 @@ mod tests {
     #[test]
     fn a_second_stdin_open_is_refused() {
         let guard = StdinGuard::for_test();
-        let first = open_from(&guard, Cursor::new(crate::shared::tests::y4m_header_only()));
-        let second = open_from(&guard, Cursor::new(crate::shared::tests::y4m_header_only()));
+        let first_bytes = crate::shared::tests::y4m_header_only();
+        let second_bytes = crate::shared::tests::y4m_header_only();
+
+        let first = open_from(&guard, Cursor::new(first_bytes));
+        let second = open_from(&guard, Cursor::new(second_bytes));
 
         assert!(first.is_ok());
         assert!(second.is_err());

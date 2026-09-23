@@ -2,8 +2,8 @@ mod format;
 mod index;
 
 use std::path::{Path, PathBuf};
-use std::slice;
 use std::time::Duration;
+use std::{panic, slice};
 
 use av_toolbox_core::{
     BoundInputs,
@@ -98,12 +98,15 @@ impl SourceDefinition for File {
     type Opened = Opened;
 
     fn open(args: &Self::Args) -> Result<Self::Opened, StageError> {
+        require_i32("track", args.track)?;
+        require_i32("threads", args.threads)?;
         require_utf8_path(&args.path)?;
 
-        let index_path = index::index_path(&args.path, args.index_dir.as_deref())?;
+        let index_dir = args.index_dir.as_deref();
+        let index_path = index::index_path(&args.path, index_dir)?;
         require_utf8_path(&index_path)?;
 
-        let index = index::load_or_build(&args.path, args.index_dir.as_deref())?;
+        let index = index::load_or_build(&args.path, index_dir)?;
 
         let track_index = match args.track {
             Some(track) => track,
@@ -115,8 +118,8 @@ impl SourceDefinition for File {
         };
 
         let threads = args.threads.unwrap_or(0);
-        // SEEK_LINEAR_NO_RW refuses to seek at all, and ffms2 needs to seek to reach even frame
-        // 0 of a regular seekable container, so this needs SEEK_NORMAL instead.
+        // SEEK_LINEAR_NO_RW fails the very first request for frame 0, the probe below, as a
+        // non-linear access, since FFMS2 has already decoded past frame 0 while opening the track.
         let created = VideoSource::new(&args.path, track_index, &index, threads, SeekMode::SEEK_NORMAL);
         let mut video = created.map_err(|error| open_error(&args.path, error))?;
         let track = Track::TrackFromVideo(&mut video);
@@ -246,11 +249,7 @@ impl Source<HostSide> for FileSource {
     }
 }
 
-/// Fails unless a decoded frame's own resolution and converted pixel format match what
-/// `SetOutputFormatV2` was asked for.
-///
-/// `next` calls this before any plane is sliced, so `copy_plane`'s row and stride arithmetic can
-/// trust the frame actually holds the output format it was built from.
+/// Fails unless a decoded frame's own resolution and converted pixel format match the expected ones.
 fn validate_decoded_frame(
     frame: &Frame,
     expected_width: u32,
@@ -367,7 +366,7 @@ fn resolve_choice(
 /// The colour a frame carries, mapped from its ffms2 properties.
 ///
 /// A forced format that crosses the RGB/YUV family boundary overrides the source's matrix and
-/// range, which no longer describe the samples once ffms2 has recoloured them: an RGB output made
+/// range, which no longer describe the samples once ffms2 has recoloured them. An RGB output made
 /// from a YUV source is identity matrix at full range, and a YUV output made from an RGB source
 /// carries no matrix or range at all.
 fn colour_of(
@@ -434,7 +433,7 @@ fn primaries_of(value: i32) -> Primaries {
 
 fn transfer_of(value: i32) -> Transfer {
     match value {
-        1 => Transfer::Bt709,
+        1 | 6 | 14 | 15 => Transfer::Bt709,
         13 => Transfer::Srgb,
         16 => Transfer::Pq,
         18 => Transfer::Hlg,
@@ -456,12 +455,34 @@ fn timestamp_of(pts: i64, numerator: i64, denominator: i64) -> Option<Duration> 
     let numerator = u64::try_from(numerator).ok()?;
     let denominator = u64::try_from(denominator).ok()?;
 
-    let scaled = u128::from(pts).checked_mul(u128::from(numerator))?;
+    let pts = u128::from(pts);
+    let numerator = u128::from(numerator);
+    let denominator = u128::from(denominator);
+
+    let scaled = pts.checked_mul(numerator)?;
     let scaled = scaled.checked_mul(1_000_000)?;
-    let nanos = scaled / u128::from(denominator);
+    let nanos = scaled / denominator;
     let nanos = u64::try_from(nanos).ok()?;
 
     Some(Duration::from_nanos(nanos))
+}
+
+/// Fails when an argument the `ffms2` crate casts to `i32` is above `i32::MAX`.
+fn require_i32(name: &str, value: Option<usize>) -> Result<(), StageError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+
+    let converted = i32::try_from(value);
+
+    if converted.is_ok() {
+        return Ok(());
+    }
+
+    let limit = i32::MAX;
+    let message = format!("{name} is {value}, above the most ffms2 accepts of {limit}");
+
+    Err(StageError::msg(message))
 }
 
 /// Fails when `path` is not a UTF-8 string ffms2 can turn into a `CString`.
@@ -485,23 +506,38 @@ fn require_utf8_path(path: &Path) -> Result<(), StageError> {
     Ok(())
 }
 
+/// Describes an FFMS2 error without the NUL padding of its message buffer.
+///
+/// The `ffms2` crate's `Debug` impl panics on an error code or message it cannot read, so a panic
+/// there gives a fixed description instead.
+fn describe_error(error: &ffms2::Error) -> String {
+    let described = panic::catch_unwind(|| format!("{error:?}"));
+    let text = described.unwrap_or_else(|_| "an error ffms2 could not describe".to_string());
+    let trimmed = text.trim_end_matches('\0');
+
+    trimmed.to_string()
+}
+
 fn open_error(path: &Path, error: ffms2::Error) -> StageError {
     let display = path.display();
-    let message = format!("ffms2 could not open {display}: {error:?}");
+    let described = describe_error(&error);
+    let message = format!("ffms2 could not open {display}: {described}");
 
     StageError::msg(message)
 }
 
 fn track_error(path: &Path, error: ffms2::Error) -> StageError {
     let display = path.display();
-    let message = format!("ffms2 could not find a video track in {display}: {error:?}");
+    let described = describe_error(&error);
+    let message = format!("ffms2 could not find a video track in {display}: {described}");
 
     StageError::msg(message)
 }
 
 fn frame_error(path: &Path, frame: usize, error: ffms2::Error) -> StageError {
     let display = path.display();
-    let message = format!("ffms2 could not decode frame {frame} of {display}: {error:?}");
+    let described = describe_error(&error);
+    let message = format!("ffms2 could not decode frame {frame} of {display}: {described}");
 
     StageError::msg(message)
 }
@@ -539,11 +575,18 @@ mod tests {
 
     use super::*;
 
-    fn opened(name: &str, format: Option<Carried>) -> (tempfile::TempDir, Opened) {
+    fn copied(name: &str) -> (tempfile::TempDir, PathBuf) {
         let folder = tempfile::tempdir().expect("a temp dir");
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let media = manifest.join("tests").join("media").join(name);
         let source = folder.path().join(name);
-        std::fs::copy(manifest.join("tests").join("media").join(name), &source).expect("copies");
+        std::fs::copy(media, &source).expect("copies");
+
+        (folder, source)
+    }
+
+    fn opened(name: &str, format: Option<Carried>) -> (tempfile::TempDir, Opened) {
+        let (folder, source) = copied(name);
         let args = FileArgs {
             path: source,
             track: None,
@@ -599,6 +642,28 @@ mod tests {
                 depth: av_toolbox_gpu::Depth::TEN
             }
         );
+    }
+
+    #[test]
+    fn a_ten_bit_file_decodes_every_frame_with_two_byte_samples() {
+        let (_folder, opened) = opened("yuv420p10.mkv", None);
+
+        let frames = decode_all(opened);
+
+        assert_eq!(frames.len(), 8);
+        for frame in &frames {
+            let luma = frame.plane(Channel::Y).expect("luma");
+            let u_plane = frame.plane(Channel::U).expect("chroma");
+            let v_plane = frame.plane(Channel::V).expect("chroma");
+
+            assert_eq!(luma.bytes().len(), 64 * 64 * 2);
+            assert_eq!(u_plane.bytes().len(), 32 * 32 * 2);
+            assert_eq!(v_plane.bytes().len(), 32 * 32 * 2);
+            assert!(luma.bytes().chunks(2).any(|sample| sample[1] != 0));
+
+            let mut samples = luma.bytes().chunks(2);
+            assert!(samples.all(|sample| u16::from_le_bytes([sample[0], sample[1]]) < 1024));
+        }
     }
 
     #[test]
@@ -820,6 +885,59 @@ mod tests {
             .expect_err("zero row bytes");
 
         assert!(error.to_string().contains('0'));
+    }
+
+    #[test]
+    fn an_error_opening_a_missing_file_carries_no_nul_padding() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let args = FileArgs {
+            path: folder.path().join("missing.mkv"),
+            track: None,
+            index_dir: None,
+            format: None,
+            threads: None,
+        };
+
+        let opened = File::open(&args);
+        let error = opened.err().expect("the file is missing");
+        let message = error.to_string();
+
+        assert!(!message.contains('\0'), "{message:?}");
+    }
+
+    #[test]
+    fn a_track_or_thread_count_above_i32_max_is_refused() {
+        let too_large = i32::MAX as usize + 1;
+        let (_folder, source) = copied("yuv420p.mkv");
+        let track_args = FileArgs {
+            path: source.clone(),
+            track: Some(too_large),
+            index_dir: None,
+            format: None,
+            threads: None,
+        };
+        let threads_args = FileArgs {
+            path: source,
+            track: None,
+            index_dir: None,
+            format: None,
+            threads: Some(too_large),
+        };
+
+        let track_error = File::open(&track_args).err().expect("the track is too large");
+        let threads_error = File::open(&threads_args)
+            .err()
+            .expect("the thread count is too large");
+
+        assert!(track_error.to_string().contains("track"));
+        assert!(threads_error.to_string().contains("threads"));
+    }
+
+    #[test]
+    fn transfers_on_the_bt709_curve_map_to_bt709() {
+        for value in [1, 6, 14, 15] {
+            assert_eq!(transfer_of(value), Transfer::Bt709, "{value}");
+        }
     }
 
     #[test]

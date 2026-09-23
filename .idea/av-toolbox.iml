@@ -16,6 +16,8 @@
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-gpu/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-runtime/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-graph/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-sources/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-sources/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
