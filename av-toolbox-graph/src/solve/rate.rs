@@ -26,12 +26,10 @@ impl Solver<'_> {
         let message = format!("{listed}, but every frames input of a stage must share one frame rate");
 
         let node = self.graph.node(id);
-        self.diagnostics.push(Diagnostic::error(
-            DiagnosticCode::FrameRateMismatch,
-            stage_path(node.kind(), node.name()),
-            node.span(),
-            message,
-        ));
+        let path = stage_path(node.kind(), node.name());
+        let diagnostic = Diagnostic::error(DiagnosticCode::FrameRateMismatch, path, node.span(), message);
+
+        self.diagnostics.push(diagnostic);
 
         false
     }

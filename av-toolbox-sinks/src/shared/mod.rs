@@ -2,7 +2,7 @@ mod rate;
 mod y4m;
 
 #[cfg(test)]
-pub(crate) mod tests;
+pub(crate) mod testing;
 
 use std::io::Write;
 
@@ -106,11 +106,11 @@ impl<W: Write + Send + 'static> Sink<HostSide> for Y4mSink<W> {
 }
 
 #[cfg(test)]
-mod sink_tests {
+mod tests {
     use av_toolbox_gpu::{FrameFormat, FrameRate, MaskFormat};
 
     use super::*;
-    use crate::shared::tests::{SharedBuffer, resolved, yuv420};
+    use crate::shared::testing::{SharedBuffer, resolved, yuv420};
 
     fn rate(numerator: u32, denominator: u32) -> FrameRate {
         FrameRate::new(numerator, denominator).expect("a valid rate")

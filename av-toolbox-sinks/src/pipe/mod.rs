@@ -151,11 +151,17 @@ fn create_path(path: &Path) -> Result<File, StageError> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::io;
+    #[cfg(unix)]
+    use std::io::Read;
+    #[cfg(unix)]
+    use std::os::fd::IntoRawFd;
 
     use av_toolbox_gpu::{FrameRate, SampleFormat, testing_context};
 
     use super::*;
-    use crate::shared::tests::{consume, filled_frame, resolved, yuv420};
+    use crate::shared::testing::{consume, filled_frame, resolved, yuv420};
 
     fn formats() -> ResolvedFormats {
         let rate = FrameRate::new(25, 1);
@@ -243,10 +249,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_fd_from_a_real_pipe_is_written_through_and_closed_afterwards() {
-        use std::io::Read;
-        use std::os::fd::IntoRawFd;
-
-        let (mut reader, writer) = std::io::pipe().expect("a pipe");
+        let (mut reader, writer) = io::pipe().expect("a pipe");
         let fd = writer.into_raw_fd() as u32;
         let target = args(Some(fd), None);
 

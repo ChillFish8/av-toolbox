@@ -95,7 +95,7 @@ mod tests {
     use av_toolbox_gpu::{FrameRate, SampleFormat, testing_context};
 
     use super::*;
-    use crate::shared::tests::{SharedBuffer, consume, filled_frame, resolved, yuv420};
+    use crate::shared::testing::{SharedBuffer, consume, filled_frame, resolved, yuv420};
 
     #[test]
     fn stdout_writes_through_the_writer_it_is_given() {

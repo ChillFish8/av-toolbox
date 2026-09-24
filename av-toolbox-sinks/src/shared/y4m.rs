@@ -223,7 +223,7 @@ mod tests {
     use av_toolbox_gpu::{ColourRange, Depth, FrameMeta, testing_context};
 
     use super::*;
-    use crate::shared::tests::{SharedBuffer, filled_frame, yuv420};
+    use crate::shared::testing::{SharedBuffer, filled_frame, yuv420};
 
     fn rate(numerator: u32, denominator: u32) -> FrameRate {
         FrameRate::new(numerator, denominator).expect("a valid rate")
