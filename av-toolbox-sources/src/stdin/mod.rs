@@ -1,5 +1,5 @@
 use std::io;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, IsTerminal, Read};
 
 use av_toolbox_core::{
     BoundInputs,
@@ -46,6 +46,14 @@ impl SourceDefinition for Stdin {
     fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
         let claims = Claims::process();
         let stdin = io::stdin();
+        let is_terminal = stdin.is_terminal();
+
+        tracing::info!("y4m/stdin is reading a y4m stream from standard input");
+
+        if let Some(notice) = waiting_notice(is_terminal) {
+            tracing::warn!("{notice}");
+        }
+
         let reader = BufReader::new(stdin);
 
         open_from(claims, reader)
@@ -68,6 +76,17 @@ impl SourceDefinition for Stdin {
 
         Ok(Box::new(source))
     }
+}
+
+/// What to log before reading standard input, louder when nothing is piped in.
+fn waiting_notice(is_terminal: bool) -> Option<&'static str> {
+    if is_terminal {
+        let notice = "y4m/stdin is waiting for a y4m stream on standard input, which is a terminal. Pipe one in, such as `< input.y4m`.";
+
+        return Some(notice);
+    }
+
+    None
 }
 
 fn open_from<R: Read>(claims: &Claims, reader: R) -> Result<Y4mReader<R>, StageError> {
@@ -104,5 +123,20 @@ mod tests {
 
         assert!(first.is_ok());
         assert!(second.is_err());
+    }
+
+    #[test]
+    fn a_terminal_on_stdin_gets_a_waiting_warning() {
+        let notice = waiting_notice(true).expect("a notice");
+
+        assert!(notice.contains("waiting"));
+        assert!(notice.contains("< input.y4m"));
+    }
+
+    #[test]
+    fn a_piped_stdin_gets_no_warning() {
+        let notice = waiting_notice(false);
+
+        assert!(notice.is_none());
     }
 }
