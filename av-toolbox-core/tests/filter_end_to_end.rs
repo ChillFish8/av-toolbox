@@ -97,6 +97,7 @@ fn frame_format() -> FrameFormat {
         },
         sample: SampleFormat::F32,
         colour: ColourInfo::default(),
+        frame_rate: None,
     }
 }
 

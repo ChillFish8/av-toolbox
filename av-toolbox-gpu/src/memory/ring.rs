@@ -171,6 +171,7 @@ mod tests {
             },
             sample: SampleFormat::U8,
             colour: ColourInfo::default(),
+            frame_rate: None,
         }
     }
 

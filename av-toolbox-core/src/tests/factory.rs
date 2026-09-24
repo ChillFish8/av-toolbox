@@ -635,6 +635,7 @@ fn frame_format() -> FrameFormat {
         },
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
+        frame_rate: None,
     }
 }
 

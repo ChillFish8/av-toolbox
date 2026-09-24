@@ -11,6 +11,7 @@ pub(crate) mod gpu;
 mod host;
 mod host_frame;
 mod layout;
+mod rate;
 mod sample;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -29,4 +30,5 @@ pub use self::gpu::{Frame, FrameMeta, FrameMut, Mask, Plane, PlaneBuffer, SceneS
 pub use self::host::{HostItem, HostPlanes};
 pub use self::host_frame::{HostFrame, HostFrameMut, HostMask, HostMaskMut, HostPlane, HostStreamItem};
 pub use self::layout::{Channel, FrameLayout, Subsampling};
+pub use self::rate::FrameRate;
 pub use self::sample::{Depth, DepthError, SampleFormat};

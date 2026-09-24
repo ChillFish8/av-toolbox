@@ -1,6 +1,7 @@
 use std::fmt;
 
 use crate::frame::layout::{Channel, FrameLayout};
+use crate::frame::rate::FrameRate;
 use crate::frame::sample::SampleFormat;
 
 /// Whether samples use the full range of their depth or the narrower video range.
@@ -61,6 +62,8 @@ pub struct FrameFormat {
     pub layout: FrameLayout,
     pub sample: SampleFormat,
     pub colour: ColourInfo,
+    /// How many frames the stream shows per second, `None` when it is unknown.
+    pub frame_rate: Option<FrameRate>,
 }
 
 impl FrameFormat {
@@ -216,6 +219,7 @@ mod tests {
             layout,
             sample,
             colour: ColourInfo::default(),
+            frame_rate: None,
         }
     }
 
@@ -257,6 +261,7 @@ mod tests {
             },
             sample: SampleFormat::F32,
             colour: ColourInfo::default(),
+            frame_rate: None,
         };
 
         let expected = (3840 * 2160 + 2 * 1920 * 1080) * 4;

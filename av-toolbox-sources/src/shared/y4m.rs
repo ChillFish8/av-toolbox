@@ -71,6 +71,7 @@ impl<R: Read> Y4mReader<R> {
             layout,
             sample,
             colour,
+            frame_rate: None,
         };
 
         let frame_rate = decoder.get_framerate();

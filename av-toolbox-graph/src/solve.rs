@@ -813,6 +813,7 @@ mod tests {
             },
             sample,
             colour: ColourInfo::default(),
+            frame_rate: None,
         })
     }
 

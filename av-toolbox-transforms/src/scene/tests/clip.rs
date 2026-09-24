@@ -30,6 +30,7 @@ pub(super) fn grey8_of(width: u32, height: u32) -> FrameFormat {
         layout: FrameLayout::Grey,
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
+        frame_rate: None,
     }
 }
 
@@ -42,6 +43,7 @@ pub(super) fn yuv420_ten_bit() -> FrameFormat {
         },
         sample: SampleFormat::U16 { depth: Depth::TEN },
         colour: ColourInfo::default(),
+        frame_rate: None,
     }
 }
 

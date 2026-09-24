@@ -157,6 +157,7 @@ impl SourceDefinition for File {
             layout,
             sample,
             colour,
+            frame_rate: None,
         };
         let expected = FrameShape {
             width,
@@ -870,6 +871,7 @@ mod tests {
             layout: FrameLayout::Grey,
             sample: SampleFormat::U8,
             colour: ColourInfo::default(),
+            frame_rate: None,
         };
         let path = PathBuf::from("/nonexistent");
 

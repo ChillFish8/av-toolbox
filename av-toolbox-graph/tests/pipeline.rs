@@ -167,6 +167,7 @@ fn fixture_format() -> StreamFormat {
         },
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
+        frame_rate: None,
     })
 }
 

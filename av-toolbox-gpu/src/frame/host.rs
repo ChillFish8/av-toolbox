@@ -155,6 +155,7 @@ mod tests {
             },
             sample,
             colour: ColourInfo::default(),
+            frame_rate: None,
         })
     }
 
@@ -236,6 +237,7 @@ mod tests {
             layout: FrameLayout::Grey,
             sample: SampleFormat::U8,
             colour: ColourInfo::default(),
+            frame_rate: None,
         });
         planes.resize_for(&grey);
 

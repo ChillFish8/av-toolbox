@@ -70,6 +70,7 @@ pub use self::frame::{
     FrameLayout,
     FrameMeta,
     FrameMut,
+    FrameRate,
     HostFrame,
     HostFrameMut,
     HostItem,
