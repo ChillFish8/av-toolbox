@@ -12,5 +12,5 @@ pub mod toml;
 
 pub use self::backend::{OpenBackendError, open_backend};
 pub use self::error::PipelineError;
-pub use self::pipeline::{CompiledPipeline, Pipeline, StageRef};
+pub use self::pipeline::{CompiledPipeline, LiveSource, Pipeline, StageRef};
 pub use self::registry::registry;

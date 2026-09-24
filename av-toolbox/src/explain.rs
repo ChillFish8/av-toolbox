@@ -2,9 +2,11 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
+use av_toolbox_pipeline::{LiveSource, Pipeline};
 use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::cli::{Args, ExplainArgs};
+use crate::load::Loaded;
 use crate::{load, report};
 
 const DEFAULT_HTML_PATH: &str = "plan.html";
@@ -25,15 +27,13 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
     };
 
     if explain.structure_only {
-        let warnings = pipeline.warnings();
-        report::diagnostics(&mut stderr, &loaded.file, warnings);
+        return draw_structure(&pipeline, explain, &loaded, &mut stderr);
+    }
 
-        let drawn = if explain.html {
-            pipeline.render_html()
-        } else {
-            pipeline.render_ascii()
-        };
-        return output(explain, &drawn, &mut stderr);
+    let live_sources = pipeline.live_sources();
+    if !live_sources.is_empty() {
+        log_live_sources(&live_sources);
+        return draw_structure(&pipeline, explain, &loaded, &mut stderr);
     }
 
     let Some(backend) = load::backend(args, &mut stderr) else {
@@ -50,6 +50,36 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
         compiled.render_ascii()
     };
     output(explain, &drawn, &mut stderr)
+}
+
+fn draw_structure(
+    pipeline: &Pipeline<'_>,
+    explain: &ExplainArgs,
+    loaded: &Loaded,
+    stderr: &mut dyn WriteColor,
+) -> ExitCode {
+    let warnings = pipeline.warnings();
+    report::diagnostics(stderr, &loaded.file, warnings);
+
+    let drawn = if explain.html {
+        pipeline.render_html()
+    } else {
+        pipeline.render_ascii()
+    };
+
+    output(explain, &drawn, stderr)
+}
+
+fn log_live_sources(live_sources: &[LiveSource<'_>]) {
+    for live_source in live_sources {
+        let name = live_source.stage.name;
+        let stage_type = live_source.stage_type;
+
+        tracing::info!(
+            "source {name} ({stage_type}) reads a live stream, so formats and transfers are not shown. \
+             Pipe a stream in and run execute to see them."
+        );
+    }
 }
 
 fn output(explain: &ExplainArgs, drawn: &str, stderr: &mut dyn WriteColor) -> ExitCode {

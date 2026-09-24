@@ -103,6 +103,11 @@ pub trait StageFactory<P: ?Sized>: Send + Sync {
         inputs: &[InputArgument],
         slot: &OpenSlot,
     ) -> Result<Box<P>, BuildStageError>;
+
+    /// Whether opening this stage's input, given `args`, would wait on a live stream.
+    fn reads_stream(&self, _args: &Value) -> Result<bool, BuildStageError> {
+        Ok(false)
+    }
 }
 
 /// A source whose arguments are deserialized, ready to negotiate and build.
@@ -676,6 +681,12 @@ macro_rules! impl_source_factory {
                     inputs: bound,
                     slot: slot.clone(),
                 }))
+            }
+
+            fn reads_stream(&self, args: &Value) -> Result<bool, BuildStageError> {
+                let args = self.deserialize_args(args)?;
+
+                Ok(D::reads_stream(&args))
             }
         }
     };

@@ -43,6 +43,10 @@ impl SourceDefinition for Stdin {
     type Side = HostSide;
     type Opened = Opened;
 
+    fn reads_stream(_args: &Self::Args) -> bool {
+        true
+    }
+
     fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
         let claims = Claims::process();
         let stdin = io::stdin();
@@ -138,5 +142,10 @@ mod tests {
         let notice = waiting_notice(false);
 
         assert!(notice.is_none());
+    }
+
+    #[test]
+    fn stdin_reads_a_live_stream() {
+        assert!(Stdin::reads_stream(&StdinArgs {}));
     }
 }

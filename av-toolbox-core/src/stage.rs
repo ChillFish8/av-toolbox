@@ -228,6 +228,11 @@ pub trait SourceDefinition: StageDefinition {
     /// Opens the input, which happens once per graph.
     fn open(args: &Self::Args) -> Result<Self::Opened, StageError>;
 
+    /// Whether opening the input waits on a live stream, such as standard input or a pipe.
+    fn reads_stream(_args: &Self::Args) -> bool {
+        false
+    }
+
     /// What it could produce, given what opening the input found.
     fn produces(capabilities: &Capabilities, opened: &Self::Opened) -> Result<OutputFormats, StageError>;
 

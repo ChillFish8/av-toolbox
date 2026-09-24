@@ -29,6 +29,13 @@ pub struct StageRef<'a> {
     pub span: Span,
 }
 
+/// A written source whose input is a live stream.
+#[derive(Debug, Copy, Clone)]
+pub struct LiveSource<'a> {
+    pub stage: StageRef<'a>,
+    pub stage_type: &'a str,
+}
+
 /// A checked and optimised pipeline, ready to draw or compile.
 pub struct Pipeline<'r> {
     registry: &'r PipelineRegistry,
@@ -72,6 +79,11 @@ impl<'r> Pipeline<'r> {
 
     pub fn stage_of(&self, id: NodeId) -> Option<StageRef<'_>> {
         stage_of(&self.graph, id)
+    }
+
+    /// Every written source in the graph whose input is a live stream.
+    pub fn live_sources(&self) -> Vec<LiveSource<'_>> {
+        live_sources(&self.graph, self.registry)
     }
 
     /// Settles every edge's format, places the transfers and plans the run on `backend`.
@@ -153,6 +165,39 @@ fn stage_of(graph: &CompiledGraph, id: NodeId) -> Option<StageRef<'_>> {
         name: node.name(),
         span: node.span(),
     })
+}
+
+/// Every written source in `graph` whose input is a live stream, according to `registry`.
+fn live_sources<'a>(graph: &'a CompiledGraph, registry: &PipelineRegistry) -> Vec<LiveSource<'a>> {
+    let mut found = Vec::new();
+
+    for node in graph.nodes() {
+        let is_written_source = node.role() == NodeRole::Stage && node.kind() == StageKind::Source;
+        if !is_written_source {
+            continue;
+        }
+
+        let identifier = node.identifier();
+        let args = node.args();
+        let reads_stream = registry.reads_stream(identifier, args).unwrap_or(false);
+
+        if !reads_stream {
+            continue;
+        }
+
+        let stage = StageRef {
+            kind: node.kind(),
+            name: node.name(),
+            span: node.span(),
+        };
+
+        found.push(LiveSource {
+            stage,
+            stage_type: identifier,
+        });
+    }
+
+    found
 }
 
 #[cfg(test)]
@@ -248,5 +293,39 @@ inputs = ["input"]
         let pipeline = Pipeline::build(&registry, &specs).expect("should build");
 
         assert!(pipeline.stage_of(NodeId::new(99)).is_none());
+    }
+
+    #[test]
+    fn live_sources_lists_a_source_that_reads_a_stream() {
+        let registry = crate::registry().expect("the built-in stages register");
+        let specs = specs(PASSTHROUGH);
+        let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+
+        let live_sources = pipeline.live_sources();
+        let names: Vec<&str> = live_sources
+            .iter()
+            .map(|live_source| live_source.stage.name)
+            .collect();
+
+        assert_eq!(names, vec!["input"]);
+    }
+
+    #[test]
+    fn live_sources_is_empty_for_a_regular_file_pipe() {
+        let registry = crate::registry().expect("the built-in stages register");
+        let text = r#"
+[source.input]
+type = "y4m/pipe"
+args.path = "clip.y4m"
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["input"]
+"#;
+        let specs = specs(text);
+        let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+        let live_sources = pipeline.live_sources();
+
+        assert!(live_sources.is_empty());
     }
 }

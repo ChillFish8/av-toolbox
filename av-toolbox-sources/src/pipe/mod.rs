@@ -2,6 +2,8 @@ use std::fs::File;
 use std::io::BufReader;
 #[cfg(unix)]
 use std::os::fd::{FromRawFd, RawFd};
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 
 use av_toolbox_core::{BoundInputs, InputSignature, Source, SourceDefinition, StageDefinition, StageError};
@@ -59,6 +61,14 @@ impl SourceDefinition for Pipe {
         let reader = BufReader::new(file);
 
         Y4mReader::open(reader)
+    }
+
+    fn reads_stream(args: &Self::Args) -> bool {
+        match (args.fd, &args.path) {
+            (Some(_), None) => true,
+            (None, Some(path)) => path_is_fifo(path),
+            _ => false,
+        }
     }
 
     fn produces(_capabilities: &Capabilities, opened: &Self::Opened) -> Result<OutputFormats, StageError> {
@@ -125,6 +135,20 @@ fn file_from_fd(_fd: u32) -> Result<File, StageError> {
     Err(StageError::msg(
         "y4m/pipe can only read a file descriptor on Unix, use path instead",
     ))
+}
+
+/// Whether `path` is a FIFO, false for anything else, including a path that cannot be read.
+#[cfg(unix)]
+fn path_is_fifo(path: &Path) -> bool {
+    let metadata = std::fs::metadata(path);
+    let is_fifo = metadata.map(|metadata| metadata.file_type().is_fifo());
+
+    is_fifo.unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn path_is_fifo(_path: &Path) -> bool {
+    false
 }
 
 fn open_path(path: &Path) -> Result<File, StageError> {
@@ -273,5 +297,53 @@ mod tests {
         let error = Pipe::open(&args).err().expect("stdin is refused");
 
         assert!(error.to_string().contains("y4m/stdin"));
+    }
+
+    #[test]
+    fn an_fd_reads_a_live_stream() {
+        let args = PipeArgs {
+            fd: Some(3),
+            path: None,
+        };
+
+        assert!(Pipe::reads_stream(&args));
+    }
+
+    #[test]
+    fn a_regular_file_path_does_not_read_a_live_stream() {
+        let file = tempfile::NamedTempFile::new().expect("a temp file");
+        let path = file.path().to_path_buf();
+        let args = PipeArgs {
+            fd: None,
+            path: Some(path),
+        };
+
+        assert!(!Pipe::reads_stream(&args));
+    }
+
+    #[test]
+    fn neither_fd_nor_path_does_not_read_a_live_stream() {
+        let args = PipeArgs { fd: None, path: None };
+
+        assert!(!Pipe::reads_stream(&args));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_path_reads_a_live_stream() {
+        let directory = tempfile::tempdir().expect("a temp directory");
+        let fifo_path = directory.path().join("input.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .expect("runs mkfifo");
+        assert!(status.success());
+
+        let args = PipeArgs {
+            fd: None,
+            path: Some(fifo_path),
+        };
+
+        assert!(Pipe::reads_stream(&args));
     }
 }

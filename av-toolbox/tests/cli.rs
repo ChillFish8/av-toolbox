@@ -201,6 +201,24 @@ fn a_usage_error_exits_two() {
     assert_eq!(output.status.code(), Some(2));
 }
 
+#[test]
+fn explain_falls_back_to_the_structure_for_a_live_stream() {
+    let path = example("passthrough.toml");
+    let path = path.to_str().expect("utf-8 path");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+        .args(["--color", "never", "explain", path])
+        .env("RUST_LOG", "info")
+        .output()
+        .expect("the binary runs");
+    let stderr = text(&output.stderr);
+    let stdout = text(&output.stdout);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stdout.contains("output"));
+    assert!(stderr.contains("reads a live stream"));
+}
+
 #[cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device {
     use std::io::Write;
@@ -264,29 +282,40 @@ mod device {
     }
 
     #[test]
-    fn explain_compiles_the_passthrough_example_on_a_device() {
-        let path = example("passthrough.toml");
-        let path = path.to_str().expect("utf-8 path");
-
-        let mut child = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
-            .args(["--color", "never", "explain", path])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the binary runs");
-
-        let mut stdin = child.stdin.take().expect("stdin is piped");
+    fn explain_compiles_a_non_live_pipeline_on_a_device() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let input_path = directory.path().join("input.y4m");
+        let output_path = directory.path().join("output.y4m");
         let input = y4m_stream();
-        let feeder = thread::spawn(move || {
-            stdin.write_all(&input).expect("writes the stream");
-        });
+        std::fs::write(&input_path, input).expect("writes the input");
 
-        let output = child.wait_with_output().expect("the binary finishes");
-        feeder.join().expect("the feeder thread finishes");
+        let input_path = input_path.to_str().expect("utf-8 path");
+        let output_path = output_path.to_str().expect("utf-8 path");
+        let content = format!(
+            r#"
+[source.input]
+type = "y4m/pipe"
+args.path = "{input_path}"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["input"]
+args.path = "{output_path}"
+"#
+        );
+        let pipeline_path = directory.path().join("pipeline.toml");
+        std::fs::write(&pipeline_path, content).expect("writes the pipeline");
+        let pipeline_path = pipeline_path.to_str().expect("utf-8 path");
+
+        let output = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args(["--color", "never", "explain", pipeline_path])
+            .output()
+            .expect("the binary runs");
         let stderr = text(&output.stderr);
+        let stdout = text(&output.stdout);
 
         assert!(output.status.success(), "{stderr}");
-        assert!(text(&output.stdout).contains("output"));
+        assert!(stdout.contains("output"));
+        assert!(!stderr.contains("reads a live stream"));
     }
 }

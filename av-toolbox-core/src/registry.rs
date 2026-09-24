@@ -151,6 +151,13 @@ impl PipelineRegistry {
         }
     }
 
+    /// Whether opening a registered source's input, given `args`, would wait on a live stream.
+    pub fn reads_stream(&self, identifier: &str, args: &Value) -> Result<bool, BuildStageError> {
+        let factory = lookup(&self.sources, StageKind::Source, identifier)?;
+
+        factory.reads_stream(args)
+    }
+
     /// Describes every registered stage.
     pub fn stages(&self) -> impl Iterator<Item = StageInfo<'_>> {
         let sources = self.sources.values().map(|factory| factory.info());
@@ -195,6 +202,21 @@ where
     Ok(())
 }
 
+/// Looks `identifier` up among `factories`, or reports it unknown for `kind`.
+fn lookup<'f, P: ?Sized>(
+    factories: &'f Factories<P>,
+    kind: StageKind,
+    identifier: &str,
+) -> Result<&'f dyn StageFactory<P>, BuildStageError> {
+    factories
+        .get(identifier)
+        .map(|factory| factory.as_ref())
+        .ok_or_else(|| BuildStageError::UnknownStage {
+            kind,
+            identifier: identifier.to_string(),
+        })
+}
+
 fn prepare<P: ?Sized>(
     factories: &Factories<P>,
     kind: StageKind,
@@ -203,12 +225,7 @@ fn prepare<P: ?Sized>(
     inputs: &[InputArgument],
     slot: &OpenSlot,
 ) -> Result<Box<P>, BuildStageError> {
-    let factory = factories
-        .get(identifier)
-        .ok_or_else(|| BuildStageError::UnknownStage {
-            kind,
-            identifier: identifier.to_string(),
-        })?;
+    let factory = lookup(factories, kind, identifier)?;
 
     factory.prepare(args, inputs, slot)
 }
@@ -313,6 +330,53 @@ mod tests {
 
         fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
             Ok(())
+        }
+
+        fn produces(
+            _capabilities: &Capabilities,
+            _opened: &Self::Opened,
+        ) -> Result<OutputFormats, StageError> {
+            unreachable!("not exercised by these tests")
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _opened: Self::Opened,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Source>, StageError> {
+            Ok(Box::new(FileSource))
+        }
+    }
+
+    struct LiveSourceDefinition;
+
+    impl StageDefinition for LiveSourceDefinition {
+        type Args = FileArgs;
+
+        fn package() -> &'static str {
+            "builtin"
+        }
+
+        fn identifier() -> &'static str {
+            "live"
+        }
+
+        fn inputs() -> &'static InputSignature {
+            &InputSignature::EMPTY
+        }
+    }
+
+    impl SourceDefinition for LiveSourceDefinition {
+        type Side = DeviceSide;
+        type Opened = ();
+
+        fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
+            Ok(())
+        }
+
+        fn reads_stream(_args: &Self::Args) -> bool {
+            true
         }
 
         fn produces(
@@ -736,6 +800,72 @@ mod tests {
         registry
             .register_source::<FileSourceDefinition>()
             .expect("only the crossing identifiers are reserved");
+    }
+
+    fn registry_with_file_and_live_sources() -> PipelineRegistry {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_source::<FileSourceDefinition>()
+            .expect("should register");
+        registry
+            .register_source::<LiveSourceDefinition>()
+            .expect("should register");
+
+        registry
+    }
+
+    #[test]
+    fn reads_stream_answers_true_for_a_source_that_overrides_it() {
+        let registry = registry_with_file_and_live_sources();
+        let args = serde_json::json!({ "input": "clip.y4m" });
+
+        let reads_stream = registry
+            .reads_stream("builtin/live", &args)
+            .expect("should answer");
+
+        assert!(reads_stream);
+    }
+
+    #[test]
+    fn reads_stream_defaults_to_false() {
+        let registry = registry_with_file_and_live_sources();
+        let args = serde_json::json!({ "input": "clip.y4m" });
+
+        let reads_stream = registry
+            .reads_stream("builtin/file", &args)
+            .expect("should answer");
+
+        assert!(!reads_stream);
+    }
+
+    #[test]
+    fn reads_stream_rejects_invalid_args() {
+        let registry = registry_with_file_and_live_sources();
+        let args = serde_json::json!({});
+
+        let error = registry
+            .reads_stream("builtin/file", &args)
+            .expect_err("input is required");
+
+        assert!(matches!(error, BuildStageError::InvalidArgs { .. }));
+    }
+
+    #[test]
+    fn reads_stream_rejects_an_unknown_identifier() {
+        let registry = registry_with_file_and_live_sources();
+        let args = serde_json::json!({ "input": "clip.y4m" });
+
+        let error = registry
+            .reads_stream("builtin/missing", &args)
+            .expect_err("the identifier is not registered");
+
+        assert!(matches!(
+            error,
+            BuildStageError::UnknownStage {
+                kind: StageKind::Source,
+                ..
+            },
+        ));
     }
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
