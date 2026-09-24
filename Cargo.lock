@@ -213,6 +213,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "av-toolbox-sinks"
+version = "0.1.0"
+dependencies = [
+ "av-toolbox-core",
+ "av-toolbox-gpu",
+ "av-toolbox-graph",
+ "av-toolbox-runtime",
+ "av-toolbox-sources",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "y4m",
+]
+
+[[package]]
 name = "av-toolbox-sources"
 version = "0.1.0"
 dependencies = [
