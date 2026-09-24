@@ -1,41 +1,20 @@
 use std::io;
 use std::io::{BufReader, Read};
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use av_toolbox_core::{BoundInputs, InputSignature, Source, SourceDefinition, StageDefinition, StageError};
+use av_toolbox_core::{
+    BoundInputs,
+    Claims,
+    InputSignature,
+    Source,
+    SourceDefinition,
+    StageDefinition,
+    StageError,
+};
 use av_toolbox_gpu::{BuildContext, Capabilities, HostSide, OutputFormats, ResolvedFormats, Runtime};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::shared::{Y4mReader, Y4mSource, produced_by};
-
-/// Standard input can be read by one source per process.
-static STDIN_TAKEN: AtomicBool = AtomicBool::new(false);
-
-/// Guards standard input against being opened by more than one `y4m/stdin` source.
-struct StdinGuard {
-    taken: &'static AtomicBool,
-}
-
-impl StdinGuard {
-    fn process() -> Self {
-        Self { taken: &STDIN_TAKEN }
-    }
-
-    /// Whether standard input was already claimed by an earlier open.
-    fn claim(&self) -> bool {
-        self.taken.swap(true, Ordering::SeqCst)
-    }
-}
-
-#[cfg(test)]
-impl StdinGuard {
-    fn for_test() -> Self {
-        let leaked = Box::leak(Box::new(AtomicBool::new(false)));
-
-        Self { taken: leaked }
-    }
-}
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub(crate) struct StdinArgs {}
@@ -65,11 +44,11 @@ impl SourceDefinition for Stdin {
     type Opened = Opened;
 
     fn open(_args: &Self::Args) -> Result<Self::Opened, StageError> {
-        let guard = StdinGuard::process();
+        let claims = Claims::process();
         let stdin = io::stdin();
         let reader = BufReader::new(stdin);
 
-        open_from(&guard, reader)
+        open_from(claims, reader)
     }
 
     fn produces(_capabilities: &Capabilities, opened: &Self::Opened) -> Result<OutputFormats, StageError> {
@@ -91,13 +70,9 @@ impl SourceDefinition for Stdin {
     }
 }
 
-fn open_from<R: Read>(guard: &StdinGuard, reader: R) -> Result<Y4mReader<R>, StageError> {
-    let already_taken = guard.claim();
-    if already_taken {
-        return Err(StageError::msg(
-            "stdin is already read by another y4m/stdin source",
-        ));
-    }
+fn open_from<R: Read>(claims: &Claims, reader: R) -> Result<Y4mReader<R>, StageError> {
+    let claimed = claims.claim_stdin();
+    claimed.map_err(|_| StageError::msg("stdin is already read by another y4m/stdin source"))?;
 
     Y4mReader::open(reader)
 }
@@ -110,22 +85,22 @@ mod tests {
 
     #[test]
     fn stdin_opens_through_the_reader_it_is_given() {
-        let guard = StdinGuard::for_test();
+        let claims = Claims::new();
         let bytes = crate::shared::tests::y4m_header_only();
 
-        let opened = open_from(&guard, Cursor::new(bytes)).expect("opens");
+        let opened = open_from(&claims, Cursor::new(bytes)).expect("opens");
 
         assert_eq!(opened.format().width, 4);
     }
 
     #[test]
     fn a_second_stdin_open_is_refused() {
-        let guard = StdinGuard::for_test();
+        let claims = Claims::new();
         let first_bytes = crate::shared::tests::y4m_header_only();
         let second_bytes = crate::shared::tests::y4m_header_only();
 
-        let first = open_from(&guard, Cursor::new(first_bytes));
-        let second = open_from(&guard, Cursor::new(second_bytes));
+        let first = open_from(&claims, Cursor::new(first_bytes));
+        let second = open_from(&claims, Cursor::new(second_bytes));
 
         assert!(first.is_ok());
         assert!(second.is_err());

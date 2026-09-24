@@ -18,6 +18,7 @@
 //! validates arguments against the schema and binds inputs to the signature before handing them
 //! to the stage.
 
+mod claims;
 mod crossing;
 mod error;
 mod factory;
@@ -41,6 +42,7 @@ mod tests;
 
 pub use av_toolbox_gpu::{AnyItem, DeviceSide, HostSide, Side};
 
+pub use self::claims::{ClaimError, Claims};
 pub use self::crossing::Crossing;
 pub use self::error::{
     ArgsError,
