@@ -36,3 +36,8 @@ tempfile = "3"
 y4m = "0.8"
 ffms2-sys = "0.3"
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "preserve_order"] }
+bytesize = "2.7"
+clap = { version = "4.6", features = ["derive", "env"] }
+codespan-reporting = "0.13"
+ctrlc = "3.5"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
