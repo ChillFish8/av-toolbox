@@ -83,47 +83,67 @@ impl BuildTask for WriteLuma {
     }
 }
 
+/// The width of the plane [WriteOversizedPlane] writes.
+const OVERSIZED_WIDTH: usize = 8192;
+
+/// The most memory the oversized plane may take, so a device with a huge axis limit fails the
+/// test rather than the allocation.
+const OVERSIZED_MAX_BYTES: usize = 1 << 30;
+
 /// A plane with more cubes in it than a device takes on one axis of a launch.
 ///
-/// At 8192 square it is 64 MiB of `u32` elements, which is 65536 cubes of 256 units on a device
-/// whose cube is 16 by 16. A device with a wider cube covers the same plane in fewer, so
-/// [WriteOversizedPlane] checks the count against what this device reports rather than assuming it.
-fn oversized_format() -> MaskFormat {
+/// Its height is grown until its `u32` elements need one cube more than `axis_limit`, counted in
+/// cubes of `units_per_cube`, since the cube size and the limit both vary by device.
+fn oversized_format(units_per_cube: usize, axis_limit: usize) -> MaskFormat {
+    let elements_needed = (axis_limit + 1) * units_per_cube;
+    let bytes_needed = elements_needed * size_of::<u32>();
+
+    assert!(
+        bytes_needed <= OVERSIZED_MAX_BYTES,
+        "this device takes {axis_limit} cubes of {units_per_cube} units on one axis, so a plane \
+         that overruns it needs {bytes_needed} bytes, more than this test allows itself",
+    );
+
+    let height = bytes_needed.div_ceil(OVERSIZED_WIDTH);
+
     MaskFormat {
-        width: 8192,
-        height: 8192,
+        width: OVERSIZED_WIDTH as u32,
+        height: height as u32,
         sample: SampleFormat::U8,
     }
 }
 
-/// Writes indices across a plane too large for a single-axis launch and hands its samples back.
+/// Writes indices across a plane too large for a single-axis launch.
+///
+/// It hands back how many elements the plane holds and the samples that came back.
 struct WriteOversizedPlane;
 
 impl BuildTask for WriteOversizedPlane {
-    type Output = Vec<u32>;
+    type Output = (usize, Vec<u32>);
 
     fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
         let frames = context.frame_context();
-        let mask = frames.alloc_mask(&oversized_format(), FrameMeta::at(0));
-        let plane = mask.plane();
-
-        let count = elements(plane.buffer().bytes());
-
         let units_per_cube = frames.cube_dim().num_elems() as usize;
-        let cubes = count.div_ceil(units_per_cube);
         let limit = frames.capabilities().max_cube_count.0 as usize;
+        let format = oversized_format(units_per_cube, limit);
+
+        let mask = frames.alloc_mask(&format, FrameMeta::at(0));
+        let plane = mask.plane();
+        let count = elements(plane.buffer().bytes());
+        let cubes = count.div_ceil(units_per_cube);
 
         assert!(
             cubes > limit,
             "this plane is {cubes} cubes of {units_per_cube} units, which fits the first axis \
-             limit of {limit}, so the launch below never spreads and this test pins nothing. \
-             Grow the plane until it does not fit rather than deleting the test.",
+             limit of {limit}, so the launch below never spreads and this test pins nothing",
         );
 
         let binding = plane.array::<u32, R>();
         launch(context, binding, count, 0);
 
-        read_back(context.client(), plane.buffer().handle())
+        let samples = read_back(context.client(), plane.buffer().handle());
+
+        (count, samples)
     }
 }
 
@@ -181,14 +201,14 @@ fn a_kernel_writes_every_sample_a_plane_binding_names() {
 /// by the device rather than producing wrong samples, so this fails as a panic from the launch.
 #[test]
 fn a_kernel_covers_a_plane_too_large_for_a_single_axis_launch() {
-    let samples = backend().build(WriteOversizedPlane);
+    let (count, samples) = backend().build(WriteOversizedPlane);
 
     let wrong = samples
         .iter()
         .enumerate()
         .find(|(index, sample)| **sample != *index as u32);
 
-    assert_eq!(samples.len(), elements(8192 * 8192));
+    assert_eq!(samples.len(), count);
     assert_eq!(wrong, None, "the launch did not cover the whole plane");
 }
 

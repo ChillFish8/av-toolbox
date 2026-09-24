@@ -330,18 +330,29 @@ fn unlanded_format() -> StreamFormat {
     mask_format(4096, 4096)
 }
 
-/// Polls `batch` once and hands it back still in flight.
-fn poll_once(batch: PendingBatch) -> PendingBatch {
-    let polled = batch.try_wait().expect("a pending read is not a failure");
+/// How many reads [polled_read] starts before deciding this device lands every one on its first
+/// poll.
+const POLL_ATTEMPTS: usize = 10;
 
-    match polled {
-        TryWait::NotReady(batch) => batch,
-        TryWait::Ready(_) => panic!(
-            "this device landed a 16 MiB read on its first poll, so nothing here was ever \
-             polled and unlanded and these tests pin nothing. Grow the read until it does not \
-             land rather than deleting them."
-        ),
+/// Starts a read and polls it once, handing it back still in flight.
+///
+/// A read can land on its first poll now and then when the device is idle and the thread is slow to
+/// check, so another is started until one does not.
+fn polled_read(frames: &FrameContext, format: &StreamFormat, seed: u8) -> PendingBatch {
+    for _ in 0..POLL_ATTEMPTS {
+        let batch = start_read(frames, format, seed);
+        let polled = batch.try_wait().expect("a pending read is not a failure");
+
+        if let TryWait::NotReady(batch) = polled {
+            return batch;
+        }
     }
+
+    panic!(
+        "this device landed {POLL_ATTEMPTS} 16 MiB reads on their first poll, so nothing here is \
+         ever polled and unlanded and these tests pin nothing. Grow the read until it does not \
+         land rather than deleting them."
+    );
 }
 
 /// The regression the drop rule exists for.
@@ -354,7 +365,7 @@ fn abandoning_a_polled_batch_leaves_the_device_usable() {
     let frames = backend().frame_context();
     let format = unlanded_format();
 
-    let batch = poll_once(start_read(&frames, &format, 0));
+    let batch = polled_read(&frames, &format, 0);
     drop(batch);
 
     for round in 1..=3u8 {
@@ -396,12 +407,26 @@ fn time_of_drop(batch: PendingBatch) -> Duration {
     started.elapsed()
 }
 
+/// How many reads the landing time is the fastest of.
+///
+/// Other tests share the device, so one read can land slowly while it is busy. The fastest of
+/// several is what a read costs on its own, which load cannot inflate.
+const LANDING_SAMPLES: usize = 5;
+
+/// The fastest a read that has already been polled once lands, out of [LANDING_SAMPLES] reads.
+fn fastest_landing(frames: &FrameContext, format: &StreamFormat) -> Duration {
+    (0..LANDING_SAMPLES)
+        .map(|_| time_to_land_after_a_poll(frames, format))
+        .min()
+        .expect("at least one read is timed")
+}
+
 /// How long a read that has already been polled once takes to land.
 ///
 /// That is what dropping a polled batch has left to wait for, so it is what such a drop is
 /// measured against.
 fn time_to_land_after_a_poll(frames: &FrameContext, format: &StreamFormat) -> Duration {
-    let batch = poll_once(start_read(frames, format, 0));
+    let batch = polled_read(frames, format, 0);
 
     let started = Instant::now();
     batch.wait().expect("the read should land");
@@ -420,10 +445,13 @@ fn dropping_a_polled_batch_waits_for_it_and_dropping_an_unpolled_one_does_not() 
 
     // The first read of a size grows the staging pool, which is not what is being timed here.
     time_to_land_after_a_poll(&frames, &format);
-    let landing = time_to_land_after_a_poll(&frames, &format);
+    let landing = fastest_landing(&frames, &format);
 
-    let polled = time_of_drop(poll_once(start_read(&frames, &format, 0)));
-    let unpolled = time_of_drop(start_read(&frames, &format, 0));
+    let polled_batch = polled_read(&frames, &format, 0);
+    let polled = time_of_drop(polled_batch);
+
+    let unpolled_batch = start_read(&frames, &format, 0);
+    let unpolled = time_of_drop(unpolled_batch);
 
     assert!(
         polled * 10 > landing,
