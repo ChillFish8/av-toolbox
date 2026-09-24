@@ -1,7 +1,9 @@
-use av_toolbox_core::StageKind;
+use av_toolbox_core::{Crossing, Parallelism, Residency, StageKind};
 use serde_json::json;
 
 use crate::graph::{CompiledGraph, NodeId};
+use crate::plan::Routing;
+use crate::render::diagram::{Block, Diagram, DiagramBox, Endpoint, Exchange, ExchangeKind, Link};
 use crate::{Spanned, StageSpec, build, testing};
 
 pub(crate) fn built(specs: &[StageSpec]) -> CompiledGraph {
@@ -214,4 +216,210 @@ pub(crate) fn planned_round_trip() -> CompiledGraph {
 
     graph.set_execution_plan(made);
     graph
+}
+
+/// One stage of the hand built example, before it becomes a box.
+struct ExampleStage {
+    name: &'static str,
+    identifier: &'static str,
+    kind: StageKind,
+    residency: Residency,
+    crossing: Option<Crossing>,
+    block: usize,
+}
+
+fn example_stage(
+    name: &'static str,
+    identifier: &'static str,
+    kind: StageKind,
+    residency: Residency,
+    block: usize,
+) -> ExampleStage {
+    ExampleStage {
+        name,
+        identifier,
+        kind,
+        residency,
+        crossing: None,
+        block,
+    }
+}
+
+fn example_crossing(name: &'static str, crossing: Crossing, block: usize) -> ExampleStage {
+    ExampleStage {
+        name,
+        identifier: crossing.identifier(),
+        kind: StageKind::Transform,
+        residency: crossing.to_side(),
+        crossing: Some(crossing),
+        block,
+    }
+}
+
+fn example_block(
+    id: usize,
+    boxes: &[usize],
+    width: usize,
+    routing: Option<Routing>,
+    reason: Option<&'static str>,
+) -> Block {
+    let granularity = match width {
+        1 => Parallelism::Stream,
+        _ => Parallelism::Chunk,
+    };
+    let boxes = boxes.iter().map(|index| NodeId::new(*index)).collect();
+
+    Block {
+        id,
+        boxes,
+        width,
+        granularity: Some(granularity),
+        routing,
+        reason,
+    }
+}
+
+fn example_link(from: Endpoint, to: Endpoint, param: Option<&'static str>, bounded: Option<bool>) -> Link {
+    Link {
+        from,
+        to,
+        param,
+        bounded,
+    }
+}
+
+fn example_node(index: usize) -> Endpoint {
+    let node = NodeId::new(index);
+    Endpoint::Box(node)
+}
+
+/// A realistic planned pipeline, built by hand.
+///
+/// Region 0 decodes, detects scenes and uploads. Region 1 runs eight workers on the gpu, where a
+/// denoise feeds a deband and an edge mask and a blend reads all three. Region 2 re-splits scenes,
+/// region 3 encodes on six workers, region 4 muxes, and region 5 scores the output against the
+/// source.
+pub(crate) fn example_diagram() -> Diagram {
+    let stages = vec![
+        example_stage("source", "ffms2/video", StageKind::Source, Residency::Host, 0),
+        example_stage("scenes", "scene/detect", StageKind::Transform, Residency::Host, 0),
+        example_crossing("upload(scenes)", Crossing::Upload, 0),
+        example_stage(
+            "denoise",
+            "nlmeans/temporal",
+            StageKind::Filter,
+            Residency::Device,
+            1,
+        ),
+        example_stage("deband", "f3kdb/deband", StageKind::Filter, Residency::Device, 1),
+        example_stage("edges", "mask/sobel", StageKind::Mask, Residency::Device, 1),
+        example_stage("merge", "mask/blend", StageKind::Mask, Residency::Device, 1),
+        example_crossing("unload(merge)", Crossing::Unload, 1),
+        example_stage("chunks", "scene/split", StageKind::Transform, Residency::Host, 2),
+        example_stage(
+            "encode",
+            "svt-av1/encode",
+            StageKind::Transform,
+            Residency::Host,
+            3,
+        ),
+        example_stage("mux", "matroska/write", StageKind::Sink, Residency::Host, 4),
+        example_stage("quality", "vmaf/report", StageKind::Sink, Residency::Host, 5),
+    ];
+
+    let blocks = vec![
+        example_block(0, &[0, 1, 2], 1, None, None),
+        example_block(1, &[3, 4, 5, 6, 7], 8, Some(Routing::ByChunk), None),
+        example_block(2, &[8], 1, None, Some("granularity")),
+        example_block(3, &[9], 6, Some(Routing::ByChunk), None),
+        example_block(4, &[10], 1, None, Some("granularity")),
+        example_block(5, &[11], 1, None, Some("granularity")),
+    ];
+
+    let boxes = stages
+        .iter()
+        .enumerate()
+        .map(|(index, stage)| DiagramBox {
+            node: NodeId::new(index),
+            block: stage.block,
+            name: stage.name.to_string(),
+            identifier: stage.identifier.to_string(),
+            kind: stage.kind,
+            residency: Some(stage.residency),
+            crossing: stage.crossing,
+            width: blocks[stage.block].width,
+            reason: None,
+        })
+        .collect();
+
+    let exchanges = vec![
+        Exchange {
+            block: 1,
+            kind: ExchangeKind::Disperse { slot: Some(0) },
+            width: 8,
+        },
+        Exchange {
+            block: 1,
+            kind: ExchangeKind::Aggregate,
+            width: 8,
+        },
+        Exchange {
+            block: 3,
+            kind: ExchangeKind::Disperse { slot: Some(0) },
+            width: 6,
+        },
+        Exchange {
+            block: 3,
+            kind: ExchangeKind::Aggregate,
+            width: 6,
+        },
+        Exchange {
+            block: 5,
+            kind: ExchangeKind::Disperse { slot: Some(0) },
+            width: 1,
+        },
+    ];
+
+    let local = None;
+    let unbounded = Some(false);
+    let bounded = Some(true);
+    let links = vec![
+        example_link(example_node(0), example_node(1), Some("clip"), local),
+        example_link(example_node(1), example_node(2), None, local),
+        example_link(example_node(2), Endpoint::Disperse(1), Some("clip"), unbounded),
+        example_link(example_node(3), example_node(4), Some("clip"), local),
+        example_link(example_node(3), example_node(5), Some("clip"), local),
+        example_link(example_node(4), example_node(6), Some("base"), local),
+        example_link(example_node(3), example_node(6), Some("overlay"), local),
+        example_link(example_node(5), example_node(6), Some("mask"), local),
+        example_link(example_node(6), example_node(7), None, local),
+        example_link(Endpoint::Aggregate(1), example_node(8), Some("clip"), unbounded),
+        example_link(example_node(8), Endpoint::Disperse(3), Some("clip"), unbounded),
+        example_link(Endpoint::Aggregate(3), example_node(10), Some("video"), unbounded),
+        example_link(
+            example_node(0),
+            Endpoint::Disperse(5),
+            Some("reference"),
+            unbounded,
+        ),
+        example_link(
+            Endpoint::Aggregate(1),
+            Endpoint::Disperse(5),
+            Some("distorted"),
+            unbounded,
+        ),
+        example_link(Endpoint::Disperse(1), example_node(3), None, unbounded),
+        example_link(example_node(7), Endpoint::Aggregate(1), None, bounded),
+        example_link(Endpoint::Disperse(3), example_node(9), None, unbounded),
+        example_link(example_node(9), Endpoint::Aggregate(3), None, bounded),
+        example_link(Endpoint::Disperse(5), example_node(11), None, unbounded),
+    ];
+
+    Diagram {
+        blocks,
+        boxes,
+        exchanges,
+        links,
+        planned: true,
+    }
 }

@@ -81,14 +81,6 @@ impl Diagram {
         }
     }
 
-    /// The block an endpoint is drawn in.
-    pub(crate) fn block_of(&self, endpoint: Endpoint) -> usize {
-        match endpoint {
-            Endpoint::Box(node) => self.boxes[node.index()].block,
-            Endpoint::Disperse(block) | Endpoint::Aggregate(block) => block,
-        }
-    }
-
     pub(crate) fn exchange(&self, endpoint: Endpoint) -> Option<&Exchange> {
         self.exchanges
             .iter()
@@ -124,6 +116,30 @@ impl Block {
         }
 
         heading
+    }
+
+    /// The line a text frame prints along its top border.
+    pub(crate) fn short_heading(&self) -> String {
+        let granularity = self.granularity.map(|granularity| granularity.to_string());
+
+        match (self.width, granularity) {
+            (1, Some(granularity)) => format!("region {} · {granularity}", self.id),
+            (width, Some(granularity)) => format!("region {} · ×{width} {granularity}", self.id),
+            (1, None) => format!("region {}", self.id),
+            (width, None) => format!("region {} · ×{width}", self.id),
+        }
+    }
+
+    /// The routing and the reason, for the line just inside a text frame, when there is either.
+    pub(crate) fn detail(&self) -> Option<String> {
+        let routing = self.routing.map(routing_text);
+
+        match (routing, self.reason) {
+            (Some(routing), Some(reason)) => Some(format!("{routing} ({reason})")),
+            (Some(routing), None) => Some(routing.to_string()),
+            (None, Some(reason)) => Some(format!("({reason})")),
+            (None, None) => None,
+        }
     }
 }
 
@@ -172,8 +188,18 @@ impl Exchange {
         }
     }
 
+    /// The symbol and ratio a text marker prints.
+    pub(crate) fn ratio(&self) -> String {
+        match self.kind {
+            ExchangeKind::Disperse { .. } => format!("◁ 1:{}", self.width),
+            ExchangeKind::Aggregate => format!("▷ {}:1", self.width),
+        }
+    }
+
     /// The ratio, the role and the bounding, one per line.
     pub(crate) fn lines(&self) -> [String; 3] {
+        let ratio = self.ratio();
+
         match self.kind {
             ExchangeKind::Disperse { slot } => {
                 let role = match slot {
@@ -181,13 +207,9 @@ impl Exchange {
                     None => String::from("disperse"),
                 };
 
-                [format!("◁ 1:{}", self.width), role, String::from("unbounded")]
+                [ratio, role, String::from("unbounded")]
             },
-            ExchangeKind::Aggregate => [
-                format!("▷ {}:1", self.width),
-                String::from("aggregate"),
-                String::from("bounded"),
-            ],
+            ExchangeKind::Aggregate => [ratio, String::from("aggregate"), String::from("bounded")],
         }
     }
 }
@@ -727,6 +749,55 @@ mod tests {
 
         assert_eq!(disperse.lines(), ["◁ 1:4", "disperse slot 0", "unbounded"]);
         assert_eq!(aggregate.lines(), ["▷ 4:1", "aggregate", "bounded"]);
+    }
+
+    #[test]
+    fn the_short_heading_names_the_width_and_granularity() {
+        let specs = fixtures::wide_pipeline(4);
+        let graph = fixtures::planned(&specs);
+        let diagram = Diagram::of(&graph);
+        let denoise = box_named(&diagram, "denoise");
+        let out = box_named(&diagram, "out");
+
+        let wide = diagram.blocks[denoise.block].short_heading();
+        let narrow = diagram.blocks[out.block].short_heading();
+
+        assert_eq!(wide, format!("region {} · ×4 chunk", denoise.block));
+        assert_eq!(narrow, format!("region {} · stream", out.block));
+    }
+
+    #[test]
+    fn the_detail_carries_the_routing_and_the_reason() {
+        let specs = fixtures::wide_pipeline(4);
+        let graph = fixtures::planned(&specs);
+        let diagram = Diagram::of(&graph);
+        let denoise = box_named(&diagram, "denoise");
+        let out = box_named(&diagram, "out");
+        let input = box_named(&diagram, "input");
+
+        assert_eq!(
+            diagram.blocks[denoise.block].detail(),
+            Some(String::from("by chunk"))
+        );
+        assert_eq!(
+            diagram.blocks[out.block].detail(),
+            Some(String::from("(granularity)"))
+        );
+        assert_eq!(diagram.blocks[input.block].detail(), None);
+    }
+
+    #[test]
+    fn each_exchange_prints_its_ratio() {
+        let specs = fixtures::wide_pipeline(4);
+        let graph = fixtures::planned(&specs);
+        let diagram = Diagram::of(&graph);
+        let ratios: Vec<String> = diagram
+            .exchanges
+            .iter()
+            .map(|exchange| exchange.ratio())
+            .collect();
+
+        assert_eq!(ratios, vec!["◁ 1:4", "▷ 4:1"]);
     }
 
     #[test]

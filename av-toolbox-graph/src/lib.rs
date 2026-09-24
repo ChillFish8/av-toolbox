@@ -30,7 +30,6 @@ mod build;
 mod diagnostic;
 mod graph;
 mod instantiate;
-mod layout;
 mod optimise;
 mod plan;
 mod render;

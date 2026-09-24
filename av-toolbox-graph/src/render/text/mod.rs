@@ -1,74 +1,46 @@
+mod cells;
 mod draw;
 mod frame;
 mod grid;
-mod place;
+mod tracks;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use self::draw::{Entry, Exit, box_entry, box_port, box_size, draw_box, draw_label, draw_lane, route};
-use self::frame::{FRAME_INSET, draw_frame, draw_marker, frame_size, marker_size};
+use self::cells::{Cell, Cells, Shape, place_cells};
+use self::draw::{box_size, draw_box, draw_label, draw_route};
+use self::frame::{LEGEND, draw_frame, draw_frame_text, draw_marker, marker_size};
 use self::grid::Grid;
-use self::place::{Placed, Rect, Run, gaps, place, turn_columns, widen};
+use self::tracks::{FrameCells, Geometry, Rect, Size, Wire, lay_out};
 use super::RenderOptions;
-use super::diagram::{Block, Diagram, Endpoint, Exchange};
+use super::diagram::{Diagram, Endpoint};
 use crate::graph::CompiledGraph;
-use crate::layout::{Layout, Slot, longest_path_ranks};
 
-/// Something drawn inside a block.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum Item {
-    Endpoint(Endpoint),
-    /// Where a line leaving a box crosses the block's last column, so it stays clear of the
-    /// boxes between it and the frame.
-    Port(Endpoint),
+/// What one item looks like, for sizing and drawing.
+#[derive(Debug, Clone)]
+enum Look {
+    Box {
+        lines: Vec<String>,
+        stacked: bool,
+        dashed: bool,
+    },
+    Marker {
+        ratio: String,
+    },
 }
 
-/// One item with everything needed to size and draw it.
-struct Placeable {
-    item: Item,
-    lines: Vec<String>,
-    stacked: bool,
-    dashed: bool,
+/// One box or marker, with the region it belongs to.
+#[derive(Debug, Clone)]
+struct Item {
+    endpoint: Endpoint,
+    region: usize,
+    look: Look,
 }
 
-/// One block laid out on its own, before it is placed among the others.
-struct BlockPlan {
-    items: Vec<Placeable>,
-    edge_links: Vec<Option<usize>>,
-    layout: Layout,
-    /// How many lines from inside the block enter each item.
-    inner_arrivals: Vec<usize>,
-    /// How many lines from anywhere enter each item.
-    arrivals: Vec<usize>,
-    placed: Placed,
-    size: (usize, usize),
-}
-
-/// One run of a line between two neighbouring columns.
-#[derive(Debug, Copy, Clone)]
-struct Hop {
-    rank: usize,
-    exit: Exit,
-    entry: Entry,
-}
-
-/// A label waiting to be written once every line is down, so no line can cut through it.
-struct PendingLabel {
-    end: usize,
-    y: usize,
-    text: &'static str,
-}
-
-/// Every block laid out and placed, ready to draw.
-struct Arrangement<'render> {
-    diagram: &'render Diagram,
-    labels: Vec<Option<&'static str>>,
-    plans: Vec<BlockPlan>,
-    outer_links: Vec<usize>,
-    outer: Layout,
-    placed: Placed,
-    /// Each block's items, placed where the block sits on the grid.
-    absolute: Vec<Placed>,
+/// Everything placed and routed, ready to draw.
+struct Arrangement {
+    items: Vec<Item>,
+    wires: Vec<Wire>,
+    geometry: Geometry,
 }
 
 /// Draws the graph left to right as boxes joined by lines.
@@ -81,691 +53,352 @@ pub fn render_ascii(graph: &CompiledGraph, options: &RenderOptions) -> String {
     }
 
     let diagram = Diagram::of(graph);
-    let arranged = arrange(&diagram, options);
+    draw_diagram(&diagram, options)
+}
 
-    let mut grid = Grid::new(arranged.placed.width, arranged.placed.height);
-    let mut pending = Vec::new();
+/// Draws a diagram on one grid, so every column shares a width and every row a port line.
+///
+/// Frame text and labels go down after every line, so no line cuts through them.
+pub(crate) fn draw_diagram(diagram: &Diagram, options: &RenderOptions) -> String {
+    if diagram.boxes.is_empty() {
+        return String::new();
+    }
 
-    if diagram.planned {
-        for (block, rect) in diagram.blocks.iter().zip(&arranged.placed.nodes) {
-            let heading = block.heading();
-            draw_frame(&mut grid, *rect, &heading);
+    let arranged = arrange(diagram, options);
+    let geometry = &arranged.geometry;
+    let mut grid = Grid::new(geometry.width, geometry.height);
+
+    for rect in &geometry.frames {
+        draw_frame(&mut grid, *rect);
+    }
+
+    let fronts = box_fronts(&arranged);
+
+    for (item, front) in arranged.items.iter().zip(&fronts) {
+        match &item.look {
+            Look::Box {
+                lines,
+                stacked,
+                dashed,
+            } => draw_box(&mut grid, *front, lines, *dashed, *stacked),
+            Look::Marker { ratio } => draw_marker(&mut grid, *front, ratio),
         }
     }
 
-    for (plan, inner) in arranged.plans.iter().zip(&arranged.absolute) {
-        draw_items(&mut grid, plan, inner);
-        draw_inner_links(&mut grid, plan, inner, &arranged.labels, &mut pending);
+    for (wire, points) in arranged.wires.iter().zip(&geometry.routes) {
+        let source = &arranged.items[wire.from];
+        let front = fronts[wire.from];
+        let cell = geometry.items[wire.from];
+        let boxed = matches!(source.look, Look::Box { .. });
+        let narrowed = front.width < cell.width;
+
+        draw_route(&mut grid, points, boxed && !narrowed);
+
+        if boxed && narrowed {
+            let (_, exit_y) = points[0];
+            grid.draw(front.right(), exit_y, '├');
+        }
     }
 
-    for lane in arranged.placed.virtuals.values() {
-        draw_lane(&mut grid, *lane);
+    for (block, rect) in diagram.blocks.iter().zip(&geometry.frames) {
+        let heading = block.short_heading();
+        let detail = block.detail();
+        draw_frame_text(&mut grid, *rect, &heading, detail.as_deref());
     }
 
-    draw_outer_links(&mut grid, &arranged, &mut pending);
+    for (link, spot) in diagram.links.iter().zip(&geometry.labels) {
+        let param = link.param.filter(|_| options.show_param_names);
+        let (Some(param), Some((end, y))) = (param, spot) else {
+            continue;
+        };
 
-    for label in pending {
-        draw_label(&mut grid, label.end, label.y, label.text);
+        draw_label(&mut grid, *end, *y, param);
     }
 
-    grid.render()
+    let mut rendered = grid.render();
+    while rendered.ends_with("\n\n") {
+        rendered.pop();
+    }
+
+    if diagram.planned {
+        rendered.push('\n');
+        rendered.push_str(LEGEND);
+        rendered.push('\n');
+    }
+
+    rendered
 }
 
-/// Lays out every block, then places the blocks among each other.
+/// The rectangle each item is drawn in.
 ///
-/// Rows never depend on the gaps between columns, so a first placement finds where every line
-/// turns, and the second widens each gap to give every turn its own column.
-fn arrange<'render>(diagram: &'render Diagram, options: &RenderOptions) -> Arrangement<'render> {
-    let labels: Vec<Option<&'static str>> = diagram
-        .links
+/// A plain box sharing a column with a stacked box is drawn one cell narrower, so its right
+/// border lines up with the stacked box's front rather than its shadow. Its line still leaves
+/// from the column's last cell.
+fn box_fronts(arranged: &Arrangement) -> Vec<Rect> {
+    let stacked_columns: HashSet<usize> = arranged
+        .items
         .iter()
-        .map(|link| link.param.filter(|_| options.show_param_names))
+        .zip(&arranged.geometry.items)
+        .filter(|(item, _)| matches!(item.look, Look::Box { stacked: true, .. }))
+        .map(|(_, rect)| rect.x)
         .collect();
 
-    let plans: Vec<BlockPlan> = diagram
-        .blocks
+    arranged
+        .items
         .iter()
-        .map(|block| plan_block(diagram, block, options, &labels))
-        .collect();
+        .zip(&arranged.geometry.items)
+        .map(|(item, rect)| {
+            let plain = matches!(item.look, Look::Box { stacked: false, .. });
 
-    let outer_links: Vec<usize> = (0..diagram.links.len())
-        .filter(|index| crosses_blocks(diagram, *index))
-        .collect();
-    let outer_edges: Vec<(usize, usize)> = outer_links
-        .iter()
-        .map(|index| block_edge(diagram, *index))
-        .collect();
-    let outer_labels: Vec<usize> = outer_links
-        .iter()
-        .map(|index| label_width(labels[*index]))
-        .collect();
-
-    let outer = Layout::build(plans.len(), &outer_edges);
-    let base_gaps = gaps(&outer, &outer_edges, &outer_labels);
-    let block_sizes: Vec<(usize, usize)> = plans.iter().map(|plan| plan.size).collect();
-
-    let inset = match diagram.planned {
-        true => FRAME_INSET,
-        false => 0,
-    };
-
-    let rough = place(&outer, &block_sizes, &base_gaps);
-    let rough_absolute = absolute_items(&plans, &rough, inset);
-    let links = OuterLinks {
-        diagram,
-        plans: &plans,
-        links: &outer_links,
-        layout: &outer,
-    };
-    let rough_hops = links.hops(&rough, &rough_absolute);
-    let turns = turns_of(&rough_hops);
-    let outer_gaps = widen(&base_gaps, &turns);
-
-    let placed = place(&outer, &block_sizes, &outer_gaps);
-    let absolute = absolute_items(&plans, &placed, inset);
-
-    Arrangement {
-        diagram,
-        labels,
-        plans,
-        outer_links,
-        outer,
-        placed,
-        absolute,
-    }
-}
-
-/// Moves each block's items to where the block sits, inside its frame.
-fn absolute_items(plans: &[BlockPlan], placed: &Placed, inset: usize) -> Vec<Placed> {
-    plans
-        .iter()
-        .zip(&placed.nodes)
-        .map(|(plan, rect)| plan.placed.shifted(rect.x + inset, rect.y + inset))
+            match plain && stacked_columns.contains(&rect.x) {
+                true => Rect {
+                    width: rect.width - 1,
+                    ..*rect
+                },
+                false => *rect,
+            }
+        })
         .collect()
 }
 
-fn crosses_blocks(diagram: &Diagram, index: usize) -> bool {
-    let link = &diagram.links[index];
-    diagram.block_of(link.from) != diagram.block_of(link.to)
-}
-
-fn block_edge(diagram: &Diagram, index: usize) -> (usize, usize) {
-    let link = &diagram.links[index];
-    let from = diagram.block_of(link.from);
-    let to = diagram.block_of(link.to);
-
-    (from, to)
-}
-
-fn label_width(label: Option<&str>) -> usize {
-    label.map_or(0, |label| label.chars().count())
-}
-
-/// Lays out one block's items in their own columns.
-///
-/// A disperse takes the first column and an aggregate the last. When a box read from outside the
-/// block sits before the last box column, every box read from outside gets a port in the last
-/// column, so each line leaves the block on its own row.
-fn plan_block(
-    diagram: &Diagram,
-    block: &Block,
-    options: &RenderOptions,
-    labels: &[Option<&'static str>],
-) -> BlockPlan {
-    let mut items = placeables(diagram, block, options);
-    let (mut edges, mut edge_links) = inner_edges(diagram, block, &items);
-
-    let mut ranks = longest_path_ranks(items.len(), &edges);
-    let deepest_box = items
+/// Places and routes every item, with wires in the same order as the diagram's links.
+fn arrange(diagram: &Diagram, options: &RenderOptions) -> Arrangement {
+    let items = items_of(diagram, options);
+    let index: HashMap<Endpoint, usize> = items
         .iter()
-        .zip(&ranks)
-        .filter(|(placeable, _)| matches!(placeable.item, Item::Endpoint(Endpoint::Box(_))))
-        .map(|(_, rank)| *rank)
-        .max()
-        .unwrap_or(0);
-    let last = deepest_box + 1;
-
-    for (position, placeable) in items.iter().enumerate() {
-        if matches!(placeable.item, Item::Endpoint(Endpoint::Aggregate(_))) {
-            ranks[position] = last;
-        }
-    }
-
-    let leaving = leaving_boxes(diagram, block);
-    let needs_ports = leaving.iter().any(|source| {
-        let position = position_of(&items, Item::Endpoint(*source));
-        ranks[position] < deepest_box
-    });
-
-    if needs_ports {
-        for source in leaving {
-            let from = position_of(&items, Item::Endpoint(source));
-
-            items.push(Placeable {
-                item: Item::Port(source),
-                lines: Vec::new(),
-                stacked: false,
-                dashed: false,
-            });
-            ranks.push(last);
-            edges.push((from, items.len() - 1));
-            edge_links.push(None);
-        }
-    }
-
-    let mut inner_arrivals = vec![0; items.len()];
-    for (_, to) in &edges {
-        inner_arrivals[*to] += 1;
-    }
-
-    let arrivals: Vec<usize> = items
-        .iter()
-        .zip(&inner_arrivals)
-        .map(|(placeable, inner)| inner + outer_arrivals(diagram, placeable.item))
+        .enumerate()
+        .map(|(position, item)| (item.endpoint, position))
         .collect();
-    let sizes: Vec<(usize, usize)> = items
-        .iter()
-        .zip(&arrivals)
-        .map(|(placeable, count)| size_of(placeable, *count))
-        .collect();
-
-    let layout = Layout::with_ranks(ranks, &edges);
-    let edge_labels: Vec<usize> = edge_links
-        .iter()
-        .map(|link| {
-            let label = link.and_then(|index| labels[index]);
-            label_width(label)
-        })
-        .collect();
-    let base_gaps = gaps(&layout, &edges, &edge_labels);
-    let rough = place(&layout, &sizes, &base_gaps);
-
-    let mut plan = BlockPlan {
-        items,
-        edge_links,
-        layout,
-        inner_arrivals,
-        arrivals,
-        placed: rough,
-        size: (0, 0),
-    };
-
-    let rough_hops = plan.hops(&plan.placed);
-    let turns = turns_of(&rough_hops);
-    let column_gaps = widen(&base_gaps, &turns);
-    plan.placed = place(&plan.layout, &sizes, &column_gaps);
-
-    let inner = (plan.placed.width, plan.placed.height);
-    plan.size = match diagram.planned {
-        true => {
-            let heading = block.heading();
-            frame_size(inner, &heading)
-        },
-        false => inner,
-    };
-
-    plan
-}
-
-/// Every box in the block that a link leaving the block starts at, in link order.
-fn leaving_boxes(diagram: &Diagram, block: &Block) -> Vec<Endpoint> {
-    let mut sources = Vec::new();
-
-    for link in &diagram.links {
-        let leaves = diagram.block_of(link.from) == block.id && diagram.block_of(link.to) != block.id;
-        let is_box = matches!(link.from, Endpoint::Box(_));
-
-        if leaves && is_box && !sources.contains(&link.from) {
-            sources.push(link.from);
-        }
-    }
-
-    sources
-}
-
-/// How many links from other blocks end at an item.
-fn outer_arrivals(diagram: &Diagram, item: Item) -> usize {
-    let Item::Endpoint(endpoint) = item else {
-        return 0;
-    };
-
-    diagram
+    let edges: Vec<(usize, usize)> = diagram
         .links
         .iter()
-        .filter(|link| link.to == endpoint && diagram.block_of(link.from) != diagram.block_of(endpoint))
-        .count()
-}
+        .map(|link| (index[&link.from], index[&link.to]))
+        .collect();
+    let regions = regions_of(&items, diagram.blocks.len());
 
-fn placeables(diagram: &Diagram, block: &Block, options: &RenderOptions) -> Vec<Placeable> {
-    let mut items = Vec::new();
+    let shape = Shape {
+        count: items.len(),
+        edges: &edges,
+        regions: &regions,
+    };
+    let cells = place_cells(&shape);
 
-    let disperse = diagram.exchange(Endpoint::Disperse(block.id));
-    if let Some(exchange) = disperse {
-        items.push(marker(exchange));
-    }
+    let entries = entry_indices(&edges, &cells);
+    let arrivals = arrival_counts(&edges, items.len());
+    let sizes: Vec<Size> = items
+        .iter()
+        .zip(&arrivals)
+        .map(|(item, count)| size_of(item, *count))
+        .collect();
 
-    for node in &block.boxes {
-        let entry = &diagram.boxes[node.index()];
+    let mut wires = Vec::with_capacity(edges.len());
+    for ((edge, entry), link) in edges.iter().zip(&entries).zip(&diagram.links) {
+        let label = link
+            .param
+            .filter(|_| options.show_param_names)
+            .map_or(0, |param| param.chars().count());
 
-        items.push(Placeable {
-            item: Item::Endpoint(Endpoint::Box(*node)),
-            lines: entry.lines(options),
-            stacked: entry.width > 1,
-            dashed: entry.crossing.is_some(),
+        let shared_region = items[edge.0].region == items[edge.1].region;
+        let region = match diagram.planned && shared_region {
+            true => Some(items[edge.0].region),
+            false => None,
+        };
+
+        wires.push(Wire {
+            from: edge.0,
+            to: edge.1,
+            entry: *entry,
+            label,
+            region,
         });
     }
 
-    let aggregate = diagram.exchange(Endpoint::Aggregate(block.id));
-    if let Some(exchange) = aggregate {
-        items.push(marker(exchange));
+    let frames = match diagram.planned {
+        true => frame_cells(diagram, &regions, &cells),
+        false => Vec::new(),
+    };
+    let geometry = lay_out(&cells, &sizes, &wires, &frames);
+
+    Arrangement {
+        items,
+        wires,
+        geometry,
+    }
+}
+
+/// Every block's items in order, its disperse first and its aggregate last.
+fn items_of(diagram: &Diagram, options: &RenderOptions) -> Vec<Item> {
+    let mut items = Vec::new();
+
+    for block in &diagram.blocks {
+        let disperse = diagram.exchange(Endpoint::Disperse(block.id));
+        if let Some(exchange) = disperse {
+            items.push(Item {
+                endpoint: exchange.endpoint(),
+                region: block.id,
+                look: Look::Marker {
+                    ratio: exchange.ratio(),
+                },
+            });
+        }
+
+        for node in &block.boxes {
+            let entry = &diagram.boxes[node.index()];
+
+            items.push(Item {
+                endpoint: Endpoint::Box(*node),
+                region: block.id,
+                look: Look::Box {
+                    lines: entry.lines(options),
+                    stacked: entry.width > 1,
+                    dashed: entry.crossing.is_some(),
+                },
+            });
+        }
+
+        let aggregate = diagram.exchange(Endpoint::Aggregate(block.id));
+        if let Some(exchange) = aggregate {
+            items.push(Item {
+                endpoint: exchange.endpoint(),
+                region: block.id,
+                look: Look::Marker {
+                    ratio: exchange.ratio(),
+                },
+            });
+        }
     }
 
     items
 }
 
-fn marker(exchange: &Exchange) -> Placeable {
-    let lines = exchange.lines();
+fn regions_of(items: &[Item], count: usize) -> Vec<Vec<usize>> {
+    let mut regions = vec![Vec::new(); count];
 
-    Placeable {
-        item: Item::Endpoint(exchange.endpoint()),
-        lines: lines.to_vec(),
-        stacked: false,
-        dashed: false,
+    for (position, item) in items.iter().enumerate() {
+        regions[item.region].push(position);
     }
+
+    regions
 }
 
-/// Every link with both ends in this block, as item positions, alongside the link it came from.
-fn inner_edges(
-    diagram: &Diagram,
-    block: &Block,
-    items: &[Placeable],
-) -> (Vec<(usize, usize)>, Vec<Option<usize>>) {
-    let mut edges = Vec::new();
-    let mut edge_links = Vec::new();
+/// Each link's entry index at its target, ordered by the row it arrives from, top first.
+fn entry_indices(edges: &[(usize, usize)], cells: &Cells) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..edges.len()).collect();
+    order.sort_by_key(|index| {
+        let (from, to) = edges[*index];
+        let (arrival, track) = arrival_of(cells.cells[from], cells.cells[to]);
 
-    for (index, link) in diagram.links.iter().enumerate() {
-        let inside = diagram.block_of(link.from) == block.id && diagram.block_of(link.to) == block.id;
-        if !inside {
-            continue;
+        (to, arrival, track, *index)
+    });
+
+    let mut entries = vec![0; edges.len()];
+    let mut previous = None;
+    let mut next = 0;
+
+    for index in order {
+        let target = edges[index].1;
+
+        if previous != Some(target) {
+            previous = Some(target);
+            next = 0;
         }
 
-        let from = position_of(items, Item::Endpoint(link.from));
-        let to = position_of(items, Item::Endpoint(link.to));
-        edges.push((from, to));
-        edge_links.push(Some(index));
+        entries[index] = next;
+        next += 1;
     }
 
-    (edges, edge_links)
+    entries
 }
 
-fn position_of(items: &[Placeable], item: Item) -> usize {
-    let found = items.iter().position(|placeable| placeable.item == item);
-    found.expect("every endpoint in a block is one of its items")
-}
+/// Where a link arrives from, counting rows and channels together, with a tie break for links
+/// sharing a channel.
+///
+/// A link to the next column arrives from its source's row. Any other link arrives from the
+/// channel it runs along, just above or below its source's row. Links sharing a channel take
+/// entries in the order of their tracks, top first.
+fn arrival_of(source: Cell, target: Cell) -> (usize, isize) {
+    let row_position = source.row * 2 + 1;
+    let column = source.column as isize;
 
-/// The size an item needs, grown so every line entering it has a row of its own.
-fn size_of(placeable: &Placeable, arrivals: usize) -> (usize, usize) {
-    let rows = placeable.lines.len();
-    let extra = arrivals.saturating_sub(rows);
+    if target.column == source.column + 1 {
+        return (row_position, column);
+    }
 
-    match placeable.item {
-        Item::Endpoint(Endpoint::Box(_)) => {
-            let (width, height) = box_size(&placeable.lines, placeable.stacked);
-            (width, height + extra)
-        },
-        Item::Endpoint(_) => {
-            let (width, height) = marker_size(&placeable.lines);
-            (width, height + extra)
-        },
-        Item::Port(_) => (1, 1),
+    match target.row < source.row {
+        true => (row_position - 1, column),
+        false => (row_position + 1, -column),
     }
 }
 
-/// Numbers the lines arriving at each target from the top down, by the row each arrives from.
-fn arrival_order<Target: Eq>(targets: &[Target], rows: &[usize]) -> Vec<usize> {
-    (0..targets.len())
-        .map(|line| {
-            let key = (rows[line], line);
+fn arrival_counts(edges: &[(usize, usize)], count: usize) -> Vec<usize> {
+    let mut arrivals = vec![0; count];
 
-            (0..targets.len())
-                .filter(|other| targets[*other] == targets[line] && (rows[*other], *other) < key)
-                .count()
+    for (_, to) in edges {
+        arrivals[*to] += 1;
+    }
+
+    arrivals
+}
+
+fn size_of(item: &Item, arrivals: usize) -> Size {
+    match &item.look {
+        Look::Box { lines, stacked, .. } => {
+            let (width, height) = box_size(lines, *stacked, arrivals);
+            let shadow = usize::from(*stacked);
+
+            Size {
+                width,
+                height,
+                port: (height - shadow) / 2,
+                stacked: *stacked,
+            }
+        },
+        Look::Marker { ratio } => {
+            let (width, height) = marker_size(ratio, arrivals);
+
+            Size {
+                width,
+                height,
+                port: 0,
+                stacked: false,
+            }
+        },
+    }
+}
+
+fn frame_cells(diagram: &Diagram, regions: &[Vec<usize>], cells: &Cells) -> Vec<FrameCells> {
+    diagram
+        .blocks
+        .iter()
+        .zip(regions)
+        .map(|(block, items)| {
+            let placed: Vec<Cell> = items.iter().map(|item| cells.cells[*item]).collect();
+            let first_column = placed.iter().map(|cell| cell.column).min().unwrap_or(0);
+            let last_column = placed.iter().map(|cell| cell.column).max().unwrap_or(0);
+            let top_row = placed.iter().map(|cell| cell.row).min().unwrap_or(0);
+            let bottom_row = placed.iter().map(|cell| cell.row).max().unwrap_or(0);
+            let detail = block.detail();
+
+            FrameCells {
+                first_column,
+                last_column,
+                top_row,
+                bottom_row,
+                detail: detail.is_some(),
+            }
         })
         .collect()
 }
 
-fn turns_of(hops: &[Vec<Hop>]) -> HashMap<(usize, usize), usize> {
-    let runs: Vec<Run> = hops
-        .iter()
-        .flatten()
-        .map(|hop| Run {
-            rank: hop.rank,
-            from: hop.exit.y,
-            to: hop.entry.y,
-        })
-        .collect();
-
-    turn_columns(&runs)
-}
-
-/// Draws one line's runs, each turning in the column its gap gave its row.
-fn draw_hops(grid: &mut Grid, placed: &Placed, turns: &HashMap<(usize, usize), usize>, hops: &[Hop]) {
-    for hop in hops {
-        let offset = turns.get(&(hop.rank, hop.exit.y)).copied().unwrap_or(0);
-        let turn = placed.column_end(hop.rank) + 1 + offset;
-
-        route(grid, hop.exit, turn, hop.entry);
-    }
-}
-
-fn draw_items(grid: &mut Grid, plan: &BlockPlan, placed: &Placed) {
-    for (position, placeable) in plan.items.iter().enumerate() {
-        let rect = placed.nodes[position];
-
-        match placeable.item {
-            Item::Endpoint(Endpoint::Box(_)) => {
-                draw_box(grid, rect, &placeable.lines, placeable.dashed, placeable.stacked);
-            },
-            Item::Endpoint(_) => draw_marker(grid, rect, &placeable.lines),
-            Item::Port(_) => {},
-        }
-    }
-
-    for lane in placed.virtuals.values() {
-        draw_lane(grid, *lane);
-    }
-}
-
-impl BlockPlan {
-    /// Every inner link's runs, each entering its target on a row of its own.
-    fn hops(&self, placed: &Placed) -> Vec<Vec<Hop>> {
-        let chains: Vec<Vec<(usize, Slot)>> = (0..self.edge_links.len())
-            .map(|edge| self.layout.chain(edge))
-            .collect();
-        let targets: Vec<Slot> = chains.iter().map(|chain| chain[chain.len() - 1].1).collect();
-        let rows: Vec<usize> = chains
-            .iter()
-            .map(|chain| {
-                let (rank, slot) = chain[chain.len() - 2];
-                self.exit_at(placed, rank, slot).y
-            })
-            .collect();
-        let order = arrival_order(&targets, &rows);
-
-        chains
-            .iter()
-            .zip(&order)
-            .map(|(chain, index)| {
-                chain
-                    .windows(2)
-                    .map(|pair| Hop {
-                        rank: pair[0].0,
-                        exit: self.exit_at(placed, pair[0].0, pair[0].1),
-                        entry: self.entry_at(placed, pair[1].0, pair[1].1, *index),
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn exit_at(&self, placed: &Placed, rank: usize, slot: Slot) -> Exit {
-        match slot {
-            Slot::Node(position) => self.exit_of(placed, position),
-            Slot::Virtual(_) => {
-                let lane = placed.slot(rank, slot);
-                lane_exit(lane)
-            },
-        }
-    }
-
-    fn entry_at(&self, placed: &Placed, rank: usize, slot: Slot, index: usize) -> Entry {
-        match slot {
-            Slot::Node(position) => self.entry_of(placed, position, index),
-            Slot::Virtual(_) => {
-                let lane = placed.slot(rank, slot);
-                lane_entry(lane)
-            },
-        }
-    }
-
-    fn exit_of(&self, placed: &Placed, position: usize) -> Exit {
-        let rect = placed.nodes[position];
-        let placeable = &self.items[position];
-
-        match placeable.item {
-            Item::Endpoint(Endpoint::Box(_)) => Exit {
-                x: rect.right(),
-                y: box_port(rect, placeable.stacked),
-                tee: true,
-            },
-            Item::Endpoint(_) => Exit {
-                x: rect.right(),
-                y: rect.y,
-                tee: false,
-            },
-            Item::Port(_) => Exit {
-                x: rect.x,
-                y: rect.y,
-                tee: false,
-            },
-        }
-    }
-
-    /// Where the line at `index` of those entering an item arrives.
-    ///
-    /// Lines enter a marker on its rows from the top down, and the marker is sized to have a row
-    /// for each of them.
-    fn entry_of(&self, placed: &Placed, position: usize, index: usize) -> Entry {
-        let rect = placed.nodes[position];
-        let placeable = &self.items[position];
-
-        match placeable.item {
-            Item::Endpoint(Endpoint::Box(_)) => {
-                let count = self.arrivals[position];
-
-                Entry {
-                    x: rect.x,
-                    y: box_entry(rect, placeable.stacked, count, index),
-                    arrow: true,
-                }
-            },
-            Item::Endpoint(_) => Entry {
-                x: rect.x,
-                y: rect.y + index,
-                arrow: true,
-            },
-            Item::Port(_) => Entry {
-                x: rect.x,
-                y: rect.y,
-                arrow: false,
-            },
-        }
-    }
-}
-
-fn lane_exit(rect: Rect) -> Exit {
-    Exit {
-        x: rect.right(),
-        y: rect.y,
-        tee: false,
-    }
-}
-
-fn lane_entry(rect: Rect) -> Entry {
-    Entry {
-        x: rect.x,
-        y: rect.y,
-        arrow: false,
-    }
-}
-
-fn draw_inner_links(
-    grid: &mut Grid,
-    plan: &BlockPlan,
-    placed: &Placed,
-    labels: &[Option<&'static str>],
-    pending: &mut Vec<PendingLabel>,
-) {
-    let hops = plan.hops(placed);
-    let turns = turns_of(&hops);
-
-    for (link_hops, link) in hops.iter().zip(&plan.edge_links) {
-        draw_hops(grid, placed, &turns, link_hops);
-
-        let label = link.and_then(|index| labels[index]);
-        let last = link_hops.last();
-
-        if let (Some(text), Some(hop)) = (label, last) {
-            pending.push(PendingLabel {
-                end: hop.entry.x,
-                y: hop.entry.y,
-                text,
-            });
-        }
-    }
-}
-
-fn draw_outer_links(grid: &mut Grid, arranged: &Arrangement, pending: &mut Vec<PendingLabel>) {
-    let links = OuterLinks {
-        diagram: arranged.diagram,
-        plans: &arranged.plans,
-        links: &arranged.outer_links,
-        layout: &arranged.outer,
-    };
-    let hops = links.hops(&arranged.placed, &arranged.absolute);
-    let turns = turns_of(&hops);
-
-    for (link_hops, index) in hops.iter().zip(&arranged.outer_links) {
-        draw_hops(grid, &arranged.placed, &turns, link_hops);
-
-        let label = arranged.labels[*index];
-        let last = link_hops.last();
-
-        if let (Some(text), Some(hop)) = (label, last) {
-            let link = &arranged.diagram.links[*index];
-            let target = arranged.diagram.block_of(link.to);
-
-            pending.push(PendingLabel {
-                end: arranged.placed.nodes[target].x,
-                y: hop.entry.y,
-                text,
-            });
-        }
-    }
-}
-
-/// Everything needed to route the links that run between blocks.
-struct OuterLinks<'render> {
-    diagram: &'render Diagram,
-    plans: &'render [BlockPlan],
-    links: &'render [usize],
-    layout: &'render Layout,
-}
-
-impl OuterLinks<'_> {
-    /// Every link's runs between blocks, each entering its target on a row of its own.
-    fn hops(&self, placed: &Placed, absolute: &[Placed]) -> Vec<Vec<Hop>> {
-        let chains: Vec<Vec<(usize, Slot)>> = (0..self.links.len())
-            .map(|edge| self.layout.chain(edge))
-            .collect();
-        let starts: Vec<Exit> = self
-            .links
-            .iter()
-            .map(|index| {
-                let link = &self.diagram.links[*index];
-                self.leaving(absolute, link.from)
-            })
-            .collect();
-        let targets: Vec<Endpoint> = self
-            .links
-            .iter()
-            .map(|index| self.diagram.links[*index].to)
-            .collect();
-        let rows: Vec<usize> = chains
-            .iter()
-            .zip(&starts)
-            .map(|(chain, start)| {
-                let (rank, slot) = chain[chain.len() - 2];
-
-                match slot {
-                    Slot::Node(_) => start.y,
-                    Slot::Virtual(_) => placed.slot(rank, slot).y,
-                }
-            })
-            .collect();
-        let order = arrival_order(&targets, &rows);
-
-        let mut hops = Vec::with_capacity(chains.len());
-        for (edge, chain) in chains.iter().enumerate() {
-            let end = self.entering(absolute, targets[edge], order[edge]);
-            let link_hops = chain
-                .windows(2)
-                .map(|pair| {
-                    let (from_rank, from_slot) = pair[0];
-                    let (to_rank, to_slot) = pair[1];
-
-                    let exit = match from_slot {
-                        Slot::Node(_) => starts[edge],
-                        Slot::Virtual(_) => {
-                            let lane = placed.slot(from_rank, from_slot);
-                            lane_exit(lane)
-                        },
-                    };
-                    let entry = match to_slot {
-                        Slot::Node(_) => end,
-                        Slot::Virtual(_) => {
-                            let lane = placed.slot(to_rank, to_slot);
-                            lane_entry(lane)
-                        },
-                    };
-
-                    Hop {
-                        rank: from_rank,
-                        exit,
-                        entry,
-                    }
-                })
-                .collect();
-
-            hops.push(link_hops);
-        }
-
-        hops
-    }
-
-    /// Where a link leaves its block, through the box's port when it has one.
-    fn leaving(&self, absolute: &[Placed], endpoint: Endpoint) -> Exit {
-        let block = self.diagram.block_of(endpoint);
-        let plan = &self.plans[block];
-        let port = plan
-            .items
-            .iter()
-            .position(|placeable| placeable.item == Item::Port(endpoint));
-
-        let position = match port {
-            Some(position) => position,
-            None => position_of(&plan.items, Item::Endpoint(endpoint)),
-        };
-
-        plan.exit_of(&absolute[block], position)
-    }
-
-    /// Where the link at `index` of those entering an endpoint from other blocks arrives.
-    ///
-    /// These lines take the rows after any line from inside the block.
-    fn entering(&self, absolute: &[Placed], endpoint: Endpoint, index: usize) -> Entry {
-        let block = self.diagram.block_of(endpoint);
-        let plan = &self.plans[block];
-        let position = position_of(&plan.items, Item::Endpoint(endpoint));
-        let offset = plan.inner_arrivals[position];
-
-        plan.entry_of(&absolute[block], position, offset + index)
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use av_toolbox_core::{Parallelism, StageKind};
+
+    use super::draw::route_cells;
+    use super::frame::frame_text;
     use super::*;
+    use crate::graph::NodeId;
+    use crate::render::diagram::{Block, DiagramBox, Link};
     use crate::render::fixtures;
 
     fn bare() -> RenderOptions {
@@ -775,60 +408,174 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_source_feeding_a_sink_draws_two_boxes_side_by_side() {
-        let specs = fixtures::source_to_sink();
-        let graph = fixtures::built(&specs);
-        let rendered = render_ascii(&graph, &bare());
-
-        assert_eq!(
-            rendered,
-            concat!(
-                "┌───────┐    ┌─────┐\n",
-                "│ input ├────▶ out │\n",
-                "└───────┘    └─────┘\n",
-            )
-        );
+    fn labelled() -> RenderOptions {
+        RenderOptions {
+            show_identifier: false,
+            show_param_names: true,
+        }
     }
 
-    #[test]
-    fn an_edge_skipping_a_column_follows_a_lane_through_it() {
-        let specs = fixtures::skipping_pipeline();
-        let graph = fixtures::built(&specs);
-        let rendered = render_ascii(&graph, &bare());
+    /// A diagram of one box, framed as a one wide stream region when `planned`.
+    fn lone_box(name: &str, planned: bool) -> Diagram {
+        let granularity = planned.then_some(Parallelism::Stream);
+        let block = Block {
+            id: 0,
+            boxes: vec![NodeId::new(0)],
+            width: 1,
+            granularity,
+            routing: None,
+            reason: None,
+        };
+        let only = DiagramBox {
+            node: NodeId::new(0),
+            block: 0,
+            name: name.to_string(),
+            identifier: String::from("test/file"),
+            kind: StageKind::Source,
+            residency: None,
+            crossing: None,
+            width: 1,
+            reason: None,
+        };
 
-        assert_eq!(
-            rendered,
-            concat!(
-                "             ┌──────┐    ┌───────┐\n",
-                "┌───────┐ ┌──▶ blur ├────▶ merge │    ┌─────┐\n",
-                "│ input ├─┤  └──────┘ ┌──▶       ├────▶ out │\n",
-                "└───────┘ │           │  └───────┘    └─────┘\n",
-                "          └───────────┘\n",
-            )
-        );
+        Diagram {
+            blocks: vec![block],
+            boxes: vec![only],
+            exchanges: Vec::new(),
+            links: Vec::new(),
+            planned,
+        }
     }
 
-    #[test]
-    fn a_wide_region_draws_exactly() {
-        let specs = fixtures::wide_pipeline(4);
-        let graph = fixtures::planned(&specs);
-        let rendered = render_ascii(&graph, &bare());
+    fn property_diagrams() -> Vec<Diagram> {
+        let pipelines = [
+            fixtures::two_exit_pipeline(),
+            fixtures::mixed_inputs_pipeline(),
+            fixtures::middle_exit_pipeline(),
+            fixtures::many_region_pipeline(),
+            fixtures::wide_pipeline(4),
+        ];
 
-        assert_eq!(
-            rendered,
-            concat!(
-                "                         ┌ region 1 ×4 · chunk · by chunk ──────────────────────┐\n",
-                "┌ region 0 · stream ┐    │                                                      │    ┌ region 2 · stream (granularity) ┐\n",
-                "│                   │    │                        ┌─────────┐                   │    │                                 │\n",
-                "│ ┌───────┐         │ ┌──┼─▶ ◁ 1:4 ────────────┐  │ denoise │┐ ┌──▶ ▷ 4:1 ──────┼─┐  │ ┌─────┐                         │\n",
-                "│ │ input ├─────────┼─┘  │   disperse slot 0   └──▶   ×4    │├─┘    aggregate   │ └──┼─▶ out │                         │\n",
-                "│ └───────┘         │    │   unbounded            └─────────┘│      bounded     │    │ └─────┘                         │\n",
-                "│                   │    │                         └─────────┘                  │    │                                 │\n",
-                "└───────────────────┘    │                                                      │    └─────────────────────────────────┘\n",
-                "                         └──────────────────────────────────────────────────────┘\n",
-            )
-        );
+        let mut diagrams: Vec<Diagram> = pipelines
+            .iter()
+            .map(|specs| {
+                let graph = fixtures::planned(specs);
+                Diagram::of(&graph)
+            })
+            .collect();
+
+        let unplanned = [
+            fixtures::skipping_pipeline(),
+            fixtures::named_inputs_pipeline(),
+            fixtures::crossed_pipeline(),
+        ];
+
+        for specs in &unplanned {
+            let graph = fixtures::built(specs);
+            let diagram = Diagram::of(&graph);
+            diagrams.push(diagram);
+        }
+
+        let example = fixtures::example_diagram();
+        diagrams.push(example);
+        diagrams
+    }
+
+    /// A diagram built by hand, with boxes numbered across the regions in order.
+    ///
+    /// Each region is its box names and how many workers run it. Links name the boxes they join.
+    fn hand_built(regions: &[(&[&str], usize)], links: &[(usize, usize)], planned: bool) -> Diagram {
+        let mut blocks = Vec::new();
+        let mut boxes = Vec::new();
+
+        for (id, (names, width)) in regions.iter().enumerate() {
+            let first = boxes.len();
+            let granularity = planned.then_some(Parallelism::Stream);
+
+            for (offset, name) in names.iter().enumerate() {
+                boxes.push(DiagramBox {
+                    node: NodeId::new(first + offset),
+                    block: id,
+                    name: name.to_string(),
+                    identifier: String::from("test/file"),
+                    kind: StageKind::Filter,
+                    residency: None,
+                    crossing: None,
+                    width: *width,
+                    reason: None,
+                });
+            }
+
+            let members = (first..boxes.len()).map(NodeId::new).collect();
+            blocks.push(Block {
+                id,
+                boxes: members,
+                width: *width,
+                granularity,
+                routing: None,
+                reason: None,
+            });
+        }
+
+        let links = links
+            .iter()
+            .map(|(from, to)| Link {
+                from: Endpoint::Box(NodeId::new(*from)),
+                to: Endpoint::Box(NodeId::new(*to)),
+                param: None,
+                bounded: None,
+            })
+            .collect();
+
+        Diagram {
+            blocks,
+            boxes,
+            exchanges: Vec::new(),
+            links,
+            planned,
+        }
+    }
+
+    /// Every frame heading or detail that a line has written over, as the cell it starts in.
+    fn covered_frame_text(diagram: &Diagram) -> Vec<(usize, usize)> {
+        let arranged = arrange(diagram, &labelled());
+        let rendered = draw_diagram(diagram, &labelled());
+        let rows: Vec<Vec<char>> = rendered.lines().map(|line| line.chars().collect()).collect();
+        let mut covered = Vec::new();
+
+        for (block, rect) in diagram.blocks.iter().zip(&arranged.geometry.frames) {
+            let heading = block.short_heading();
+            let detail = block.detail();
+
+            for piece in frame_text(*rect, &heading, detail.as_deref()) {
+                let row = &rows[piece.y];
+                let shown: String = row
+                    .iter()
+                    .skip(piece.x)
+                    .take(piece.text.chars().count())
+                    .collect();
+
+                if shown.trim_end() != piece.text.trim_end() {
+                    covered.push((piece.x, piece.y));
+                }
+            }
+        }
+
+        covered
+    }
+
+    fn overlaps(first: Rect, second: Rect) -> bool {
+        let across = first.x <= second.right() && second.x <= first.right();
+        let down = first.y <= second.bottom() && second.y <= first.bottom();
+
+        across && down
+    }
+
+    fn strictly_inside(inner: Rect, outer: Rect) -> bool {
+        let across = inner.x > outer.x && inner.right() < outer.right();
+        let down = inner.y > outer.y && inner.bottom() < outer.bottom();
+
+        across && down
     }
 
     #[test]
@@ -845,16 +592,12 @@ mod tests {
     fn param_names_label_the_edges_only_when_asked_for() {
         let specs = fixtures::skipping_pipeline();
         let graph = fixtures::built(&specs);
-        let shown = RenderOptions {
-            show_identifier: false,
-            show_param_names: true,
-        };
 
-        let labelled = render_ascii(&graph, &shown);
-        let bare_render = render_ascii(&graph, &bare());
+        let shown = render_ascii(&graph, &labelled());
+        let hidden = render_ascii(&graph, &bare());
 
-        assert!(labelled.contains("reference"));
-        assert!(!bare_render.contains("reference"));
+        assert!(shown.contains("reference"));
+        assert!(!hidden.contains("reference"));
     }
 
     #[test]
@@ -870,17 +613,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unplanned_graph_draws_no_frames() {
+    fn an_unplanned_graph_draws_no_frames_and_no_legend() {
         let specs = fixtures::skipping_pipeline();
         let graph = fixtures::built(&specs);
         let rendered = render_ascii(&graph, &bare());
 
         assert!(!rendered.contains("region"));
+        assert!(!rendered.contains("◁ disperse"));
     }
 
     #[test]
     fn an_empty_graph_renders_nothing() {
-        let graph = crate::graph::CompiledGraph::new(Vec::new());
+        let graph = CompiledGraph::new(Vec::new());
         let rendered = render_ascii(&graph, &bare());
 
         assert_eq!(rendered, "");
@@ -915,34 +659,287 @@ mod tests {
         assert!(rendered.contains("▷ 16:1"));
     }
 
-    /// `first` is read from outside its region while it sits in the region's first column, so
-    /// its outgoing line has to pass the boxes after it without cutting through them.
     #[test]
-    fn a_line_leaving_a_middle_column_passes_clear_of_later_boxes() {
-        let specs = fixtures::middle_exit_pipeline();
+    fn a_planned_diagram_ends_with_the_legend() {
+        let specs = fixtures::wide_pipeline(4);
         let graph = fixtures::planned(&specs);
+        let rendered = render_ascii(&graph, &bare());
+
+        assert_eq!(rendered.lines().last(), Some(LEGEND));
+    }
+
+    #[test]
+    fn a_long_heading_is_cut_rather_than_widening_its_frame() {
+        let diagram = lone_box("a", true);
+        let heading = diagram.blocks[0].short_heading();
+        let arranged = arrange(&diagram, &bare());
+        let frame = arranged.geometry.frames[0];
+        let only = arranged.geometry.items[0];
+
+        assert!(heading.chars().count() > only.width);
+
+        let rendered = draw_diagram(&diagram, &bare());
+        let top_border = rendered.lines().next().expect("the frame has a top border");
+
+        assert!(top_border.contains('…'));
+        assert!(frame.width <= only.width + 4);
+    }
+
+    #[test]
+    fn a_lone_source_draws_one_box() {
+        let diagram = lone_box("input", false);
+        let rendered = draw_diagram(&diagram, &bare());
+
+        assert_eq!(rendered, concat!("┌───────┐\n", "│ input │\n", "└───────┘\n"));
+    }
+
+    #[test]
+    fn frames_never_overlap() {
+        for diagram in property_diagrams() {
+            let arranged = arrange(&diagram, &labelled());
+            let frames = &arranged.geometry.frames;
+
+            for (index, first) in frames.iter().enumerate() {
+                for second in frames.iter().skip(index + 1) {
+                    assert!(!overlaps(*first, *second), "{first:?} overlaps {second:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_item_sits_inside_its_frame() {
+        for diagram in property_diagrams() {
+            let arranged = arrange(&diagram, &labelled());
+
+            if !diagram.planned {
+                continue;
+            }
+
+            for (item, rect) in arranged.items.iter().zip(&arranged.geometry.items) {
+                let frame = arranged.geometry.frames[item.region];
+                assert!(strictly_inside(*rect, frame), "{rect:?} is not inside {frame:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn lines_from_different_exits_never_run_along_each_other() {
+        for diagram in property_diagrams() {
+            let arranged = arrange(&diagram, &labelled());
+            let mut owners: HashMap<(usize, usize, bool), usize> = HashMap::new();
+
+            for (wire, points) in arranged.wires.iter().zip(&arranged.geometry.routes) {
+                let passed = route_cells(points);
+                let interior = passed.iter().skip(1).take(passed.len().saturating_sub(2));
+
+                for (x, y, sides) in interior {
+                    let orientations = [(sides.left || sides.right, false), (sides.up || sides.down, true)];
+
+                    for (present, vertical) in orientations {
+                        if !present {
+                            continue;
+                        }
+
+                        let owner = owners.entry((*x, *y, vertical)).or_insert(wire.from);
+                        assert_eq!(*owner, wire.from, "two exits share the run through ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_route_runs_from_its_sources_right_edge_to_inside_its_targets_left_edge() {
+        for diagram in property_diagrams() {
+            let arranged = arrange(&diagram, &labelled());
+            let items = &arranged.geometry.items;
+
+            for (wire, points) in arranged.wires.iter().zip(&arranged.geometry.routes) {
+                let source = items[wire.from];
+                let target = items[wire.to];
+                let (start_x, start_y) = *points.first().expect("a route has a start");
+                let (end_x, end_y) = *points.last().expect("a route has an end");
+
+                assert_eq!(start_x, source.right());
+                assert!(start_y >= source.y && start_y <= source.bottom());
+                assert_eq!(end_x, target.x);
+                assert!(end_y >= target.y && end_y <= target.bottom());
+            }
+        }
+    }
+
+    #[test]
+    fn labels_overlap_neither_each_other_nor_an_item() {
+        for diagram in property_diagrams() {
+            let arranged = arrange(&diagram, &labelled());
+            let mut spans: Vec<Rect> = Vec::new();
+
+            for (wire, spot) in arranged.wires.iter().zip(&arranged.geometry.labels) {
+                let Some((end, y)) = spot else {
+                    continue;
+                };
+
+                let span = Rect {
+                    x: end - wire.label,
+                    y: *y,
+                    width: wire.label,
+                    height: 1,
+                };
+
+                for item in &arranged.geometry.items {
+                    assert!(!overlaps(span, *item), "a label covers {item:?}");
+                }
+
+                for other in &spans {
+                    assert!(!overlaps(span, *other), "two labels overlap at {span:?}");
+                }
+
+                spans.push(span);
+            }
+        }
+    }
+
+    #[test]
+    fn no_line_covers_a_frames_heading_or_detail() {
+        for diagram in property_diagrams() {
+            let covered = covered_frame_text(&diagram);
+            assert!(covered.is_empty(), "frame text is covered at {covered:?}");
+        }
+    }
+
+    #[test]
+    fn a_line_turning_down_through_a_frames_top_leaves_its_heading_whole() {
+        let regions: [(&[&str], usize); 2] = [(&["x", "y", "z"], 1), (&["p"], 1)];
+        let diagram = hand_built(&regions, &[(0, 1), (0, 2), (3, 1)], true);
+        let arranged = arrange(&diagram, &bare());
+        let frame = arranged.geometry.frames[0];
+        let crossing = arranged.geometry.routes[2]
+            .iter()
+            .any(|(x, y)| *y < frame.y && *x > frame.x && *x < frame.right());
+        let covered = covered_frame_text(&diagram);
+
+        assert!(crossing, "the line from p should reach region 0 from above");
+        assert!(covered.is_empty(), "frame text is covered at {covered:?}");
+    }
+
+    #[test]
+    fn no_line_passes_through_an_item() {
+        for diagram in property_diagrams() {
+            let arranged = arrange(&diagram, &labelled());
+
+            for points in &arranged.geometry.routes {
+                let passed = route_cells(points);
+                let interior = passed.iter().skip(1).take(passed.len().saturating_sub(2));
+
+                for (x, y, _) in interior {
+                    for item in &arranged.geometry.items {
+                        let inside =
+                            *x >= item.x && *x <= item.right() && *y >= item.y && *y <= item.bottom();
+                        assert!(!inside, "a line passes through {item:?} at ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_plain_box_lines_up_with_a_stacked_box_in_its_column() {
+        let regions: [(&[&str], usize); 3] = [(&["plain"], 1), (&["wide"], 2), (&["out"], 1)];
+        let diagram = hand_built(&regions, &[(0, 2), (1, 2)], false);
+        let rendered = draw_diagram(&diagram, &bare());
+        let names = ["plain", "wide", "out", "×2"];
+
+        for line in rendered.lines() {
+            for name in names {
+                let Some(start) = line.find(name) else {
+                    continue;
+                };
+
+                let before = line[..start].chars().last();
+                let after = line[start + name.len()..].chars().next();
+                assert_eq!(
+                    (before, after),
+                    (Some(' '), Some(' ')),
+                    "{name} touches its border in {line:?}"
+                );
+            }
+        }
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "             ┌─────┐\n",
+                "┌───────┐    │ out │\n",
+                "│ plain ├────▶     │\n",
+                "└───────┘  ┌─▶     │\n",
+                "           │ └─────┘\n",
+                "           │\n",
+                "┌───────┐  │\n",
+                "│ wide  │┐ │\n",
+                "│  ×2   │├─┘\n",
+                "└───────┘│\n",
+                " └───────┘\n",
+            )
+        );
+    }
+
+    #[test]
+    fn a_join_takes_the_spine_on_its_port_line_ahead_of_a_skipping_link() {
+        let specs = fixtures::skipping_pipeline();
+        let graph = fixtures::built(&specs);
+        let diagram = Diagram::of(&graph);
+        let arranged = arrange(&diagram, &bare());
+        let blur = fixtures::node_named(&graph, "blur");
+        let merge = fixtures::node_named(&graph, "merge");
+
+        let position_of = |node: NodeId| {
+            let endpoint = Endpoint::Box(node);
+            arranged.items.iter().position(|item| item.endpoint == endpoint)
+        };
+        let from = position_of(blur);
+        let to = position_of(merge);
+        let spine_link = arranged
+            .wires
+            .iter()
+            .position(|wire| Some(wire.from) == from && Some(wire.to) == to)
+            .expect("blur feeds merge");
+
+        assert_eq!(arranged.geometry.routes[spine_link].len(), 2);
+    }
+
+    #[test]
+    fn a_source_feeding_a_sink_draws_two_boxes_side_by_side() {
+        let specs = fixtures::source_to_sink();
+        let graph = fixtures::built(&specs);
         let rendered = render_ascii(&graph, &bare());
 
         assert_eq!(
             rendered,
             concat!(
-                "┌ region 0 · stream ────────────────────┐\n",
-                "│                                       │\n",
-                "│              ┌──────┐    ┌─────┐      │\n",
-                "│ ┌───────┐ ┌──▶ blur ├────▶ out │      │\n",
-                "│ │ first ├─┤  └──────┘    └─────┘ ┌────┼─┐\n",
-                "│ └───────┘ │                      │    │ │   ┌ region 2 · stream ─────────────────────────────────┐\n",
-                "│           └──────────────────────┘    │ │   │                                                    │\n",
-                "│                                       │ └───┼─▶ ◁ 1:1 ────────────┐  ┌───────┐    ┌────────────┐ │\n",
-                "└───────────────────────────────────────┘  ┌──┼─▶ disperse slot 0   └──▶ merge ├────▶ merged_out │ │\n",
-                "                                           │  │   unbounded            └───────┘    └────────────┘ │\n",
-                "┌ region 1 · stream ┐                      │  │                                                    │\n",
-                "│                   │                      │  └────────────────────────────────────────────────────┘\n",
-                "│ ┌────────┐        │                      │\n",
-                "│ │ second ├────────┼──────────────────────┘\n",
-                "│ └────────┘        │\n",
-                "│                   │\n",
-                "└───────────────────┘\n",
+                "┌───────┐  ┌─────┐\n",
+                "│ input ├──▶ out │\n",
+                "└───────┘  └─────┘\n",
+            )
+        );
+    }
+
+    #[test]
+    fn an_edge_skipping_a_column_runs_in_the_channel_below() {
+        let specs = fixtures::skipping_pipeline();
+        let graph = fixtures::built(&specs);
+        let rendered = render_ascii(&graph, &bare());
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "                       ┌───────┐\n",
+                "┌───────┐   ┌──────┐   │ merge │  ┌─────┐\n",
+                "│ input ├─┬─▶ blur ├───▶       ├──▶ out │\n",
+                "└───────┘ │ └──────┘ ┌─▶       │  └─────┘\n",
+                "          │          │ └───────┘\n",
+                "          │          │\n",
+                "          └──────────┘\n",
             )
         );
     }
@@ -951,28 +948,51 @@ mod tests {
     fn each_named_input_enters_on_its_own_row_under_its_own_label() {
         let specs = fixtures::named_inputs_pipeline();
         let graph = fixtures::built(&specs);
-        let labelled = RenderOptions {
-            show_identifier: false,
-            show_param_names: true,
-        };
-        let rendered = render_ascii(&graph, &labelled);
+        let rendered = render_ascii(&graph, &labelled());
 
         assert_eq!(
             rendered,
             concat!(
-                "┌───────┐\n",
-                "│ first ├──┐          ┌─────────┐\n",
-                "└───────┘  └──────base▶ matched │         ┌─────┐\n",
-                "            ┌──overlay▶         ├────input▶ out │\n",
-                "┌────────┐  │         └─────────┘         └─────┘\n",
-                "│ second ├──┘\n",
+                "                    ┌─────────┐\n",
+                "┌────────┐          │ matched │       ┌─────┐\n",
+                "│ first  ├──────base▶         ├──input▶ out │\n",
+                "└────────┘ ┌─overlay▶         │       └─────┘\n",
+                "           │        └─────────┘\n",
+                "           │\n",
+                "┌────────┐ │\n",
+                "│ second ├─┘\n",
                 "└────────┘\n",
             )
         );
     }
 
     #[test]
-    fn lines_leaving_one_region_for_two_others_never_merge() {
+    fn a_wide_region_draws_exactly() {
+        let specs = fixtures::wide_pipeline(4);
+        let graph = fixtures::planned(&specs);
+        let rendered = render_ascii(&graph, &bare());
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "┌ region … ─┐  ┌ region 1 · ×4 chunk ───────────────┐  ┌ regio… ─┐\n",
+                "│           │  │ by chunk                           │  │ (granu… │\n",
+                "│           │  │                                    │  │         │\n",
+                "│           │  │            ┌─────────┐             │  │         │\n",
+                "│ ┌───────┐ │  │            │ denoise │┐            │  │ ┌─────┐ │\n",
+                "│ │ input ├─┼──┼─▶ ◁ 1:4 ───▶   ×4    │├──▶ ▷ 4:1 ──┼──┼─▶ out │ │\n",
+                "│ └───────┘ │  │            └─────────┘│            │  │ └─────┘ │\n",
+                "│           │  │             └─────────┘            │  │         │\n",
+                "│           │  │                                    │  │         │\n",
+                "└───────────┘  └────────────────────────────────────┘  └─────────┘\n",
+                "\n",
+                "◁ disperse, unbounded   ▷ aggregate, bounded   ┄ host and gpu crossing   ×N workers\n",
+            )
+        );
+    }
+
+    #[test]
+    fn a_planned_mixed_inputs_graph_draws_exactly() {
         let specs = fixtures::mixed_inputs_pipeline();
         let graph = fixtures::planned(&specs);
         let rendered = render_ascii(&graph, &bare());
@@ -980,70 +1000,63 @@ mod tests {
         assert_eq!(
             rendered,
             concat!(
-                "                                     ┌ region 1 ×4 · chunk · by chunk ───────────────────┐\n",
-                "┌ region 0 · stream ───────────┐     │                                                   │    ┌ region 2 · frame ────────────────────────────────────┐\n",
-                "│                              │     │                        ┌──────┐                   │    │                                                      │\n",
-                "│              ┌────────┐      │  ┌──┼─▶ ◁ 1:4 ────────────┐  │ wide │┐ ┌──▶ ▷ 4:1 ──────┼────┼─▶ ◁ 1:1 ────────────┐  ┌────────────────┐    ┌─────┐ │\n",
-                "│ ┌───────┐ ┌──▶ narrow ├──────┼─┐│  │   disperse slot 0   └──▶  ×4  │├─┘    aggregate   │ ┌──┼─▶ disperse slot 0   │  │     merge      │ ┌──▶ out │ │\n",
-                "│ │ input ├─┤  └────────┘      │ ││  │   unbounded            └──────┘│      bounded     │ │  │   unbounded         └──▶ (mixed inputs) ├─┘  └─────┘ │\n",
-                "│ └───────┘ │             ┌────┼─┼┘  │                         └──────┘                  │ │  │                        └────────────────┘            │\n",
-                "│           └─────────────┘    │ │   │                                                   │ │  │                                                      │\n",
-                "│                              │ │   └───────────────────────────────────────────────────┘ │  └──────────────────────────────────────────────────────┘\n",
-                "└──────────────────────────────┘ │                                                         │\n",
-                "                                 └─────────────────────────────────────────────────────────┘\n",
+                "┌ region 0 · stream ─────┐    ┌ region 1 · ×4 chunk ────────────┐   ┌ region 2 · frame ──────────────────────┐\n",
+                "│                        │    │ by chunk                        │   │                                        │\n",
+                "│                        │    │                                 │   │                                        │\n",
+                "│                        │    │            ┌──────┐             │   │            ┌────────────────┐          │\n",
+                "│ ┌───────┐   ┌────────┐ │    │            │ wide │┐            │   │            │     merge      │  ┌─────┐ │\n",
+                "│ │ input ├─┬─▶ narrow ├─┼─┐┌─┼─▶ ◁ 1:4 ───▶  ×4  │├──▶ ▷ 4:1 ──┼───┼─▶ ◁ 1:1 ───▶ (mixed inputs) ├──▶ out │ │\n",
+                "│ └───────┘ │ └────────┘ │ ││ │            └──────┘│            │ ┌─┼─▶          └────────────────┘  └─────┘ │\n",
+                "│           │            │ ││ │             └──────┘            │ │ │                                        │\n",
+                "│           │            │ ││ │                                 │ │ │                                        │\n",
+                "└───────────┼────────────┘ ││ └─────────────────────────────────┘ │ └────────────────────────────────────────┘\n",
+                "            │              ││                                     │\n",
+                "            └──────────────┼┘                                     │\n",
+                "                           └──────────────────────────────────────┘\n",
+                "\n",
+                "◁ disperse, unbounded   ▷ aggregate, bounded   ┄ host and gpu crossing   ×N workers\n",
             )
         );
     }
 
-    fn multi_region_graphs() -> Vec<CompiledGraph> {
-        let all_specs = [
-            fixtures::two_exit_pipeline(),
-            fixtures::mixed_inputs_pipeline(),
-            fixtures::middle_exit_pipeline(),
-            fixtures::many_region_pipeline(),
-        ];
-
-        all_specs.iter().map(|specs| fixtures::planned(specs)).collect()
-    }
-
-    fn overlaps(first: Rect, second: Rect) -> bool {
-        let across = first.x <= second.right() && second.x <= first.right();
-        let down = first.y <= second.bottom() && second.y <= first.bottom();
-
-        across && down
-    }
-
     #[test]
-    fn a_planned_graphs_blocks_never_overlap() {
-        for graph in multi_region_graphs() {
-            let diagram = Diagram::of(&graph);
-            let arranged = arrange(&diagram, &RenderOptions::default());
-            let blocks = &arranged.placed.nodes;
+    fn the_example_pipeline_draws_exactly() {
+        let diagram = fixtures::example_diagram();
+        let rendered = draw_diagram(&diagram, &labelled());
 
-            assert!(blocks.len() > 1);
-
-            for (index, first) in blocks.iter().enumerate() {
-                for second in blocks.iter().skip(index + 1) {
-                    assert!(!overlaps(*first, *second), "{first:?} overlaps {second:?}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn every_box_sits_inside_its_block() {
-        for graph in multi_region_graphs() {
-            let diagram = Diagram::of(&graph);
-            let arranged = arrange(&diagram, &RenderOptions::default());
-
-            for (block, items) in arranged.placed.nodes.iter().zip(&arranged.absolute) {
-                for item in &items.nodes {
-                    let inside_across = item.x > block.x && item.right() < block.right();
-                    let inside_down = item.y > block.y && item.bottom() < block.bottom();
-
-                    assert!(inside_across && inside_down, "{item:?} is outside {block:?}");
-                }
-            }
-        }
+        assert_eq!(
+            rendered,
+            concat!(
+                "┌ region 0 · stream ──────────────────────────────┐      ┌ region 1 · ×8 chunk ───────────────────────────────────────────────────────────────────────────┐             ┌ region 2… ─┐      ┌ region 3 · ×6 chunk ───────────────────┐       ┌ region… ─┐\n",
+                "│                                                 │      │ by chunk                                                                                       │             │ (granular… │      │ by chunk                               │       │ (granul… │\n",
+                "│                                                 │      │                                                                                                │             │            │      │                                        │       │          │\n",
+                "│                                                 │      │                                                     ┌────────┐                                 │             │            │      │                                        │       │          │\n",
+                "│ ┌────────┐       ┌────────┐  ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │      │            ┌─────────┐        ┌────────┐            │ merge  │┐  ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐             │             │ ┌────────┐ │      │                ┌─────────┐             │       │ ┌──────┐ │\n",
+                "│ │ source │       │ scenes │  ┆ upload(scenes) ┆ │      │            │ denoise │┐       │ deband │┐           │ gpu ×8 ││  ┆ unload(merge) ┆┐            │             │ │ chunks │ │      │                │ encode  │┐            │       │ │ mux  │ │\n",
+                "│ │  host  ├─┬─clip▶  host  ├──▶      gpu       ├─┼──clip┼─▶ ◁ 1:8 ───▶ gpu ×8  │├─┬─clip▶ gpu ×8 │├───────base▶        │├──▶    host ×8    ┆├──▶ ▷ 8:1 ──┼──┬──────clip┼─▶  host  ├─┼──clip┼─▶ ◁ 1:6 ───────▶ host ×6 │├──▶ ▷ 6:1 ──┼──video┼─▶ host │ │\n",
+                "│ └────────┘ │     └────────┘  ┆    host→gpu    ┆ │      │            └─────────┘│ │     └────────┘│ ┌──overlay▶        ││  ┆   gpu→host    ┆┆            │  │          │ └────────┘ │      │                └─────────┘│            │       │ └──────┘ │\n",
+                "│            │                 └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │      │             └─────────┘ │      └────────┘ │┌────mask▶        ││  └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘┆            │  │          │            │      │                 └─────────┘            │       │          │\n",
+                "│            │                                    │      │                         │                 ││        └────────┘│   └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘            │  │          │            │      │                                        │       │          │\n",
+                "│            │                                    │      │                         │                 ││         └────────┘                                │  │          │            │      │                                        │       │          │\n",
+                "│            │                                    │      │                         │                 ││                                                   │  │          │            │      │                                        │       │          │\n",
+                "└────────────┼────────────────────────────────────┘      │                         │                 ││                                                   │  │          └────────────┘      └────────────────────────────────────────┘       └──────────┘\n",
+                "             │                                           │                         │                 ││                                                   │  │\n",
+                "             │                                           │                         ├─────────────────┘│                                                   │  │\n",
+                "             └───────────────────────────────────────────┼─────────────────────────┼──────────────────┼───────────────────────────────────────────────────┼─┐│\n",
+                "                                                         │                         │                  │                                                   │ ││\n",
+                "                                                         │                         │                  │                                                   │ ││          ┌ region 5 · stream ──────────────┐\n",
+                "                                                         │                         │                  │                                                   │ ││          │ (granularity)                   │\n",
+                "                                                         │                         │                  │                                                   │ ││          │                                 │\n",
+                "                                                         │                         │     ┌────────┐   │                                                   │ ││          │                     ┌─────────┐ │\n",
+                "                                                         │                         │     │ edges  │┐  │                                                   │ ││          │                     │ quality │ │\n",
+                "                                                         │                         └─clip▶ gpu ×8 │├──┘                                                   │ │└─distorted┼─▶ ◁ 1:1 ────────────▶  host   │ │\n",
+                "                                                         │                               └────────┘│                                                      │ └──reference┼─▶                   └─────────┘ │\n",
+                "                                                         │                                └────────┘                                                      │             │                                 │\n",
+                "                                                         │                                                                                                │             │                                 │\n",
+                "                                                         └────────────────────────────────────────────────────────────────────────────────────────────────┘             └─────────────────────────────────┘\n",
+                "\n",
+                "◁ disperse, unbounded   ▷ aggregate, bounded   ┄ host and gpu crossing   ×N workers\n",
+            )
+        );
     }
 }

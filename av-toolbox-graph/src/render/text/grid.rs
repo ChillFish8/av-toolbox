@@ -1,14 +1,14 @@
 /// Which sides a box drawing character connects to.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq)]
-struct Sides {
-    up: bool,
-    down: bool,
-    left: bool,
-    right: bool,
+pub(crate) struct Sides {
+    pub(crate) up: bool,
+    pub(crate) down: bool,
+    pub(crate) left: bool,
+    pub(crate) right: bool,
 }
 
 impl Sides {
-    fn merged(self, other: Self) -> Self {
+    pub(crate) fn merged(self, other: Self) -> Self {
         Self {
             up: self.up || other.up,
             down: self.down || other.down,
@@ -16,6 +16,31 @@ impl Sides {
             right: self.right || other.right,
         }
     }
+
+    pub(crate) const UP: Self = Self {
+        up: true,
+        down: false,
+        left: false,
+        right: false,
+    };
+    pub(crate) const DOWN: Self = Self {
+        up: false,
+        down: true,
+        left: false,
+        right: false,
+    };
+    pub(crate) const LEFT: Self = Self {
+        up: false,
+        down: false,
+        left: true,
+        right: false,
+    };
+    pub(crate) const RIGHT: Self = Self {
+        up: false,
+        down: false,
+        left: false,
+        right: true,
+    };
 }
 
 /// A character canvas that joins lines where they meet.
@@ -54,6 +79,12 @@ impl Grid {
         };
 
         self.set(x, y, character_for(incoming.merged(current)));
+    }
+
+    /// Draws a line cell reaching out on the given sides, joining it to any line already there.
+    pub(crate) fn draw_sides(&mut self, x: usize, y: usize, sides: Sides) {
+        let value = character_for(sides);
+        self.draw(x, y, value);
     }
 
     pub(crate) fn text(&mut self, x: usize, y: usize, value: &str) {

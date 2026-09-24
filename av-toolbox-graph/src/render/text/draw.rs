@@ -1,53 +1,24 @@
-use super::grid::Grid;
-use super::place::Rect;
+use super::grid::{Grid, Sides};
+use super::tracks::Rect;
 
 /// Two spaces of padding inside a box, and a border either side of that.
 const BOX_PADDING: usize = 4;
 
-/// Where a line starts, and whether it leaves a box border as a tee.
-#[derive(Debug, Copy, Clone)]
-pub(super) struct Exit {
-    pub(super) x: usize,
-    pub(super) y: usize,
-    pub(super) tee: bool,
-}
-
-/// Where a line ends, and whether it ends in an arrow.
-#[derive(Debug, Copy, Clone)]
-pub(super) struct Entry {
-    pub(super) x: usize,
-    pub(super) y: usize,
-    pub(super) arrow: bool,
-}
-
-pub(super) fn widest(lines: &[String]) -> usize {
+fn widest(lines: &[String]) -> usize {
     lines.iter().map(|line| line.chars().count()).max().unwrap_or(0)
 }
 
-/// The size a box needs, including the shadow behind it when it stands for several workers.
-pub(super) fn box_size(lines: &[String], stacked: bool) -> (usize, usize) {
-    let shadow = usize::from(stacked);
-    let width = widest(lines) + BOX_PADDING + shadow;
-    let height = lines.len() + 2 + shadow;
-
-    (width, height)
-}
-
-/// The row a line leaves a box by.
-pub(super) fn box_port(rect: Rect, stacked: bool) -> usize {
-    let height = rect.height - usize::from(stacked);
-    rect.y + height / 2
-}
-
-/// The row the line at `index` of the `count` lines entering a box arrives on.
+/// The size a box needs, with its shadow when stacked and a row inside for every entering line.
 ///
-/// Each line gets its own row on the left side, and the rows sit together around the middle.
-/// A box is sized with at least as many rows inside its border as lines entering it.
-pub(super) fn box_entry(rect: Rect, stacked: bool, count: usize, index: usize) -> usize {
-    let inside = rect.height - usize::from(stacked) - 2;
-    let first = rect.y + 1 + (inside - count).div_ceil(2);
+/// Entering lines take rows from the middle downwards, so the inside is at least twice as tall as
+/// the number of lines entering, less one.
+pub(super) fn box_size(lines: &[String], stacked: bool, arrivals: usize) -> (usize, usize) {
+    let shadow = usize::from(stacked);
+    let entry_rows = (arrivals * 2).saturating_sub(1);
+    let inside = lines.len().max(entry_rows).max(1);
+    let width = widest(lines) + BOX_PADDING + shadow;
 
-    first + index
+    (width, inside + 2 + shadow)
 }
 
 /// Draws a box and its lines, dashed for a crossing, with a shadow copy behind it when stacked.
@@ -110,65 +81,80 @@ fn clear_inside(grid: &mut Grid, rect: Rect) {
     }
 }
 
-/// Runs a line straight across a virtual slot, so an edge crossing its column has something to follow.
-pub(super) fn draw_lane(grid: &mut Grid, rect: Rect) {
-    for x in rect.x..=rect.right() {
-        grid.draw(x, rect.y, '─');
-    }
-}
-
-/// Runs a line right from an exit, turning once at `turn` to reach the entry's row.
-///
-/// Every run is horizontal or vertical, and each character joins any line already there.
-pub(super) fn route(grid: &mut Grid, exit: Exit, turn: usize, entry: Entry) {
-    let leaving = match exit.tee {
-        true => '├',
-        false => '─',
-    };
-    grid.draw(exit.x, exit.y, leaving);
-
-    if exit.y == entry.y {
-        for x in (exit.x + 1)..entry.x {
-            grid.draw(x, exit.y, '─');
-        }
-    } else {
-        let going_down = entry.y > exit.y;
-        let (first_corner, second_corner) = match going_down {
-            true => ('┐', '└'),
-            false => ('┘', '┌'),
-        };
-
-        for x in (exit.x + 1)..turn {
-            grid.draw(x, exit.y, '─');
-        }
-
-        grid.draw(turn, exit.y, first_corner);
-
-        let upper = exit.y.min(entry.y);
-        let lower = exit.y.max(entry.y);
-        for y in (upper + 1)..lower {
-            grid.draw(turn, y, '│');
-        }
-
-        grid.draw(turn, entry.y, second_corner);
-
-        for x in (turn + 1)..entry.x {
-            grid.draw(x, entry.y, '─');
-        }
-    }
-
-    if entry.arrow {
-        grid.set(entry.x, entry.y, '▶');
-        return;
-    }
-
-    grid.draw(entry.x, entry.y, '─');
-}
-
 /// Writes a label so it ends in the cell just before `end`.
 pub(super) fn draw_label(grid: &mut Grid, end: usize, y: usize, label: &str) {
     let length = label.chars().count();
     grid.text(end - length, y, label);
+}
+
+/// Draws a route through its corner points, as a tee or plain run where it starts and an arrow where it ends.
+pub(super) fn draw_route(grid: &mut Grid, points: &[(usize, usize)], tee: bool) {
+    let cells = route_cells(points);
+    let last = cells.len().saturating_sub(1);
+
+    for (index, (x, y, sides)) in cells.into_iter().enumerate() {
+        if index == 0 {
+            let leaving = match tee {
+                true => '├',
+                false => '─',
+            };
+            grid.draw(x, y, leaving);
+            continue;
+        }
+
+        if index == last {
+            grid.set(x, y, '▶');
+            continue;
+        }
+
+        grid.draw_sides(x, y, sides);
+    }
+}
+
+/// Every cell a route passes, with the sides the route touches in each.
+pub(super) fn route_cells(points: &[(usize, usize)]) -> Vec<(usize, usize, Sides)> {
+    let Some(&(start_x, start_y)) = points.first() else {
+        return Vec::new();
+    };
+
+    let mut cells = vec![(start_x, start_y, Sides::default())];
+
+    for pair in points.windows(2) {
+        let (target_x, target_y) = pair[1];
+
+        loop {
+            let (x, y, _) = *cells.last().expect("a route has a start");
+            if (x, y) == (target_x, target_y) {
+                break;
+            }
+
+            let (next_x, next_y, leaving, arriving) = step(x, y, target_x, target_y);
+            if let Some(current) = cells.last_mut() {
+                current.2 = current.2.merged(leaving);
+            }
+
+            cells.push((next_x, next_y, arriving));
+        }
+    }
+
+    cells
+}
+
+/// One cell's step towards a point, with the side it leaves by and the side it arrives by.
+fn step(x: usize, y: usize, target_x: usize, target_y: usize) -> (usize, usize, Sides, Sides) {
+    if target_x > x {
+        return (x + 1, y, Sides::RIGHT, Sides::LEFT);
+    }
+
+    if target_x < x {
+        return (x - 1, y, Sides::LEFT, Sides::RIGHT);
+    }
+
+    if target_y > y {
+        return (x, y + 1, Sides::DOWN, Sides::UP);
+    }
+
+    (x, y - 1, Sides::UP, Sides::DOWN)
 }
 
 #[cfg(test)]
@@ -183,7 +169,7 @@ mod tests {
     fn a_stacked_box_shows_its_shadow_to_the_right_and_below() {
         let mut grid = Grid::new(8, 5);
         let labels = lines(&["ab", "x4"]);
-        let size = box_size(&labels, true);
+        let size = box_size(&labels, true, 0);
         let rect = Rect {
             x: 0,
             y: 0,
@@ -200,36 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn lines_entering_one_box_arrive_on_neighbouring_rows_around_its_middle() {
-        let rect = Rect {
-            x: 0,
-            y: 0,
-            width: 6,
-            height: 5,
-        };
-
-        let single = box_entry(rect, false, 1, 0);
-        let pair = [box_entry(rect, false, 2, 0), box_entry(rect, false, 2, 1)];
-
-        assert_eq!(single, box_port(rect, false));
-        assert_eq!(pair, [2, 3]);
-    }
-
-    #[test]
     fn a_route_between_rows_turns_once_in_the_gap() {
         let mut grid = Grid::new(6, 3);
-        let exit = Exit {
-            x: 0,
-            y: 0,
-            tee: false,
-        };
-        let entry = Entry {
-            x: 5,
-            y: 2,
-            arrow: true,
-        };
+        let points = [(0, 0), (2, 0), (2, 2), (5, 2)];
 
-        route(&mut grid, exit, 2, entry);
+        draw_route(&mut grid, &points, false);
 
         assert_eq!(grid.render(), concat!("──┐\n", "  │\n", "  └──▶\n"));
     }
