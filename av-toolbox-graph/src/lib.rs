@@ -57,4 +57,4 @@ pub use self::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId, Routin
 pub use self::render::{RenderOptions, render_ascii, render_html};
 pub use self::residency::place_transfers;
 pub use self::solve::{SolvedFormats, solve};
-pub use self::spec::{InputRef, Span, Spanned, StageSpec};
+pub use self::spec::{ArgSpans, InputRef, Span, Spanned, StageSpec};

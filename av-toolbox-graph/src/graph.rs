@@ -4,8 +4,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use av_toolbox_core::{Crossing, OpenSlot, Residency, StageHandle, StageKind, StreamType};
 use serde_json::Value;
 
-use crate::Span;
 use crate::plan::ExecutionPlan;
+use crate::{ArgSpans, Span};
 
 /// A node's position in the graph.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -133,6 +133,7 @@ pub(crate) struct NodeParts {
     pub(crate) identifier: String,
     pub(crate) args: Value,
     pub(crate) args_span: Span,
+    pub(crate) arg_spans: ArgSpans,
     pub(crate) inputs: Vec<Edge>,
     pub(crate) workers: Option<usize>,
     pub(crate) span: Span,
@@ -147,6 +148,7 @@ pub struct Node {
     identifier: String,
     args: Value,
     args_span: Span,
+    arg_spans: ArgSpans,
     inputs: Vec<Edge>,
     consumers: Vec<NodeId>,
     workers: Option<usize>,
@@ -170,6 +172,7 @@ impl Node {
             identifier: parts.identifier,
             args: parts.args,
             args_span: parts.args_span,
+            arg_spans: parts.arg_spans,
             inputs: parts.inputs,
             consumers: Vec::new(),
             workers: parts.workers,
@@ -208,6 +211,10 @@ impl Node {
 
     pub fn args_span(&self) -> Span {
         self.args_span
+    }
+
+    pub fn arg_spans(&self) -> &ArgSpans {
+        &self.arg_spans
     }
 
     /// The inputs in the order the definition wrote them.
@@ -362,6 +369,7 @@ impl CompiledGraph {
             identifier: crossing.identifier().to_string(),
             args: Value::Object(Default::default()),
             args_span: source.span(),
+            arg_spans: ArgSpans::default(),
             inputs: vec![Edge::new(None, None, 0, producer, source.span())],
             consumers: Vec::new(),
             workers: None,
@@ -486,6 +494,7 @@ pub(crate) mod tests {
             identifier: "test/example".to_string(),
             args: json!({}),
             args_span: Span::unknown(),
+            arg_spans: ArgSpans::default(),
             inputs: edges,
             workers: None,
             span: Span::unknown(),

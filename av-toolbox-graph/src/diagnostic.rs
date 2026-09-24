@@ -24,6 +24,8 @@ impl fmt::Display for Severity {
 /// The rule a diagnostic was raised by.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum DiagnosticCode {
+    InvalidSyntax,
+    InvalidDefinition,
     DuplicateStageName,
     UnknownStageReference,
     UnknownStage,
@@ -47,6 +49,8 @@ pub enum DiagnosticCode {
 impl DiagnosticCode {
     pub const fn as_str(&self) -> &'static str {
         match self {
+            Self::InvalidSyntax => "invalid-syntax",
+            Self::InvalidDefinition => "invalid-definition",
             Self::DuplicateStageName => "duplicate-stage-name",
             Self::UnknownStageReference => "unknown-stage-reference",
             Self::UnknownStage => "unknown-stage",

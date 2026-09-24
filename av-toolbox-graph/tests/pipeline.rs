@@ -32,6 +32,7 @@ use av_toolbox_gpu::{
     StreamTemplate,
     Subsampling,
 };
+use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build};
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 use av_toolbox_graph::{
     CompiledGraph,
@@ -42,7 +43,6 @@ use av_toolbox_graph::{
     render_html,
     solve,
 };
-use av_toolbox_graph::{InputRef, Span, Spanned, StageSpec, build};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -186,6 +186,7 @@ fn spec(kind: StageKind, name: &str, stage_type: &str, inputs: Vec<&str>, args: 
             })
             .collect(),
         args: Spanned::unknown(args),
+        arg_spans: ArgSpans::default(),
         workers: None,
         span: Span::unknown(),
     }

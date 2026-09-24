@@ -1,5 +1,5 @@
 use av_toolbox_core::StageKind;
-use av_toolbox_graph::{InputRef, Span, Spanned, StageSpec};
+use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec};
 use serde_json::json;
 
 fn spec(kind: StageKind, name: &str, stage_type: &str) -> StageSpec {
@@ -9,6 +9,7 @@ fn spec(kind: StageKind, name: &str, stage_type: &str) -> StageSpec {
         stage_type: Spanned::unknown(stage_type.to_string()),
         inputs: Vec::new(),
         args: Spanned::unknown(json!({})),
+        arg_spans: ArgSpans::default(),
         workers: None,
         span: Span::unknown(),
     }

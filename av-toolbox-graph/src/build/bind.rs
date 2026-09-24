@@ -193,6 +193,7 @@ fn build_nodes(resolution: &Resolution<'_>, accepted: &[bool], ids: &HashMap<usi
             identifier: stage.info.full_identifier().to_string(),
             args: stage.spec.args.value.clone(),
             args_span: stage.spec.args.span,
+            arg_spans: stage.spec.arg_spans.clone(),
             inputs,
             workers: stage.spec.workers,
             span: stage.spec.span,

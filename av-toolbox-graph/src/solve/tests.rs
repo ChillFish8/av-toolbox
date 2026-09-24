@@ -14,7 +14,7 @@ use av_toolbox_gpu::{
 use serde_json::json;
 
 use super::*;
-use crate::{Diagnostic, Spanned, StageSpec, build, testing};
+use crate::{Diagnostic, Span, Spanned, StageSpec, build, testing};
 
 /// Whichever backend this build enables, so these tests compile under any single one.
 ///
@@ -673,6 +673,34 @@ fn frames_inputs_at_different_rates_report_a_mismatch_on_the_join() {
     assert_eq!(reported[0].path(), "mask.join");
     assert!(reported[0].message().contains("25/1"));
     assert!(reported[0].message().contains("30/1"));
+}
+
+#[test]
+fn a_rate_mismatch_notes_each_input_where_it_is_read() {
+    let mut join = mask("join", "test/merge", "left", "right");
+    join.inputs[0].span = Span::new(10, 16);
+    join.inputs[1].span = Span::new(18, 25);
+    let specs = vec![
+        rated("left", 25, 1),
+        rated("right", 30, 1),
+        join,
+        sink("out", "join"),
+    ];
+
+    let reported = rate_mismatches(&specs);
+    let notes: Vec<(&str, Span)> = reported[0]
+        .notes()
+        .iter()
+        .map(|note| (note.message.as_str(), note.span))
+        .collect();
+
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes[0].1, Span::new(10, 16));
+    assert!(notes[0].0.contains("left"));
+    assert!(notes[0].0.contains("25/1"));
+    assert_eq!(notes[1].1, Span::new(18, 25));
+    assert!(notes[1].0.contains("right"));
+    assert!(notes[1].0.contains("30/1"));
 }
 
 #[test]

@@ -25,13 +25,38 @@ impl Solver<'_> {
         let listed = describe(&rates);
         let message = format!("{listed}, but every frames input of a stage must share one frame rate");
 
-        let node = self.graph.node(id);
+        let graph = self.graph;
+        let node = graph.node(id);
         let path = stage_path(node.kind(), node.name());
-        let diagnostic = Diagnostic::error(DiagnosticCode::FrameRateMismatch, path, node.span(), message);
+        let mut diagnostic = Diagnostic::error(DiagnosticCode::FrameRateMismatch, path, node.span(), message);
+
+        for (slot, rate) in &rates {
+            let edge_index = self.slots[id.index()][*slot].expect("a bound slot has an edge");
+            let edge = &node.inputs()[edge_index];
+            let source = edge.source();
+            let producer = graph.node(source).name();
+            let param = edge.param();
+            let note = describe_input(param, producer, *rate);
+            let span = edge.span();
+
+            diagnostic = diagnostic.with_note(note, span);
+        }
 
         self.diagnostics.push(diagnostic);
 
         false
+    }
+}
+
+fn describe_input(param: Option<&str>, producer: &str, rate: Option<FrameRate>) -> String {
+    let reads = match param {
+        Some(param) => format!("{param} reads {producer}"),
+        None => format!("this input reads {producer}"),
+    };
+
+    match rate {
+        Some(rate) => format!("{reads} at {rate}"),
+        None => format!("{reads} at an unknown rate"),
     }
 }
 

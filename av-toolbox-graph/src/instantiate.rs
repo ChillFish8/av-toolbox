@@ -265,8 +265,8 @@ fn build_stage(
 
 /// Puts a build failure where the definition can be corrected.
 ///
-/// A schema violation lands on the arguments table with the violation's own pointer appended, and
-/// anything else lands on the stage.
+/// A schema violation lands on the deepest recorded value it sits under, falling back to the
+/// arguments table, and anything else lands on the stage.
 fn report(node: &Node, error: BuildStageError, diagnostics: &mut Diagnostics) {
     let BuildStageError::InvalidArgs { source, .. } = &error else {
         diagnostics.push(Diagnostic::error(
@@ -296,11 +296,16 @@ fn report(node: &Node, error: BuildStageError, diagnostics: &mut Diagnostics) {
             args_path(node.kind(), node.name()),
             violation.path().replace('/', ".")
         );
+        let pointer = violation.path();
+        let arg_spans = node.arg_spans();
+        let narrowed = arg_spans.narrowest(pointer);
+        let fallback = node.args_span();
+        let span = narrowed.unwrap_or(fallback);
 
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::InvalidArgs,
             path,
-            node.args_span(),
+            span,
             violation.message(),
         ));
     }
@@ -360,6 +365,36 @@ mod diagnostics_tests {
         assert_eq!(reported[0].code(), DiagnosticCode::InvalidArgs);
         assert!(reported[0].path().starts_with("filter.blur.args"));
         assert_eq!(reported[0].span(), Span::new(40, 60));
+    }
+
+    #[test]
+    fn each_violation_lands_on_its_own_value_or_the_arguments() {
+        let mut source = testing::spec(StageKind::Source, "input", "test/rated");
+        source.args = Spanned::new(json!({ "numerator": "a", "denominator": "b" }), Span::new(40, 90));
+        source.arg_spans.insert("/numerator", Span::new(52, 55));
+
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("input")];
+
+        let specs = vec![source, sink];
+        let registry = testing::registry();
+        let graph = build(&registry, &specs).expect("should build").into_graph();
+
+        let mut diagnostics = Diagnostics::new();
+        graph.prepare_stages(&registry, &mut diagnostics);
+        let mut spans: Vec<(String, Span)> = diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.path().to_string(), diagnostic.span()))
+            .collect();
+        spans.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(
+            spans,
+            vec![
+                ("source.input.args.denominator".to_string(), Span::new(40, 90)),
+                ("source.input.args.numerator".to_string(), Span::new(52, 55)),
+            ]
+        );
     }
 
     #[test]

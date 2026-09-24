@@ -131,7 +131,7 @@ mod tests {
 
     use super::*;
     use crate::graph::{Edge, NodeParts};
-    use crate::{DiagnosticCode, Severity, Span};
+    use crate::{ArgSpans, DiagnosticCode, Severity, Span};
 
     fn node(index: usize, name: &str, kind: StageKind, inputs: &[usize]) -> Node {
         let edges = inputs
@@ -147,6 +147,7 @@ mod tests {
             identifier: "test/example".to_string(),
             args: json!({}),
             args_span: Span::unknown(),
+            arg_spans: ArgSpans::default(),
             inputs: edges,
             workers: None,
             span: Span::unknown(),

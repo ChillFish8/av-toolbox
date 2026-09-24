@@ -36,7 +36,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
-use av_toolbox_graph::{InputRef, Span, Spanned, StageSpec, build, place_transfers, plan, solve};
+use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build, place_transfers, plan, solve};
 use av_toolbox_runtime::{Engine, Settings};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -170,6 +170,7 @@ fn stage(kind: StageKind, name: &str, stage_type: &str, args: serde_json::Value)
         stage_type: Spanned::unknown(stage_type.to_string()),
         inputs: Vec::new(),
         args: Spanned::unknown(args),
+        arg_spans: ArgSpans::default(),
         workers: None,
         span: Span::unknown(),
     }
