@@ -3,10 +3,6 @@
 #[cfg(feature = "scene")]
 mod scene;
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "nothing outside the tests splits scenes yet")
-)]
 mod split;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
@@ -15,6 +11,7 @@ use av_toolbox_core::{PipelineRegistry, RegistryError};
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     #[cfg(feature = "scene")]
     registry.register_transform::<scene::SceneDetect>()?;
+    registry.register_meta_transform::<split::SceneSplit>()?;
 
     Ok(())
 }

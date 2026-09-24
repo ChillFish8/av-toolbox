@@ -203,3 +203,84 @@ fn bad_arguments_are_refused_at_prepare() {
     assert!(matches!(above, Err(BuildStageError::InvalidArgs { .. })));
     assert!(matches!(unknown, Err(BuildStageError::InvalidArgs { .. })));
 }
+
+/// The length of each run of equal chunk ids, in order, checking the ids count up from 0.
+fn chunk_lengths(emitted: &[HostStreamItem]) -> Vec<usize> {
+    let mut lengths: Vec<usize> = Vec::new();
+    let mut previous: Option<u64> = None;
+    for item in emitted {
+        let chunk = item.meta().chunk;
+        match previous {
+            Some(open) if open == chunk => {
+                let last = lengths.last_mut().expect("a chunk is open");
+                *last += 1;
+            },
+            _ => {
+                let expected = lengths.len() as u64;
+                assert_eq!(chunk, expected, "chunk ids count up from 0 without gaps");
+                lengths.push(1);
+            },
+        }
+
+        previous = Some(chunk);
+    }
+
+    lengths
+}
+
+#[test]
+fn split_mode_keeps_every_chunk_within_the_limit() {
+    let mut context = testing_context();
+    let frames = clip(&context, &grey8(), THREE_SCENES);
+    let split = args(json!({ "mode": "split", "max_frames": 12 }));
+    let mut detect = Detect::new(&split, &grey8()).expect("builds");
+
+    let emitted = run(&mut detect, &mut context, frames);
+
+    let lengths = chunk_lengths(&emitted);
+    assert!(lengths.iter().all(|&length| length <= 12), "{lengths:?}");
+    assert_eq!(lengths.iter().sum::<usize>(), 90);
+    assert_ne!(emitted[29].meta().chunk, emitted[30].meta().chunk);
+    assert_ne!(emitted[59].meta().chunk, emitted[60].meta().chunk);
+}
+
+#[test]
+fn split_mode_measures_seconds_from_timestamps() {
+    let mut context = testing_context();
+    let frames = clip(&context, &grey8(), THREE_SCENES);
+    let split = args(json!({ "mode": "split", "max_seconds": 0.5 }));
+    let mut detect = Detect::new(&split, &grey8()).expect("builds");
+
+    let emitted = run(&mut detect, &mut context, frames);
+
+    let lengths = chunk_lengths(&emitted);
+    assert!(lengths.iter().all(|&length| length <= 12), "{lengths:?}");
+}
+
+#[test]
+fn split_mode_holds_a_scene_until_the_cut_after_it_is_found() {
+    let mut context = testing_context();
+    let frames = clip(&context, &grey8(), THREE_SCENES);
+    let split = args(json!({ "mode": "split", "max_frames": 12 }));
+    let mut detect = Detect::new(&split, &grey8()).expect("builds");
+
+    let mut first_emission = None;
+    for (call, frame) in frames.into_iter().enumerate() {
+        let out = process(&mut detect, &mut context, frame);
+        if !out.is_empty() {
+            first_emission = Some((call, out.len()));
+            break;
+        }
+    }
+
+    assert_eq!(first_emission, Some((35, 30)));
+}
+
+#[test]
+fn split_arguments_prepare() {
+    let prepared = prepare(json!({ "mode": "split", "max_frames": 240 }));
+    let refused = prepare(json!({ "mode": "split", "max_frames": null, "max_seconds": null }));
+
+    assert!(prepared.is_ok());
+    assert!(matches!(refused, Err(BuildStageError::InvalidArgs { .. })));
+}
