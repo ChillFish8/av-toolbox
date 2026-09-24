@@ -54,6 +54,9 @@ pub(crate) struct Args {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Run a pipeline.
+    Execute(ExecuteArgs),
+
     /// List the devices each backend can see on this machine.
     ///
     /// Every row names a device in the spelling `--device` takes, next to the backends that offer
@@ -71,6 +74,36 @@ pub(crate) enum Command {
     /// By default the pipeline is compiled on the chosen device, so the drawing shows where frames
     /// move between host and device and which stages run in parallel.
     Explain(ExplainArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ExecuteArgs {
+    /// The pipeline file to run.
+    pub(crate) pipeline: PathBuf,
+
+    /// How much memory frames in flight may occupy.
+    ///
+    /// Takes a size such as `8GB`, `4.5GiB` or `512MB`, or a plain byte count. `GB` is 10^9 while
+    /// `GiB` is 2^30.
+    ///
+    /// Left unset, the budget is worked out from the pipeline.
+    #[arg(long, value_name = "SIZE", value_parser = parse_frame_budget)]
+    pub(crate) frame_budget: Option<usize>,
+}
+
+/// Reads a size such as `8GB` into a byte count.
+fn parse_frame_budget(raw: &str) -> Result<usize, String> {
+    let invalid = format!(
+        "invalid frame budget '{raw}'. Give a size such as 8GB, 4.5GiB or 512MB, or a plain byte count"
+    );
+
+    let parsed = raw.parse::<bytesize::ByteSize>();
+    let Ok(size) = parsed else {
+        return Err(invalid);
+    };
+
+    let bytes = size.as_u64();
+    usize::try_from(bytes).map_err(|_| invalid)
 }
 
 #[derive(Debug, clap::Args)]
@@ -112,5 +145,23 @@ impl ColorMode {
             Self::Auto if std::io::stderr().is_terminal() => ColorChoice::Auto,
             Self::Auto => ColorChoice::Never,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_budget_reads_sizes_and_byte_counts() {
+        assert_eq!(parse_frame_budget("4KiB"), Ok(4096));
+        assert_eq!(parse_frame_budget("1000"), Ok(1000));
+    }
+
+    #[test]
+    fn a_bad_frame_budget_shows_the_expected_form() {
+        let error = parse_frame_budget("lots").expect_err("not a size");
+
+        assert!(error.contains("4.5GiB"));
     }
 }

@@ -1,4 +1,6 @@
 use av_toolbox_graph::{Diagnostic, Severity};
+use av_toolbox_pipeline::StageRef;
+use av_toolbox_runtime::RunError;
 use codespan_reporting::diagnostic::{Diagnostic as Report, Label, Severity as Level};
 use codespan_reporting::files::{Error as FilesError, SimpleFile};
 use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
@@ -139,9 +141,65 @@ fn plural(count: usize, noun: &str) -> String {
     }
 }
 
+/// Prints a failed run at the stage that failed.
+///
+/// A node the compiler inserted, such as a host/device transfer, has no written stage to point
+/// at, so it prints a plain line naming the transfer instead of the error's own `Display`, which
+/// would otherwise leak the node's internal id. A node id nothing in the run names at all falls
+/// back to the error's own `Display`.
+pub(crate) fn run_error(
+    writer: &mut dyn WriteColor,
+    file: &PipelineFile,
+    error: &RunError,
+    stage: Option<StageRef<'_>>,
+) {
+    let Some(stage) = stage else {
+        let message = plain_message(error);
+        error_line(writer, &message);
+
+        return;
+    };
+
+    let cause = innermost(error);
+    let message = format!("{} {} failed: {cause}", stage.kind, stage.name);
+    let label = Label::primary((), stage.span.start..stage.span.end);
+    let labels = vec![label];
+    let report = Report::error().with_message(message).with_labels(labels);
+    let config = Config::default();
+
+    // Nothing is left to report a failed write to stderr to.
+    let _ = term::emit_to_write_style(writer, &config, file, &report);
+}
+
+/// The message for a run error with no written stage to point at.
+///
+/// A node is known but unwritten when the compiler inserted it, and that is always a transfer
+/// between host and device.
+fn plain_message(error: &RunError) -> String {
+    if error.node().is_none() {
+        return error.to_string();
+    }
+
+    let cause = innermost(error);
+    format!("a transfer between host and device failed: {cause}")
+}
+
+/// The deepest cause of a run error, which names what went wrong without the node it happened on.
+fn innermost(error: &RunError) -> String {
+    let mut current: &dyn std::error::Error = error;
+    while let Some(next) = current.source() {
+        current = next;
+    }
+
+    current.to_string()
+}
+
 #[cfg(test)]
 mod tests {
-    use av_toolbox_graph::{DiagnosticCode, Span};
+    use av_toolbox_core::{StageError, StageKind};
+    use av_toolbox_graph::{DiagnosticCode, NodeId, Span};
+    use av_toolbox_pipeline::StageRef;
+    use av_toolbox_runtime::RunError;
     use codespan_reporting::files::SimpleFile;
     use codespan_reporting::term::termcolor::NoColor;
 
@@ -291,5 +349,58 @@ mod tests {
     #[test]
     fn nothing_to_report_prints_nothing() {
         assert_eq!(rendered(TEXT, &[]), "");
+    }
+
+    #[test]
+    fn a_run_error_points_at_its_stage() {
+        let failure = RunError::Stage {
+            node: NodeId::new(0),
+            source: StageError::msg("the reader closed the stream"),
+        };
+        let stage = StageRef {
+            kind: StageKind::Filter,
+            name: "blur",
+            span: Span::new(0, 13),
+        };
+        let mut writer = NoColor::new(Vec::new());
+
+        run_error(&mut writer, &file(TEXT), &failure, Some(stage));
+        let output = String::from_utf8(writer.into_inner()).expect("utf-8");
+
+        assert!(output.contains("filter blur failed: the reader closed the stream"));
+        assert!(output.contains("^^^^^^^^^^^^^"));
+        assert!(!output.contains("NodeId"));
+    }
+
+    #[test]
+    fn a_run_error_with_no_stage_is_a_plain_line() {
+        let failure = RunError::DroppedItems { dropped: 3 };
+        let mut writer = NoColor::new(Vec::new());
+
+        run_error(&mut writer, &file(TEXT), &failure, None);
+        let output = String::from_utf8(writer.into_inner()).expect("utf-8");
+
+        assert_eq!(
+            output,
+            "error: the run finished with 3 items that never reached a worker\n"
+        );
+    }
+
+    #[test]
+    fn a_run_error_at_a_compiler_inserted_node_hides_the_node_id() {
+        let failure = RunError::Stage {
+            node: NodeId::new(3),
+            source: StageError::msg("the device was lost"),
+        };
+        let mut writer = NoColor::new(Vec::new());
+
+        run_error(&mut writer, &file(TEXT), &failure, None);
+        let output = String::from_utf8(writer.into_inner()).expect("utf-8");
+
+        assert_eq!(
+            output,
+            "error: a transfer between host and device failed: the device was lost\n"
+        );
+        assert!(!output.contains("NodeId"));
     }
 }
