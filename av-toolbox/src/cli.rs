@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::path::PathBuf;
 
 use av_toolbox_gpu::{Accelerator, Device, default_accelerators};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -64,12 +65,36 @@ pub(crate) enum Command {
 
     /// List every stage a pipeline can use, or describe one.
     ListStages(ListStagesArgs),
+
+    /// Draw a pipeline as a graph.
+    ///
+    /// By default the pipeline is compiled on the chosen device, so the drawing shows where frames
+    /// move between host and device and which stages run in parallel.
+    Explain(ExplainArgs),
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ListStagesArgs {
     /// A stage type such as `y4m/pipe`, to show its inputs and arguments.
     pub(crate) stage_type: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ExplainArgs {
+    /// The pipeline file to draw.
+    pub(crate) pipeline: PathBuf,
+
+    /// Write an HTML page instead of drawing in the terminal.
+    #[arg(long)]
+    pub(crate) html: bool,
+
+    /// Where to write the HTML page, `plan.html` in the working directory by default.
+    #[arg(long, value_name = "PATH", requires = "html")]
+    pub(crate) path: Option<PathBuf>,
+
+    /// Draw the stages and their connections without opening a device.
+    #[arg(long)]
+    pub(crate) structure_only: bool,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]

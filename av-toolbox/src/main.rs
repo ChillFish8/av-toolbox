@@ -1,4 +1,5 @@
 mod cli;
+mod explain;
 mod list_devices;
 mod list_stages;
 mod load;
@@ -21,6 +22,7 @@ fn main() -> ExitCode {
     match &args.command {
         Command::ListDevices => list_devices::run(&args.accelerators),
         Command::ListStages(list) => list_stages::run(&args, list),
+        Command::Explain(explain) => explain::run(&args, explain),
     }
 }
 

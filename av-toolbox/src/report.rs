@@ -1,4 +1,8 @@
+use av_toolbox_graph::{Diagnostic, Severity};
+use codespan_reporting::diagnostic::{Diagnostic as Report, Label, Severity as Level};
+use codespan_reporting::files::{Error as FilesError, SimpleFile};
 use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
+use codespan_reporting::term::{self, Config};
 
 use crate::cli::ColorMode;
 
@@ -23,11 +27,148 @@ fn write_line(writer: &mut dyn WriteColor, level: &str, colour: Color, message: 
     writeln!(writer, ": {message}")
 }
 
+/// A pipeline file's name and text, for pointing diagnostics at.
+pub(crate) type PipelineFile = SimpleFile<String, String>;
+
+/// Prints every diagnostic against the file, errors first, then a count of what was found.
+pub(crate) fn diagnostics(writer: &mut dyn WriteColor, file: &PipelineFile, diagnostics: &[Diagnostic]) {
+    // Nothing is left to report a failed write to stderr to.
+    let _ = write_diagnostics(writer, file, diagnostics);
+}
+
+fn write_diagnostics(
+    writer: &mut dyn WriteColor,
+    file: &PipelineFile,
+    diagnostics: &[Diagnostic],
+) -> Result<(), FilesError> {
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+
+    let config = Config::default();
+    let errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == Severity::Error);
+    let warnings = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == Severity::Warning);
+
+    for diagnostic in errors.chain(warnings) {
+        let report = convert(diagnostic);
+        term::emit_to_write_style(writer, &config, file, &report)?;
+    }
+
+    write_summary(writer, diagnostics)?;
+
+    Ok(())
+}
+
+fn convert(diagnostic: &Diagnostic) -> Report<()> {
+    let level = match diagnostic.severity() {
+        Severity::Error => Level::Error,
+        Severity::Warning => Level::Warning,
+    };
+
+    let mut labels = Vec::new();
+    let mut notes = Vec::new();
+
+    let span = diagnostic.span();
+    let path = diagnostic.path();
+    if !span.is_unknown() {
+        let label = Label::primary((), span.start..span.end);
+        labels.push(label);
+    } else if !path.is_empty() {
+        let located = format!("in {path}");
+        notes.push(located);
+    }
+
+    for note in diagnostic.notes() {
+        if note.span.is_unknown() {
+            let message = note.message.clone();
+            notes.push(message);
+            continue;
+        }
+
+        let label = Label::secondary((), note.span.start..note.span.end).with_message(&note.message);
+        labels.push(label);
+    }
+
+    let code = diagnostic.code();
+    let message = diagnostic.message();
+
+    Report::new(level)
+        .with_code(code.as_str())
+        .with_message(message)
+        .with_labels(labels)
+        .with_notes(notes)
+}
+
+fn write_summary(writer: &mut dyn WriteColor, diagnostics: &[Diagnostic]) -> std::io::Result<()> {
+    let errors = count(diagnostics, Severity::Error);
+    let warnings = count(diagnostics, Severity::Warning);
+
+    let counted = match (errors, warnings) {
+        (0, warnings) => plural(warnings, "warning"),
+        (errors, 0) => plural(errors, "error"),
+        (errors, warnings) => {
+            let errors = plural(errors, "error");
+            let warnings = plural(warnings, "warning");
+
+            format!("{errors} and {warnings}")
+        },
+    };
+    let message = format!("pipeline has {counted}");
+
+    match errors {
+        0 => write_line(writer, "warning", Color::Yellow, &message),
+        _ => write_line(writer, "error", Color::Red, &message),
+    }
+}
+
+fn count(diagnostics: &[Diagnostic], severity: Severity) -> usize {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == severity)
+        .count()
+}
+
+fn plural(count: usize, noun: &str) -> String {
+    match count {
+        1 => format!("1 {noun}"),
+        count => format!("{count} {noun}s"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use av_toolbox_graph::{DiagnosticCode, Span};
+    use codespan_reporting::files::SimpleFile;
     use codespan_reporting::term::termcolor::NoColor;
 
     use super::*;
+
+    const TEXT: &str = "[filter.blur]\ntype = \"test/blur\"\n";
+
+    fn file(text: &str) -> PipelineFile {
+        SimpleFile::new("pipeline.toml".to_string(), text.to_string())
+    }
+
+    fn rendered(text: &str, diagnostics: &[Diagnostic]) -> String {
+        let mut writer = NoColor::new(Vec::new());
+
+        super::diagnostics(&mut writer, &file(text), diagnostics);
+
+        String::from_utf8(writer.into_inner()).expect("utf-8")
+    }
+
+    fn error(span: Span) -> Diagnostic {
+        Diagnostic::error(
+            DiagnosticCode::UnknownStage,
+            "filter.blur.type",
+            span,
+            "no filter is registered",
+        )
+    }
 
     #[test]
     fn an_error_line_names_its_level() {
@@ -37,5 +178,118 @@ mod tests {
         let written = String::from_utf8(writer.into_inner()).expect("utf-8");
 
         assert_eq!(written, "error: cannot read pipeline.toml\n");
+    }
+
+    #[test]
+    fn a_primary_label_underlines_its_span() {
+        let output = rendered(TEXT, &[error(Span::new(21, 32))]);
+
+        assert!(output.contains("error[unknown-stage]: no filter is registered"));
+        assert!(output.contains("pipeline.toml:2:8"));
+        assert!(output.contains("^^^^^^^^^^^"));
+    }
+
+    #[test]
+    fn a_note_with_a_span_is_a_secondary_label() {
+        let diagnostic = error(Span::new(21, 32)).with_note("defined here", Span::new(0, 13));
+
+        let output = rendered(TEXT, &[diagnostic]);
+
+        assert!(output.contains("-------------"));
+        assert!(output.contains("defined here"));
+    }
+
+    #[test]
+    fn a_note_without_a_span_is_a_note_line() {
+        let diagnostic = error(Span::new(21, 32)).with_note("try list-stages", Span::unknown());
+
+        let output = rendered(TEXT, &[diagnostic]);
+
+        assert!(output.contains("= try list-stages"));
+    }
+
+    #[test]
+    fn an_unknown_span_names_the_path_instead() {
+        let diagnostic = Diagnostic::error(
+            DiagnosticCode::NoSinks,
+            "",
+            Span::unknown(),
+            "the pipeline has no sink",
+        );
+        let with_path = error(Span::unknown());
+
+        let output = rendered(TEXT, &[diagnostic, with_path]);
+
+        assert!(output.contains("error[no-sinks]: the pipeline has no sink"));
+        assert!(output.contains("= in filter.blur.type"));
+        assert!(!output.contains("pipeline.toml:"));
+    }
+
+    #[test]
+    fn a_label_after_multi_byte_text_lands_on_its_text() {
+        let text = "# réglage\n[filter.blur]\n";
+        let header = text.find("[filter.blur]").expect("present");
+
+        let output = rendered(text, &[error(Span::new(header, header + 13))]);
+
+        assert!(output.contains("pipeline.toml:2:1"));
+        assert!(output.contains("^^^^^^^^^^^^^"));
+    }
+
+    #[test]
+    fn errors_print_before_warnings() {
+        let warning = Diagnostic::warning(
+            DiagnosticCode::UnusedStage,
+            "filter.blur",
+            Span::new(0, 13),
+            "unused",
+        );
+        let failure = error(Span::new(21, 32));
+
+        let output = rendered(TEXT, &[warning, failure]);
+        let error_at = output.find("error[").expect("an error");
+        let warning_at = output.find("warning[").expect("a warning");
+
+        assert!(error_at < warning_at);
+    }
+
+    #[test]
+    fn the_summary_counts_errors_and_warnings() {
+        let warning = Diagnostic::warning(
+            DiagnosticCode::UnusedStage,
+            "filter.blur",
+            Span::new(0, 13),
+            "unused",
+        );
+        let failure = error(Span::new(21, 32));
+
+        let output = rendered(TEXT, &[warning, failure]);
+
+        assert!(output.ends_with("error: pipeline has 1 error and 1 warning\n"));
+    }
+
+    #[test]
+    fn warnings_alone_are_summarised_as_warnings() {
+        let first = Diagnostic::warning(
+            DiagnosticCode::UnusedStage,
+            "filter.a",
+            Span::new(0, 13),
+            "unused",
+        );
+        let second = Diagnostic::warning(
+            DiagnosticCode::UnusedStage,
+            "filter.b",
+            Span::new(0, 13),
+            "unused",
+        );
+
+        let output = rendered(TEXT, &[first, second]);
+
+        assert!(output.ends_with("warning: pipeline has 2 warnings\n"));
+    }
+
+    #[test]
+    fn nothing_to_report_prints_nothing() {
+        assert_eq!(rendered(TEXT, &[]), "");
     }
 }
