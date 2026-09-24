@@ -8,6 +8,7 @@ members = [
     "av-toolbox-runtime",
     "av-toolbox-gpu",
     "av-toolbox-sources",
+    "av-toolbox-transforms",
 ]
 
 [profile.test-release]
@@ -21,7 +22,8 @@ serde_json = "1.0.151"
 schemars = "1.2.2"
 jsonschema = { version = "0.56.0", default-features = false }
 thiserror = "2.0.20"
-av-scenechange = "0.24"
+av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
+v_frame = "0.7"
 cubecl = { version = "0.10", features = ["std"] }
 etcetera = "0.11"
 strum = "0.28"

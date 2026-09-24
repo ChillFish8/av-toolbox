@@ -85,6 +85,7 @@ pub use self::frame::{
     PlaneBuffer,
     Primaries,
     SampleFormat,
+    SceneScore,
     StreamFormat,
     StreamItem,
     Subsampling,

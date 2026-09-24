@@ -299,6 +299,7 @@ mod tests {
         HostStreamItem,
         MaskFormat,
         SampleFormat,
+        SceneScore,
         Subsampling,
         default_accelerators,
     };
@@ -560,6 +561,7 @@ mod tests {
             index: 12,
             chunk: 0,
             timestamp: Some(Duration::from_millis(500)),
+            scene_score: Some(SceneScore::new(2.5)),
         };
         let items = vec![
             StreamItem::Frame(context.alloc_frame(&frame_format(), stamped)),
@@ -675,6 +677,7 @@ mod tests {
             index: 12,
             chunk: 3,
             timestamp: Some(Duration::from_millis(40)),
+            scene_score: Some(SceneScore::new(2.5)),
         };
 
         let mut frame = context.alloc_host_frame(&frame_format(), stamped);
