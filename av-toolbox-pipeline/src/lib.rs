@@ -4,6 +4,7 @@
 
 mod backend;
 mod registry;
+pub mod toml;
 
 pub use self::backend::{OpenBackendError, open_backend};
 pub use self::registry::registry;
