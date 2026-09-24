@@ -5,6 +5,7 @@ members = [
     "av-toolbox-core",
     "av-toolbox-cubek",
     "av-toolbox-graph",
+    "av-toolbox-pipeline",
     "av-toolbox-runtime",
     "av-toolbox-gpu",
     "av-toolbox-sinks",
@@ -34,3 +35,4 @@ tracing = "0.1"
 tempfile = "3"
 y4m = "0.8"
 ffms2-sys = "0.3"
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "preserve_order"] }

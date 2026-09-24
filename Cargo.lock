@@ -200,6 +200,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "av-toolbox-pipeline"
+version = "0.1.0"
+dependencies = [
+ "av-toolbox-core",
+ "av-toolbox-gpu",
+ "av-toolbox-graph",
+ "av-toolbox-runtime",
+ "av-toolbox-sinks",
+ "av-toolbox-sources",
+ "av-toolbox-transforms",
+ "serde_json",
+ "thiserror",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
 name = "av-toolbox-runtime"
 version = "0.1.0"
 dependencies = [
