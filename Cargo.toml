@@ -15,6 +15,7 @@ members = [
 [profile.test-release]
 inherits = "release"
 debug-assertions = true
+overflow-checks = true
 
 [workspace.dependencies]
 av-toolbox-gpu = { path = "av-toolbox-gpu" }
