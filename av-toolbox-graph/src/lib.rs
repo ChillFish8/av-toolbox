@@ -12,7 +12,7 @@
 //!   [CompiledGraph::instantiate_region] builds just one region's, for a worker's own copies.
 //! - [optimise()] runs passes over it, merging identical stages and working out which outputs have
 //!   to be shared.
-//! - [render_ascii], [render_svg] and [render_mermaid] draw it.
+//! - [render_ascii] and [render_html] draw it, left to right, showing how a planned graph runs.
 //!
 //! ```no_run
 //! # use av_toolbox_core::PipelineRegistry;
@@ -44,7 +44,6 @@ pub use self::build::{Built, build};
 pub use self::diagnostic::{Diagnostic, DiagnosticCode, Diagnostics, Note, Severity};
 pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, NodeRole, Sharing};
 pub use self::instantiate::StageBox;
-pub use self::layout::{Layout, Slot};
 pub use self::optimise::{
     Change,
     CommonStageElimination,
@@ -56,7 +55,7 @@ pub use self::optimise::{
     optimise,
 };
 pub use self::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId, Routing, plan};
-pub use self::render::{RenderOptions, RenderView, render_ascii, render_mermaid, render_svg};
+pub use self::render::{RenderOptions, render_ascii, render_html};
 pub use self::residency::place_transfers;
 pub use self::solve::{SolvedFormats, solve};
 pub use self::spec::{InputRef, Span, Spanned, StageSpec};

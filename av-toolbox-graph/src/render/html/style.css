@@ -1,0 +1,204 @@
+:root {
+    color-scheme: light dark;
+    --page: #f8fafc;
+    --ink: #111827;
+    --muted: #4b5563;
+    --frame: #94a3b8;
+    --frame-fill: rgba(148, 163, 184, 0.08);
+    --link: #4b5563;
+    --badge: #1f2937;
+    --badge-ink: #f9fafb;
+    --source-fill: #dbeafe;
+    --source-stroke: #1e40af;
+    --filter-fill: #dcfce7;
+    --filter-stroke: #166534;
+    --mask-fill: #fef3c7;
+    --mask-stroke: #92400e;
+    --transform-fill: #ede9fe;
+    --transform-stroke: #5b21b6;
+    --sink-fill: #fee2e2;
+    --sink-stroke: #991b1b;
+    --exchange-fill: #f3f4f6;
+    --exchange-stroke: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --page: #0f172a;
+        --ink: #e5e7eb;
+        --muted: #9ca3af;
+        --frame: #64748b;
+        --frame-fill: rgba(100, 116, 139, 0.12);
+        --link: #9ca3af;
+        --badge: #e5e7eb;
+        --badge-ink: #111827;
+        --source-fill: #1e3a8a;
+        --source-stroke: #93c5fd;
+        --filter-fill: #14532d;
+        --filter-stroke: #86efac;
+        --mask-fill: #78350f;
+        --mask-stroke: #fcd34d;
+        --transform-fill: #4c1d95;
+        --transform-stroke: #c4b5fd;
+        --sink-fill: #7f1d1d;
+        --sink-stroke: #fca5a5;
+        --exchange-fill: #1f2937;
+        --exchange-stroke: #d1d5db;
+    }
+}
+
+html,
+body {
+    margin: 0;
+    height: 100%;
+    background: var(--page);
+    color: var(--ink);
+    font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+}
+
+header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--frame);
+    color: var(--muted);
+}
+
+.legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.legend-crossing {
+    fill: none;
+    stroke: var(--muted);
+    stroke-dasharray: 3 2;
+}
+
+.legend-stack {
+    fill: var(--page);
+    stroke: var(--muted);
+}
+
+#canvas {
+    flex: 1;
+    min-height: 0;
+}
+
+#canvas > svg {
+    width: 100%;
+    height: 100%;
+}
+
+#canvas text {
+    font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+#message {
+    margin: 16px;
+}
+
+.frame {
+    fill: var(--frame-fill);
+    stroke: var(--frame);
+    stroke-width: 1;
+}
+
+#canvas .heading {
+    fill: var(--muted);
+    font-size: 12px;
+}
+
+.box .shape {
+    stroke-width: 1.5;
+}
+
+.box.source .shape {
+    fill: var(--source-fill);
+    stroke: var(--source-stroke);
+}
+
+.box.filter .shape {
+    fill: var(--filter-fill);
+    stroke: var(--filter-stroke);
+}
+
+.box.mask .shape {
+    fill: var(--mask-fill);
+    stroke: var(--mask-stroke);
+}
+
+.box.transform .shape {
+    fill: var(--transform-fill);
+    stroke: var(--transform-stroke);
+}
+
+.box.sink .shape {
+    fill: var(--sink-fill);
+    stroke: var(--sink-stroke);
+}
+
+.box.crossing .shape {
+    stroke-dasharray: 5 3;
+}
+
+.box .shadow {
+    opacity: 0.55;
+}
+
+.box text,
+.exchange text {
+    fill: var(--ink);
+    text-anchor: middle;
+}
+
+.box .detail {
+    fill: var(--muted);
+}
+
+.badge {
+    fill: var(--badge);
+}
+
+#canvas .badge-text {
+    fill: var(--badge-ink);
+    font-size: 11px;
+}
+
+.exchange .shape {
+    fill: var(--exchange-fill);
+    stroke: var(--exchange-stroke);
+    stroke-width: 1.5;
+}
+
+.link {
+    fill: none;
+    stroke: var(--link);
+    stroke-width: 1.5;
+}
+
+.link.unbounded {
+    stroke-dasharray: 6 4;
+}
+
+.link.local {
+    stroke-width: 1;
+}
+
+.arrow-head {
+    fill: var(--link);
+}
+
+#canvas .link-label {
+    fill: var(--muted);
+    font-size: 11px;
+    text-anchor: middle;
+}

@@ -1,67 +1,75 @@
-use std::collections::HashMap;
-
-use crate::graph::{CompiledGraph, EdgeId, NodeId};
+use std::collections::{HashMap, VecDeque};
 
 /// One position in a rank.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum Slot {
-    Stage(NodeId),
-    /// A point an edge passes through on its way down through a rank it does not stop in.
-    Virtual(EdgeId),
+pub(crate) enum Slot {
+    Node(usize),
+    /// A point an edge passes through on its way across a rank it does not stop in.
+    Virtual(usize),
 }
 
-/// A connection between a slot in one rank and a slot in the rank below it.
+/// A connection between a slot in one rank and a slot in the next.
 #[derive(Debug, Copy, Clone)]
 struct Link {
-    upper: Slot,
-    lower: Slot,
+    from: Slot,
+    to: Slot,
 }
 
-/// Where every stage sits, without saying how wide anything is.
+/// Where every node sits, without saying how big anything is.
 #[derive(Debug, Clone)]
-pub struct Layout {
+pub(crate) struct Layout {
     ranks: Vec<Vec<Slot>>,
     links: Vec<Vec<Link>>,
-    stage_ranks: Vec<usize>,
+    node_ranks: Vec<usize>,
+    edges: Vec<(usize, usize)>,
     crossings: usize,
 }
 
 impl Layout {
-    pub fn build(graph: &CompiledGraph) -> Self {
-        let stage_ranks = assign_ranks(graph);
-        let depth = stage_ranks.iter().copied().max().map_or(0, |deepest| deepest + 1);
+    /// Lays out `count` nodes joined by `edges`, each naming the node it leaves and the node it enters.
+    pub(crate) fn build(count: usize, edges: &[(usize, usize)]) -> Self {
+        let node_ranks = longest_path_ranks(count, edges);
+        Self::with_ranks(node_ranks, edges)
+    }
+
+    /// Lays out nodes whose ranks are already decided.
+    ///
+    /// Every edge must run from a lower rank to a higher one.
+    pub(crate) fn with_ranks(node_ranks: Vec<usize>, edges: &[(usize, usize)]) -> Self {
+        let depth = node_ranks.iter().copied().max().map_or(0, |deepest| deepest + 1);
 
         let mut ranks: Vec<Vec<Slot>> = vec![Vec::new(); depth];
-        for node in graph.nodes() {
-            ranks[stage_ranks[node.id().index()]].push(Slot::Stage(node.id()));
+        for (node, rank) in node_ranks.iter().enumerate() {
+            ranks[*rank].push(Slot::Node(node));
         }
 
         let mut links: Vec<Vec<Link>> = vec![Vec::new(); depth.saturating_sub(1)];
-        for node in graph.nodes() {
-            for (index, edge) in node.inputs().iter().enumerate() {
-                let id = EdgeId::new(node.id(), index);
-                let from = stage_ranks[edge.source().index()];
-                let to = stage_ranks[node.id().index()];
+        for (index, &(from, to)) in edges.iter().enumerate() {
+            let first = node_ranks[from];
+            let last = node_ranks[to];
 
-                let mut upper = Slot::Stage(edge.source());
-                for rank in (from + 1)..to {
-                    let hop = Slot::Virtual(id);
-                    ranks[rank].push(hop);
-                    links[rank - 1].push(Link { upper, lower: hop });
-                    upper = hop;
-                }
-
-                links[to - 1].push(Link {
-                    upper,
-                    lower: Slot::Stage(node.id()),
+            let mut previous = Slot::Node(from);
+            for rank in (first + 1)..last {
+                let hop = Slot::Virtual(index);
+                ranks[rank].push(hop);
+                links[rank - 1].push(Link {
+                    from: previous,
+                    to: hop,
                 });
+                previous = hop;
             }
+
+            links[last - 1].push(Link {
+                from: previous,
+                to: Slot::Node(to),
+            });
         }
 
         let mut layout = Self {
             ranks,
             links,
-            stage_ranks,
+            node_ranks,
+            edges: edges.to_vec(),
             crossings: 0,
         };
 
@@ -70,20 +78,32 @@ impl Layout {
         layout
     }
 
-    pub fn ranks(&self) -> &[Vec<Slot>] {
+    pub(crate) fn ranks(&self) -> &[Vec<Slot>] {
         &self.ranks
     }
 
-    pub fn crossings(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn crossings(&self) -> usize {
         self.crossings
     }
 
-    pub fn rank_of_stage(&self, node: NodeId) -> usize {
-        self.stage_ranks[node.index()]
+    pub(crate) fn rank_of(&self, node: usize) -> usize {
+        self.node_ranks[node]
     }
 
-    pub fn slot_position(&self, rank: usize, slot: Slot) -> Option<usize> {
-        self.ranks.get(rank)?.iter().position(|entry| *entry == slot)
+    /// The slots one edge passes through, from the node it leaves to the node it enters.
+    pub(crate) fn chain(&self, edge: usize) -> Vec<(usize, Slot)> {
+        let (from, to) = self.edges[edge];
+        let first = self.node_ranks[from];
+        let last = self.node_ranks[to];
+
+        let mut chain = vec![(first, Slot::Node(from))];
+        for rank in (first + 1)..last {
+            chain.push((rank, Slot::Virtual(edge)));
+        }
+
+        chain.push((last, Slot::Node(to)));
+        chain
     }
 
     /// Counts how many pairs of links cross between one rank and the next.
@@ -94,7 +114,7 @@ impl Layout {
         for (gap, links) in self.links.iter().enumerate() {
             let placed: Vec<(usize, usize)> = links
                 .iter()
-                .map(|link| (positions[gap][&link.upper], positions[gap + 1][&link.lower]))
+                .map(|link| (positions[gap][&link.from], positions[gap + 1][&link.to]))
                 .collect();
 
             for (index, first) in placed.iter().enumerate() {
@@ -140,7 +160,7 @@ impl Layout {
     /// Orders one rank by where each slot's neighbours sit in an adjacent rank.
     fn order_by_median(&mut self, rank: usize, neighbour_rank: usize) {
         let gap = rank.min(neighbour_rank);
-        let reading_upwards = neighbour_rank > rank;
+        let reading_forwards = neighbour_rank > rank;
         let neighbours = positions_in(&self.ranks[neighbour_rank]);
 
         let mut keyed: Vec<(Slot, f64)> = self.ranks[rank]
@@ -150,9 +170,9 @@ impl Layout {
                 let found: Vec<usize> = self.links[gap]
                     .iter()
                     .filter_map(|link| {
-                        let (near, far) = match reading_upwards {
-                            true => (link.upper, link.lower),
-                            false => (link.lower, link.upper),
+                        let (near, far) = match reading_forwards {
+                            true => (link.from, link.to),
+                            false => (link.to, link.from),
                         };
 
                         if near != *slot {
@@ -179,25 +199,34 @@ fn positions_in(rank: &[Slot]) -> HashMap<Slot, usize> {
         .collect()
 }
 
-/// Puts each stage one rank below the deepest stage it reads.
-fn assign_ranks(graph: &CompiledGraph) -> Vec<usize> {
-    let mut ranks = vec![0; graph.len()];
+/// Puts each node one rank after the deepest node it reads.
+pub(crate) fn longest_path_ranks(count: usize, edges: &[(usize, usize)]) -> Vec<usize> {
+    let mut waiting = vec![0; count];
+    let mut consumers: Vec<Vec<usize>> = vec![Vec::new(); count];
 
-    for id in graph.order() {
-        let node = graph.node(*id);
-        let deepest = node
-            .inputs()
-            .iter()
-            .map(|edge| ranks[edge.source().index()] + 1)
-            .max();
+    for &(from, to) in edges {
+        waiting[to] += 1;
+        consumers[from].push(to);
+    }
 
-        ranks[id.index()] = deepest.unwrap_or(0);
+    let mut ready: VecDeque<usize> = (0..count).filter(|node| waiting[*node] == 0).collect();
+    let mut ranks = vec![0; count];
+
+    while let Some(node) = ready.pop_front() {
+        for &consumer in &consumers[node] {
+            ranks[consumer] = ranks[consumer].max(ranks[node] + 1);
+            waiting[consumer] -= 1;
+
+            if waiting[consumer] == 0 {
+                ready.push_back(consumer);
+            }
+        }
     }
 
     ranks
 }
 
-/// How many down and up passes to make. More than this rarely finds a better ordering.
+/// How many forward and backward passes to make. More than this rarely finds a better ordering.
 const SWEEPS: usize = 4;
 
 /// The middle of a slot's neighbours, or its current position when it has none.
@@ -218,55 +247,24 @@ fn median(mut positions: Vec<usize>, fallback: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_core::StageKind;
-    use serde_json::json;
-
     use super::*;
-    use crate::{Spanned, StageSpec, build, testing};
 
     /// A source read directly by a mask, and also through a filter, so one edge spans two ranks.
-    fn skipping_edge() -> Vec<StageSpec> {
-        let mut source = testing::spec(StageKind::Source, "input", "test/file");
-        source.args = Spanned::unknown(json!({ "path": "a.mkv" }));
-
-        let mut blur = testing::spec(StageKind::Filter, "blur", "test/blur");
-        blur.inputs = vec![testing::positional("input")];
-        blur.args = Spanned::unknown(json!({ "sigma": 1.0 }));
-
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/merge");
-        merge.inputs = vec![testing::positional("blur"), testing::positional("input")];
-
-        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
-        sink.inputs = vec![testing::positional("merge")];
-
-        vec![source, blur, merge, sink]
-    }
-
-    fn layout_of(specs: &[StageSpec]) -> (crate::CompiledGraph, Layout) {
-        let registry = testing::registry();
-        let graph = build(&registry, specs).expect("should build").into_graph();
-        let layout = Layout::build(&graph);
-
-        (graph, layout)
-    }
+    ///
+    /// Nodes are the source, the filter, the mask and a sink, in that order.
+    const SKIPPING_EDGE: [(usize, usize); 4] = [(0, 1), (1, 2), (0, 2), (2, 3)];
 
     #[test]
-    fn a_stage_sits_one_rank_below_its_deepest_input() {
-        let (graph, layout) = layout_of(&skipping_edge());
+    fn a_node_sits_one_rank_after_its_deepest_input() {
+        let layout = Layout::build(4, &SKIPPING_EDGE);
 
-        let merge = graph
-            .nodes()
-            .iter()
-            .find(|node| node.name() == "merge")
-            .expect("the mask is in the graph");
-
-        assert_eq!(layout.rank_of_stage(merge.id()), 2);
+        assert_eq!(layout.rank_of(2), 2);
         assert_eq!(layout.ranks().len(), 4);
     }
 
     #[test]
     fn an_edge_spanning_two_ranks_gets_a_virtual_slot_in_between() {
-        let (_, layout) = layout_of(&skipping_edge());
+        let layout = Layout::build(4, &SKIPPING_EDGE);
 
         let hops = layout.ranks()[1]
             .iter()
@@ -277,70 +275,66 @@ mod tests {
     }
 
     #[test]
-    fn a_rank_lists_its_stages_in_declaration_order() {
-        let (graph, layout) = layout_of(&skipping_edge());
-        let first = layout.ranks()[0][0];
+    fn a_rank_lists_its_nodes_in_the_order_given() {
+        let layout = Layout::build(4, &SKIPPING_EDGE);
 
-        assert_eq!(first, Slot::Stage(graph.nodes()[0].id()));
+        assert_eq!(layout.ranks()[0][0], Slot::Node(0));
     }
 
     #[test]
     fn a_graph_whose_edges_do_not_cross_reports_no_crossings() {
-        let mut source = testing::spec(StageKind::Source, "input", "test/file");
-        source.args = Spanned::unknown(json!({ "path": "a.mkv" }));
-
-        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
-        sink.inputs = vec![testing::positional("input")];
-
-        let (_, layout) = layout_of(&[source, sink]);
+        let layout = Layout::build(2, &[(0, 1)]);
 
         assert_eq!(layout.crossings(), 0);
     }
 
-    /// Two sources whose consumers are declared in the opposite order, which crosses the edges.
-    fn crossed_branches() -> Vec<StageSpec> {
-        let mut first_source = testing::spec(StageKind::Source, "first_source", "test/file");
-        first_source.args = Spanned::unknown(json!({ "path": "a.mkv" }));
-
-        let mut second_source = testing::spec(StageKind::Source, "second_source", "test/file");
-        second_source.args = Spanned::unknown(json!({ "path": "b.mkv" }));
-
-        let mut first_blur = testing::spec(StageKind::Filter, "first_blur", "test/blur");
-        first_blur.inputs = vec![testing::positional("second_source")];
-        first_blur.args = Spanned::unknown(json!({ "sigma": 1.0 }));
-
-        let mut second_blur = testing::spec(StageKind::Filter, "second_blur", "test/blur");
-        second_blur.inputs = vec![testing::positional("first_source")];
-        second_blur.args = Spanned::unknown(json!({ "sigma": 2.0 }));
-
-        let mut first_sink = testing::spec(StageKind::Sink, "first_out", "test/stdout");
-        first_sink.inputs = vec![testing::positional("first_blur")];
-
-        let mut second_sink = testing::spec(StageKind::Sink, "second_out", "test/stdout");
-        second_sink.inputs = vec![testing::positional("second_blur")];
-
-        vec![
-            first_source,
-            second_source,
-            first_blur,
-            second_blur,
-            first_sink,
-            second_sink,
-        ]
-    }
+    /// Two sources whose consumers are listed in the opposite order, which crosses the edges.
+    const CROSSED_BRANCHES: [(usize, usize); 4] = [(1, 2), (0, 3), (2, 4), (3, 5)];
 
     #[test]
-    fn reordering_a_rank_removes_the_crossings_declaration_order_created() {
-        let (_, layout) = layout_of(&crossed_branches());
+    fn reordering_a_rank_removes_the_crossings_the_given_order_created() {
+        let layout = Layout::build(6, &CROSSED_BRANCHES);
 
         assert_eq!(layout.crossings(), 0);
     }
 
     #[test]
     fn the_same_graph_always_lays_out_the_same_way() {
-        let (_, first) = layout_of(&crossed_branches());
-        let (_, second) = layout_of(&crossed_branches());
+        let first = Layout::build(6, &CROSSED_BRANCHES);
+        let second = Layout::build(6, &CROSSED_BRANCHES);
 
         assert_eq!(first.ranks(), second.ranks());
+    }
+
+    #[test]
+    fn longest_path_ranks_put_a_join_after_its_longest_branch() {
+        let ranks = longest_path_ranks(4, &[(0, 1), (1, 2), (0, 3), (2, 3)]);
+
+        assert_eq!(ranks, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_layout_with_given_ranks_keeps_them() {
+        let layout = Layout::with_ranks(vec![0, 1, 3], &[(0, 1), (0, 2)]);
+
+        assert_eq!(layout.rank_of(2), 3);
+        assert_eq!(layout.ranks().len(), 4);
+    }
+
+    #[test]
+    fn a_chain_passes_a_virtual_slot_in_every_rank_it_skips() {
+        let layout = Layout::with_ranks(vec![0, 1, 3], &[(0, 1), (0, 2)]);
+
+        let chain = layout.chain(1);
+
+        assert_eq!(
+            chain,
+            vec![
+                (0, Slot::Node(0)),
+                (1, Slot::Virtual(1)),
+                (2, Slot::Virtual(1)),
+                (3, Slot::Node(2)),
+            ]
+        );
     }
 }

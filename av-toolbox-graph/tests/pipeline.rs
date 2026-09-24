@@ -39,8 +39,7 @@ use av_toolbox_graph::{
     default_passes,
     optimise,
     render_ascii,
-    render_mermaid,
-    render_svg,
+    render_html,
     solve,
 };
 use av_toolbox_graph::{InputRef, Span, Spanned, StageSpec, build};
@@ -220,11 +219,10 @@ fn a_pipeline_builds_optimises_renders_and_instantiates() {
 
     let options = RenderOptions::default();
     assert!(render_ascii(&graph, &options).contains("input"));
-    assert!(render_mermaid(&graph, &options).starts_with("flowchart TD"));
 
-    let svg = render_svg(&graph, &options);
-    assert!(svg.contains("<svg"));
-    assert!(svg.contains("input"));
+    let html = render_html(&graph, &options);
+    assert!(html.starts_with("<!DOCTYPE html>"));
+    assert!(html.contains("\"input\""));
 
     let backend = Backend::open_default(Device::Default).expect("should open");
     let solved = solve(&graph, &registry, backend.capabilities()).expect("should solve");
