@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-gpu = { workspace = true }
-ffms2 = { workspace = true, optional = true }
+ffms2-sys = { workspace = true, optional = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
@@ -21,7 +21,7 @@ tempfile = { workspace = true }
 
 [features]
 default = ["ffms2"]
-ffms2 = ["dep:ffms2"]
+ffms2 = ["dep:ffms2-sys"]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan"]
 metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal"]
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda"]

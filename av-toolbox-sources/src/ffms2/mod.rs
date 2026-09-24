@@ -1,9 +1,9 @@
 mod format;
 mod index;
+mod sys;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use std::{panic, slice};
 
 use av_toolbox_core::{
     BoundInputs,
@@ -34,13 +34,11 @@ use av_toolbox_gpu::{
     Runtime,
     Transfer,
 };
-use ffms2::frame::{Frame, Resizers};
-use ffms2::track::{Track, TrackType};
-use ffms2::video::{SeekMode, VideoSource};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use self::format::{Carried, Choice};
+use self::sys::{Ffms2Error, StridedPlane, VideoSource};
 use crate::shared::produced_by;
 
 /// Arguments for `ffms2/file`.
@@ -58,15 +56,22 @@ pub(crate) struct FileArgs {
     pub(crate) threads: Option<usize>,
 }
 
+/// The size and pixel format of a decoded frame.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct FrameShape {
+    width: i32,
+    height: i32,
+    format_id: i32,
+}
+
 /// A video track opened and ready to decode.
 pub(crate) struct Opened {
     video: VideoSource,
-    track: Track,
     format: FrameFormat,
-    /// The ffmpeg pixel format id every decoded frame is expected to convert into.
-    output_id: i32,
+    /// The shape every decoded frame is expected to convert into.
+    expected: FrameShape,
     path: PathBuf,
-    next: usize,
+    next: i32,
 }
 
 impl Opened {
@@ -98,71 +103,71 @@ impl SourceDefinition for File {
     type Opened = Opened;
 
     fn open(args: &Self::Args) -> Result<Self::Opened, StageError> {
-        require_i32("track", args.track)?;
-        require_i32("threads", args.threads)?;
-        require_utf8_path(&args.path)?;
+        let track = to_i32("track", args.track)?;
+        let threads = to_i32("threads", args.threads)?;
 
         let index_dir = args.index_dir.as_deref();
-        let index_path = index::index_path(&args.path, index_dir)?;
-        require_utf8_path(&index_path)?;
-
         let index = index::load_or_build(&args.path, index_dir)?;
 
-        let track_index = match args.track {
+        let track_index = match track {
             Some(track) => track,
             None => {
-                let found = index.FirstTrackOfType(TrackType::TYPE_VIDEO);
+                let found = index.first_video_track();
 
-                found.map_err(|error| track_error(&args.path, error))?
+                found.map_err(|error| track_error(&args.path, &error))?
             },
         };
 
-        let threads = args.threads.unwrap_or(0);
-        // SEEK_LINEAR_NO_RW fails the very first request for frame 0, the probe below, as a
-        // non-linear access, since FFMS2 has already decoded past frame 0 while opening the track.
-        let created = VideoSource::new(&args.path, track_index, &index, threads, SeekMode::SEEK_NORMAL);
-        let mut video = created.map_err(|error| open_error(&args.path, error))?;
-        let track = Track::TrackFromVideo(&mut video);
+        let threads = threads.unwrap_or(0);
+        let created = VideoSource::open(&args.path, track_index, &index, threads);
+        let mut video = created.map_err(|error| open_error(&args.path, &error))?;
 
-        let probed = Frame::GetFrame(&mut video, 0);
-        let probe = probed.map_err(|error| frame_error(&args.path, 0, error))?;
+        let probed = video.frame(0);
+        let probe = probed.map_err(|error| frame_error(&args.path, 0, &error))?;
+        let encoded_id = probe.encoded_pixel_format();
+        let width = probe.width();
+        let height = probe.height();
+        let range = probe.colour_range();
+        let matrix = probe.colour_space();
+        let primaries = probe.colour_primaries();
+        let transfer = probe.transfer();
 
-        let resolved_name = pixel_format_name(probe.EncodedPixelFormat);
-        let choice = resolve_choice(&args.path, probe.EncodedPixelFormat, resolved_name, args.format)?;
+        let resolved_name = pixel_format_name(encoded_id);
+        let choice = resolve_choice(&args.path, encoded_id, resolved_name, args.format)?;
 
-        let resolution = probe.get_frame_resolution();
-        let width = resolution.width as usize;
-        let height = resolution.height as usize;
         let output_name = choice.output.ffmpeg_name();
-        let output_id = Frame::GetPixFmt(output_name);
-        let mut targets = vec![output_id];
-        let configured = video.SetOutputFormatV2(&mut targets, width, height, Resizers::RESIZER_BICUBIC);
-        configured.map_err(|error| open_error(&args.path, error))?;
+        let output_id = sys::pixel_format_id(output_name);
+        let configured = video.set_output_format(output_id, width, height);
+        configured.map_err(|error| open_error(&args.path, &error))?;
 
         let (layout, sample) = choice.output.layout();
         let source_layout = resolved_name.and_then(format::mapped_layout);
         let colour = colour_of(
-            probe.ColorRange,
-            probe.ColorSpace,
-            probe.ColorPrimaries,
-            probe.TransferCharateristics,
+            range,
+            matrix,
+            primaries,
+            transfer,
             choice.full_range,
             source_layout,
             layout,
         );
         let format = FrameFormat {
-            width: resolution.width as u32,
-            height: resolution.height as u32,
+            width: width as u32,
+            height: height as u32,
             layout,
             sample,
             colour,
         };
+        let expected = FrameShape {
+            width,
+            height,
+            format_id: output_id,
+        };
 
         Ok(Opened {
             video,
-            track,
             format,
-            output_id,
+            expected,
             path: args.path.clone(),
             next: 0,
         })
@@ -202,88 +207,72 @@ impl StageInstance for FileSource {}
 
 impl Source<HostSide> for FileSource {
     fn next(&mut self, context: &mut FrameContext) -> Result<Option<HostFrame>, StageError> {
-        let total_frames = self.opened.track.NumFrames();
+        let opened = &mut self.opened;
+        let total_frames = opened.video.num_frames();
 
-        if self.opened.next == total_frames {
+        if opened.next >= total_frames {
             return Ok(None);
         }
 
-        let current = self.opened.next;
-        let decoded = Frame::GetFrame(&mut self.opened.video, current);
-        let frame = decoded.map_err(|error| frame_error(&self.opened.path, current, error))?;
-        validate_decoded_frame(
-            &frame,
-            self.opened.format.width,
-            self.opened.format.height,
-            self.opened.output_id,
-            &self.opened.path,
-            current,
-        )?;
+        let current = opened.next;
+        let pts = opened.video.pts(current);
+        let (numerator, denominator) = opened.video.time_base();
+        let timestamp = pts.and_then(|pts| timestamp_of(pts, numerator, denominator));
 
-        let frame_info = self.opened.track.FrameInfo(current);
-        let time_base = self.opened.track.TimeBase();
-        let timestamp = timestamp_of(frame_info.PTS, time_base.Num, time_base.Den);
+        let decoded = opened.video.frame(current);
+        let frame = decoded.map_err(|error| frame_error(&opened.path, current, &error))?;
+        let actual = FrameShape {
+            width: frame.width(),
+            height: frame.height(),
+            format_id: frame.converted_pixel_format(),
+        };
+        validate_decoded_frame(actual, opened.expected, &opened.path, current)?;
 
         let meta = FrameMeta {
             timestamp,
             ..FrameMeta::at(current as u64)
         };
-        let mut host_frame = context.alloc_host_frame(&self.opened.format, meta);
+        let mut host_frame = context.alloc_host_frame(&opened.format, meta);
 
-        let plane_channels = ffmpeg_plane_channels(self.opened.format.layout);
+        let plane_channels = ffmpeg_plane_channels(opened.format.layout);
         for (plane_index, channel) in plane_channels.iter().enumerate() {
-            copy_plane(
-                &mut host_frame,
-                &self.opened.format,
-                &frame,
-                plane_index,
-                *channel,
-                &self.opened.path,
-                current,
-            )?;
+            let (row_bytes, rows) = plane_extent(&opened.format, *channel, &opened.path, current)?;
+
+            // SAFETY: `validate_decoded_frame` confirmed the frame holds the output format at the
+            // output resolution, and `plane_extent` sized this plane from that same format.
+            let plane = unsafe { frame.plane(plane_index, row_bytes, rows) };
+            let plane = plane.ok_or_else(|| missing_plane_error(&opened.path, current, *channel))?;
+
+            copy_plane(&mut host_frame, *channel, &plane, &opened.path, current)?;
         }
 
-        self.opened.next += 1;
+        opened.next += 1;
 
         Ok(Some(host_frame.freeze()))
     }
 }
 
-/// Fails unless a decoded frame's own resolution and converted pixel format match the expected ones.
+/// Fails unless a decoded frame's own shape matches the expected one.
 fn validate_decoded_frame(
-    frame: &Frame,
-    expected_width: u32,
-    expected_height: u32,
-    expected_format_id: i32,
+    actual: FrameShape,
+    expected: FrameShape,
     path: &Path,
-    frame_index: usize,
+    frame_index: i32,
 ) -> Result<(), StageError> {
-    let resolution = frame.get_frame_resolution();
-    let width_matches = resolution.width as u32 == expected_width;
-    let height_matches = resolution.height as u32 == expected_height;
-    let format_matches = frame.ConvertedPixelFormat == expected_format_id;
-
-    if width_matches && height_matches && format_matches {
+    if actual == expected {
         return Ok(());
     }
 
     Err(unexpected_frame_error(path, frame_index))
 }
 
-/// Copies one ffmpeg plane into a host frame's matching channel, row by row.
-///
-/// Reads straight from the frame's own `Data` pointer and `Linesize`, sized from our own output
-/// format rather than ffms2's `get_pixel_data`, which sizes every plane from the encoded format's
-/// chroma subsampling and not the output format `SetOutputFormatV2` actually wrote.
-fn copy_plane(
-    host_frame: &mut HostFrameMut,
+/// The bytes in each row of a channel's plane, and its row count.
+fn plane_extent(
     format: &FrameFormat,
-    frame: &Frame,
-    plane_index: usize,
     channel: Channel,
     path: &Path,
-    frame_index: usize,
-) -> Result<(), StageError> {
+    frame_index: i32,
+) -> Result<(usize, usize), StageError> {
     let dimensions = format.channel_dimensions(channel);
     let (width, height) = dimensions.ok_or_else(|| missing_plane_error(path, frame_index, channel))?;
     let row_bytes = width as usize * format.sample.bytes();
@@ -293,30 +282,25 @@ fn copy_plane(
         return Err(missing_plane_error(path, frame_index, channel));
     }
 
-    let pointer = frame.Data[plane_index];
-    let linesize = frame.Linesize[plane_index];
-    let large_enough_stride = linesize >= 0 && (linesize as usize) >= row_bytes;
+    Ok((row_bytes, rows))
+}
 
-    if pointer.is_null() || !large_enough_stride {
-        return Err(missing_plane_error(path, frame_index, channel));
-    }
-
-    let linesize = linesize as usize;
-    let span = linesize * (rows - 1) + row_bytes;
-
-    // SAFETY: `next` has already checked this frame's resolution and converted pixel format
-    // against the output `SetOutputFormatV2` was asked for, so ffms2 holds `rows` strided rows of
-    // exactly this output format here, valid until the video source's next `GetFrame` call.
-    let source = unsafe { slice::from_raw_parts(pointer, span) };
-
+/// Copies one plane into a host frame's matching channel, row by row.
+fn copy_plane(
+    host_frame: &mut HostFrameMut,
+    channel: Channel,
+    plane: &StridedPlane,
+    path: &Path,
+    frame_index: i32,
+) -> Result<(), StageError> {
     let destination = host_frame
         .plane_mut(channel)
         .ok_or_else(|| missing_plane_error(path, frame_index, channel))?;
 
-    let source_rows = source.chunks(linesize);
+    let row_bytes = plane.row_bytes();
     let destination_rows = destination.chunks_mut(row_bytes);
-    for (source_row, destination_row) in source_rows.zip(destination_rows).take(rows) {
-        destination_row.copy_from_slice(&source_row[..row_bytes]);
+    for (source_row, destination_row) in plane.rows().zip(destination_rows) {
+        destination_row.copy_from_slice(source_row);
     }
 
     Ok(())
@@ -335,7 +319,7 @@ fn ffmpeg_plane_channels(layout: FrameLayout) -> &'static [Channel] {
 fn pixel_format_name(id: i32) -> Option<&'static str> {
     let names = format::known_names();
     let matched = names.iter().find(|name| {
-        let candidate = Frame::GetPixFmt(name);
+        let candidate = sys::pixel_format_id(name);
 
         candidate == id
     });
@@ -467,77 +451,39 @@ fn timestamp_of(pts: i64, numerator: i64, denominator: i64) -> Option<Duration> 
     Some(Duration::from_nanos(nanos))
 }
 
-/// Fails when an argument the `ffms2` crate casts to `i32` is above `i32::MAX`.
-fn require_i32(name: &str, value: Option<usize>) -> Result<(), StageError> {
+/// Converts an optional argument to the `i32` FFMS2 takes, failing above `i32::MAX`.
+fn to_i32(name: &str, value: Option<usize>) -> Result<Option<i32>, StageError> {
     let Some(value) = value else {
-        return Ok(());
+        return Ok(None);
     };
 
     let converted = i32::try_from(value);
 
-    if converted.is_ok() {
-        return Ok(());
-    }
+    converted.map(Some).map_err(|_| {
+        let limit = i32::MAX;
+        let message = format!("{name} is {value}, above the most ffms2 accepts of {limit}");
 
-    let limit = i32::MAX;
-    let message = format!("{name} is {value}, above the most ffms2 accepts of {limit}");
-
-    Err(StageError::msg(message))
+        StageError::msg(message)
+    })
 }
 
-/// Fails when `path` is not a UTF-8 string ffms2 can turn into a `CString`.
-///
-/// ffms2 converts every path it is given with `CString::new(path.to_str().unwrap())`, so a path
-/// that is not valid UTF-8, or one that is but carries an interior NUL byte, panics inside it.
-fn require_utf8_path(path: &Path) -> Result<(), StageError> {
-    let Some(text) = path.to_str() else {
-        let display = path.display();
-        let message = format!("{display} is not valid utf-8, which ffms2 requires");
-
-        return Err(StageError::msg(message));
-    };
-
-    if text.contains('\0') {
-        let message = format!("{text} carries a nul byte, which ffms2 cannot turn into a c string");
-
-        return Err(StageError::msg(message));
-    }
-
-    Ok(())
-}
-
-/// Describes an FFMS2 error without the NUL padding of its message buffer.
-///
-/// The `ffms2` crate's `Debug` impl panics on an error code or message it cannot read, so a panic
-/// there gives a fixed description instead.
-fn describe_error(error: &ffms2::Error) -> String {
-    let described = panic::catch_unwind(|| format!("{error:?}"));
-    let text = described.unwrap_or_else(|_| "an error ffms2 could not describe".to_string());
-    let trimmed = text.trim_end_matches('\0');
-
-    trimmed.to_string()
-}
-
-fn open_error(path: &Path, error: ffms2::Error) -> StageError {
+fn open_error(path: &Path, error: &Ffms2Error) -> StageError {
     let display = path.display();
-    let described = describe_error(&error);
-    let message = format!("ffms2 could not open {display}: {described}");
+    let message = format!("ffms2 could not open {display}: {error}");
 
     StageError::msg(message)
 }
 
-fn track_error(path: &Path, error: ffms2::Error) -> StageError {
+fn track_error(path: &Path, error: &Ffms2Error) -> StageError {
     let display = path.display();
-    let described = describe_error(&error);
-    let message = format!("ffms2 could not find a video track in {display}: {described}");
+    let message = format!("ffms2 could not find a video track in {display}: {error}");
 
     StageError::msg(message)
 }
 
-fn frame_error(path: &Path, frame: usize, error: ffms2::Error) -> StageError {
+fn frame_error(path: &Path, frame: i32, error: &Ffms2Error) -> StageError {
     let display = path.display();
-    let described = describe_error(&error);
-    let message = format!("ffms2 could not decode frame {frame} of {display}: {described}");
+    let message = format!("ffms2 could not decode frame {frame} of {display}: {error}");
 
     StageError::msg(message)
 }
@@ -551,7 +497,7 @@ fn unresolved_pixel_format_error(path: &Path, id: i32) -> StageError {
     StageError::msg(message)
 }
 
-fn unexpected_frame_error(path: &Path, frame: usize) -> StageError {
+fn unexpected_frame_error(path: &Path, frame: i32) -> StageError {
     let display = path.display();
     let message = format!(
         "ffms2 frame {frame} of {display} does not match the resolution or pixel format SetOutputFormatV2 was asked for"
@@ -560,7 +506,7 @@ fn unexpected_frame_error(path: &Path, frame: usize) -> StageError {
     StageError::msg(message)
 }
 
-fn missing_plane_error(path: &Path, frame: usize, channel: Channel) -> StageError {
+fn missing_plane_error(path: &Path, frame: i32, channel: Channel) -> StageError {
     let display = path.display();
     let message = format!("ffms2 frame {frame} of {display} is missing its {channel} plane");
 
@@ -766,7 +712,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_non_utf8_path_is_refused_before_touching_ffms2() {
+    fn a_non_utf8_path_is_refused() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
@@ -788,7 +734,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_path_with_an_interior_nul_byte_is_refused_before_touching_ffms2() {
+    fn a_path_with_an_interior_nul_byte_is_refused() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
@@ -825,70 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_whose_resolution_does_not_match_the_output_is_an_error() {
-        let mut frame = Frame::default();
-        frame.EncodedWidth = 32;
-        frame.EncodedHeight = 32;
-        frame.ScaledWidth = -1;
-        frame.ScaledHeight = -1;
-        frame.ConvertedPixelFormat = 7;
-        let path = PathBuf::from("/nonexistent");
-
-        let error = validate_decoded_frame(&frame, 64, 64, 7, &path, 3).expect_err("mismatched resolution");
-
-        assert!(error.to_string().contains('3'));
-    }
-
-    #[test]
-    fn a_frame_whose_converted_format_does_not_match_the_output_is_an_error() {
-        let mut frame = Frame::default();
-        frame.EncodedWidth = 64;
-        frame.EncodedHeight = 64;
-        frame.ScaledWidth = -1;
-        frame.ScaledHeight = -1;
-        frame.ConvertedPixelFormat = 1;
-        let path = PathBuf::from("/nonexistent");
-
-        let error = validate_decoded_frame(&frame, 64, 64, 7, &path, 3).expect_err("mismatched pixel format");
-
-        assert!(error.to_string().contains('3'));
-    }
-
-    #[test]
-    fn a_frame_matching_the_output_passes_validation() {
-        let mut frame = Frame::default();
-        frame.EncodedWidth = 64;
-        frame.EncodedHeight = 64;
-        frame.ScaledWidth = -1;
-        frame.ScaledHeight = -1;
-        frame.ConvertedPixelFormat = 7;
-        let path = PathBuf::from("/nonexistent");
-
-        assert!(validate_decoded_frame(&frame, 64, 64, 7, &path, 3).is_ok());
-    }
-
-    #[test]
-    fn a_plane_with_zero_row_bytes_is_an_error_not_a_silent_no_op() {
-        let context = testing_context();
-        let format = FrameFormat {
-            width: 0,
-            height: 64,
-            layout: FrameLayout::Grey,
-            sample: SampleFormat::U8,
-            colour: ColourInfo::default(),
-        };
-        let mut host_frame = context.alloc_host_frame(&format, FrameMeta::at(0));
-        let frame = Frame::default();
-        let path = PathBuf::from("/nonexistent");
-
-        let error = copy_plane(&mut host_frame, &format, &frame, 0, Channel::Y, &path, 0)
-            .expect_err("zero row bytes");
-
-        assert!(error.to_string().contains('0'));
-    }
-
-    #[test]
-    fn an_error_opening_a_missing_file_carries_no_nul_padding() {
+    fn an_error_opening_a_missing_file_carries_the_whole_ffms2_message() {
         let folder = tempfile::tempdir().expect("a temp dir");
         let args = FileArgs {
             path: folder.path().join("missing.mkv"),
@@ -902,7 +785,97 @@ mod tests {
         let error = opened.err().expect("the file is missing");
         let message = error.to_string();
 
+        assert_eq!(message.matches("missing.mkv").count(), 2, "{message:?}");
         assert!(!message.contains('\0'), "{message:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_index_dir_still_opens_the_file() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (folder, source) = copied("yuv420p.mkv");
+        let bytes = [0x66, 0x6f, 0x80, 0x6f];
+        let index_dir = folder.path().join(OsStr::from_bytes(&bytes));
+        std::fs::create_dir(&index_dir).expect("creates the index dir");
+        let args = FileArgs {
+            path: source,
+            track: None,
+            index_dir: Some(index_dir),
+            format: None,
+            threads: None,
+        };
+
+        let opened = File::open(&args);
+
+        assert!(opened.is_ok());
+    }
+
+    #[test]
+    fn a_frame_whose_resolution_does_not_match_the_output_is_an_error() {
+        let expected = FrameShape {
+            width: 64,
+            height: 64,
+            format_id: 7,
+        };
+        let actual = FrameShape {
+            width: 32,
+            height: 32,
+            format_id: 7,
+        };
+        let path = PathBuf::from("/nonexistent");
+
+        let error = validate_decoded_frame(actual, expected, &path, 3).expect_err("mismatched resolution");
+
+        assert!(error.to_string().contains('3'));
+    }
+
+    #[test]
+    fn a_frame_whose_converted_format_does_not_match_the_output_is_an_error() {
+        let expected = FrameShape {
+            width: 64,
+            height: 64,
+            format_id: 7,
+        };
+        let actual = FrameShape {
+            width: 64,
+            height: 64,
+            format_id: 1,
+        };
+        let path = PathBuf::from("/nonexistent");
+
+        let error = validate_decoded_frame(actual, expected, &path, 3).expect_err("mismatched pixel format");
+
+        assert!(error.to_string().contains('3'));
+    }
+
+    #[test]
+    fn a_frame_matching_the_output_passes_validation() {
+        let expected = FrameShape {
+            width: 64,
+            height: 64,
+            format_id: 7,
+        };
+        let path = PathBuf::from("/nonexistent");
+
+        assert!(validate_decoded_frame(expected, expected, &path, 3).is_ok());
+    }
+
+    #[test]
+    fn a_plane_with_zero_row_bytes_is_an_error_not_a_silent_no_op() {
+        let format = FrameFormat {
+            width: 0,
+            height: 64,
+            layout: FrameLayout::Grey,
+            sample: SampleFormat::U8,
+            colour: ColourInfo::default(),
+        };
+        let path = PathBuf::from("/nonexistent");
+
+        let error = plane_extent(&format, Channel::Y, &path, 0).expect_err("zero row bytes");
+
+        assert!(error.to_string().contains('0'));
     }
 
     #[test]

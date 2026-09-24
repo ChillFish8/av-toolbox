@@ -167,7 +167,7 @@ dependencies = [
  "av-toolbox-gpu",
  "av-toolbox-graph",
  "av-toolbox-runtime",
- "ffms2",
+ "ffms2-sys",
  "schemars",
  "serde",
  "serde_json",
@@ -436,16 +436,6 @@ checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
 dependencies = [
  "ciborium-io",
  "half",
-]
-
-[[package]]
-name = "clang"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2ed30b30e1e17966b55ddd0b9dd2758fd824f0a6da6875c8abb17e6aba47c28"
-dependencies = [
- "clang-sys",
- "libc",
 ]
 
 [[package]]
@@ -1272,43 +1262,6 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
-
-[[package]]
-name = "ffmpeg-sys-the-third"
-version = "6.0.0+ffmpeg-9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8beaa5d31a4dee3c5a93caf6c0dd3e9d49fb9849c96354f8d619ec6b062036f2"
-dependencies = [
- "bindgen 0.72.1",
- "cc",
- "clang",
- "libc",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
-name = "ffmpeg-the-third"
-version = "6.0.0+ffmpeg-9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf29dd4474510215c218b491acf6c06d27c42cf3579abdc20936290a3817ca31"
-dependencies = [
- "bitflags",
- "ffmpeg-sys-the-third",
- "libc",
-]
-
-[[package]]
-name = "ffms2"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c53565495c920660a98d5dedbd69c7d1075d1d8c7032eb599c879e78d4b3e663"
-dependencies = [
- "cfg-if",
- "ffmpeg-the-third",
- "ffms2-sys",
- "pastey",
-]
 
 [[package]]
 name = "ffms2-sys"
@@ -2531,12 +2484,6 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
-name = "pastey"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "percent-encoding"
@@ -3789,12 +3736,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
-
-[[package]]
-name = "vcpkg"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"

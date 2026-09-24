@@ -1,19 +1,9 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::Once;
 
 use av_toolbox_core::StageError;
-use ffms2::IndexErrorHandling;
-use ffms2::index::{Index, Indexer};
 
-use super::describe_error;
-
-static INIT: Once = Once::new();
-
-/// Initialises FFMS2 once per process.
-pub(crate) fn init() {
-    INIT.call_once(ffms2::FFMS2::Init);
-}
+use super::sys::{Ffms2Error, Index, Indexer};
 
 /// The path an index for a source file lives at.
 ///
@@ -69,10 +59,9 @@ fn keyed_name(file_name: &OsStr, canonical: &Path) -> String {
     format!("{name}.{hash:016x}.ffindex")
 }
 
-fn indexing_error(source: &Path, error: ffms2::Error) -> StageError {
+fn indexing_error(source: &Path, error: &Ffms2Error) -> StageError {
     let display = source.display();
-    let described = describe_error(&error);
-    let message = format!("ffms2 could not index {display}: {described}");
+    let message = format!("ffms2 could not index {display}: {error}");
 
     StageError::msg(message)
 }
@@ -83,15 +72,13 @@ fn indexing_error(source: &Path, error: ffms2::Error) -> StageError {
 /// source is indexed again. When the rebuilt index cannot be written, it is still returned and
 /// used from memory.
 pub(crate) fn load_or_build(source: &Path, index_dir: Option<&Path>) -> Result<Index, StageError> {
-    init();
-
     let path = index_path(source, index_dir)?;
 
     if path.exists() {
-        let existing = Index::new(&path);
+        let existing = Index::read(&path);
 
         if let Ok(existing) = existing {
-            let belongs = existing.IndexBelongsToFile(source);
+            let belongs = existing.belongs_to(source);
 
             if belongs.is_ok() {
                 return Ok(existing);
@@ -100,16 +87,20 @@ pub(crate) fn load_or_build(source: &Path, index_dir: Option<&Path>) -> Result<I
     }
 
     let created = Indexer::new(source);
-    let indexer = created.map_err(|error| indexing_error(source, error))?;
+    let indexer = created.map_err(|error| indexing_error(source, &error))?;
 
-    let indexed = indexer.DoIndexing2(IndexErrorHandling::IEH_ABORT);
-    let index = indexed.map_err(|error| indexing_error(source, error))?;
+    let indexed = indexer.index();
+    let index = indexed.map_err(|error| indexing_error(source, &error))?;
 
-    let written = index.WriteIndex(&path);
+    let written = index.write(&path);
 
-    if written.is_err() {
+    if let Err(error) = written {
         let path_display = path.display();
-        tracing::warn!(path = %path_display, "the ffms2 index could not be written, continuing with it in memory");
+        tracing::warn!(
+            path = %path_display,
+            %error,
+            "the ffms2 index could not be written, continuing with it in memory"
+        );
     }
 
     Ok(index)
@@ -198,9 +189,20 @@ mod tests {
         std::fs::copy(other_index, planted).expect("plants an index for the wrong file");
 
         let index = load_or_build(&source, None).expect("rebuilds");
-        let belongs = index.IndexBelongsToFile(&source);
 
-        assert!(belongs.is_ok());
+        assert!(index.belongs_to(&source).is_ok());
+    }
+
+    #[test]
+    fn a_garbage_index_is_rebuilt() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let source = copied(&folder, "yuv420p.mkv");
+        let planted = folder.path().join("yuv420p.mkv.ffindex");
+        std::fs::write(&planted, b"not an index").expect("plants garbage");
+
+        let index = load_or_build(&source, None).expect("rebuilds");
+
+        assert!(index.belongs_to(&source).is_ok());
     }
 
     #[test]
