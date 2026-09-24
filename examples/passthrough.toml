@@ -1,0 +1,8 @@
+# Copies a y4m stream from standard input to standard output.
+
+[source.input]
+type = "y4m/stdin"
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["input"]

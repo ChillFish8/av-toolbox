@@ -1,0 +1,15 @@
+# Decodes a video, splits it at scene changes and writes it out as y4m.
+
+[source.clip]
+type = "ffms2/file"
+args.path = "input.mkv"
+
+[transform.scenes]
+type = "scene/detect"
+inputs = ["clip"]
+args.mode = "natural"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["scenes"]
+args.path = "output.y4m"
