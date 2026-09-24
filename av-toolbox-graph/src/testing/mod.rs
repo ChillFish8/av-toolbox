@@ -5,6 +5,7 @@ mod endpoints;
 mod filters;
 mod host;
 mod masks;
+mod rated;
 mod shared;
 mod specs;
 
@@ -36,6 +37,7 @@ pub(crate) use self::filters::{
 };
 use self::host::{HostBlur, HostFile, HostStdout, Restamp};
 use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
+use self::rated::{Rated, Retime};
 pub(crate) use self::specs::{named, positional, spec};
 
 pub(crate) fn registry() -> PipelineRegistry {
@@ -76,6 +78,8 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry
         .register_meta_transform::<Restamp>()
         .expect("should register");
+    registry.register_source::<Rated>().expect("should register");
+    registry.register_filter::<Retime>().expect("should register");
 
     registry
 }
@@ -92,7 +96,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 29);
+        assert_eq!(identifiers.len(), 31);
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
         assert!(identifiers.contains(&"test/blur"));

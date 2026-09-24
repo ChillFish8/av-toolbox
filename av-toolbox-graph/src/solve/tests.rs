@@ -11,9 +11,10 @@ use av_toolbox_gpu::{
     Subsampling,
     default_accelerators,
 };
+use serde_json::json;
 
 use super::*;
-use crate::{Diagnostic, StageSpec, build, testing};
+use crate::{Diagnostic, Spanned, StageSpec, build, testing};
 
 /// Whichever backend this build enables, so these tests compile under any single one.
 ///
@@ -83,6 +84,40 @@ fn sink(name: &str, from: &str) -> StageSpec {
     spec
 }
 
+fn rated(name: &str, numerator: u32, denominator: u32) -> StageSpec {
+    let mut spec = source(name, "test/rated");
+    spec.args = Spanned::unknown(json!({ "numerator": numerator, "denominator": denominator }));
+
+    spec
+}
+
+fn retimed(name: &str, from: &str, numerator: u32, denominator: u32) -> StageSpec {
+    let mut spec = filter(name, "test/retime", from);
+    spec.args = Spanned::unknown(json!({ "numerator": numerator, "denominator": denominator }));
+
+    spec
+}
+
+fn rate_mismatches(specs: &[StageSpec]) -> Vec<Diagnostic> {
+    let registry = testing::registry();
+    let graph = build(&registry, specs).expect("should build").into_graph();
+
+    let diagnostics = solve(&graph, &registry, &capabilities()).expect_err("should fail");
+
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code() == DiagnosticCode::FrameRateMismatch)
+        .cloned()
+        .collect()
+}
+
+fn solves(specs: &[StageSpec]) -> bool {
+    let registry = testing::registry();
+    let graph = build(&registry, specs).expect("should build").into_graph();
+
+    solve(&graph, &registry, &capabilities()).is_ok()
+}
+
 fn both_accept_either() -> Vec<StageSpec> {
     vec![
         source("input", "test/wide"),
@@ -150,7 +185,7 @@ fn matched_cannot_agree() -> Vec<StageSpec> {
 /// `test/wide` read by a pass-through filter and by `test/precise`, where F32 suits both.
 fn pass_through_and_precise() -> Vec<StageSpec> {
     let mut plain = filter("plain", "test/blur", "input");
-    plain.args = crate::Spanned::unknown(serde_json::json!({ "sigma": 0.8 }));
+    plain.args = Spanned::unknown(json!({ "sigma": 0.8 }));
 
     vec![
         source("input", "test/wide"),
@@ -600,7 +635,7 @@ fn a_stage_falls_back_when_the_device_cannot_compute_its_preference() {
 fn a_stage_whose_arguments_are_invalid_is_reported_by_solving() {
     let mut specs = both_accept_either();
     specs[1] = filter("pick", "test/blur", "input");
-    specs[1].args = crate::Spanned::unknown(serde_json::json!({ "sigma": "wide" }));
+    specs[1].args = Spanned::unknown(json!({ "sigma": "wide" }));
 
     let registry = testing::registry();
     let graph = build(&registry, &specs).expect("should build").into_graph();
@@ -609,4 +644,81 @@ fn a_stage_whose_arguments_are_invalid_is_reported_by_solving() {
     let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
 
     assert_eq!(reported[0].code(), DiagnosticCode::InvalidArgs);
+}
+
+#[test]
+fn frames_inputs_at_the_same_rate_settle() {
+    let specs = vec![
+        rated("left", 25, 1),
+        rated("right", 50, 2),
+        mask("join", "test/merge", "left", "right"),
+        sink("out", "join"),
+    ];
+
+    assert!(solves(&specs));
+}
+
+#[test]
+fn frames_inputs_at_different_rates_report_a_mismatch_on_the_join() {
+    let specs = vec![
+        rated("left", 25, 1),
+        rated("right", 30, 1),
+        mask("join", "test/merge", "left", "right"),
+        sink("out", "join"),
+    ];
+
+    let reported = rate_mismatches(&specs);
+
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].path(), "mask.join");
+    assert!(reported[0].message().contains("25/1"));
+    assert!(reported[0].message().contains("30/1"));
+}
+
+#[test]
+fn a_known_rate_against_an_unknown_one_is_a_mismatch() {
+    let mut unknown = source("right", "test/file");
+    unknown.args = Spanned::unknown(json!({ "path": "a.mkv" }));
+    let specs = vec![
+        rated("left", 25, 1),
+        unknown,
+        mask("join", "test/merge", "left", "right"),
+        sink("out", "join"),
+    ];
+
+    let reported = rate_mismatches(&specs);
+
+    assert_eq!(reported.len(), 1);
+    assert!(reported[0].message().contains("unknown"));
+}
+
+#[test]
+fn a_mask_input_takes_no_part_in_the_rate_check() {
+    let mut clean = testing::spec(StageKind::Filter, "clean", "test/deband");
+    clean.inputs = vec![
+        testing::named("reference", "right"),
+        testing::named("overlay", "veil"),
+    ];
+    let specs = vec![
+        rated("left", 25, 1),
+        rated("right", 30, 1),
+        mask("veil", "test/merge", "left", "left"),
+        clean,
+        sink("out", "clean"),
+    ];
+
+    assert!(solves(&specs));
+}
+
+#[test]
+fn a_retimed_stream_matches_a_sibling_at_its_new_rate() {
+    let specs = vec![
+        rated("input", 25, 1),
+        retimed("slowed", "input", 30, 1),
+        rated("other", 30, 1),
+        mask("join", "test/merge", "slowed", "other"),
+        sink("out", "join"),
+    ];
+
+    assert!(solves(&specs));
 }

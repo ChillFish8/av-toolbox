@@ -1,3 +1,4 @@
+mod rate;
 #[cfg(test)]
 mod tests;
 
@@ -119,6 +120,10 @@ impl Solver<'_> {
         let Some(inputs) = self.inputs_of(id) else {
             return;
         };
+
+        if !self.rates_agree(id, &inputs) {
+            return;
+        }
 
         if self.graph.node(id).kind() == StageKind::Sink {
             self.resolved[id.index()] = Some(ResolvedFormats::new(inputs, None));
