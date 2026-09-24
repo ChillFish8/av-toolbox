@@ -128,6 +128,24 @@ impl VideoSource {
         (time_base.Num, time_base.Den)
     }
 
+    /// The track's frame rate as a numerator and denominator.
+    ///
+    /// Gives `(0, 0)` when FFMS2 has no properties for the track.
+    pub(crate) fn frame_rate(&self) -> (i32, i32) {
+        // SAFETY: `self.handle` is a live video source, which owns the properties it returns.
+        let raw_properties = unsafe { ffms2_sys::FFMS_GetVideoProperties(self.handle.as_ptr()) };
+
+        // SAFETY: a non-null `raw_properties` is owned by the video source for the lifetime of
+        // `self`.
+        let properties = unsafe { raw_properties.as_ref() };
+
+        let Some(properties) = properties else {
+            return (0, 0);
+        };
+
+        (properties.FPSNumerator, properties.FPSDenominator)
+    }
+
     /// Decodes a frame, which stays readable until this source is used again.
     pub(crate) fn frame(&mut self, index: i32) -> Result<Frame<'_>, Ffms2Error> {
         let mut errors = ErrorBuffer::new();
@@ -381,6 +399,16 @@ mod tests {
         let rows: Vec<&[u8]> = plane.rows().collect();
 
         assert_eq!(rows, vec![&[1, 2][..], &[3, 4][..], &[5, 6][..]]);
+    }
+
+    #[test]
+    fn a_video_track_reports_its_frame_rate() {
+        let video = opened("yuv420p.mkv");
+
+        let (numerator, denominator) = video.frame_rate();
+
+        assert!(numerator > 0);
+        assert_eq!(numerator, denominator * 25);
     }
 
     #[test]

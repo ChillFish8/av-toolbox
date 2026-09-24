@@ -14,6 +14,7 @@ use av_toolbox_gpu::{
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    FrameRate,
     HostFrame,
     SampleFormat,
     Subsampling,
@@ -65,16 +66,16 @@ impl<R: Read> Y4mReader<R> {
             range,
             ..ColourInfo::default()
         };
+        let frame_rate = decoder.get_framerate();
         let format = FrameFormat {
             width: decoder.get_width() as u32,
             height: decoder.get_height() as u32,
             layout,
             sample,
             colour,
-            frame_rate: None,
+            frame_rate: rate_of(frame_rate),
         };
 
-        let frame_rate = decoder.get_framerate();
         let frame_end = bytes_read.load(Ordering::Relaxed);
 
         Ok(Self {
@@ -191,6 +192,13 @@ fn range_of(raw_params: &[u8]) -> ColourRange {
     ColourRange::Unspecified
 }
 
+fn rate_of(ratio: y4m::Ratio) -> Option<FrameRate> {
+    let numerator = u32::try_from(ratio.num).ok()?;
+    let denominator = u32::try_from(ratio.den).ok()?;
+
+    FrameRate::new(numerator, denominator)
+}
+
 fn timestamp_of(index: u64, (numerator, denominator): (usize, usize)) -> Option<Duration> {
     if numerator == 0 {
         return None;
@@ -224,6 +232,7 @@ mod tests {
         ColourRange,
         Depth,
         FrameLayout,
+        FrameRate,
         SampleFormat,
         Subsampling,
         testing_context,
@@ -267,6 +276,33 @@ mod tests {
         };
 
         (luma, chroma)
+    }
+
+    fn header_at(ratio: Ratio) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        y4m::encode(4, 2, ratio)
+            .write_header(&mut bytes)
+            .expect("writes the header");
+
+        bytes
+    }
+
+    #[test]
+    fn the_header_frame_rate_becomes_the_format_rate() {
+        let bytes = header_at(Ratio::new(30000, 1001));
+
+        let reader = Y4mReader::open(Cursor::new(bytes)).expect("opens");
+
+        assert_eq!(reader.format().frame_rate, FrameRate::new(30000, 1001));
+    }
+
+    #[test]
+    fn a_zero_header_frame_rate_is_no_rate() {
+        let bytes = header_at(Ratio::new(0, 0));
+
+        let reader = Y4mReader::open(Cursor::new(bytes)).expect("opens");
+
+        assert_eq!(reader.format().frame_rate, None);
     }
 
     #[test]

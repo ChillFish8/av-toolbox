@@ -24,6 +24,7 @@ use av_toolbox_gpu::{
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    FrameRate,
     HostFrame,
     HostFrameMut,
     HostSide,
@@ -122,6 +123,9 @@ impl SourceDefinition for File {
         let created = VideoSource::open(&args.path, track_index, &index, threads);
         let mut video = created.map_err(|error| open_error(&args.path, &error))?;
 
+        let (fps_numerator, fps_denominator) = video.frame_rate();
+        let frame_rate = rate_from(fps_numerator, fps_denominator);
+
         let probed = video.frame(0);
         let probe = probed.map_err(|error| frame_error(&args.path, 0, &error))?;
         let encoded_id = probe.encoded_pixel_format();
@@ -157,7 +161,7 @@ impl SourceDefinition for File {
             layout,
             sample,
             colour,
-            frame_rate: None,
+            frame_rate,
         };
         let expected = FrameShape {
             width,
@@ -452,6 +456,14 @@ fn timestamp_of(pts: i64, numerator: i64, denominator: i64) -> Option<Duration> 
     Some(Duration::from_nanos(nanos))
 }
 
+/// The frame rate FFMS2 reports, or `None` when either part is zero or negative.
+fn rate_from(numerator: i32, denominator: i32) -> Option<FrameRate> {
+    let numerator = u32::try_from(numerator).ok()?;
+    let denominator = u32::try_from(denominator).ok()?;
+
+    FrameRate::new(numerator, denominator)
+}
+
 /// Converts an optional argument to the `i32` FFMS2 takes, failing above `i32::MAX`.
 fn to_i32(name: &str, value: Option<usize>) -> Result<Option<i32>, StageError> {
     let Some(value) = value else {
@@ -518,7 +530,15 @@ fn missing_plane_error(path: &Path, frame: i32, channel: Channel) -> StageError 
 mod tests {
     use std::path::PathBuf;
 
-    use av_toolbox_gpu::{Channel, ColourRange, FrameLayout, SampleFormat, Subsampling, testing_context};
+    use av_toolbox_gpu::{
+        Channel,
+        ColourRange,
+        FrameLayout,
+        FrameRate,
+        SampleFormat,
+        Subsampling,
+        testing_context,
+    };
 
     use super::*;
 
@@ -577,6 +597,25 @@ mod tests {
             frames[1].meta().timestamp,
             Some(std::time::Duration::from_millis(40))
         );
+    }
+
+    #[test]
+    fn a_file_reports_its_frame_rate() {
+        let (_folder, opened) = opened("yuv420p.mkv", None);
+
+        assert_eq!(opened.format().frame_rate, FrameRate::new(25, 1));
+    }
+
+    #[test]
+    fn a_zero_or_negative_ffms2_rate_is_no_rate() {
+        assert_eq!(rate_from(0, 1), None);
+        assert_eq!(rate_from(25, 0), None);
+        assert_eq!(rate_from(-25, 1), None);
+    }
+
+    #[test]
+    fn an_ffms2_rate_is_reduced() {
+        assert_eq!(rate_from(50, 2), FrameRate::new(25, 1));
     }
 
     #[test]
