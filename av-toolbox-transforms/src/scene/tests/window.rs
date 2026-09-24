@@ -2,9 +2,9 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use av_scenechange::Rational32;
-use av_toolbox_gpu::{FrameFormat, FrameLayout, SampleFormat, testing_context};
+use av_toolbox_gpu::{FrameFormat, FrameLayout, HostFrame, SampleFormat, testing_context};
 
-use super::clip::{THREE_SCENES, clip, grey8, yuv420_ten_bit};
+use super::clip::{THREE_SCENES, clip, flat_clip, grey8, grey8_of, yuv420_ten_bit};
 use crate::scene::args::{DetectArgs, Mode, Speed};
 use crate::scene::window::{Decision, LumaWindow, Settings, frame_rate};
 
@@ -22,6 +22,11 @@ fn natural(speed: Speed, min_scene_frames: usize, max_scene_frames: Option<usize
 fn decide(format: &FrameFormat, args: &DetectArgs, scenes: &[(u64, u64)]) -> Vec<Decision> {
     let context = testing_context();
     let frames = clip(&context, format, scenes);
+
+    decide_frames(format, args, frames)
+}
+
+fn decide_frames(format: &FrameFormat, args: &DetectArgs, frames: Vec<HostFrame>) -> Vec<Decision> {
     let settings = Settings::for_stream(format, args).expect("the clip is readable");
     let mut window = LumaWindow::new(settings);
 
@@ -158,6 +163,31 @@ fn the_frame_rate_falls_back_to_thirty() {
     assert_eq!(frame_rate(None, first), fallback);
     assert_eq!(frame_rate(first, first), fallback);
     assert_eq!(frame_rate(Some(Duration::ZERO), huge), fallback);
+}
+
+#[test]
+fn a_flat_clip_scores_only_finite_values() {
+    let args = natural(Speed::Standard, 0, None);
+    let context = testing_context();
+    let format = grey8();
+    let frames = flat_clip(&context, &format, 40);
+
+    let decisions = decide_frames(&format, &args, frames);
+
+    let non_finite = decisions
+        .iter()
+        .filter_map(|decision| decision.score)
+        .filter(|score| !score.get().is_finite())
+        .count();
+    assert_eq!(non_finite, 0, "every score should be finite");
+}
+
+#[test]
+fn a_height_not_a_multiple_of_sixty_four_does_not_panic() {
+    let args = natural(Speed::Standard, 0, None);
+    let format = grey8_of(96, 40);
+
+    decide(&format, &args, THREE_SCENES);
 }
 
 #[test]

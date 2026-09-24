@@ -20,9 +20,13 @@ pub(super) const SIZE: u32 = 64;
 pub(super) const THREE_SCENES: &[(u64, u64)] = &[(1, 30), (2, 30), (3, 30)];
 
 pub(super) fn grey8() -> FrameFormat {
+    grey8_of(SIZE, SIZE)
+}
+
+pub(super) fn grey8_of(width: u32, height: u32) -> FrameFormat {
     FrameFormat {
-        width: SIZE,
-        height: SIZE,
+        width,
+        height,
         layout: FrameLayout::Grey,
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
@@ -59,6 +63,37 @@ pub(super) fn clip(context: &FrameContext, format: &FrameFormat, scenes: &[(u64,
     frames
 }
 
+/// A clip of `length` frames, every sample the same value throughout, 40 ms apart.
+pub(super) fn flat_clip(context: &FrameContext, format: &FrameFormat, length: u64) -> Vec<HostFrame> {
+    let mut frames = Vec::new();
+    for index in 0..length {
+        let frame = flat(context, format, index);
+        frames.push(frame);
+    }
+
+    frames
+}
+
+fn flat(context: &FrameContext, format: &FrameFormat, index: u64) -> HostFrame {
+    let timestamp = Duration::from_millis(index * 40);
+    let meta = FrameMeta {
+        timestamp: Some(timestamp),
+        ..FrameMeta::at(index)
+    };
+
+    let mut frame = context.alloc_host_frame(format, meta);
+    let luma = frame.plane_mut(Channel::Y).expect("every test clip carries luma");
+    fill_neutral(luma, format);
+
+    for channel in [Channel::U, Channel::V] {
+        if let Some(chroma) = frame.plane_mut(channel) {
+            fill_neutral(chroma, format);
+        }
+    }
+
+    frame.freeze()
+}
+
 fn textured(context: &FrameContext, format: &FrameFormat, seed: u64, offset: u64, index: u64) -> HostFrame {
     let timestamp = Duration::from_millis(index * 40);
     let meta = FrameMeta {
@@ -81,15 +116,16 @@ fn textured(context: &FrameContext, format: &FrameFormat, seed: u64, offset: u64
 
 /// Fills `plane` with 4 by 4 cells of noise from `seed`, moved `offset` pixels to the left.
 fn fill_texture(plane: &mut [u8], format: &FrameFormat, seed: u64, offset: u64) {
-    let size = format.width as usize;
+    let width = format.width as usize;
+    let height = format.height as usize;
     let largest = largest_value(format);
     let bytes_per_sample = format.sample.bytes();
-    for y in 0..size {
-        for x in 0..size {
+    for y in 0..height {
+        for x in 0..width {
             let shifted = x as u64 + offset;
             let hashed = noise(seed, shifted, y as u64);
             let value = hashed % (largest + 1);
-            let at = (y * size + x) * bytes_per_sample;
+            let at = (y * width + x) * bytes_per_sample;
             write_sample(plane, at, value, bytes_per_sample);
         }
     }

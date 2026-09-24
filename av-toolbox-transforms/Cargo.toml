@@ -13,7 +13,11 @@ v_frame = { workspace = true, optional = true }
 
 [dev-dependencies]
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
+av-toolbox-graph = { path = "../av-toolbox-graph" }
+av-toolbox-runtime = { path = "../av-toolbox-runtime" }
+av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
 serde_json = { workspace = true }
+y4m = { workspace = true }
 
 [features]
 default = ["scene"]

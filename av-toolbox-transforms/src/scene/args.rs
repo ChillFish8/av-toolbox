@@ -59,6 +59,8 @@ enum RawDetectArgs {
         max_scene_frames: Option<usize>,
     },
     /// Scenes split so no chunk is longer than a limit.
+    ///
+    /// Each scene is held whole until it ends, then split to the limit.
     Split {
         #[serde(default)]
         speed: Speed,

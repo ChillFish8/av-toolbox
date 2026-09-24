@@ -18,6 +18,7 @@
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-graph/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-sources/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-sources/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-transforms/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

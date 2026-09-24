@@ -15,6 +15,10 @@ use super::args::DetectArgs;
 /// How many frames past the one being analysed the detector reads.
 pub(super) const LOOKAHEAD: usize = 5;
 
+/// Padding around each luma plane, wide enough for the detector's motion search to read past
+/// every edge without going out of bounds.
+const LUMA_PADDING: usize = 88;
+
 /// What the detector decided about one frame.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub(super) struct Decision {
@@ -226,7 +230,7 @@ impl<T: Pixel> Window<T> {
         self.frames.pop_front();
         self.next += 1;
 
-        let score = result.as_ref().map(score_of);
+        let score = result.as_ref().and_then(score_of);
 
         Decision { starts_scene, score }
     }
@@ -241,7 +245,11 @@ impl<T: Pixel> Window<T> {
             self.settings.height,
             ChromaSubsampling::Monochrome,
             self.settings.bit_depth,
-        );
+        )
+        .luma_padding_left(LUMA_PADDING)
+        .luma_padding_right(LUMA_PADDING)
+        .luma_padding_top(LUMA_PADDING)
+        .luma_padding_bottom(LUMA_PADDING);
         let built = builder.build::<T>();
         let mut luma =
             built.map_err(|error| StageError::msg(format!("could not hold a frame's luma: {error:?}")))?;
@@ -256,8 +264,14 @@ impl<T: Pixel> Window<T> {
 }
 
 /// The frame's cost as a cut relative to the cost the detector needs to call one.
-fn score_of(result: &ScenecutResult) -> SceneScore {
+///
+/// `None` when the threshold is 0, such as on a flat frame, which would otherwise divide out to
+/// an infinite or NaN score.
+fn score_of(result: &ScenecutResult) -> Option<SceneScore> {
     let ratio = result.inter_cost / result.threshold;
+    if !ratio.is_finite() {
+        return None;
+    }
 
-    SceneScore::new(ratio as f32)
+    Some(SceneScore::new(ratio as f32))
 }
