@@ -8,6 +8,7 @@ pub fn registry() -> Result<PipelineRegistry, RegistryError> {
 
     av_toolbox_sources::register(&mut registry)?;
     av_toolbox_transforms::register(&mut registry)?;
+    av_toolbox_filters::register(&mut registry)?;
     av_toolbox_masks::register(&mut registry)?;
     av_toolbox_sinks::register(&mut registry)?;
 
@@ -35,6 +36,7 @@ mod tests {
         assert!(registered(StageKind::Sink, "y4m/pipe"));
         assert!(registered(StageKind::Transform, "scene/detect"));
         assert!(registered(StageKind::Transform, "scene/split"));
+        assert!(registered(StageKind::Filter, "blend/masked"));
         assert!(registered(StageKind::Mask, "mask/threshold"));
         assert!(registered(StageKind::Mask, "mask/union"));
         assert!(registered(StageKind::Mask, "mask/vote"));

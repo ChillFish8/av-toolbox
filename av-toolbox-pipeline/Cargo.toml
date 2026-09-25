@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-filters = { path = "../av-toolbox-filters" }
 av-toolbox-gpu = { workspace = true }
 av-toolbox-graph = { path = "../av-toolbox-graph" }
 av-toolbox-masks = { path = "../av-toolbox-masks" }
@@ -29,6 +30,7 @@ ffms2 = ["av-toolbox-sources/ffms2"]
 vulkan = [
     "av-toolbox-gpu/vulkan",
     "av-toolbox-core/vulkan",
+    "av-toolbox-filters/vulkan",
     "av-toolbox-graph/vulkan",
     "av-toolbox-masks/vulkan",
     "av-toolbox-runtime/vulkan",
@@ -39,6 +41,7 @@ vulkan = [
 metal = [
     "av-toolbox-gpu/metal",
     "av-toolbox-core/metal",
+    "av-toolbox-filters/metal",
     "av-toolbox-graph/metal",
     "av-toolbox-masks/metal",
     "av-toolbox-runtime/metal",
@@ -49,6 +52,7 @@ metal = [
 cuda = [
     "av-toolbox-gpu/cuda",
     "av-toolbox-core/cuda",
+    "av-toolbox-filters/cuda",
     "av-toolbox-graph/cuda",
     "av-toolbox-masks/cuda",
     "av-toolbox-runtime/cuda",
@@ -59,6 +63,7 @@ cuda = [
 rocm = [
     "av-toolbox-gpu/rocm",
     "av-toolbox-core/rocm",
+    "av-toolbox-filters/rocm",
     "av-toolbox-graph/rocm",
     "av-toolbox-masks/rocm",
     "av-toolbox-runtime/rocm",

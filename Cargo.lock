@@ -241,6 +241,18 @@ name = "av-toolbox-cubek"
 version = "0.1.0"
 
 [[package]]
+name = "av-toolbox-filters"
+version = "0.1.0"
+dependencies = [
+ "av-toolbox-core",
+ "av-toolbox-gpu",
+ "cubecl",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "av-toolbox-gpu"
 version = "0.1.0"
 dependencies = [
@@ -282,6 +294,7 @@ name = "av-toolbox-pipeline"
 version = "0.1.0"
 dependencies = [
  "av-toolbox-core",
+ "av-toolbox-filters",
  "av-toolbox-gpu",
  "av-toolbox-graph",
  "av-toolbox-masks",

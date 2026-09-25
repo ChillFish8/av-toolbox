@@ -4,6 +4,7 @@ members = [
     "av-toolbox",
     "av-toolbox-core",
     "av-toolbox-cubek",
+    "av-toolbox-filters",
     "av-toolbox-graph",
     "av-toolbox-masks",
     "av-toolbox-pipeline",
