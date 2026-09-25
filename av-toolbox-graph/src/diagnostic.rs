@@ -44,6 +44,12 @@ pub enum DiagnosticCode {
     InvalidWorkers,
     ResidencyRoundTrip,
     TransfersNotPlaced,
+    UnknownVariable,
+    MissingVariable,
+    InvalidVariable,
+    UnknownCallOutput,
+    UnreadableFile,
+    CallCycle,
 }
 
 impl DiagnosticCode {
@@ -69,6 +75,12 @@ impl DiagnosticCode {
             Self::InvalidWorkers => "invalid-workers",
             Self::ResidencyRoundTrip => "residency-round-trip",
             Self::TransfersNotPlaced => "transfers-not-placed",
+            Self::UnknownVariable => "unknown-variable",
+            Self::MissingVariable => "missing-variable",
+            Self::InvalidVariable => "invalid-variable",
+            Self::UnknownCallOutput => "unknown-call-output",
+            Self::UnreadableFile => "unreadable-file",
+            Self::CallCycle => "call-cycle",
         }
     }
 }
@@ -198,6 +210,10 @@ impl Diagnostics {
         self.entries.push(diagnostic);
     }
 
+    pub fn extend(&mut self, other: Diagnostics) {
+        self.entries.extend(other.entries);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -308,6 +324,35 @@ mod tests {
         ));
 
         assert!(diagnostics.has_errors());
+    }
+
+    #[test]
+    fn the_new_codes_render_as_kebab_case() {
+        assert_eq!(DiagnosticCode::UnknownVariable.as_str(), "unknown-variable");
+        assert_eq!(DiagnosticCode::MissingVariable.as_str(), "missing-variable");
+        assert_eq!(DiagnosticCode::InvalidVariable.as_str(), "invalid-variable");
+        assert_eq!(DiagnosticCode::UnknownCallOutput.as_str(), "unknown-call-output");
+        assert_eq!(DiagnosticCode::UnreadableFile.as_str(), "unreadable-file");
+        assert_eq!(DiagnosticCode::CallCycle.as_str(), "call-cycle");
+    }
+
+    #[test]
+    fn extending_a_set_keeps_every_entry_in_order() {
+        let mut first = Diagnostics::new();
+        first.push(Diagnostic::error(
+            DiagnosticCode::NoSinks,
+            "",
+            Span::unknown(),
+            "a",
+        ));
+
+        let mut second = Diagnostics::new();
+        second.push(Diagnostic::error(DiagnosticCode::Cycle, "", Span::unknown(), "b"));
+
+        first.extend(second);
+        let codes: Vec<DiagnosticCode> = first.iter().map(|entry| entry.code()).collect();
+
+        assert_eq!(codes, [DiagnosticCode::NoSinks, DiagnosticCode::Cycle]);
     }
 
     #[test]

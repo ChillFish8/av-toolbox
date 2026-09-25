@@ -1,21 +1,47 @@
 use av_toolbox_core::StageKind;
 use serde_json::Value;
 
-/// A byte range in whatever the caller parsed the definitions from.
+/// Which file a span points into.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub struct FileId(u32);
+
+impl FileId {
+    /// The file a pipeline was loaded from.
+    pub const ROOT: FileId = FileId(0);
+
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    pub const fn index(&self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// A byte range in one of the files the caller parsed the definitions from.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Span {
+    pub file: FileId,
     pub start: usize,
     pub end: usize,
 }
 
 impl Span {
     pub const fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
+        Self {
+            file: FileId::ROOT,
+            start,
+            end,
+        }
+    }
+
+    pub const fn in_file(file: FileId, start: usize, end: usize) -> Self {
+        Self { file, start, end }
     }
 
     /// A span for a caller with no source behind it, such as a builder UI.
     pub const fn unknown() -> Self {
-        Self { start: 0, end: 0 }
+        Self::new(0, 0)
     }
 
     pub const fn is_unknown(&self) -> bool {
@@ -157,5 +183,29 @@ mod tests {
 
         assert!(spans.is_empty());
         assert_eq!(spans.narrowest("/sigma"), None);
+    }
+
+    #[test]
+    fn a_new_span_is_in_the_root_file() {
+        let span = Span::new(4, 9);
+
+        assert_eq!(span.file, FileId::ROOT);
+    }
+
+    #[test]
+    fn a_span_in_a_file_keeps_its_file() {
+        let file = FileId::new(3);
+
+        let span = Span::in_file(file, 4, 9);
+
+        assert_eq!(span.file, file);
+        assert_eq!(span.file.index(), 3);
+    }
+
+    #[test]
+    fn an_empty_span_in_any_file_is_unknown() {
+        let file = FileId::new(2);
+
+        assert!(Span::in_file(file, 0, 0).is_unknown());
     }
 }

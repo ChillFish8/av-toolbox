@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use av_toolbox_core::{PipelineRegistry, StageInfo, StageKind};
 
 use crate::diagnostic::{input_path, stage_path, type_path};
-use crate::{Diagnostic, DiagnosticCode, Diagnostics, Spanned, StageSpec};
+use crate::{Diagnostic, DiagnosticCode, Diagnostics, Spanned, StageSpec, suggest_name};
 
 /// A spec that passed every structural check, paired with its registry entry.
 pub(crate) struct ResolvedStage<'a> {
@@ -165,7 +165,8 @@ fn check_input(
 
     let Some(position) = target else {
         let mut message = format!("no stage named {} is defined", input.value.target);
-        if let Some(closest) = suggest(&input.value.target, by_name.keys()) {
+        let known_names = by_name.keys().map(String::as_str);
+        if let Some(closest) = suggest_name(&input.value.target, known_names) {
             message.push_str(&format!(", did you mean {closest}"));
         }
 
@@ -205,45 +206,6 @@ fn check_has_sink(specs: &[StageSpec], diagnostics: &mut Diagnostics) {
         crate::Span::unknown(),
         "the pipeline has no sink, so nothing consumes its output",
     ));
-}
-
-/// The closest defined name, when one is near enough to be worth suggesting.
-fn suggest<'a>(target: &str, names: impl Iterator<Item = &'a String>) -> Option<&'a String> {
-    let mut best: Option<(usize, &'a String)> = None;
-
-    for name in names {
-        let distance = edit_distance(target, name);
-        let is_better = best.is_none_or(|(current, _)| distance < current);
-
-        if distance <= 2 && is_better {
-            best = Some((distance, name));
-        }
-    }
-
-    best.map(|(_, name)| name)
-}
-
-/// The number of single character edits between two names.
-fn edit_distance(left: &str, right: &str) -> usize {
-    let right_chars: Vec<char> = right.chars().collect();
-    let mut previous: Vec<usize> = (0..=right_chars.len()).collect();
-    let mut current = vec![0; right_chars.len() + 1];
-
-    for (row, left_char) in left.chars().enumerate() {
-        current[0] = row + 1;
-
-        for (column, right_char) in right_chars.iter().enumerate() {
-            let substitution = previous[column] + usize::from(left_char != *right_char);
-            let deletion = previous[column + 1] + 1;
-            let insertion = current[column] + 1;
-
-            current[column + 1] = substitution.min(deletion).min(insertion);
-        }
-
-        std::mem::swap(&mut previous, &mut current);
-    }
-
-    previous[right_chars.len()]
 }
 
 #[cfg(test)]
