@@ -1,17 +1,19 @@
+mod calls;
 mod errors;
 mod shapes;
 mod spans;
+mod variables;
 
-use av_toolbox_graph::{Diagnostic, Span, StageSpec};
+use av_toolbox_graph::{Diagnostic, FileId, Span};
 
-use super::parse;
+use super::{RawFile, parse};
 
-fn parsed(text: &str) -> Vec<StageSpec> {
-    parse(text).expect("the file should parse")
+fn parsed(text: &str) -> RawFile {
+    parse(text, FileId::ROOT).expect("the file should parse")
 }
 
 fn reported(text: &str) -> Vec<Diagnostic> {
-    let diagnostics = parse(text).expect_err("the file should fail");
+    let diagnostics = parse(text, FileId::ROOT).expect_err("the file should fail");
     diagnostics.into_inner()
 }
 

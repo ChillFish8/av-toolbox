@@ -1,9 +1,9 @@
 use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeArray, DeFloat, DeInteger, DeTable, DeValue};
-use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, Diagnostics, Span};
+use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, Diagnostics, FileId, Span};
 use serde_json::{Map, Number, Value};
 
-use super::span_of;
+use crate::variables::{has_template, pieces};
 
 /// Converts a stage's `args` table to JSON, recording where every value was written.
 ///
@@ -11,10 +11,12 @@ use super::span_of;
 pub(super) fn convert_args(
     table: &DeTable<'_>,
     path: &str,
+    file: FileId,
     diagnostics: &mut Diagnostics,
 ) -> Option<(Value, ArgSpans)> {
     let mut conversion = Conversion {
         path,
+        file,
         spans: ArgSpans::new(),
         diagnostics,
         failed: false,
@@ -28,8 +30,32 @@ pub(super) fn convert_args(
     Some((converted, conversion.spans))
 }
 
+/// Converts one TOML value to JSON, or `None` after reporting why it cannot be.
+pub(super) fn convert_value(
+    value: &TomlSpanned<DeValue<'_>>,
+    path: &str,
+    file: FileId,
+    diagnostics: &mut Diagnostics,
+) -> Option<Value> {
+    let mut conversion = Conversion {
+        path,
+        file,
+        spans: ArgSpans::new(),
+        diagnostics,
+        failed: false,
+    };
+
+    let converted = conversion.value(value, "");
+    if conversion.failed {
+        return None;
+    }
+
+    Some(converted)
+}
+
 struct Conversion<'a> {
     path: &'a str,
+    file: FileId,
     spans: ArgSpans,
     diagnostics: &'a mut Diagnostics,
     failed: bool,
@@ -43,6 +69,14 @@ impl Conversion<'_> {
             let name = key.get_ref();
             let escaped = escape(name);
             let nested = format!("{pointer}/{escaped}");
+
+            if has_template(name) {
+                let range = key.span();
+                let span = Span::in_file(self.file, range.start, range.end);
+                self.refuse(&nested, span, "templates cannot be used in argument names");
+                continue;
+            }
+
             let converted = self.value(value, &nested);
             let owned_name = name.to_string();
 
@@ -54,12 +88,17 @@ impl Conversion<'_> {
 
     fn value(&mut self, value: &TomlSpanned<DeValue<'_>>, pointer: &str) -> Value {
         let range = value.span();
-        let span = span_of(range);
+        let span = Span::in_file(self.file, range.start, range.end);
         self.spans.insert(pointer, span);
 
         let inner = value.get_ref();
         match inner {
             DeValue::String(text) => {
+                let checked = pieces(text);
+                if let Err(problem) = checked {
+                    return self.refuse(pointer, span, problem.message());
+                }
+
                 let owned = text.to_string();
                 Value::String(owned)
             },

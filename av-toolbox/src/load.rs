@@ -47,7 +47,7 @@ pub(crate) fn load(path: &Path, stderr: &mut dyn WriteColor) -> Option<Loaded> {
         },
     };
 
-    let parsed = av_toolbox_pipeline::toml::parse(&text);
+    let parsed = av_toolbox_pipeline::toml::parse_specs(&text);
     let file = SimpleFile::new(name, text);
 
     match parsed {

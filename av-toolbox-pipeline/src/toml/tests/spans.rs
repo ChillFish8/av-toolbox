@@ -20,50 +20,56 @@ inputs = { base = "clip", overlay = "denoise" }
 
 #[test]
 fn the_stage_and_name_span_the_header() {
-    let specs = parsed(PIPELINE);
+    let file = parsed(PIPELINE);
     let header = locate(PIPELINE, "[filter.denoise]");
 
-    assert_eq!(specs[1].span, header);
-    assert_eq!(specs[1].name.span, header);
+    assert_eq!(file.stages[1].span, header);
+    assert_eq!(file.stages[1].name.span, header);
 }
 
 #[test]
 fn the_type_spans_its_value() {
-    let specs = parsed(PIPELINE);
+    let file = parsed(PIPELINE);
 
-    assert_eq!(specs[1].stage_type.span, locate(PIPELINE, "\"denoise/nl4d\""));
+    assert_eq!(
+        file.stages[1].stage_type.span,
+        locate(PIPELINE, "\"denoise/nl4d\"")
+    );
 }
 
 #[test]
 fn each_positional_input_spans_its_element() {
-    let specs = parsed(PIPELINE);
+    let file = parsed(PIPELINE);
 
     let array = locate(PIPELINE, "[\"clip\", \"spare\"]");
     let first = Span::new(array.start + 1, array.start + 7);
 
-    assert_eq!(specs[1].inputs[0].span, first);
-    assert_eq!(specs[1].inputs[1].span, locate(PIPELINE, "\"spare\""));
+    assert_eq!(file.stages[1].inputs[0].span, first);
+    assert_eq!(file.stages[1].inputs[1].span, locate(PIPELINE, "\"spare\""));
 }
 
 #[test]
 fn each_named_input_spans_its_entry() {
-    let specs = parsed(PIPELINE);
+    let file = parsed(PIPELINE);
 
-    assert_eq!(specs[2].inputs[0].span, locate(PIPELINE, "base = \"clip\""));
-    assert_eq!(specs[2].inputs[1].span, locate(PIPELINE, "overlay = \"denoise\""));
+    assert_eq!(file.stages[2].inputs[0].span, locate(PIPELINE, "base = \"clip\""));
+    assert_eq!(
+        file.stages[2].inputs[1].span,
+        locate(PIPELINE, "overlay = \"denoise\"")
+    );
 }
 
 #[test]
 fn the_args_span_is_the_args_table() {
-    let specs = parsed(PIPELINE);
+    let file = parsed(PIPELINE);
 
-    assert_eq!(specs[1].args.span, locate(PIPELINE, "{ sigma = 1 }"));
+    assert_eq!(file.stages[1].args.span, locate(PIPELINE, "{ sigma = 1 }"));
 }
 
 #[test]
 fn arg_spans_hold_every_value() {
-    let specs = parsed(PIPELINE);
-    let spans = &specs[0].arg_spans;
+    let file = parsed(PIPELINE);
+    let spans = &file.stages[0].arg_spans;
 
     assert_eq!(spans.narrowest("/path"), Some(locate(PIPELINE, "\"in.mkv\"")));
     assert_eq!(spans.narrowest("/limits/1"), Some(locate(PIPELINE, "80")));
@@ -74,17 +80,17 @@ fn arg_spans_hold_every_value() {
 fn a_dotted_stage_spans_its_name_key() {
     let text = "source.blur.type = \"test/x\"\n";
 
-    let specs = parsed(text);
+    let file = parsed(text);
 
-    assert_eq!(specs[0].span, locate(text, "blur"));
+    assert_eq!(file.stages[0].span, locate(text, "blur"));
 }
 
 #[test]
 fn an_arg_key_needing_escape_still_locates_its_value() {
     let text = "[filter.a]\ntype = \"a/b\"\nargs = { \"a/b\" = 1, \"c~d\" = 2 }\n";
 
-    let specs = parsed(text);
-    let spans = &specs[0].arg_spans;
+    let file = parsed(text);
+    let spans = &file.stages[0].arg_spans;
 
     assert_eq!(spans.narrowest("/a~1b"), Some(locate(text, "1")));
     assert_eq!(spans.narrowest("/c~0d"), Some(locate(text, "2")));

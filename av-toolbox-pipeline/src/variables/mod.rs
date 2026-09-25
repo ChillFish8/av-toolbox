@@ -13,10 +13,9 @@ use serde_json::{Number, Value};
 pub use self::supplied::Supplied;
 #[cfg_attr(not(test), expect(unused_imports, reason = "used by the loader"))]
 pub(crate) use self::supplied::{SuppliedValue, environment_name};
-#[expect(unused_imports, reason = "used by the loader")]
-pub(crate) use self::template::has_template;
 #[cfg_attr(not(test), expect(unused_imports, reason = "used by the loader"))]
-pub(crate) use self::template::{FillError, Piece, TemplateError, fill, pieces};
+pub(crate) use self::template::{FillError, Piece, TemplateError, fill};
+pub(crate) use self::template::{has_template, pieces};
 
 /// Every variable of one file, by name, once resolved.
 #[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
@@ -116,7 +115,6 @@ pub struct Declaration {
     pub choices: Option<Spanned<Vec<Value>>>,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn is_variable_name(name: &str) -> bool {
     let allowed =
         |character: char| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_';

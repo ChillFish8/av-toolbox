@@ -179,3 +179,62 @@ fn a_valid_stage_alongside_a_broken_one_still_fails_the_whole_file() {
     assert_eq!(diagnostics[0].path(), "filter.bad.type");
     assert_eq!(diagnostics[0].span(), locate(text, "4"));
 }
+
+#[test]
+fn a_plural_variable_table_suggests_the_singular() {
+    let diagnostics = reported("[variables.a]\ntype = \"string\"\n");
+
+    assert!(
+        diagnostics[0].notes()[0]
+            .message
+            .contains("did you mean `variable`?")
+    );
+}
+
+#[test]
+fn a_template_in_type_is_refused() {
+    let text = "[source.a]\ntype = \"{{ kind }}\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert_eq!(diagnostics[0].span(), locate(text, "\"{{ kind }}\""));
+}
+
+#[test]
+fn a_template_in_inputs_is_refused() {
+    let text = "[sink.a]\ntype = \"a/b\"\ninputs = [\"{{ from }}\"]\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+}
+
+#[test]
+fn a_template_in_an_argument_name_is_refused() {
+    let text = "[source.a]\ntype = \"a/b\"\nargs = { \"{{ key }}\" = 1 }\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+}
+
+#[test]
+fn an_unclosed_template_in_args_is_refused_at_its_string() {
+    let text = "[source.a]\ntype = \"a/b\"\nargs.path = \"{{ dir\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert_eq!(diagnostics[0].span(), locate(text, "\"{{ dir\""));
+}
+
+#[test]
+fn a_template_in_a_named_input_slot_is_refused() {
+    let text = "[sink.a]\ntype = \"a/b\"\ninputs = { \"{{ x }}\" = \"a\" }\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert_eq!(diagnostics[0].span(), locate(text, "\"{{ x }}\""));
+}

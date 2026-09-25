@@ -4,21 +4,18 @@ use super::Values;
 
 /// One piece of a string that may hold templates.
 #[derive(Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) enum Piece<'a> {
     Text(&'a str),
     Variable(&'a str),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) enum TemplateError {
     Unclosed,
     EmptyName,
 }
 
 impl TemplateError {
-    #[expect(dead_code, reason = "used by the loader")]
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::Unclosed => "a template opened with {{ is never closed with }}",
@@ -34,13 +31,11 @@ pub(crate) enum FillError {
     Unknown(String),
 }
 
-#[expect(dead_code, reason = "used by the loader")]
 pub(crate) fn has_template(text: &str) -> bool {
     text.contains("{{")
 }
 
 /// Splits `text` into plain text and the variables its templates name.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn pieces(text: &str) -> Result<Vec<Piece<'_>>, TemplateError> {
     let mut found = Vec::new();
     let mut rest = text;

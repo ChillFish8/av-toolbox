@@ -2,6 +2,7 @@ use av_toolbox_core::StageKind;
 use serde_json::json;
 
 use super::parsed;
+use crate::toml::RawWorkers;
 
 const PASSTHROUGH: &str = r#"
 [source.input]
@@ -13,21 +14,21 @@ inputs = ["input"]
 "#;
 
 fn names(text: &str) -> Vec<String> {
-    let specs = parsed(text);
-    specs.into_iter().map(|spec| spec.name.value).collect()
+    let file = parsed(text);
+    file.stages.into_iter().map(|stage| stage.name.value).collect()
 }
 
 #[test]
 fn a_minimal_pipeline_parses() {
-    let specs = parsed(PASSTHROUGH);
+    let file = parsed(PASSTHROUGH);
 
-    assert_eq!(specs.len(), 2);
-    assert_eq!(specs[0].kind, StageKind::Source);
-    assert_eq!(specs[0].stage_type.value, "y4m/stdin");
-    assert!(specs[0].inputs.is_empty());
-    assert_eq!(specs[1].kind, StageKind::Sink);
-    assert_eq!(specs[1].inputs[0].value.target, "input");
-    assert_eq!(specs[1].inputs[0].value.name, None);
+    assert_eq!(file.stages.len(), 2);
+    assert_eq!(file.stages[0].kind, StageKind::Source);
+    assert_eq!(file.stages[0].stage_type.value, "y4m/stdin");
+    assert!(file.stages[0].inputs.is_empty());
+    assert_eq!(file.stages[1].kind, StageKind::Sink);
+    assert_eq!(file.stages[1].inputs[0].value.target, "input");
+    assert_eq!(file.stages[1].inputs[0].value.name, None);
 }
 
 #[test]
@@ -62,7 +63,8 @@ type = "a/b"
 type = "a/b"
 "#;
 
-    let kinds: Vec<StageKind> = parsed(text).iter().map(|spec| spec.kind).collect();
+    let file = parsed(text);
+    let kinds: Vec<StageKind> = file.stages.iter().map(|stage| stage.kind).collect();
 
     assert_eq!(
         kinds,
@@ -84,8 +86,8 @@ type = "merge/masked"
 inputs = { base = "clip", overlay = "denoise" }
 "#;
 
-    let specs = parsed(text);
-    let inputs: Vec<(Option<&str>, &str)> = specs[0]
+    let file = parsed(text);
+    let inputs: Vec<(Option<&str>, &str)> = file.stages[0]
         .inputs
         .iter()
         .map(|input| (input.value.name.as_deref(), input.value.target.as_str()))
@@ -97,16 +99,22 @@ inputs = { base = "clip", overlay = "denoise" }
 #[test]
 fn workers_are_read() {
     let text = "[filter.a]\ntype = \"a/b\"\nworkers = 3\n";
+    let file = parsed(text);
 
-    assert_eq!(parsed(text)[0].workers, Some(3));
+    let workers = file.stages[0]
+        .workers
+        .as_ref()
+        .map(|workers| workers.value.clone());
+
+    assert_eq!(workers, Some(RawWorkers::Count(3)));
 }
 
 #[test]
 fn missing_args_are_an_empty_table() {
-    let specs = parsed(PASSTHROUGH);
+    let file = parsed(PASSTHROUGH);
 
-    assert_eq!(specs[0].args.value, json!({}));
-    assert!(specs[0].arg_spans.is_empty());
+    assert_eq!(file.stages[0].args.value, json!({}));
+    assert!(file.stages[0].arg_spans.is_empty());
 }
 
 #[test]
@@ -126,35 +134,63 @@ args = { sigma = 0.5, radius = 3, label = "x", on = true, list = [1, 2], nested 
         "nested": { "deep": "y" },
     });
 
-    assert_eq!(parsed(text)[0].args.value, expected);
+    let file = parsed(text);
+
+    assert_eq!(file.stages[0].args.value, expected);
 }
 
 #[test]
 fn dotted_args_convert_to_json() {
     let text = "[source.a]\ntype = \"ffms2/file\"\nargs.path = \"in.mkv\"\nargs.track = 1\n";
+    let file = parsed(text);
 
-    assert_eq!(
-        parsed(text)[0].args.value,
-        json!({ "path": "in.mkv", "track": 1 })
-    );
+    assert_eq!(file.stages[0].args.value, json!({ "path": "in.mkv", "track": 1 }));
 }
 
 #[test]
 fn a_stage_written_with_dotted_keys_parses() {
     let text = "source.blur.type = \"test/x\"\n";
 
-    let specs = parsed(text);
+    let file = parsed(text);
 
-    assert_eq!(specs[0].name.value, "blur");
-    assert_eq!(specs[0].stage_type.value, "test/x");
+    assert_eq!(file.stages[0].name.value, "blur");
+    assert_eq!(file.stages[0].stage_type.value, "test/x");
 }
 
 #[test]
 fn an_inline_stage_table_parses() {
     let text = "sink.out = { type = \"y4m/stdout\", inputs = [\"a\"] }\n";
 
-    let specs = parsed(text);
+    let file = parsed(text);
 
-    assert_eq!(specs[0].stage_type.value, "y4m/stdout");
-    assert_eq!(specs[0].inputs[0].value.target, "a");
+    assert_eq!(file.stages[0].stage_type.value, "y4m/stdout");
+    assert_eq!(file.stages[0].inputs[0].value.target, "a");
+}
+
+#[test]
+fn templates_in_args_are_kept_as_written() {
+    let file = parsed("[source.a]\ntype = \"a/b\"\nargs.path = \"{{ dir }}/in.y4m\"\n");
+
+    assert_eq!(file.stages[0].args.value["path"], "{{ dir }}/in.y4m");
+}
+
+#[test]
+fn templated_workers_are_kept_as_written() {
+    let file = parsed("[filter.a]\ntype = \"a/b\"\nworkers = \"{{ count }}\"\n");
+    let workers = file.stages[0]
+        .workers
+        .as_ref()
+        .map(|workers| workers.value.clone());
+
+    assert_eq!(workers, Some(RawWorkers::Template("{{ count }}".into())));
+}
+
+#[test]
+fn spans_carry_the_file_they_were_parsed_from() {
+    let file_id = av_toolbox_graph::FileId::new(2);
+
+    let file = crate::toml::parse("[source.a]\ntype = \"a/b\"\n", file_id).expect("parses");
+
+    assert_eq!(file.stages[0].span.file, file_id);
+    assert_eq!(file.stages[0].stage_type.span.file, file_id);
 }

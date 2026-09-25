@@ -216,7 +216,7 @@ inputs = ["input"]
 "#;
 
     fn specs(text: &str) -> Vec<StageSpec> {
-        crate::toml::parse(text).expect("the file should parse")
+        crate::toml::parse_specs(text).expect("the file should parse")
     }
 
     #[test]

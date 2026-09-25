@@ -177,7 +177,7 @@ args.path = "{output_path}"
 
     let mut registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
     registry.register_filter::<Pass>().expect("should register");
-    let specs = av_toolbox_pipeline::toml::parse(&text).expect("the file should parse");
+    let specs = av_toolbox_pipeline::toml::parse_specs(&text).expect("the file should parse");
 
     let pipeline = Pipeline::build(&registry, &specs).expect("should build");
     let backend = Backend::open_default(Device::Default).expect("should open a device");
