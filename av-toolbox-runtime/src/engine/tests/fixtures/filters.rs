@@ -366,7 +366,7 @@ impl Filter for AllocatingInstance {
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
 
-        Ok(context.alloc_frame(&format(), *input.meta()))
+        Ok(context.alloc_frame(&format(), input.meta().clone()))
     }
 }
 

@@ -160,7 +160,7 @@ impl<R: Runtime> Filter for BrightenFilter<R> {
             Err(frame) => frame,
         };
 
-        let output = context.alloc_frame(&self.format, *shared.meta());
+        let output = context.alloc_frame(&self.format, shared.meta().clone());
         for channel in self.format.channels() {
             let source = shared
                 .plane(*channel)

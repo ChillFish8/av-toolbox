@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use av_toolbox_core::{Filter, Inputs, StageError, StageInstance};
-use av_toolbox_gpu::{AnyItem, Frame, FrameContext, FrameMeta, StreamItem, testing_context};
+use av_toolbox_gpu::{AnyItem, Attachments, Frame, FrameContext, FrameMeta, StreamItem, testing_context};
 use av_toolbox_graph::{NodeId, Routing, StageBox};
 
 use crate::engine::tests::fixtures::filters::{PASS_ENDS, PASS_STARTS, PassInstance};
@@ -145,6 +145,7 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
             chunk: unit + 900,
             timestamp: Some(Duration::from_secs(unit)),
             scene_score: None,
+            attachments: Attachments::new(),
         };
         let item = AnyItem::from(StreamItem::Frame(build_context.alloc_frame(&format(), meta)));
         work_sender

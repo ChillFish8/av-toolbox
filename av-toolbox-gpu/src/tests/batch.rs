@@ -4,6 +4,7 @@ use cubecl::prelude::Runtime;
 
 use crate::frame::tests::binding::{elements, launch};
 use crate::{
+    Attachments,
     Backend,
     BuildContext,
     BuildTask,
@@ -165,9 +166,10 @@ fn a_host_frame_keeps_its_bytes_and_place_through_an_upload_and_unload() {
         chunk: 3,
         timestamp: Some(Duration::from_millis(480)),
         scene_score: Some(SceneScore::new(2.5)),
+        attachments: Attachments::new(),
     };
 
-    let mut host_frame = frames.alloc_host_frame(&format, meta);
+    let mut host_frame = frames.alloc_host_frame(&format, meta.clone());
     for (offset, channel) in [Channel::Y, Channel::U, Channel::V].iter().enumerate() {
         let plane = host_frame
             .plane_mut(*channel)

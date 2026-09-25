@@ -5,6 +5,7 @@ use std::time::Duration;
 use cubecl::prelude::{ArrayArg, CubePrimitive, Runtime};
 use cubecl::server::Handle;
 
+use crate::frame::attachments::{Attachments, MetaValue};
 use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat, StreamFormat};
 use crate::frame::layout::Channel;
 use crate::memory::FrameBudget;
@@ -193,8 +194,8 @@ impl Hash for SceneScore {
     }
 }
 
-/// Where a frame sits in its stream.
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
+/// Where a frame sits in its stream, and what stages attached to it.
+#[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct FrameMeta {
     pub index: u64,
     /// The chunk this frame belongs to.
@@ -204,6 +205,7 @@ pub struct FrameMeta {
     pub timestamp: Option<Duration>,
     /// How strongly scene detection favoured a cut just before this frame, when it was scored.
     pub scene_score: Option<SceneScore>,
+    pub attachments: Attachments,
 }
 
 impl FrameMeta {
@@ -214,13 +216,19 @@ impl FrameMeta {
             chunk: 0,
             timestamp: None,
             scene_score: None,
+            attachments: Attachments::new(),
         }
     }
 
     /// The same metadata in `chunk`.
-    pub const fn in_chunk(mut self, chunk: u64) -> Self {
+    pub fn in_chunk(mut self, chunk: u64) -> Self {
         self.chunk = chunk;
         self
+    }
+
+    /// Attaches `value` under `key` for the stage that is running.
+    pub fn attach(&mut self, key: impl Into<String>, value: MetaValue) {
+        self.attachments.attach(key, value);
     }
 }
 
@@ -767,6 +775,7 @@ mod tests {
             chunk: 3,
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            attachments: Attachments::new(),
         };
         let mut frame = Frame::new(format, planes, meta);
 
@@ -789,6 +798,7 @@ mod tests {
             chunk: 3,
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            attachments: Attachments::new(),
         };
         let mut mask = Mask::new(format, plane(64, 64), meta);
 
@@ -808,6 +818,7 @@ mod tests {
             chunk: 3,
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            attachments: Attachments::new(),
         };
         let frame = Frame::new(format, planes, meta);
         let mut item = StreamItem::Frame(frame);
@@ -831,6 +842,7 @@ mod tests {
             chunk: 3,
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            attachments: Attachments::new(),
         };
         let mask = Mask::new(format, plane(64, 64), meta);
         let mut item = StreamItem::Mask(mask);
@@ -878,5 +890,16 @@ mod tests {
         let meta = FrameMeta::at(3);
 
         assert_eq!(meta.scene_score, None);
+    }
+
+    #[test]
+    fn metadata_attach_goes_to_its_pending_values() {
+        let mut meta = FrameMeta::at(0);
+
+        meta.attach("cut", MetaValue::Bool(true));
+        meta.attachments.stamp("transform.detect");
+
+        let stages: Vec<&str> = meta.attachments.stages().map(|(path, _)| path).collect();
+        assert_eq!(stages, vec!["transform.detect"]);
     }
 }

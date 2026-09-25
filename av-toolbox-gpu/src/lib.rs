@@ -60,6 +60,7 @@ pub use self::context::{FrameContext, LoadItem};
 pub use self::device::{Device, DeviceError, ParseDeviceError};
 pub use self::enumerate::{BackendDevices, enumerate_devices};
 pub use self::frame::{
+    Attachments,
     Channel,
     ColourInfo,
     ColourRange,
@@ -82,6 +83,7 @@ pub use self::frame::{
     Mask,
     MaskFormat,
     Matrix,
+    MetaValue,
     Plane,
     PlaneBuffer,
     Primaries,

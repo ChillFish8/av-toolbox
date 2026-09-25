@@ -126,12 +126,16 @@ impl FrameContext {
         for (item, entry) in items.iter().enumerate() {
             let stream_item = match entry.planes.format() {
                 StreamFormat::Frames(format) => {
-                    let frame = self.pool.load_frame(item, format, entry.planes, entry.meta)?;
+                    let frame = self
+                        .pool
+                        .load_frame(item, format, entry.planes, entry.meta.clone())?;
 
                     StreamItem::from(frame)
                 },
                 StreamFormat::Mask(format) => {
-                    let mask = self.pool.load_mask(item, format, entry.planes, entry.meta)?;
+                    let mask = self
+                        .pool
+                        .load_mask(item, format, entry.planes, entry.meta.clone())?;
 
                     StreamItem::from(mask)
                 },
@@ -195,7 +199,7 @@ impl FrameContext {
 
     /// Uploads a host item as a device item in the same place in the stream.
     pub fn load_host(&self, item: &HostStreamItem) -> Result<StreamItem, RuntimeError> {
-        let meta = *item.meta();
+        let meta = item.meta().clone();
 
         match item.format() {
             StreamFormat::Frames(format) => {
@@ -221,7 +225,7 @@ impl FrameContext {
             .next()
             .expect("a batch of one item lands as exactly one item");
 
-        let meta = *landed.meta();
+        let meta = landed.meta().clone();
         let (format, planes) = landed.into_planes().into_parts();
 
         Ok(HostPool::adopt_item(format, planes, meta))
@@ -293,11 +297,13 @@ mod tests {
     use crate::testing::CountingAllocator;
     use crate::{
         Accelerator,
+        Attachments,
         ColourInfo,
         FrameBudget,
         FrameLayout,
         HostStreamItem,
         MaskFormat,
+        MetaValue,
         SampleFormat,
         SceneScore,
         Subsampling,
@@ -563,9 +569,10 @@ mod tests {
             chunk: 0,
             timestamp: Some(Duration::from_millis(500)),
             scene_score: Some(SceneScore::new(2.5)),
+            attachments: Attachments::new(),
         };
         let items = vec![
-            StreamItem::Frame(context.alloc_frame(&frame_format(), stamped)),
+            StreamItem::Frame(context.alloc_frame(&frame_format(), stamped.clone())),
             StreamItem::Mask(context.alloc_mask(&mask_format(), FrameMeta::at(13))),
         ];
 
@@ -573,6 +580,22 @@ mod tests {
 
         assert_eq!(landed[0].meta(), &stamped);
         assert_eq!(landed[1].meta().index, 13);
+    }
+
+    #[test]
+    fn a_landed_batch_carries_the_attachments_of_every_item_it_read() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities());
+        let mut stamped = FrameMeta::at(12);
+        stamped.attach("score", MetaValue::Float(0.5));
+        stamped.attachments.stamp("filter.measure");
+        let items = vec![StreamItem::Frame(
+            context.alloc_frame(&frame_format(), stamped.clone()),
+        )];
+
+        let landed = context.unload(items).wait().expect("the fake lands");
+
+        assert_eq!(landed[0].meta(), &stamped);
     }
 
     // A `HostPlanes` that disagrees with the format it loads as is no longer representable here:
@@ -679,9 +702,10 @@ mod tests {
             chunk: 3,
             timestamp: Some(Duration::from_millis(40)),
             scene_score: Some(SceneScore::new(2.5)),
+            attachments: Attachments::new(),
         };
 
-        let mut frame = context.alloc_host_frame(&frame_format(), stamped);
+        let mut frame = context.alloc_host_frame(&frame_format(), stamped.clone());
         for (value, channel) in [Channel::Y, Channel::U, Channel::V].into_iter().enumerate() {
             frame.plane_mut(channel).expect("carried").fill(value as u8 + 1);
         }
@@ -718,7 +742,7 @@ mod tests {
         let allocator = Arc::new(CountingAllocator::new(64));
         let context = FrameContext::for_testing(allocator, capabilities());
         let stamped = FrameMeta::at(8).in_chunk(2);
-        let frame = context.alloc_frame(&frame_format(), stamped);
+        let frame = context.alloc_frame(&frame_format(), stamped.clone());
 
         let landed = context
             .unload_host(StreamItem::Frame(frame))
