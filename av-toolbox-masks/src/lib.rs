@@ -2,7 +2,8 @@
 //!
 //! Every mask is a single U8 plane, where 0 is background and 255 is fully selected.
 //!
-//! - `lines/adaptive` finds dark strokes against their neighbourhood.
+//! - `lines/adaptive` finds dark strokes against their neighbourhood, and can
+//!   even out lighting first to find them in deep shadow.
 //! - `lines/canny` finds edges with Canny's method.
 //! - `lines/xdog` finds line art with an extended difference of gaussians.
 //! - `mask/threshold` hardens a mask to 0 or 255 at a cutoff.

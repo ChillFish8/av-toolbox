@@ -347,3 +347,199 @@ pub fn adaptive(plane: &[f32], width: u32, height: u32, block_size: u32, offset:
         .map(|(sample, local)| if *sample <= local - offset { 255 } else { 0 })
         .collect()
 }
+
+/// A bilateral filter, radius 3 and spatial sigma 7, with `colour_sigma` in 0 to 1 units.
+pub fn bilateral(input: &[f32], width: u32, height: u32, colour_sigma: f32) -> Vec<f32> {
+    let width = width as i32;
+    let height = height as i32;
+    let mut output = Vec::with_capacity(input.len());
+
+    for row in 0..height {
+        for column in 0..width {
+            let centre = input[(row * width + column) as usize];
+            let mut total = 0.0f32;
+            let mut weights = 0.0f32;
+
+            for offset_y in -3..=3i32 {
+                for offset_x in -3..=3i32 {
+                    let distance = (offset_x * offset_x + offset_y * offset_y) as f32;
+                    if distance > 9.0 {
+                        continue;
+                    }
+
+                    let source_column = reflect(column + offset_x, width);
+                    let source_row = reflect(row + offset_y, height);
+                    let value = input[(source_row * width + source_column) as usize];
+                    let change = value - centre;
+                    let spatial = (-distance / (2.0 * 49.0)).exp();
+                    let colour = (-(change * change) / (2.0 * colour_sigma * colour_sigma)).exp();
+                    let weight = spatial * colour;
+
+                    total += value * weight;
+                    weights += weight;
+                }
+            }
+
+            output.push(total / weights);
+        }
+    }
+
+    output
+}
+
+pub fn flatten(denoised: &[f32], blurred: &[f32]) -> Vec<f32> {
+    denoised
+        .iter()
+        .zip(blurred)
+        .map(|(value, light)| (value / (light + 1.0 / 255.0) * (128.0 / 255.0)).clamp(0.0, 1.0))
+        .collect()
+}
+
+const TILES: u32 = 8;
+const LEVELS: usize = 256;
+
+fn level_of(value: f32) -> usize {
+    (value * 255.0).round().clamp(0.0, 255.0) as usize
+}
+
+/// CLAHE over an 8x8 grid of tiles.
+pub fn clahe(input: &[f32], width: u32, height: u32, clip: f32) -> Vec<f32> {
+    let tile_width = width.div_ceil(TILES);
+    let tile_height = height.div_ceil(TILES);
+    let tiles_across = width.div_ceil(tile_width);
+    let tiles_down = height.div_ceil(tile_height);
+    let limit = ((clip * (tile_width * tile_height) as f32 / 256.0).floor()).max(1.0);
+
+    let tile_count = (TILES * TILES) as usize;
+    let mut histograms = vec![0u32; tile_count * LEVELS];
+    for (index, value) in input.iter().enumerate() {
+        let column = index as u32 % width;
+        let row = index as u32 / width;
+        let tile = ((row / tile_height) * TILES + column / tile_width) as usize;
+        let level = level_of(*value);
+        histograms[tile * LEVELS + level] += 1;
+    }
+
+    let mut tables = vec![0.0f32; tile_count * LEVELS];
+    for tile in 0..tile_count {
+        let counts = &histograms[tile * LEVELS..(tile + 1) * LEVELS];
+        let total: f32 = counts.iter().map(|count| *count as f32).sum();
+        let excess: f32 = counts.iter().map(|count| (*count as f32 - limit).max(0.0)).sum();
+        let share = excess / 256.0;
+
+        let mut running = 0.0f32;
+        for (level, count) in counts.iter().enumerate() {
+            running += (*count as f32).min(limit) + share;
+            tables[tile * LEVELS + level] = if total > 0.0 { running / total } else { 0.0 };
+        }
+    }
+
+    let table = |tile_x: u32, tile_y: u32, level: usize| {
+        tables[((tile_y * TILES + tile_x) as usize) * LEVELS + level]
+    };
+
+    input
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let column = index as u32 % width;
+            let row = index as u32 / width;
+            let level = level_of(*value);
+
+            let across = (column as f32 + 0.5) / tile_width as f32 - 0.5;
+            let down = (row as f32 + 0.5) / tile_height as f32 - 0.5;
+            let left = (across.floor().max(0.0) as u32).min(tiles_across - 1);
+            let top = (down.floor().max(0.0) as u32).min(tiles_down - 1);
+            let right = (left + 1).min(tiles_across - 1);
+            let bottom = (top + 1).min(tiles_down - 1);
+            let blend_x = (across - left as f32).clamp(0.0, 1.0);
+            let blend_y = (down - top as f32).clamp(0.0, 1.0);
+
+            let top_left = table(left, top, level);
+            let top_right = table(right, top, level);
+            let bottom_left = table(left, bottom, level);
+            let bottom_right = table(right, bottom, level);
+            let upper = (1.0 - blend_x) * top_left + blend_x * top_right;
+            let lower = (1.0 - blend_x) * bottom_left + blend_x * bottom_right;
+
+            (1.0 - blend_y) * upper + blend_y * lower
+        })
+        .collect()
+}
+
+pub fn remove_specks(lines: &[u8], width: u32, height: u32, min_speck: u32) -> Vec<u8> {
+    let marks: Vec<bool> = lines.iter().map(|sample| *sample != 0).collect();
+    let labels = components(&marks, width, height);
+
+    let mut sizes = std::collections::HashMap::new();
+    for label in labels.iter().flatten() {
+        *sizes.entry(*label).or_insert(0u32) += 1;
+    }
+
+    labels
+        .iter()
+        .map(|label| match label {
+            Some(label) if sizes[label] >= min_speck => 255,
+            _ => 0,
+        })
+        .collect()
+}
+
+pub struct ShadowSettings {
+    pub block_size: u32,
+    pub c: f32,
+    pub blur_sigma: f32,
+    pub clahe_clip: f32,
+    pub denoise: f32,
+    pub min_speck: u32,
+}
+
+impl Default for ShadowSettings {
+    fn default() -> Self {
+        Self {
+            block_size: 15,
+            c: 9.0,
+            blur_sigma: 25.0,
+            clahe_clip: 1.8,
+            denoise: 50.0,
+            min_speck: 6,
+        }
+    }
+}
+
+/// Evens out the lighting, equalises, runs the threshold step, then drops small specks.
+pub fn recover_shadows(luma: &[f32], width: u32, height: u32, settings: &ShadowSettings) -> Vec<u8> {
+    let denoised = bilateral(luma, width, height, settings.denoise / 255.0);
+    let blurred = blur(&denoised, width, height, settings.blur_sigma);
+    let flattened = flatten(&denoised, &blurred);
+    let equalised = clahe(&flattened, width, height, settings.clahe_clip);
+    let lines = adaptive(&equalised, width, height, settings.block_size, settings.c);
+
+    remove_specks(&lines, width, height, settings.min_speck)
+}
+
+/// A bright left half and a dark right half, each with a vertical stroke and a speck.
+///
+/// Each stroke is 3 samples wide and runs the full height. The bright half's speck is 2 by 2
+/// samples, and the dark half's is 3 by 3 and sits clear of the dark stroke.
+pub fn shadowed_scene(width: u32, height: u32) -> Vec<u8> {
+    let half = width / 2;
+
+    (0..height)
+        .flat_map(|row| {
+            (0..width).map(move |column| {
+                let bright = column < half;
+                let stroke = (10..13).contains(&column) || (half + 10..half + 13).contains(&column);
+                let small_speck = (20..22).contains(&row) && (5..7).contains(&column);
+                let large_speck = (20..23).contains(&row) && (half + 17..half + 20).contains(&column);
+
+                match (bright, stroke || small_speck || large_speck) {
+                    (true, false) => 200,
+                    (true, true) => 120,
+                    (false, false) => 30,
+                    (false, true) => 12,
+                }
+            })
+        })
+        .collect()
+}

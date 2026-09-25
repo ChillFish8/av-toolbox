@@ -1,3 +1,6 @@
+mod clahe;
+mod shadows;
+
 use av_toolbox_core::{
     BoundInputs,
     InputParam,
@@ -31,6 +34,7 @@ use cubecl::prelude::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use self::shadows::{ShadowRecovery, remove_specks};
 use crate::luma::{Luma, accepts_luma, load_luma, produces_luma_mask};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
@@ -175,6 +179,8 @@ struct AdaptiveMask<R: Runtime> {
     smooth: Gaussian,
     local: Gaussian,
     offset: f32,
+    /// The recovery and `min_speck`, when recovering shadows.
+    recovery: Option<(ShadowRecovery, u32)>,
 }
 
 impl<R: Runtime> AdaptiveMask<R> {
@@ -242,16 +248,35 @@ impl<R: Runtime> Mask for AdaptiveMask<R> {
 
         let context = &*context;
         let sizing = Sizing(context);
+        let width = self.luma.width;
+        let height = self.luma.height;
 
-        let luma = Scratch::new::<f32>(context, self.luma.width, self.luma.height);
+        let luma = Scratch::new::<f32>(context, width, height);
         load_luma(&self.client, &sizing, &frame, &self.luma, luma.plane())?;
 
         let meta = frame.meta().clone();
         let format = self.luma.mask_format();
         let output = context.alloc_mask(&format, meta);
-        let luma_plane = luma.plane();
         let output_plane = mask_plane(&output);
-        self.threshold(context, &sizing, luma_plane, output_plane);
+
+        let Some((recovery, min_speck)) = &self.recovery else {
+            self.threshold(context, &sizing, luma.plane(), output_plane);
+            return Ok(output);
+        };
+
+        let flattened = Scratch::new::<f32>(context, width, height);
+        recovery.flatten(&self.client, context, &sizing, luma.plane(), flattened.plane());
+
+        let lines = Scratch::new::<u8>(context, width, height);
+        self.threshold(context, &sizing, flattened.plane(), lines.plane());
+        remove_specks(
+            &self.client,
+            context,
+            &sizing,
+            lines.plane(),
+            output_plane,
+            *min_speck,
+        );
 
         Ok(output)
     }
@@ -312,22 +337,28 @@ impl MaskDefinition for Adaptive {
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn Mask>, StageError> {
         let settings = args.settings()?;
-        if settings.shadows.is_some() {
-            return Err(StageError::msg("lines/adaptive cannot recover shadows yet"));
-        }
-
         let luma = Luma::from_formats(NAME, formats)?;
         let client = context.client().clone();
         let smooth = Gaussian::with_radius(&client, 0.8, 1);
         let sigma = block_sigma(settings.block_size);
         let local = Gaussian::with_radius(&client, sigma, settings.block_size / 2);
+        let recovery = settings.shadows.map(|shadows| {
+            let recovery = ShadowRecovery::new(&client, &shadows);
+            (recovery, shadows.min_speck)
+        });
+
+        let offset = match settings.shadows {
+            Some(shadows) => shadows.c / 255.0,
+            None => settings.c / 255.0,
+        };
 
         Ok(Box::new(AdaptiveMask {
             client,
             luma,
             smooth,
             local,
-            offset: settings.c / 255.0,
+            offset,
+            recovery,
         }))
     }
 }
