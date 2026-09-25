@@ -9,6 +9,7 @@ use av_toolbox_graph::{
     DiagnosticCode,
     Diagnostics,
     NodeId,
+    NodeRole,
     Region,
     Routing,
     SolvedFormats,
@@ -37,7 +38,17 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
         })
         .collect();
 
-    RegionEdges::new(feeds, region.exits().to_vec())
+    let paths = nodes
+        .iter()
+        .map(|node_id| graph.node(*node_id))
+        .filter(|node| node.role() == NodeRole::Stage)
+        .map(|node| {
+            let path = node.path();
+            (node.id(), Arc::from(path))
+        })
+        .collect();
+
+    RegionEdges::new(feeds, region.exits().to_vec()).with_paths(paths)
 }
 
 /// Which of a head's input slots are bound, sized to the widest slot any edge names.

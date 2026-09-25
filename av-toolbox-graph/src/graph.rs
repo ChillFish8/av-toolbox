@@ -4,6 +4,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use av_toolbox_core::{Crossing, OpenSlot, Residency, StageHandle, StageKind, StreamType};
 use serde_json::Value;
 
+use crate::diagnostic::stage_path;
 use crate::plan::ExecutionPlan;
 use crate::{ArgSpans, Span};
 
@@ -198,6 +199,11 @@ impl Node {
 
     pub fn kind(&self) -> StageKind {
         self.kind
+    }
+
+    /// The kind and name as one path, such as `transform.scenes.detect`.
+    pub fn path(&self) -> String {
+        stage_path(self.kind, &self.name)
     }
 
     /// The `package/stage` identifier the stage was registered under.

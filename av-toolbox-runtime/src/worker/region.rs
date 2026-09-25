@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use av_toolbox_gpu::{AnyItem, FrameContext};
 use av_toolbox_graph::{NodeId, StageBox};
@@ -17,16 +18,28 @@ pub struct Feed {
 ///
 /// `feeds` holds one entry per node after the head, in the same order those nodes appear in
 /// [RegionRunner]'s own node list. Each entry lists which producer fills which of that node's
-/// input slots. `exits` names the nodes whose output leaves the region.
+/// input slots. `exits` names the nodes whose output leaves the region. `paths` names each stage
+/// node, so what it emits is filed under that name.
 #[derive(Debug)]
 pub struct RegionEdges {
     feeds: Vec<Vec<Feed>>,
     exits: Vec<NodeId>,
+    paths: HashMap<NodeId, Arc<str>>,
 }
 
 impl RegionEdges {
     pub fn new(feeds: Vec<Vec<Feed>>, exits: Vec<NodeId>) -> Self {
-        Self { feeds, exits }
+        Self {
+            feeds,
+            exits,
+            paths: HashMap::new(),
+        }
+    }
+
+    /// The same edges, filing what each named node emits under its path.
+    pub fn with_paths(mut self, paths: HashMap<NodeId, Arc<str>>) -> Self {
+        self.paths = paths;
+        self
     }
 }
 
@@ -74,12 +87,15 @@ impl RegionRunner {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
         let (head_id, head_stage) = &mut self.nodes[0];
-        let head_output = run_node(*head_id, head_stage, context, bundle)?;
+        let mut head_output = run_node(*head_id, head_stage, context, bundle)?;
+        stamp(&self.edges.paths, *head_id, &mut head_output);
         outputs.push(head_output);
 
         for index in 1..self.nodes.len() {
             let feeds = &self.edges.feeds[index - 1];
-            let produced = run_fed(feeds, &outputs, &self.positions, &mut self.nodes[index], context)?;
+            let mut produced = run_fed(feeds, &outputs, &self.positions, &mut self.nodes[index], context)?;
+            let node = self.nodes[index].0;
+            stamp(&self.edges.paths, node, &mut produced);
             outputs.push(produced);
         }
 
@@ -95,12 +111,15 @@ impl RegionRunner {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
         let (head_id, head_stage) = &mut self.nodes[0];
-        let head_flush = end_node(*head_id, head_stage, context)?;
+        let mut head_flush = end_node(*head_id, head_stage, context)?;
+        stamp(&self.edges.paths, *head_id, &mut head_flush);
         outputs.push(head_flush);
 
         for index in 1..self.nodes.len() {
             let feeds = &self.edges.feeds[index - 1];
-            let flushed = end_fed(feeds, &outputs, &self.positions, &mut self.nodes[index], context)?;
+            let mut flushed = end_fed(feeds, &outputs, &self.positions, &mut self.nodes[index], context)?;
+            let node = self.nodes[index].0;
+            stamp(&self.edges.paths, node, &mut flushed);
             outputs.push(flushed);
         }
 
@@ -145,6 +164,19 @@ fn end_fed(
 
     forwarded.extend(flushed);
     Ok(forwarded)
+}
+
+/// Files whatever `node` attached to `items` under its path.
+///
+/// A node with no path, such as a crossing, attaches nothing.
+fn stamp(paths: &HashMap<NodeId, Arc<str>>, node: NodeId, items: &mut [AnyItem]) {
+    let Some(path) = paths.get(&node) else {
+        return;
+    };
+
+    for item in items {
+        item.meta_mut().attachments.stamp(path);
+    }
 }
 
 /// How many times a node fed by `feeds` is ready to run.
@@ -218,13 +250,24 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use av_toolbox_core::{Filter, Inputs, Sink, StageError, StageInstance, Transform};
+    use av_toolbox_core::{
+        Filter,
+        Inputs,
+        MetaInputs,
+        MetaItem,
+        MetaTransform,
+        Sink,
+        StageError,
+        StageInstance,
+        Transform,
+    };
     use av_toolbox_gpu::{
         ColourInfo,
         Frame,
         FrameFormat,
         FrameLayout,
         FrameMeta,
+        MetaValue,
         SampleFormat,
         StreamItem,
         Subsampling,
@@ -794,5 +837,130 @@ mod tests {
         };
 
         assert_eq!(error.node(), Some(failing));
+    }
+
+    /// Attaches `seen` to every item it passes.
+    struct Tagging;
+
+    impl StageInstance for Tagging {}
+
+    impl MetaTransform for Tagging {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: MetaInputs,
+        ) -> Result<Vec<MetaItem>, StageError> {
+            let mut item = inputs.take(0).expect("an item");
+            item.meta_mut().attach("seen", MetaValue::Bool(true));
+
+            Ok(vec![item])
+        }
+    }
+
+    /// Holds each item back one step, releasing the last on end of stream.
+    struct Delaying {
+        held: Option<MetaItem>,
+    }
+
+    impl StageInstance for Delaying {}
+
+    impl MetaTransform for Delaying {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: MetaInputs,
+        ) -> Result<Vec<MetaItem>, StageError> {
+            let arrived = inputs.take(0).expect("an item");
+            let released = self.held.replace(arrived);
+
+            Ok(released.into_iter().collect())
+        }
+
+        fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<MetaItem>, StageError> {
+            let released = self.held.take();
+
+            Ok(released.into_iter().collect())
+        }
+    }
+
+    fn stage_paths(item: &AnyItem) -> Vec<String> {
+        item.meta()
+            .attachments
+            .stages()
+            .map(|(path, _)| path.to_string())
+            .collect()
+    }
+
+    fn paths(entries: &[(NodeId, &str)]) -> HashMap<NodeId, Arc<str>> {
+        entries.iter().map(|(id, path)| (*id, Arc::from(*path))).collect()
+    }
+
+    #[test]
+    fn a_heads_output_is_stamped_with_its_path() {
+        let context = testing_context();
+        let head = NodeId::new(0);
+        let nodes = vec![(head, StageBox::MetaTransform(Box::new(Tagging)))];
+        let edges = RegionEdges::new(vec![], vec![head]).with_paths(paths(&[(head, "transform.tag")]));
+        let mut runner = RegionRunner::new(nodes, edges);
+
+        let produced = runner
+            .run(&mut context_of(&context), vec![Some(item(&context, 4, 0))])
+            .expect("should run");
+
+        assert_eq!(stage_paths(&produced[0]), vec!["transform.tag"]);
+    }
+
+    #[test]
+    fn each_node_in_a_chain_is_stamped_with_its_own_path() {
+        let context = testing_context();
+        let head = NodeId::new(0);
+        let second = NodeId::new(1);
+        let nodes = vec![
+            (head, StageBox::MetaTransform(Box::new(Tagging))),
+            (second, StageBox::MetaTransform(Box::new(Tagging))),
+        ];
+        let feeds = vec![vec![Feed {
+            producer: head,
+            slot: 0,
+        }]];
+        let named = paths(&[(head, "transform.first"), (second, "transform.second")]);
+        let edges = RegionEdges::new(feeds, vec![second]).with_paths(named);
+        let mut runner = RegionRunner::new(nodes, edges);
+
+        let produced = runner
+            .run(&mut context_of(&context), vec![Some(item(&context, 4, 0))])
+            .expect("should run");
+
+        assert_eq!(
+            stage_paths(&produced[0]),
+            vec!["transform.first", "transform.second"]
+        );
+    }
+
+    #[test]
+    fn a_replayed_item_keeps_its_first_stamp() {
+        let context = testing_context();
+        let head = NodeId::new(0);
+        let second = NodeId::new(1);
+        let nodes = vec![
+            (head, StageBox::MetaTransform(Box::new(Tagging))),
+            (second, StageBox::MetaTransform(Box::new(Delaying { held: None }))),
+        ];
+        let feeds = vec![vec![Feed {
+            producer: head,
+            slot: 0,
+        }]];
+        let named = paths(&[(head, "transform.tag"), (second, "transform.delay")]);
+        let edges = RegionEdges::new(feeds, vec![second]).with_paths(named);
+        let mut runner = RegionRunner::new(nodes, edges);
+        let mut stage_context = context_of(&context);
+
+        runner
+            .run(&mut stage_context, vec![Some(item(&context, 4, 0))])
+            .expect("should run");
+        let flushed = runner.end(&mut stage_context).expect("should end");
+
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(stage_paths(&flushed[0]), vec!["transform.tag"]);
     }
 }

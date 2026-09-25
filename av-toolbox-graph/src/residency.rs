@@ -245,6 +245,17 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_nodes_path_is_its_kind_and_name() {
+        let (graph, _) = placed(&[
+            stage(StageKind::Source, "input", "test/host-file", &[]),
+            stage(StageKind::Transform, "scenes.detect", "test/restamp", &["input"]),
+            stage(StageKind::Sink, "out", "test/host-stdout", &["scenes.detect"]),
+        ]);
+
+        assert_eq!(named(&graph, "scenes.detect").path(), "transform.scenes.detect");
+    }
+
+    #[test]
     fn a_graph_of_device_stages_gains_no_crossings() {
         let (graph, warnings) = placed(&[
             stage(StageKind::Source, "input", "test/file", &[]),
