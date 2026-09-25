@@ -266,12 +266,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "av-toolbox-masks"
+version = "0.1.0"
+dependencies = [
+ "av-toolbox-core",
+ "av-toolbox-gpu",
+ "cubecl",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "av-toolbox-pipeline"
 version = "0.1.0"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-gpu",
  "av-toolbox-graph",
+ "av-toolbox-masks",
  "av-toolbox-runtime",
  "av-toolbox-sinks",
  "av-toolbox-sources",

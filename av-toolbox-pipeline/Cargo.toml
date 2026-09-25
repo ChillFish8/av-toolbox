@@ -7,6 +7,7 @@ edition = "2024"
 av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-gpu = { workspace = true }
 av-toolbox-graph = { path = "../av-toolbox-graph" }
+av-toolbox-masks = { path = "../av-toolbox-masks" }
 av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 av-toolbox-sinks = { path = "../av-toolbox-sinks" }
 av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
@@ -29,6 +30,7 @@ vulkan = [
     "av-toolbox-gpu/vulkan",
     "av-toolbox-core/vulkan",
     "av-toolbox-graph/vulkan",
+    "av-toolbox-masks/vulkan",
     "av-toolbox-runtime/vulkan",
     "av-toolbox-sinks/vulkan",
     "av-toolbox-sources/vulkan",
@@ -38,6 +40,7 @@ metal = [
     "av-toolbox-gpu/metal",
     "av-toolbox-core/metal",
     "av-toolbox-graph/metal",
+    "av-toolbox-masks/metal",
     "av-toolbox-runtime/metal",
     "av-toolbox-sinks/metal",
     "av-toolbox-sources/metal",
@@ -47,6 +50,7 @@ cuda = [
     "av-toolbox-gpu/cuda",
     "av-toolbox-core/cuda",
     "av-toolbox-graph/cuda",
+    "av-toolbox-masks/cuda",
     "av-toolbox-runtime/cuda",
     "av-toolbox-sinks/cuda",
     "av-toolbox-sources/cuda",
@@ -56,6 +60,7 @@ rocm = [
     "av-toolbox-gpu/rocm",
     "av-toolbox-core/rocm",
     "av-toolbox-graph/rocm",
+    "av-toolbox-masks/rocm",
     "av-toolbox-runtime/rocm",
     "av-toolbox-sinks/rocm",
     "av-toolbox-sources/rocm",

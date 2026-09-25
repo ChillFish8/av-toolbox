@@ -5,6 +5,7 @@ members = [
     "av-toolbox-core",
     "av-toolbox-cubek",
     "av-toolbox-graph",
+    "av-toolbox-masks",
     "av-toolbox-pipeline",
     "av-toolbox-runtime",
     "av-toolbox-gpu",

@@ -1,0 +1,23 @@
+[package]
+name = "av-toolbox-masks"
+version = "0.1.0"
+edition = "2024"
+description = "Masks that select pixels in av-toolbox pipelines."
+
+[dependencies]
+av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-gpu = { workspace = true }
+cubecl = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+av-toolbox-gpu = { workspace = true, features = ["test-support"] }
+serde_json = { workspace = true }
+
+[features]
+vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan"]
+metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal"]
+cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda"]
+rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm"]
+gpu-tests = ["av-toolbox-gpu/gpu-tests"]
