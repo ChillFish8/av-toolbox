@@ -29,6 +29,26 @@ fn copy_plane<E: Int>(base: &Array<E>, output: &mut Array<E>) {
     output[ABSOLUTE_POS] = base[ABSOLUTE_POS];
 }
 
+fn missing_base() -> StageError {
+    StageError::msg("blend/masked expected base in slot 0")
+}
+
+fn missing_overlay() -> StageError {
+    StageError::msg("blend/masked expected overlay in slot 1")
+}
+
+fn missing_mask() -> StageError {
+    StageError::msg("blend/masked expected a mask in slot 2")
+}
+
+fn missing_channel() -> StageError {
+    StageError::msg("blend/masked was handed a frame missing a channel")
+}
+
+fn missing_chroma() -> StageError {
+    StageError::msg("blend/masked was handed a mask without the chroma plane this frame needs")
+}
+
 pub(super) struct MaskedBlend<R: Runtime> {
     client: ComputeClient<R>,
     format: FrameFormat,
@@ -122,28 +142,23 @@ impl<R: Runtime> StageInstance for MaskedBlend<R> {}
 
 impl<R: Runtime> Filter for MaskedBlend<R> {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        let base = inputs
-            .take_frame(0)
-            .ok_or_else(|| StageError::msg("blend/masked expected base in slot 0"))?;
-        let overlay = inputs
-            .take_frame(1)
-            .ok_or_else(|| StageError::msg("blend/masked expected overlay in slot 1"))?;
-        let mask = inputs
-            .take_mask(2)
-            .ok_or_else(|| StageError::msg("blend/masked expected a mask in slot 2"))?;
+        let base = inputs.take_frame(0).ok_or_else(missing_base)?;
+        let overlay = inputs.take_frame(1).ok_or_else(missing_overlay)?;
+        let mask = inputs.take_mask(2).ok_or_else(missing_mask)?;
 
         let meta = base.meta().clone();
         let output = context.alloc_frame(&self.format, meta);
-        let missing = || StageError::msg("blend/masked was handed a frame missing a channel");
 
         for (index, channel) in self.format.channels().iter().enumerate() {
-            let base_plane = base.plane(*channel).ok_or_else(missing)?;
-            let output_plane = output.plane(*channel).ok_or_else(missing)?;
+            let base_plane = base.plane(*channel).ok_or_else(missing_channel)?;
+            let output_plane = output.plane(*channel).ok_or_else(missing_channel)?;
             let plane_index = index as u8;
 
             if self.planes.contains(&plane_index) {
-                let overlay_plane = overlay.plane(*channel).ok_or_else(missing)?;
-                let mask_plane = mask.plane();
+                let overlay_plane = overlay.plane(*channel).ok_or_else(missing_channel)?;
+                let mask_plane = mask
+                    .plane_for(*channel, &self.format)
+                    .ok_or_else(missing_chroma)?;
                 let planes = PlaneSet {
                     base: base_plane,
                     overlay: overlay_plane,

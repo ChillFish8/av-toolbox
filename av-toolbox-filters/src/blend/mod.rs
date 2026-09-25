@@ -25,7 +25,6 @@ use av_toolbox_gpu::{
     SampleFormat,
     StreamFormat,
     StreamTemplate,
-    Subsampling,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -71,7 +70,9 @@ impl StageDefinition for Masked {
                 .accepting(StreamType::Frames)
                 .chunk_authority(),
             InputParam::required("overlay").accepting(StreamType::Frames),
-            InputParam::required("mask").accepting(StreamType::Mask),
+            InputParam::required("mask")
+                .accepting(StreamType::Mask)
+                .planes_of("base"),
         ]);
         SIGNATURE
     }
@@ -82,20 +83,6 @@ fn blendable(sample: SampleFormat) -> bool {
     matches!(sample, SampleFormat::U8 | SampleFormat::U16 { .. })
 }
 
-/// Refuses a layout whose planes are not all the frame's full size.
-fn full_size(layout: FrameLayout) -> Result<(), StageError> {
-    let FrameLayout::Yuv { subsampling } = layout else {
-        return Ok(());
-    };
-
-    if subsampling == Subsampling::Yuv444 {
-        return Ok(());
-    }
-
-    let message = format!("blend/masked needs full-size planes, convert {subsampling} to 4:4:4 first");
-    Err(StageError::msg(message))
-}
-
 /// Whether two clips can be blended sample for sample, ignoring colour and rate.
 fn same_shape(first: &FrameFormat, second: &FrameFormat) -> bool {
     first.width == second.width
@@ -104,12 +91,18 @@ fn same_shape(first: &FrameFormat, second: &FrameFormat) -> bool {
         && first.sample == second.sample
 }
 
+fn not_frames() -> StageError {
+    StageError::msg("blend/masked blends frames, not masks")
+}
+
+fn not_a_mask() -> StageError {
+    StageError::msg("blend/masked selects with a mask, not frames")
+}
+
 fn accepts_clip(offered: StreamFormat, other: Offered) -> Result<FormatSet, StageError> {
     let Some(format) = offered.as_frames() else {
-        return Err(StageError::msg("blend/masked blends frames, not masks"));
+        return Err(not_frames());
     };
-
-    full_size(format.layout)?;
 
     if !blendable(format.sample) {
         return Ok(FormatSet::new());
@@ -127,7 +120,7 @@ fn accepts_clip(offered: StreamFormat, other: Offered) -> Result<FormatSet, Stag
 
 fn accepts_mask(offered: StreamFormat) -> Result<FormatSet, StageError> {
     let Some(format) = offered.as_mask() else {
-        return Err(StageError::msg("blend/masked selects with a mask, not frames"));
+        return Err(not_a_mask());
     };
 
     let accepted = match format.sample {
@@ -148,18 +141,9 @@ fn checked_base(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageErr
         return Err(StageError::msg("blend/masked needs base, overlay and mask bound"));
     };
 
-    let base = base
-        .as_frames()
-        .copied()
-        .ok_or_else(|| StageError::msg("blend/masked blends frames, not masks"))?;
-    let overlay = overlay
-        .as_frames()
-        .copied()
-        .ok_or_else(|| StageError::msg("blend/masked blends frames, not masks"))?;
-    let mask = mask
-        .as_mask()
-        .copied()
-        .ok_or_else(|| StageError::msg("blend/masked selects with a mask, not frames"))?;
+    let base = base.as_frames().copied().ok_or_else(not_frames)?;
+    let overlay = overlay.as_frames().copied().ok_or_else(not_frames)?;
+    let mask = mask.as_mask().copied().ok_or_else(not_a_mask)?;
 
     if !same_shape(&base, &overlay) {
         return Err(StageError::msg(
@@ -275,7 +259,7 @@ impl FilterDefinition for Masked {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{ColourInfo, Depth, MaskFormat};
+    use av_toolbox_gpu::{ColourInfo, Depth, MaskFormat, Subsampling};
 
     use super::*;
 
@@ -344,19 +328,27 @@ mod tests {
     }
 
     #[test]
-    fn yuv420_is_refused_with_the_convert_message() {
+    fn a_420_clip_is_accepted() {
         let clip = yuv(Subsampling::Yuv420, SampleFormat::U8);
-        let error = accepts_clip(clip, Offered::Unknown).expect_err("4:2:0 needs converting first");
+        let accepted = accepts_clip(clip, Offered::Unknown).expect("4:2:0 is accepted");
 
-        assert!(error.to_string().contains("convert 4:2:0 to 4:4:4"));
+        assert!(accepted.accepts(SampleFormat::U8));
     }
 
     #[test]
-    fn yuv422_is_refused_with_the_convert_message() {
+    fn a_422_clip_is_accepted() {
         let clip = yuv(Subsampling::Yuv422, SampleFormat::U8);
-        let error = accepts_clip(clip, Offered::Unknown).expect_err("4:2:2 needs converting first");
+        let accepted = accepts_clip(clip, Offered::Unknown).expect("4:2:2 is accepted");
 
-        assert!(error.to_string().contains("convert 4:2:2 to 4:4:4"));
+        assert!(accepted.accepts(SampleFormat::U8));
+    }
+
+    #[test]
+    fn the_mask_param_asks_for_planes_of_base() {
+        let signature = Masked::inputs();
+        let mask = signature.params()[MASK];
+
+        assert_eq!(mask.planes_of_input(), Some("base"));
     }
 
     #[test]

@@ -8,10 +8,13 @@ use av_toolbox_core::{
     StageKind,
     StreamType,
 };
+use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, Taps, bilinear, taps};
 use av_toolbox_gpu::{
     Backend,
     BuildContext,
     BuildTask,
+    Channel,
+    ChromaLocation,
     ColourInfo,
     Depth,
     Device,
@@ -20,6 +23,7 @@ use av_toolbox_gpu::{
     FrameMeta,
     HostPool,
     HostStreamItem,
+    MaskChroma,
     MaskFormat,
     ResolvedFormats,
     SampleFormat,
@@ -33,12 +37,30 @@ fn backend() -> Backend {
     Backend::open_default(Device::Default).expect("a backend should open")
 }
 
+/// The chroma a subsampled layout's mask carries in these tests, sited at `ChromaLocation::Left`.
+///
+/// `None` for a full-size layout, matching what a real graph resolves.
+fn mask_chroma_for(layout: FrameLayout) -> Option<MaskChroma> {
+    let FrameLayout::Yuv { subsampling } = layout else {
+        return None;
+    };
+
+    if subsampling == Subsampling::Yuv444 {
+        return None;
+    }
+
+    Some(MaskChroma {
+        subsampling,
+        location: ChromaLocation::Left,
+    })
+}
+
 fn mask_format(format: &FrameFormat) -> MaskFormat {
     MaskFormat {
         width: format.width,
         height: format.height,
         sample: SampleFormat::U8,
-        chroma: None,
+        chroma: mask_chroma_for(format.layout),
     }
 }
 
@@ -81,6 +103,8 @@ struct BlendOnce {
     base: Vec<Vec<u8>>,
     overlay: Vec<Vec<u8>>,
     mask: Vec<u8>,
+    /// The mask's chroma plane, when its layout is subsampled.
+    mask_chroma: Option<Vec<u8>>,
 }
 
 impl BuildTask for BlendOnce {
@@ -108,6 +132,12 @@ impl BuildTask for BlendOnce {
         let mask_meta = FrameMeta::at(0);
         let mut mask = host.alloc_mask(&format, mask_meta);
         mask.plane_mut().copy_from_slice(&self.mask);
+        if let Some(chroma_bytes) = &self.mask_chroma {
+            let chroma_plane = mask
+                .chroma_plane_mut()
+                .expect("the format carries a chroma plane");
+            chroma_plane.copy_from_slice(chroma_bytes);
+        }
 
         let base_frame = base.freeze();
         let overlay_frame = overlay.freeze();
@@ -190,6 +220,28 @@ fn ramp(samples: usize, step: usize, largest: usize) -> Vec<u16> {
         .collect()
 }
 
+/// A ramp sized to each channel of `format`, offset by its index for variety between channels.
+fn ramps_of(format: &FrameFormat, step: usize) -> Vec<Vec<u16>> {
+    format
+        .channels()
+        .iter()
+        .enumerate()
+        .map(|(index, channel)| {
+            let samples = format.channel_samples(*channel).expect("a listed channel");
+            ramp(samples, step + index, 1023)
+        })
+        .collect()
+}
+
+/// The reference blend of one U8 plane, rounded back down to U8.
+fn reference_u8(base: &[u8], overlay: &[u8], mask: &[u8]) -> Vec<u8> {
+    let base_samples = narrow(base);
+    let overlay_samples = narrow(overlay);
+    let blended = reference(&base_samples, &overlay_samples, mask);
+
+    blended.iter().map(|sample| *sample as u8).collect()
+}
+
 /// Blends U8 clips on the device and checks every plane against the reference.
 fn check_u8(
     format: FrameFormat,
@@ -217,6 +269,7 @@ fn check_u8(
         base,
         overlay,
         mask,
+        mask_chroma: None,
     });
 
     assert_eq!(planes, expected);
@@ -232,6 +285,132 @@ fn planes_of(format: &FrameFormat, fill: impl Fn(usize, usize) -> u8) -> Vec<Vec
             (0..samples).map(|sample| fill(index, sample)).collect()
         })
         .collect()
+}
+
+/// Mirrors [av_toolbox_cubek::border::reflect] on the CPU.
+fn reflect(index: i32, length: i32) -> i32 {
+    if length <= 1 {
+        return 0;
+    }
+
+    let period = 2 * length - 2;
+    let folded = index.abs() % period;
+    if folded >= length { period - folded } else { folded }
+}
+
+/// Applies `across` then `down` on the CPU, rounding to U8 at the end, mirroring
+/// `av_toolbox_cubek::resize::apply`.
+fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, down: &Taps) -> Vec<u8> {
+    let out_width = across.starts.len() as u32;
+    let out_height = down.starts.len() as u32;
+
+    let mut rows = vec![0.0f32; (out_width * height) as usize];
+    for row in 0..height {
+        for column in 0..out_width {
+            let mut total = 0.0f32;
+            for step in 0..across.count {
+                let tap = across.starts[column as usize] + step as i32;
+                let source = reflect(tap, width as i32) as u32;
+                let weight = across.weights[(column * across.count + step) as usize];
+                let sample = input[(row * width + source) as usize];
+                total += f32::from(sample) * weight;
+            }
+
+            rows[(row * out_width + column) as usize] = total;
+        }
+    }
+
+    let mut output = Vec::with_capacity((out_width * out_height) as usize);
+    for row in 0..out_height {
+        for column in 0..out_width {
+            let mut total = 0.0f32;
+            for step in 0..down.count {
+                let tap = down.starts[row as usize] + step as i32;
+                let source = reflect(tap, height as i32) as u32;
+                let weight = down.weights[(row * down.count + step) as usize];
+                total += rows[(source * out_width + column) as usize] * weight;
+            }
+
+            let rounded = total.round().clamp(0.0, 255.0) as u8;
+            output.push(rounded);
+        }
+    }
+
+    output
+}
+
+/// The spec's downscale of a mask's full plane into its chroma plane, following the same weight
+/// tables and reflect-101 edges a real mask stage's chroma wrapper uses.
+fn downscaled_chroma(full: &[u8], width: u32, height: u32, chroma: MaskChroma) -> Vec<u8> {
+    let (factor_x, factor_y) = chroma.factors();
+    let (offset_x, offset_y) = chroma.location.offsets(factor_x, factor_y);
+    let (chroma_width, chroma_height) = chroma.subsampling.chroma_dimensions(width, height);
+
+    let across = taps(
+        chroma_width,
+        factor_x as f32,
+        offset_x,
+        bilinear,
+        BILINEAR_SUPPORT,
+    );
+    let down = taps(
+        chroma_height,
+        factor_y as f32,
+        offset_y,
+        bilinear,
+        BILINEAR_SUPPORT,
+    );
+
+    reference_resize(full, width, height, &across, &down)
+}
+
+/// The mask plane `channel` blends with, matching `Mask::plane_for`.
+fn reference_mask_plane<'a>(
+    format: &FrameFormat,
+    channel: Channel,
+    full: &'a [u8],
+    chroma: &'a [u8],
+) -> &'a [u8] {
+    let full_size = (format.width, format.height);
+    let dimensions = format
+        .channel_dimensions(channel)
+        .expect("a listed channel carries dimensions");
+
+    if dimensions == full_size { full } else { chroma }
+}
+
+/// Blends U8 clips through a mask that carries a chroma plane, and checks every plane against the
+/// reference, each read from the mask plane matching its channel.
+fn check_u8_subsampled(
+    format: FrameFormat,
+    base: Vec<Vec<u8>>,
+    overlay: Vec<Vec<u8>>,
+    mask: Vec<u8>,
+    mask_chroma: Vec<u8>,
+    args: serde_json::Value,
+) {
+    let expected: Vec<Vec<u8>> = format
+        .channels()
+        .iter()
+        .enumerate()
+        .map(|(index, channel)| {
+            let mask_plane = reference_mask_plane(&format, *channel, &mask, &mask_chroma);
+            reference_u8(&base[index], &overlay[index], mask_plane)
+        })
+        .collect();
+
+    let backend = backend();
+    let filter = built_blend(&backend, format, args);
+    let planes = backend.build(BlendOnce {
+        filter,
+        format,
+        base,
+        overlay,
+        mask,
+        mask_chroma: Some(mask_chroma),
+    });
+
+    assert_eq!(planes, expected);
 }
 
 #[test]
@@ -280,6 +459,7 @@ fn a_444_ten_bit_frame_blends_at_its_depth() {
         base: base_bytes,
         overlay: overlay_bytes,
         mask,
+        mask_chroma: None,
     });
 
     let blended: Vec<Vec<u16>> = planes.iter().map(|plane| unwiden(plane)).collect();
@@ -315,6 +495,7 @@ fn a_full_mask_takes_the_overlay_and_an_empty_one_the_base() {
         base: full_base,
         overlay: full_overlay,
         mask: full_mask,
+        mask_chroma: None,
     });
 
     let empty_args = serde_json::json!({});
@@ -328,6 +509,7 @@ fn a_full_mask_takes_the_overlay_and_an_empty_one_the_base() {
         base: empty_base,
         overlay: empty_overlay,
         mask: empty_mask,
+        mask_chroma: None,
     });
 
     assert_eq!(full, overlay);
@@ -359,9 +541,127 @@ fn planes_leaves_the_other_channels_as_base() {
         base: base_for_blend,
         overlay,
         mask,
+        mask_chroma: None,
     });
 
     assert_eq!(planes[0], expected_plane0);
     assert_eq!(planes[1], base[1]);
     assert_eq!(planes[2], base[2]);
+}
+
+#[test]
+fn a_420_frame_of_odd_size_blends_every_plane() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let format = frame(7, 5, layout, SampleFormat::U8);
+    let base = planes_of(&format, |plane, sample| ((plane * 13 + sample * 5) % 256) as u8);
+    let overlay = planes_of(&format, |plane, sample| {
+        (255 - (plane * 13 + sample * 5) % 256) as u8
+    });
+
+    let mask: Vec<u8> = (0..35).map(|index| (index * 7 % 256) as u8).collect();
+    let chroma = mask_chroma_for(layout).expect("4:2:0 carries chroma");
+    let mask_chroma = downscaled_chroma(&mask, format.width, format.height, chroma);
+    assert_eq!(mask_chroma.len(), 12);
+
+    let args = serde_json::json!({});
+
+    check_u8_subsampled(format, base, overlay, mask, mask_chroma, args);
+}
+
+#[test]
+fn a_422_frame_blends_every_plane() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv422,
+    };
+    let format = frame(8, 4, layout, SampleFormat::U8);
+    let base = planes_of(&format, |plane, sample| ((plane * 17 + sample * 3) % 256) as u8);
+    let overlay = planes_of(&format, |plane, sample| {
+        (255 - (plane * 17 + sample * 3) % 256) as u8
+    });
+
+    let mask: Vec<u8> = (0..32).map(|index| (index * 11 % 256) as u8).collect();
+    let chroma = mask_chroma_for(layout).expect("4:2:2 carries chroma");
+    let mask_chroma = downscaled_chroma(&mask, format.width, format.height, chroma);
+
+    let args = serde_json::json!({});
+
+    check_u8_subsampled(format, base, overlay, mask, mask_chroma, args);
+}
+
+#[test]
+fn a_420_ten_bit_frame_blends_at_its_depth() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let sample = SampleFormat::U16 { depth: Depth::TEN };
+    let format = frame(8, 4, layout, sample);
+    let base = ramps_of(&format, 31);
+    let overlay = ramps_of(&format, 97);
+
+    let mask: Vec<u8> = (0..32).map(|index| (index * 9 % 256) as u8).collect();
+    let chroma = mask_chroma_for(layout).expect("4:2:0 carries chroma");
+    let mask_chroma = downscaled_chroma(&mask, format.width, format.height, chroma);
+
+    let expected: Vec<Vec<u16>> = format
+        .channels()
+        .iter()
+        .enumerate()
+        .map(|(index, channel)| {
+            let mask_plane = reference_mask_plane(&format, *channel, &mask, &mask_chroma);
+            reference(&base[index], &overlay[index], mask_plane)
+        })
+        .collect();
+
+    let backend = backend();
+    let args = serde_json::json!({});
+    let filter = built_blend(&backend, format, args);
+    let base_bytes: Vec<Vec<u8>> = base.iter().map(|plane| widen(plane)).collect();
+    let overlay_bytes: Vec<Vec<u8>> = overlay.iter().map(|plane| widen(plane)).collect();
+    let planes = backend.build(BlendOnce {
+        filter,
+        format,
+        base: base_bytes,
+        overlay: overlay_bytes,
+        mask,
+        mask_chroma: Some(mask_chroma),
+    });
+
+    let blended: Vec<Vec<u16>> = planes.iter().map(|plane| unwiden(plane)).collect();
+    assert_eq!(blended, expected);
+}
+
+#[test]
+fn planes_leaves_the_other_planes_as_base() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let format = frame(8, 4, layout, SampleFormat::U8);
+    let base = planes_of(&format, |plane, sample| ((plane * 10 + sample) % 256) as u8);
+    let overlay = planes_of(&format, |plane, sample| (255 - (plane * 10 + sample) % 256) as u8);
+
+    let mask: Vec<u8> = (0..32).map(|index| (index * 9 % 256) as u8).collect();
+    let chroma = mask_chroma_for(layout).expect("4:2:0 carries chroma");
+    let mask_chroma = downscaled_chroma(&mask, format.width, format.height, chroma);
+    let args = serde_json::json!({ "planes": [1, 2] });
+
+    let expected_u = reference_u8(&base[1], &overlay[1], &mask_chroma);
+    let expected_v = reference_u8(&base[2], &overlay[2], &mask_chroma);
+
+    let backend = backend();
+    let base_for_blend = base.clone();
+    let filter = built_blend(&backend, format, args);
+    let planes = backend.build(BlendOnce {
+        filter,
+        format,
+        base: base_for_blend,
+        overlay,
+        mask,
+        mask_chroma: Some(mask_chroma),
+    });
+
+    assert_eq!(planes[0], base[0]);
+    assert_eq!(planes[1], expected_u);
+    assert_eq!(planes[2], expected_v);
 }
