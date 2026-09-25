@@ -163,6 +163,156 @@ pub fn xdog(luma: &[f32], width: u32, height: u32, settings: &XdogSettings) -> V
         .collect()
 }
 
+/// The 8-connected component of every set mark, numbered in the order they are found.
+pub fn components(marks: &[bool], width: u32, height: u32) -> Vec<Option<usize>> {
+    let width = width as i32;
+    let height = height as i32;
+    let mut found: Vec<Option<usize>> = vec![None; marks.len()];
+    let mut next = 0;
+
+    for start in 0..marks.len() {
+        if !marks[start] || found[start].is_some() {
+            continue;
+        }
+
+        found[start] = Some(next);
+        let mut pending = vec![start];
+        while let Some(index) = pending.pop() {
+            let column = index as i32 % width;
+            let row = index as i32 / width;
+
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let x = column + dx;
+                    let y = row + dy;
+                    if x < 0 || x >= width || y < 0 || y >= height {
+                        continue;
+                    }
+
+                    let neighbour = (y * width + x) as usize;
+                    if marks[neighbour] && found[neighbour].is_none() {
+                        found[neighbour] = Some(next);
+                        pending.push(neighbour);
+                    }
+                }
+            }
+        }
+
+        next += 1;
+    }
+
+    found
+}
+
+fn sobel(input: &[f32], width: u32, height: u32) -> (Vec<f32>, Vec<f32>) {
+    let width = width as i32;
+    let height = height as i32;
+    let sample = |column: i32, row: i32| {
+        let x = reflect(column, width);
+        let y = reflect(row, height);
+        input[(y * width + x) as usize]
+    };
+
+    let mut horizontal = Vec::with_capacity(input.len());
+    let mut vertical = Vec::with_capacity(input.len());
+    for row in 0..height {
+        for column in 0..width {
+            let right =
+                sample(column + 1, row - 1) + 2.0 * sample(column + 1, row) + sample(column + 1, row + 1);
+            let left =
+                sample(column - 1, row - 1) + 2.0 * sample(column - 1, row) + sample(column - 1, row + 1);
+            let below =
+                sample(column - 1, row + 1) + 2.0 * sample(column, row + 1) + sample(column + 1, row + 1);
+            let above =
+                sample(column - 1, row - 1) + 2.0 * sample(column, row - 1) + sample(column + 1, row - 1);
+            horizontal.push(right - left);
+            vertical.push(below - above);
+        }
+    }
+
+    (horizontal, vertical)
+}
+
+/// Blurs, finds gradients, suppresses non-maxima, and links weak edges to strong ones by
+/// connected component, with `low` and `high` in U8 units.
+pub fn canny(luma: &[f32], width: u32, height: u32, low: f32, high: f32) -> Vec<u8> {
+    let smoothed = blur_with_radius(luma, width, height, 0.8, 1);
+    let (horizontal, vertical) = sobel(&smoothed, width, height);
+    let magnitude: Vec<f32> = horizontal
+        .iter()
+        .zip(&vertical)
+        .map(|(across, down)| across.abs() + down.abs())
+        .collect();
+
+    let width_signed = width as i32;
+    let height_signed = height as i32;
+    let magnitude_at = |column: i32, row: i32| {
+        if column < 0 || column >= width_signed || row < 0 || row >= height_signed {
+            return 0.0;
+        }
+
+        magnitude[(row * width_signed + column) as usize]
+    };
+
+    let mut candidates = vec![false; luma.len()];
+    let mut strong = vec![false; luma.len()];
+    for index in 0..luma.len() {
+        let column = index as i32 % width_signed;
+        let row = index as i32 / width_signed;
+        let across = horizontal[index].abs();
+        let down = vertical[index].abs();
+
+        let (step_x, step_y) = if down > across * 2.414_213_5 {
+            (0, 1)
+        } else if down > across * 0.414_213_57 {
+            if horizontal[index] * vertical[index] > 0.0 {
+                (1, 1)
+            } else {
+                (1, -1)
+            }
+        } else {
+            (1, 0)
+        };
+
+        let ahead = magnitude_at(column + step_x, row + step_y);
+        let behind = magnitude_at(column - step_x, row - step_y);
+        let kept = magnitude[index] > behind && magnitude[index] >= ahead;
+
+        candidates[index] = kept && magnitude[index] > low / 255.0;
+        strong[index] = kept && magnitude[index] > high / 255.0;
+    }
+
+    let labels = components(&candidates, width, height);
+    let mut anchored = std::collections::HashSet::new();
+    for (index, label) in labels.iter().enumerate() {
+        if strong[index]
+            && let Some(label) = label
+        {
+            anchored.insert(*label);
+        }
+    }
+
+    labels
+        .iter()
+        .map(|label| match label {
+            Some(label) if anchored.contains(label) => 255,
+            _ => 0,
+        })
+        .collect()
+}
+
+/// A light square on a darker background.
+pub fn square(width: u32, height: u32) -> Vec<u8> {
+    (0..height)
+        .flat_map(|row| {
+            (0..width).map(move |column| {
+                let inside = (8..16).contains(&column) && (8..16).contains(&row);
+                if inside { 200 } else { 40 }
+            })
+        })
+        .collect()
+}
+
 /// A left to right gradient with a dark vertical stroke three samples wide down the middle.
 pub fn stroke_on_gradient(width: u32, height: u32) -> Vec<u8> {
     let middle = width / 2;
