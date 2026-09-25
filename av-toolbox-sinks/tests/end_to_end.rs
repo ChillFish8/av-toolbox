@@ -8,6 +8,7 @@ use std::{fs, thread};
 
 use av_toolbox_core::{
     BoundInputs,
+    Crossing,
     Filter,
     FilterDefinition,
     InputParam,
@@ -29,6 +30,7 @@ use av_toolbox_gpu::{
     FormatSet,
     Frame,
     FrameContext,
+    MetaValue,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -36,7 +38,18 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
-use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build, place_transfers, plan, solve};
+use av_toolbox_graph::{
+    ArgSpans,
+    InputRef,
+    NodeRole,
+    Span,
+    Spanned,
+    StageSpec,
+    build,
+    place_transfers,
+    plan,
+    solve,
+};
 use av_toolbox_runtime::{Engine, Settings};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -119,12 +132,87 @@ impl FilterDefinition for Pass {
     }
 }
 
+struct TagInstance;
+
+impl StageInstance for TagInstance {}
+
+impl Filter for TagInstance {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        let mut frame = inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+        let index = frame.meta().index as i64;
+        frame.meta_mut().attach("index_again", MetaValue::Int(index));
+
+        Ok(frame)
+    }
+}
+
+/// A device filter attaching each frame's index back onto its metadata.
+struct Tag;
+
+impl StageDefinition for Tag {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "end-to-end-test"
+    }
+
+    fn identifier() -> &'static str {
+        "tag"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("source").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for Tag {
+    type Side = DeviceSide;
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = chosen.iter().flatten().next().copied();
+        let format = format.ok_or_else(|| StageError::msg("no input was bound"))?;
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(TagInstance))
+    }
+}
+
 fn registry() -> PipelineRegistry {
     let mut registry = PipelineRegistry::new();
 
     av_toolbox_sources::register(&mut registry).expect("should register the sources");
     av_toolbox_sinks::register(&mut registry).expect("should register the sinks");
     registry.register_filter::<Pass>().expect("should register");
+    registry.register_filter::<Tag>().expect("should register");
 
     registry
 }
@@ -195,6 +283,23 @@ fn pipeline(fd: RawFd, output: &Path) -> Vec<StageSpec> {
     vec![source, pass, sink]
 }
 
+fn metadata_pipeline(fd: RawFd, output: &Path) -> Vec<StageSpec> {
+    let source = stage(StageKind::Source, "source", "y4m/pipe", json!({ "fd": fd }));
+
+    let mut tag = stage(StageKind::Filter, "tag", "end-to-end-test/tag", json!({}));
+    tag.inputs = vec![positional("source")];
+
+    let mut log = stage(
+        StageKind::Sink,
+        "log",
+        "metadata/ndjson",
+        json!({ "path": output }),
+    );
+    log.inputs = vec![positional("tag")];
+
+    vec![source, tag, log]
+}
+
 #[test]
 fn a_y4m_stream_through_a_device_filter_is_written_back_byte_for_byte() {
     let stream = y4m_stream();
@@ -224,4 +329,48 @@ fn a_y4m_stream_through_a_device_filter_is_written_back_byte_for_byte() {
 
     let written = fs::read(&output).expect("reads the output");
     assert_eq!(written, stream);
+}
+
+#[test]
+fn a_device_filters_attachments_are_logged_without_a_download() {
+    let (fd, feeder) = piped(y4m_stream());
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let output = folder.path().join("out.ndjson");
+    let registry = registry();
+    let specs = metadata_pipeline(fd, &output);
+
+    let built = build(&registry, &specs).expect("should build");
+    let mut graph = built.into_graph();
+
+    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let capabilities = backend.capabilities();
+    let mut formats = solve(&graph, &registry, capabilities).expect("should solve");
+    place_transfers(&mut graph, &registry, &mut formats).expect("should place transfers");
+    let unloads = graph
+        .nodes()
+        .iter()
+        .filter(|node| node.role() == NodeRole::Crossing(Crossing::Unload))
+        .count();
+    let made = plan(&graph, &registry).expect("should plan");
+    graph.set_execution_plan(made);
+
+    let engine = Engine::build(&graph, &registry, &backend, &formats, Settings::default())
+        .expect("should build the engine");
+    let report = engine.run().expect("should run");
+    feeder.join().expect("the feeder finishes");
+
+    assert_eq!(unloads, 0);
+    assert_eq!(report.frames, FRAME_COUNT);
+
+    let text = fs::read_to_string(&output).expect("reads the output");
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("valid json"))
+        .collect();
+    assert_eq!(lines.len() as u64, FRAME_COUNT);
+
+    for (index, line) in lines.iter().enumerate() {
+        assert_eq!(line["index"], index as u64);
+        assert_eq!(line["filter.tag"]["index_again"], index as i64);
+    }
 }
