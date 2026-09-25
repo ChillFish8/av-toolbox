@@ -1,11 +1,7 @@
 use std::fs::File;
-#[cfg(unix)]
-use std::os::fd::{FromRawFd, RawFd};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use av_toolbox_core::{BoundInputs, InputSignature, Sink, SinkDefinition, StageDefinition, StageError};
-#[cfg(unix)]
-use av_toolbox_core::{ClaimError, Claims};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -19,7 +15,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::shared::{INPUTS, RateArg, Y4mSink, accepts, writer_for};
+use crate::shared::{INPUTS, RateArg, Y4mSink, accepts, open_target, writer_for};
 
 /// Arguments for `y4m/pipe`, which takes exactly one of `fd` or `path`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -79,73 +75,11 @@ impl SinkDefinition for Pipe {
 }
 
 fn sink_for(args: &PipeArgs, formats: &ResolvedFormats) -> Result<Y4mSink<File>, StageError> {
-    let file = match (args.fd, &args.path) {
-        (Some(fd), None) => file_from_fd(fd)?,
-        (None, Some(path)) => create_path(path)?,
-        _ => return Err(StageError::msg("y4m/pipe takes exactly one of fd or path")),
-    };
-
+    let path = args.path.as_deref();
+    let file = open_target("y4m/pipe", args.fd, path)?;
     let writer = writer_for(file, formats, args.frame_rate)?;
 
     Ok(Y4mSink::new(writer))
-}
-
-#[cfg(unix)]
-fn file_from_fd(fd: u32) -> Result<File, StageError> {
-    let claims = Claims::process();
-
-    claimed_file(claims, fd)
-}
-
-/// Claims `fd` and takes ownership of it as a file.
-#[cfg(unix)]
-fn claimed_file(claims: &Claims, fd: u32) -> Result<File, StageError> {
-    let parsed = RawFd::try_from(fd);
-    let raw = parsed.map_err(|_| {
-        let message = format!("{fd} is not a valid file descriptor");
-
-        StageError::msg(message)
-    })?;
-
-    let claimed = claims.claim_descriptor(raw);
-    claimed.map_err(|error| claim_error(raw, error))?;
-
-    // SAFETY: the pipeline was given this descriptor to write, and the claim has just made this
-    // sink its only owner, from here until the sink drops.
-    let file = unsafe { File::from_raw_fd(raw) };
-
-    Ok(file)
-}
-
-#[cfg(unix)]
-fn claim_error(fd: RawFd, error: ClaimError) -> StageError {
-    match error {
-        ClaimError::StandardDescriptor(_) => {
-            let message =
-                format!("y4m/pipe cannot write descriptor {fd}, use y4m/stdout to write standard output");
-
-            StageError::msg(message)
-        },
-        other => StageError::msg(other.to_string()),
-    }
-}
-
-#[cfg(not(unix))]
-fn file_from_fd(_fd: u32) -> Result<File, StageError> {
-    Err(StageError::msg(
-        "y4m/pipe can only write a file descriptor on Unix, use path instead",
-    ))
-}
-
-fn create_path(path: &Path) -> Result<File, StageError> {
-    let opened = File::options().write(true).create(true).truncate(true).open(path);
-
-    opened.map_err(|error| {
-        let display = path.display();
-        let message = format!("{display} could not be opened for writing: {error}");
-
-        StageError::msg(message)
-    })
 }
 
 #[cfg(test)]
@@ -232,18 +166,6 @@ mod tests {
 
         let bytes = fs::read(&path).expect("reads");
         assert_eq!(bytes.len(), 27 + 6 + 12);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_standard_descriptors_are_refused() {
-        let claims = Claims::new();
-
-        for fd in 0..=2 {
-            let error = claimed_file(&claims, fd).expect_err("a standard descriptor");
-
-            assert!(error.to_string().contains("y4m/stdout"), "{fd}");
-        }
     }
 
     #[cfg(unix)]

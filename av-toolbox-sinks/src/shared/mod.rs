@@ -1,4 +1,5 @@
 mod rate;
+mod target;
 mod y4m;
 
 #[cfg(test)]
@@ -19,6 +20,7 @@ use av_toolbox_gpu::{
 };
 
 pub(crate) use self::rate::RateArg;
+pub(crate) use self::target::open_target;
 pub(crate) use self::y4m::Y4mWriter;
 
 pub(crate) const INPUTS: &InputSignature =
