@@ -35,7 +35,7 @@ pub(crate) use self::filters::{
     SPARSE_FILLED_SLOTS,
     SPARSE_OFFERED_SLOTS,
 };
-use self::host::{HostBlur, HostFile, HostStdout, Restamp};
+use self::host::{HostBlur, HostFile, HostStdout, Log, Restamp};
 use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
 use self::rated::{Rated, Retime};
 pub(crate) use self::specs::{named, positional, spec};
@@ -78,6 +78,7 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry
         .register_meta_transform::<Restamp>()
         .expect("should register");
+    registry.register_meta_sink::<Log>().expect("should register");
     registry.register_source::<Rated>().expect("should register");
     registry.register_filter::<Retime>().expect("should register");
 
@@ -96,7 +97,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 31);
+        assert_eq!(identifiers.len(), 32);
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
         assert!(identifiers.contains(&"test/blur"));
@@ -110,6 +111,7 @@ mod tests {
         assert!(identifiers.contains(&"test/host-blur"));
         assert!(identifiers.contains(&"test/host-stdout"));
         assert!(identifiers.contains(&"test/restamp"));
+        assert!(identifiers.contains(&"test/log"));
     }
 
     #[test]

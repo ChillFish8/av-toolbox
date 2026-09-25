@@ -32,6 +32,8 @@ use crate::{
     InputArgument,
     InputSignature,
     MaskDefinition,
+    MetaSink,
+    MetaSinkDefinition,
     MetaTransform,
     MetaTransformDefinition,
     OpenSlot,
@@ -278,6 +280,30 @@ pub trait PreparedSink: Send + Sync {
     ) -> Result<BuiltSink, BuildStageError>;
 }
 
+/// A metadata-only sink whose arguments are deserialized and whose inputs are bound.
+pub trait PreparedMetaSink: Send + Sync {
+    /// The smallest unit of a stream this stage can be given on its own.
+    fn parallelism(&self) -> Parallelism;
+
+    /// Which input's chunk ids line this stage's inputs up.
+    fn chunk_authority(&self) -> Option<usize>;
+
+    fn accepts_input(
+        &self,
+        capabilities: &Capabilities,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError>;
+
+    /// Builds the instance against a real backend. A metadata-only sink has no side to build for.
+    fn build(
+        self: Box<Self>,
+        backend: &Backend,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaSink>, BuildStageError>;
+}
+
 /// A prepared stage of any kind.
 pub enum PreparedStage {
     Source(Box<dyn PreparedSource>),
@@ -286,6 +312,7 @@ pub enum PreparedStage {
     Transform(Box<dyn PreparedTransform>),
     MetaTransform(Box<dyn PreparedMetaTransform>),
     Sink(Box<dyn PreparedSink>),
+    MetaSink(Box<dyn PreparedMetaSink>),
     /// A crossing that moves a stream between host and device.
     Crossing(Crossing),
 }
@@ -297,7 +324,7 @@ impl PreparedStage {
             Self::Filter(_) => StageKind::Filter,
             Self::Mask(_) => StageKind::Mask,
             Self::Transform(_) | Self::MetaTransform(_) | Self::Crossing(_) => StageKind::Transform,
-            Self::Sink(_) => StageKind::Sink,
+            Self::Sink(_) | Self::MetaSink(_) => StageKind::Sink,
         }
     }
 
@@ -309,6 +336,7 @@ impl PreparedStage {
             Self::Transform(prepared) => prepared.parallelism(),
             Self::MetaTransform(prepared) => prepared.parallelism(),
             Self::Sink(prepared) => prepared.parallelism(),
+            Self::MetaSink(prepared) => prepared.parallelism(),
             // A crossing moves one item at a time and holds nothing between them.
             Self::Crossing(_) => Parallelism::Frame,
         }
@@ -322,6 +350,7 @@ impl PreparedStage {
             Self::Transform(prepared) => prepared.chunk_authority(),
             Self::MetaTransform(prepared) => prepared.chunk_authority(),
             Self::Sink(prepared) => prepared.chunk_authority(),
+            Self::MetaSink(prepared) => prepared.chunk_authority(),
             // A crossing's one input is the only thing it could line up by.
             Self::Crossing(_) => Some(0),
         }
@@ -344,6 +373,7 @@ impl PreparedStage {
             Self::Transform(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::MetaTransform(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::Sink(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
+            Self::MetaSink(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             // A crossing never changes a format, so it accepts back whatever it was offered.
             Self::Crossing(_) => Ok(FormatSet::of([offered.sample()])),
         }
@@ -361,7 +391,7 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.produces(capabilities, chosen),
             Self::Transform(prepared) => prepared.produces(capabilities, chosen),
             Self::MetaTransform(prepared) => prepared.produces(capabilities, chosen),
-            Self::Sink(_) => Err(StageError::msg(
+            Self::Sink(_) | Self::MetaSink(_) => Err(StageError::msg(
                 "produces was asked of a sink, which produces no stream, so reaching this is a solver bug",
             )),
             Self::Crossing(_) => {
@@ -379,15 +409,15 @@ impl PreparedStage {
 
     /// Which side this stage runs on.
     ///
-    /// A metadata-only transform reports [Residency::Either](crate::Residency::Either), and a crossing reports the side it
-    /// leads to.
+    /// A metadata-only transform or sink reports [Residency::Either](crate::Residency::Either), and a
+    /// crossing reports the side it leads to.
     pub fn residency(&self) -> Residency {
         match self {
             Self::Source(prepared) => prepared.residency(),
             Self::Filter(prepared) => prepared.residency(),
             Self::Mask(prepared) => prepared.residency(),
             Self::Transform(prepared) => prepared.residency(),
-            Self::MetaTransform(_) => Residency::Either,
+            Self::MetaTransform(_) | Self::MetaSink(_) => Residency::Either,
             Self::Sink(prepared) => prepared.residency(),
             Self::Crossing(crossing) => crossing.to_side(),
         }
@@ -865,6 +895,80 @@ impl<D: MetaTransformDefinition> StageFactory<dyn PreparedMetaTransform> for Def
         inputs: &[InputArgument],
         slot: &OpenSlot,
     ) -> Result<Box<dyn PreparedMetaTransform>, BuildStageError> {
+        let args = self.deserialize_args(args)?;
+        let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+
+        Ok(Box::new(Prepared::<D> {
+            identifier: self.full_identifier().to_string(),
+            args,
+            inputs: bound,
+            slot: slot.clone(),
+        }))
+    }
+}
+
+struct BuildMetaSink<'a, D: MetaSinkDefinition> {
+    args: D::Args,
+    inputs: BoundInputs,
+    formats: &'a ResolvedFormats,
+}
+
+impl<'a, D: MetaSinkDefinition> BuildTask for BuildMetaSink<'a, D> {
+    type Output = Result<Box<dyn MetaSink>, StageError>;
+
+    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+        D::build::<R>(context, self.args, self.inputs, self.formats)
+    }
+}
+
+impl<D: MetaSinkDefinition> PreparedMetaSink for Prepared<D> {
+    fn parallelism(&self) -> Parallelism {
+        D::parallelism(&self.args)
+    }
+
+    fn chunk_authority(&self) -> Option<usize> {
+        self.inputs.chunk_authority()
+    }
+
+    fn accepts_input(
+        &self,
+        capabilities: &Capabilities,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        D::accepts_input(capabilities, &self.args, index, offered, inputs)
+    }
+
+    fn build(
+        self: Box<Self>,
+        backend: &Backend,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaSink>, BuildStageError> {
+        let identifier = self.identifier;
+        let task = BuildMetaSink::<D> {
+            args: self.args,
+            inputs: self.inputs,
+            formats,
+        };
+
+        backend
+            .build(task)
+            .map_err(|source| BuildStageError::Build { identifier, source })
+    }
+}
+
+impl<D: MetaSinkDefinition> StageFactory<dyn PreparedMetaSink> for Definition<D> {
+    fn info(&self) -> StageInfo<'_> {
+        self.stage_info()
+    }
+
+    fn prepare(
+        &self,
+        args: &Value,
+        inputs: &[InputArgument],
+        slot: &OpenSlot,
+    ) -> Result<Box<dyn PreparedMetaSink>, BuildStageError> {
         let args = self.deserialize_args(args)?;
         let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
 

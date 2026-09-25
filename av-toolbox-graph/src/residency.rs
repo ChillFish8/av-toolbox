@@ -368,6 +368,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_meta_sink_fed_by_a_device_stage_stays_on_the_device() {
+        let (graph, _) = placed(&[
+            stage(StageKind::Source, "input", "test/file", &[]),
+            stage(StageKind::Sink, "log", "test/log", &["input"]),
+        ]);
+
+        assert_eq!(named(&graph, "log").residency(), Some(Residency::Device));
+        assert!(crossings(&graph, Crossing::Unload).is_empty());
+    }
+
+    #[test]
+    fn a_meta_sink_fed_by_a_host_stage_stays_on_the_host() {
+        let (graph, _) = placed(&[
+            stage(StageKind::Source, "input", "test/host-file", &[]),
+            stage(StageKind::Sink, "log", "test/log", &["input"]),
+        ]);
+
+        assert_eq!(named(&graph, "log").residency(), Some(Residency::Host));
+        assert!(crossings(&graph, Crossing::Upload).is_empty());
+    }
+
+    #[test]
     fn a_mask_stream_crosses_as_a_mask() {
         let mut deband = stage(StageKind::Filter, "deband", "test/deband", &["input"]);
         deband.inputs.push(testing::named("overlay", "merge"));

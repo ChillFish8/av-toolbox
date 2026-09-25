@@ -6,7 +6,9 @@ use av_toolbox_core::{
     Sink,
     Source,
     Transform,
+    end_meta_sink,
     end_meta_transform,
+    run_meta_sink,
     run_meta_transform,
 };
 use av_toolbox_gpu::{AnyItem, FrameContext, Side};
@@ -43,6 +45,12 @@ pub fn run_node(
         StageBox::Sink(sink) => {
             let inputs = narrow(node, slots);
             run_sink(node, sink.as_mut(), context, inputs)
+        },
+        StageBox::MetaSink(sink) => {
+            run_meta_sink(sink.as_mut(), context, slots)
+                .map_err(|source| RunError::Stage { node, source })?;
+
+            Ok(Vec::new())
         },
         StageBox::HostSource(source) => run_source(node, source.as_mut(), context),
         StageBox::HostFilter(filter) => {
@@ -95,6 +103,7 @@ pub fn start_node(node: NodeId, stage: &mut StageBox, context: &mut FrameContext
         StageBox::Transform(transform) => transform.start_of_stream(context),
         StageBox::MetaTransform(transform) => transform.start_of_stream(context),
         StageBox::Sink(sink) => sink.start_of_stream(context),
+        StageBox::MetaSink(sink) => sink.start_of_stream(context),
         StageBox::HostSource(source) => source.start_of_stream(context),
         StageBox::HostFilter(filter) => filter.start_of_stream(context),
         StageBox::HostMask(mask) => mask.start_of_stream(context),
@@ -126,6 +135,11 @@ pub fn end_node(
             end_meta_transform(transform.as_mut(), context).map_err(|source| RunError::Stage { node, source })
         },
         StageBox::Sink(sink) => end_sink(node, sink.as_mut(), context),
+        StageBox::MetaSink(sink) => {
+            end_meta_sink(sink.as_mut(), context).map_err(|source| RunError::Stage { node, source })?;
+
+            Ok(Vec::new())
+        },
         StageBox::HostFilter(filter) => end_filter(node, filter.as_mut(), context),
         StageBox::HostTransform(transform) => end_transform(node, transform.as_mut(), context),
         StageBox::HostSink(sink) => end_sink(node, sink.as_mut(), context),
@@ -278,7 +292,15 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use av_toolbox_core::{Crossing, MetaInputs, MetaItem, MetaTransform, StageError, StageInstance};
+    use av_toolbox_core::{
+        Crossing,
+        MetaInputs,
+        MetaItem,
+        MetaSink,
+        MetaTransform,
+        StageError,
+        StageInstance,
+    };
     use av_toolbox_gpu::{
         AnyItem,
         ColourInfo,
@@ -415,6 +437,27 @@ mod tests {
 
     impl Sink for Recording {
         fn consume(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<(), StageError> {
+            let mut seen = self.seen.lock().expect("not poisoned");
+
+            for slot in 0..inputs.len() {
+                if let Some(item) = inputs.take(slot) {
+                    seen.push(item.meta().index);
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    /// Records the index of every item it consumes, without touching any samples.
+    struct MetaRecording {
+        seen: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl StageInstance for MetaRecording {}
+
+    impl MetaSink for MetaRecording {
+        fn consume(&mut self, _context: &mut FrameContext, mut inputs: MetaInputs) -> Result<(), StageError> {
             let mut seen = self.seen.lock().expect("not poisoned");
 
             for slot in 0..inputs.len() {
@@ -711,6 +754,34 @@ mod tests {
         assert_eq!(device[0].meta().chunk, 5);
         assert!(host[0].is_host());
         assert_eq!(host[0].meta().chunk, 1);
+    }
+
+    #[test]
+    fn a_meta_sink_is_handed_items_from_either_side_and_emits_nothing() {
+        let context = testing_context();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut stage = StageBox::MetaSink(Box::new(MetaRecording { seen: seen.clone() }));
+        let device_item = item(&context, 3, 0);
+        let host_side_item = host_item(&context, 5);
+
+        let from_device = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut context_of(&context),
+            vec![Some(device_item)],
+        )
+        .expect("should run");
+        let from_host = run_node(
+            NodeId::new(0),
+            &mut stage,
+            &mut context_of(&context),
+            vec![Some(host_side_item)],
+        )
+        .expect("should run");
+
+        assert!(from_device.is_empty());
+        assert!(from_host.is_empty());
+        assert_eq!(*seen.lock().expect("not poisoned"), vec![3, 5]);
     }
 
     #[test]

@@ -210,3 +210,9 @@ pub(crate) fn restamp_spec(name: &str, input: &str) -> StageSpec {
     transform.inputs = vec![positional(input)];
     transform
 }
+
+pub(crate) fn meta_sink_spec(name: &str, input: &str) -> StageSpec {
+    let mut sink = spec(StageKind::Sink, name, "test/meta-recording");
+    sink.inputs = vec![positional(input)];
+    sink
+}

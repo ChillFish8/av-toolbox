@@ -67,6 +67,8 @@ use crate::engine::tests::fixtures::sinks::{
     HoardingInstance,
     HostRecording,
     HostRecordingInstance,
+    MetaRecording,
+    MetaRecordingInstance,
     Pairing,
     PairingInstance,
     RECORDED,
@@ -112,6 +114,9 @@ fn registry() -> PipelineRegistry {
     registry.register_sink::<Gated>().expect("should register");
     registry
         .register_meta_transform::<RestampDefinition>()
+        .expect("should register");
+    registry
+        .register_meta_sink::<MetaRecording>()
         .expect("should register");
     registry
 }
@@ -167,6 +172,7 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
         "test/pairing" => StageBox::Sink(Box::new(PairingInstance::new())),
         "test/gated" => StageBox::Sink(Box::new(GatedInstance::new())),
         "test/restamp" => StageBox::MetaTransform(Box::new(RestampInstance)),
+        "test/meta-recording" => StageBox::MetaSink(Box::new(MetaRecordingInstance::new())),
         other => panic!("no test fixture knows how to build {other}"),
     };
 

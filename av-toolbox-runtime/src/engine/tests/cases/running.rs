@@ -9,6 +9,7 @@ use crate::engine::tests::specs::{
     host_pass_spec,
     host_sink_spec,
     host_source_spec,
+    meta_sink_spec,
     pairing_spec,
     restamp_spec,
     sink_spec,
@@ -46,6 +47,22 @@ fn an_all_host_chain_with_a_meta_transform_runs_end_to_end() {
     let engine = build_engine(&specs, Settings::default());
 
     let report = run_with_watchdog(engine, "an_all_host_chain_with_a_meta_transform_runs_end_to_end");
+
+    assert_eq!(recorded(), vec![0, 1, 2]);
+    assert_eq!(report.frames, 3);
+}
+
+#[test]
+fn a_meta_sinks_frames_are_counted_in_the_report() {
+    clear_recorded();
+
+    let specs = vec![
+        source_spec("input", &[0, 0, 0], 0),
+        meta_sink_spec("log", "input"),
+    ];
+    let engine = build_engine(&specs, Settings::default());
+
+    let report = run_with_watchdog(engine, "a_meta_sinks_frames_are_counted_in_the_report");
 
     assert_eq!(recorded(), vec![0, 1, 2]);
     assert_eq!(report.frames, 3);

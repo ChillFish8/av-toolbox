@@ -7,6 +7,7 @@ use av_toolbox_core::{
     Filter,
     InputArgument,
     Mask,
+    MetaSink,
     MetaTransform,
     PipelineRegistry,
     PreparedStage,
@@ -29,6 +30,7 @@ pub enum StageBox {
     Transform(Box<dyn Transform>),
     MetaTransform(Box<dyn MetaTransform>),
     Sink(Box<dyn Sink>),
+    MetaSink(Box<dyn MetaSink>),
     HostSource(Box<dyn Source<HostSide>>),
     HostFilter(Box<dyn Filter<HostSide>>),
     HostMask(Box<dyn Mask<HostSide>>),
@@ -47,6 +49,7 @@ impl fmt::Debug for StageBox {
             Self::Transform(_) => "Transform",
             Self::MetaTransform(_) => "MetaTransform",
             Self::Sink(_) => "Sink",
+            Self::MetaSink(_) => "MetaSink",
             Self::HostSource(_) => "HostSource",
             Self::HostFilter(_) => "HostFilter",
             Self::HostMask(_) => "HostMask",
@@ -256,6 +259,11 @@ fn build_stage(
         PreparedStage::Sink(prepared) => match prepared.build(backend, formats)? {
             Sided::Device(stage) => StageBox::Sink(stage),
             Sided::Host(stage) => StageBox::HostSink(stage),
+        },
+        PreparedStage::MetaSink(prepared) => {
+            let stage = prepared.build(backend, formats)?;
+
+            StageBox::MetaSink(stage)
         },
         PreparedStage::Crossing(crossing) => StageBox::Crossing(crossing),
     };

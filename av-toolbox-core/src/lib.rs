@@ -55,6 +55,7 @@ pub use self::error::{
 pub use self::factory::{
     PreparedFilter,
     PreparedMask,
+    PreparedMetaSink,
     PreparedMetaTransform,
     PreparedSink,
     PreparedSource,
@@ -75,7 +76,16 @@ pub use self::inputs::{
     bind_inputs,
 };
 pub use self::mask::Mask;
-pub use self::meta::{MetaInputs, MetaItem, MetaTransform, end_meta_transform, run_meta_transform};
+pub use self::meta::{
+    MetaInputs,
+    MetaItem,
+    MetaSink,
+    MetaTransform,
+    end_meta_sink,
+    end_meta_transform,
+    run_meta_sink,
+    run_meta_transform,
+};
 pub use self::open::OpenSlot;
 pub use self::parallelism::Parallelism;
 pub use self::registry::PipelineRegistry;
@@ -94,6 +104,7 @@ pub use self::source::Source;
 pub use self::stage::{
     FilterDefinition,
     MaskDefinition,
+    MetaSinkDefinition,
     MetaTransformDefinition,
     SinkDefinition,
     SourceDefinition,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use av_toolbox_core::{Inputs, Sink, Source, StageError, StageInstance};
+use av_toolbox_core::{Inputs, MetaInputs, MetaSink, Sink, Source, StageError, StageInstance};
 use av_toolbox_gpu::{FrameContext, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
@@ -66,6 +66,31 @@ impl<S: Side> Sink<S> for CountingSink<S> {
     }
 }
 
+/// Wraps a metadata-only sink so the engine can count what reached it.
+struct CountingMetaSink {
+    inner: Box<dyn MetaSink>,
+    frames: Arc<AtomicU64>,
+}
+
+impl StageInstance for CountingMetaSink {
+    fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
+        self.inner.start_of_stream(context)
+    }
+}
+
+impl MetaSink for CountingMetaSink {
+    fn consume(&mut self, context: &mut FrameContext, inputs: MetaInputs) -> Result<(), StageError> {
+        let seen = inputs.filled() as u64;
+        self.frames.fetch_add(seen, Ordering::SeqCst);
+
+        self.inner.consume(context, inputs)
+    }
+
+    fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
+        self.inner.end_of_stream(context)
+    }
+}
+
 /// Replaces the region head's source with a watched one, leaving every other stage alone.
 pub(super) fn wrap_head_source(
     nodes: Vec<(NodeId, StageBox)>,
@@ -112,6 +137,13 @@ pub(super) fn wrap_sinks(nodes: Vec<(NodeId, StageBox)>, frames: Arc<AtomicU64>)
             StageBox::HostSink(inner) => (
                 id,
                 StageBox::HostSink(Box::new(CountingSink {
+                    inner,
+                    frames: frames.clone(),
+                })),
+            ),
+            StageBox::MetaSink(inner) => (
+                id,
+                StageBox::MetaSink(Box::new(CountingMetaSink {
                     inner,
                     frames: frames.clone(),
                 })),

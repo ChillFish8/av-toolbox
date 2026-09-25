@@ -61,6 +61,11 @@ impl MetaInputs {
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
+
+    /// How many slots hold an item.
+    pub fn filled(&self) -> usize {
+        self.slots.iter().filter(|slot| slot.is_some()).count()
+    }
 }
 
 /// A transform that works only on where items sit in the stream, never on their samples.
@@ -103,6 +108,38 @@ pub fn end_meta_transform(
     let flushed = transform.end_of_stream(context)?;
 
     Ok(flushed.into_iter().map(|meta| meta.item).collect())
+}
+
+/// A sink that reads only where items sit in the stream, never their samples.
+///
+/// Having no way to reach a plane is what lets it run on whichever side its input already sits on.
+pub trait MetaSink: StageInstance {
+    fn consume(&mut self, context: &mut FrameContext, inputs: MetaInputs) -> Result<(), StageError>;
+
+    /// Called once the stream has ended.
+    ///
+    /// A sink that is given one chunk at a time is called at the end of every chunk rather than once
+    /// at the end of the run.
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
+        Ok(())
+    }
+}
+
+pub fn run_meta_sink(
+    sink: &mut dyn MetaSink,
+    context: &mut FrameContext,
+    slots: Vec<Option<AnyItem>>,
+) -> Result<(), StageError> {
+    let slots = slots
+        .into_iter()
+        .map(|slot| slot.map(|item| MetaItem { item }))
+        .collect();
+
+    sink.consume(context, MetaInputs { slots })
+}
+
+pub fn end_meta_sink(sink: &mut dyn MetaSink, context: &mut FrameContext) -> Result<(), StageError> {
+    sink.end_of_stream(context)
 }
 
 #[cfg(test)]
@@ -202,5 +239,60 @@ mod tests {
         assert!(after_first.is_empty());
         assert_eq!(after_second[0].meta().index, 0);
         assert_eq!(flushed[0].meta().index, 1);
+    }
+
+    struct Counting {
+        seen: Vec<u64>,
+        ended: bool,
+    }
+
+    impl StageInstance for Counting {}
+
+    impl MetaSink for Counting {
+        fn consume(&mut self, _context: &mut FrameContext, mut inputs: MetaInputs) -> Result<(), StageError> {
+            let item = inputs.take(0).expect("an item");
+            self.seen.push(item.meta().index);
+
+            Ok(())
+        }
+
+        fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
+            self.ended = true;
+
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_meta_sink_is_handed_items_from_either_side() {
+        let context = testing_context();
+        let mut sink = Counting {
+            seen: Vec::new(),
+            ended: false,
+        };
+        let device_frame = context.alloc_frame(&format(), FrameMeta::at(0));
+        let device_item = AnyItem::from(StreamItem::Frame(device_frame));
+        let host_frame = context.alloc_host_frame(&format(), FrameMeta::at(1)).freeze();
+        let host_item = AnyItem::Host(HostStreamItem::from(host_frame));
+        let mut stage_context = testing_context();
+
+        run_meta_sink(&mut sink, &mut stage_context, vec![Some(device_item)]).expect("consumes");
+        run_meta_sink(&mut sink, &mut stage_context, vec![Some(host_item)]).expect("consumes");
+        end_meta_sink(&mut sink, &mut stage_context).expect("ends");
+
+        assert_eq!(sink.seen, vec![0, 1]);
+        assert!(sink.ended);
+    }
+
+    #[test]
+    fn filled_counts_only_occupied_slots() {
+        let context = testing_context();
+        let host_frame = context.alloc_host_frame(&format(), FrameMeta::at(1)).freeze();
+        let host_item = AnyItem::Host(HostStreamItem::from(host_frame));
+        let slots = vec![None, Some(MetaItem { item: host_item })];
+
+        let inputs = MetaInputs { slots };
+
+        assert_eq!(inputs.filled(), 1);
     }
 }

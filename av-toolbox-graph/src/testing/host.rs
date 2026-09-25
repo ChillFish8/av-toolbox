@@ -7,6 +7,8 @@ use av_toolbox_core::{
     Inputs,
     MetaInputs,
     MetaItem,
+    MetaSink,
+    MetaSinkDefinition,
     MetaTransform,
     MetaTransformDefinition,
     Parallelism,
@@ -288,5 +290,60 @@ impl MetaTransformDefinition for Restamp {
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn MetaTransform>, StageError> {
         Ok(Box::new(RestampStage))
+    }
+}
+
+struct LogStage;
+
+impl StageInstance for LogStage {}
+
+impl MetaSink for LogStage {
+    fn consume(&mut self, _context: &mut FrameContext, _inputs: MetaInputs) -> Result<(), StageError> {
+        Ok(())
+    }
+}
+
+pub(super) struct Log;
+
+impl StageDefinition for Log {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "log"
+    }
+
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Frame
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl MetaSinkDefinition for Log {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaSink>, StageError> {
+        Ok(Box::new(LogStage))
     }
 }

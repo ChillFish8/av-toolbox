@@ -9,10 +9,12 @@ use crate::{
     FilterDefinition,
     InputArgument,
     MaskDefinition,
+    MetaSinkDefinition,
     MetaTransformDefinition,
     OpenSlot,
     PreparedFilter,
     PreparedMask,
+    PreparedMetaSink,
     PreparedMetaTransform,
     PreparedSink,
     PreparedSource,
@@ -42,6 +44,7 @@ pub struct PipelineRegistry {
     transforms: Factories<dyn PreparedTransform>,
     meta_transforms: Factories<dyn PreparedMetaTransform>,
     sinks: Factories<dyn PreparedSink>,
+    meta_sinks: Factories<dyn PreparedMetaSink>,
 }
 
 impl PipelineRegistry {
@@ -102,8 +105,29 @@ impl PipelineRegistry {
 
     pub fn register_sink<D: SinkDefinition>(&mut self) -> Result<(), RegistryError> {
         let definition = Definition::<D>::new(StageKind::Sink)?;
+        let identifier = definition.full_identifier();
+        if self.meta_sinks.contains_key(identifier) {
+            return Err(RegistryError::DuplicateStage {
+                kind: StageKind::Sink,
+                identifier: identifier.to_string(),
+            });
+        }
 
         insert(&mut self.sinks, definition)
+    }
+
+    /// Registers a metadata-only sink, which shares the sink identifiers.
+    pub fn register_meta_sink<D: MetaSinkDefinition>(&mut self) -> Result<(), RegistryError> {
+        let definition = Definition::<D>::new(StageKind::Sink)?;
+        let identifier = definition.full_identifier();
+        if self.sinks.contains_key(identifier) {
+            return Err(RegistryError::DuplicateStage {
+                kind: StageKind::Sink,
+                identifier: identifier.to_string(),
+            });
+        }
+
+        insert(&mut self.meta_sinks, definition)
     }
 
     /// Deserializes the arguments and binds the inputs, without needing a device.
@@ -145,6 +169,9 @@ impl PipelineRegistry {
             StageKind::Transform => {
                 prepare(&self.transforms, kind, identifier, args, inputs, slot).map(PreparedStage::Transform)
             },
+            StageKind::Sink if self.meta_sinks.contains_key(identifier) => {
+                prepare(&self.meta_sinks, kind, identifier, args, inputs, slot).map(PreparedStage::MetaSink)
+            },
             StageKind::Sink => {
                 prepare(&self.sinks, kind, identifier, args, inputs, slot).map(PreparedStage::Sink)
             },
@@ -166,6 +193,7 @@ impl PipelineRegistry {
         let transforms = self.transforms.values().map(|factory| factory.info());
         let meta_transforms = self.meta_transforms.values().map(|factory| factory.info());
         let sinks = self.sinks.values().map(|factory| factory.info());
+        let meta_sinks = self.meta_sinks.values().map(|factory| factory.info());
 
         sources
             .chain(filters)
@@ -173,6 +201,7 @@ impl PipelineRegistry {
             .chain(transforms)
             .chain(meta_transforms)
             .chain(sinks)
+            .chain(meta_sinks)
     }
 }
 
@@ -260,8 +289,11 @@ mod tests {
         Inputs,
         MetaInputs,
         MetaItem,
+        MetaSink,
+        MetaSinkDefinition,
         MetaTransform,
         Residency,
+        Sink,
         Source,
         StageError,
         StageHandle,
@@ -731,6 +763,154 @@ mod tests {
             .expect_err("should not register beside the meta transform");
 
         assert!(matches!(error, RegistryError::DuplicateStage { .. }));
+    }
+
+    struct LogStage;
+
+    impl StageInstance for LogStage {}
+
+    impl MetaSink for LogStage {
+        fn consume(&mut self, _context: &mut FrameContext, _inputs: MetaInputs) -> Result<(), StageError> {
+            Ok(())
+        }
+    }
+
+    struct LogDefinition;
+
+    impl StageDefinition for LogDefinition {
+        type Args = NoArgs;
+
+        fn package() -> &'static str {
+            "test"
+        }
+
+        fn identifier() -> &'static str {
+            "log"
+        }
+
+        fn inputs() -> &'static InputSignature {
+            const SIGNATURE: &InputSignature =
+                &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+            SIGNATURE
+        }
+    }
+
+    impl MetaSinkDefinition for LogDefinition {
+        fn accepts_input(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            _index: usize,
+            offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            Ok(FormatSet::of([offered.sample()]))
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn MetaSink>, StageError> {
+            Ok(Box::new(LogStage))
+        }
+    }
+
+    /// A sink registered under the meta sink's identifier, to test the two cannot share one.
+    struct ClashingSinkDefinition;
+
+    impl StageDefinition for ClashingSinkDefinition {
+        type Args = NoArgs;
+
+        fn package() -> &'static str {
+            "test"
+        }
+
+        fn identifier() -> &'static str {
+            "log"
+        }
+
+        fn inputs() -> &'static InputSignature {
+            const SIGNATURE: &InputSignature =
+                &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+            SIGNATURE
+        }
+    }
+
+    impl SinkDefinition for ClashingSinkDefinition {
+        type Side = DeviceSide;
+
+        fn accepts_input(
+            _capabilities: &Capabilities,
+            _args: &Self::Args,
+            _index: usize,
+            offered: StreamFormat,
+            _inputs: &[Offered],
+        ) -> Result<FormatSet, StageError> {
+            Ok(FormatSet::of([offered.sample()]))
+        }
+
+        fn build<R: Runtime>(
+            _context: &BuildContext<R>,
+            _args: Self::Args,
+            _inputs: BoundInputs,
+            _formats: &ResolvedFormats,
+        ) -> Result<Box<dyn Sink>, StageError> {
+            unreachable!("not exercised by these tests")
+        }
+    }
+
+    #[test]
+    fn a_meta_sink_prepares_as_a_sink_that_runs_on_either_side() {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_meta_sink::<LogDefinition>()
+            .expect("should register");
+        let inputs = vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)];
+
+        let prepared = registry
+            .prepare(StageKind::Sink, "test/log", &serde_json::json!({}), &inputs)
+            .expect("should prepare");
+
+        assert!(matches!(prepared, PreparedStage::MetaSink(_)));
+        assert_eq!(prepared.kind(), StageKind::Sink);
+        assert_eq!(prepared.residency(), Residency::Either);
+    }
+
+    #[test]
+    fn a_meta_sink_cannot_share_an_identifier_with_a_sink() {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_sink::<ClashingSinkDefinition>()
+            .expect("should register");
+
+        let result = registry.register_meta_sink::<LogDefinition>();
+
+        assert!(matches!(result, Err(RegistryError::DuplicateStage { .. })));
+    }
+
+    #[test]
+    fn a_sink_cannot_share_an_identifier_with_a_meta_sink() {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_meta_sink::<LogDefinition>()
+            .expect("should register");
+
+        let result = registry.register_sink::<ClashingSinkDefinition>();
+
+        assert!(matches!(result, Err(RegistryError::DuplicateStage { .. })));
+    }
+
+    #[test]
+    fn a_meta_sink_is_listed_with_the_stages() {
+        let mut registry = PipelineRegistry::new();
+        registry
+            .register_meta_sink::<LogDefinition>()
+            .expect("should register");
+
+        let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
+
+        assert_eq!(identifiers, vec!["test/log"]);
     }
 
     /// A source named after a crossing, `builtin/unload` when `UNLOAD` is set and `builtin/upload`

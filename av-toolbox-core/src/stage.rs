@@ -19,6 +19,7 @@ use crate::{
     Filter,
     InputSignature,
     Mask,
+    MetaSink,
     MetaTransform,
     Parallelism,
     Sink,
@@ -406,6 +407,28 @@ pub trait MetaTransformDefinition: StageDefinition {
         inputs: BoundInputs,
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn MetaTransform>, StageError>;
+}
+
+/// A sink that only reads where items sit in the stream, and so runs on either side.
+pub trait MetaSinkDefinition: StageDefinition {
+    /// Which sample formats this stage will take on one input, most preferred first.
+    ///
+    /// The same contract as [SinkDefinition::accepts_input](crate::SinkDefinition::accepts_input).
+    fn accepts_input(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError>;
+
+    /// Builds the instance. A metadata-only sink has no side to build for.
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaSink>, StageError>;
 }
 
 /// A stage that consumes the finished stream.

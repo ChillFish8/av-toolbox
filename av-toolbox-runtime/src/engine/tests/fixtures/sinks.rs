@@ -6,6 +6,9 @@ use av_toolbox_core::{
     InputParam,
     InputSignature,
     Inputs,
+    MetaInputs,
+    MetaSink,
+    MetaSinkDefinition,
     Sink,
     SinkDefinition,
     StageDefinition,
@@ -485,5 +488,90 @@ impl SinkDefinition for Gated {
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Sink>, StageError> {
         Ok(Box::new(GatedInstance::new()))
+    }
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(crate) struct MetaRecordingArgs {}
+
+// A metadata-only sink that records the `(timestamp, index)` of every item it consumes, without
+// touching a plane, so it runs on whichever side its input already sits on.
+pub(crate) struct MetaRecordingInstance {
+    _life: StageLife,
+}
+
+impl MetaRecordingInstance {
+    pub(crate) fn new() -> Self {
+        Self {
+            _life: StageLife::new(),
+        }
+    }
+}
+
+impl StageInstance for MetaRecordingInstance {}
+
+impl MetaSink for MetaRecordingInstance {
+    fn consume(&mut self, _context: &mut FrameContext, mut inputs: MetaInputs) -> Result<(), StageError> {
+        let item = inputs.take(0).expect("an item");
+        let timestamp = item
+            .meta()
+            .timestamp
+            .expect("every test frame carries a timestamp")
+            .as_secs();
+
+        RECORDED
+            .lock()
+            .expect("not poisoned")
+            .push((timestamp, item.meta().index));
+
+        Ok(())
+    }
+
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
+        if let Some(sender) = RECORDING_ENDED.lock().expect("not poisoned").take() {
+            sender.send(()).ok();
+        }
+
+        Ok(())
+    }
+}
+
+pub(crate) struct MetaRecording;
+
+impl StageDefinition for MetaRecording {
+    type Args = MetaRecordingArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "meta-recording"
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
+        SIGNATURE
+    }
+}
+
+impl MetaSinkDefinition for MetaRecording {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaSink>, StageError> {
+        Ok(Box::new(MetaRecordingInstance::new()))
     }
 }
