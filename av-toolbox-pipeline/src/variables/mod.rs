@@ -1,3 +1,4 @@
+mod supplied;
 mod template;
 #[cfg(test)]
 mod tests;
@@ -9,6 +10,9 @@ use std::path::Path;
 use av_toolbox_graph::Spanned;
 use serde_json::{Number, Value};
 
+pub use self::supplied::Supplied;
+#[cfg_attr(not(test), expect(unused_imports, reason = "used by the loader"))]
+pub(crate) use self::supplied::{SuppliedValue, environment_name};
 #[expect(unused_imports, reason = "used by the loader")]
 pub(crate) use self::template::has_template;
 #[cfg_attr(not(test), expect(unused_imports, reason = "used by the loader"))]
