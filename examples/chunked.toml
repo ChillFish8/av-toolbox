@@ -1,0 +1,21 @@
+# Reads a y4m stream from standard input, marks its scene changes and writes it to standard output.
+#
+# The scene detection lives in parts/scenes.toml, which this file calls.
+
+[variable.speed]
+type = "string"
+description = "How carefully to compare frames"
+default = "standard"
+choices = ["standard", "fast"]
+
+[source.input]
+type = "y4m/stdin"
+
+[call.scenes]
+path = "parts/scenes.toml"
+inputs = ["input"]
+variables.speed = "{{ speed }}"
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["scenes"]

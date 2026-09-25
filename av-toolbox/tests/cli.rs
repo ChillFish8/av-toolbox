@@ -29,7 +29,7 @@ fn written(content: &str) -> tempfile::NamedTempFile {
 
 #[test]
 fn every_example_explains_without_a_device() {
-    for name in ["passthrough.toml", "scenes.toml"] {
+    for name in ["passthrough.toml", "scenes.toml", "chunked.toml"] {
         let path = example(name);
         let path = path.to_str().expect("utf-8 path");
 
@@ -219,6 +219,140 @@ fn explain_falls_back_to_the_structure_for_a_live_stream() {
     assert!(stderr.contains("reads a live stream"));
 }
 
+const SPEED_PIPELINE: &str = r#"
+[variable.speed]
+type = "string"
+choices = ["standard", "fast"]
+
+[source.input]
+type = "y4m/stdin"
+
+[transform.scenes]
+type = "scene/detect"
+inputs = ["input"]
+args.mode = "natural"
+args.speed = "{{ speed }}"
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["scenes"]
+"#;
+
+#[test]
+fn explain_shows_the_prefixed_names_of_called_stages() {
+    let path = example("chunked.toml");
+    let path = path.to_str().expect("utf-8 path");
+
+    let output = toolbox(&["explain", path, "--structure-only"]);
+    let stderr = text(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(text(&output.stdout).contains("scenes.detect"));
+}
+
+#[test]
+fn a_var_flag_sets_a_variable() {
+    let file = written(SPEED_PIPELINE);
+    let path = file.path().to_str().expect("utf-8 path");
+
+    let output = toolbox(&["explain", path, "--structure-only", "--var", "speed=fast"]);
+    let stderr = text(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+}
+
+#[test]
+fn an_environment_variable_sets_a_variable() {
+    let file = written(SPEED_PIPELINE);
+    let path = file.path().to_str().expect("utf-8 path");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+        .args(["--color", "never", "explain", path, "--structure-only"])
+        .env("AVTB_VAR_SPEED", "fast")
+        .output()
+        .expect("the binary runs");
+    let stderr = text(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+}
+
+#[test]
+fn a_missing_variable_exits_one_with_how_to_set_it() {
+    let file = written(SPEED_PIPELINE);
+    let path = file.path().to_str().expect("utf-8 path");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+        .args(["--color", "never", "explain", path, "--structure-only"])
+        .env_remove("AVTB_VAR_SPEED")
+        .output()
+        .expect("the binary runs");
+    let stderr = text(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[missing-variable]"));
+    assert!(stderr.contains("--var speed="));
+}
+
+#[test]
+fn a_value_outside_the_choices_exits_one() {
+    let file = written(SPEED_PIPELINE);
+    let path = file.path().to_str().expect("utf-8 path");
+
+    let output = toolbox(&["explain", path, "--structure-only", "--var", "speed=slow"]);
+    let stderr = text(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[invalid-variable]"));
+}
+
+#[test]
+fn an_error_in_a_called_file_renders_that_file() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let main = r#"
+[source.input]
+type = "y4m/stdin"
+
+[call.part]
+path = "part.toml"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["part"]
+"#;
+    let part = r#"
+[input.clip]
+
+[filter.broken]
+type = "no/such-stage"
+inputs = ["clip"]
+
+[output.done]
+inputs = ["broken"]
+"#;
+    let main_path = directory.path().join("main.toml");
+    std::fs::write(&main_path, main).expect("written");
+    std::fs::write(directory.path().join("part.toml"), part).expect("written");
+    let main_path = main_path.to_str().expect("utf-8 path");
+
+    let output = toolbox(&["explain", main_path, "--structure-only"]);
+    let stderr = text(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("part.toml:"), "{stderr}");
+    assert!(stderr.contains("called from here"), "{stderr}");
+}
+
+#[test]
+fn a_var_without_equals_exits_two() {
+    let path = example("passthrough.toml");
+    let path = path.to_str().expect("utf-8 path");
+
+    let output = toolbox(&["explain", path, "--var", "speed"]);
+
+    assert_eq!(output.status.code(), Some(2));
+}
+
 #[cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device {
     use std::io::Write;
@@ -317,5 +451,32 @@ args.path = "{output_path}"
         assert!(output.status.success(), "{stderr}");
         assert!(stdout.contains("output"));
         assert!(!stderr.contains("reads a live stream"));
+    }
+
+    #[test]
+    fn executing_the_chunked_example_runs_through_the_called_file() {
+        let path = example("chunked.toml");
+        let path = path.to_str().expect("utf-8 path");
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args(["--color", "never", "execute", path])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the binary runs");
+
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let input = y4m_stream();
+        let feeder = thread::spawn(move || {
+            stdin.write_all(&input).expect("writes the stream");
+        });
+
+        let output = child.wait_with_output().expect("the binary finishes");
+        feeder.join().expect("the feeder thread finishes");
+        let stderr = text(&output.stderr);
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(output.stdout.starts_with(b"YUV4MPEG2"));
     }
 }
