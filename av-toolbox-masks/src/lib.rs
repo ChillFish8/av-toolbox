@@ -2,8 +2,9 @@
 //!
 //! Every mask is a single U8 plane, where 0 is background and 255 is fully selected.
 //!
-//! - `lines/xdog` finds line art with an extended difference of gaussians.
+//! - `lines/adaptive` finds dark strokes against their neighbourhood.
 //! - `lines/canny` finds edges with Canny's method.
+//! - `lines/xdog` finds line art with an extended difference of gaussians.
 //! - `mask/threshold` hardens a mask to 0 or 255 at a cutoff.
 //! - `mask/union` keeps the largest sample of every input.
 //! - `mask/vote` selects the pixels enough of its inputs agree on.
@@ -17,6 +18,7 @@ use av_toolbox_core::{PipelineRegistry, RegistryError};
 
 /// Registers every mask this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
+    registry.register_mask::<lines::Adaptive>()?;
     registry.register_mask::<lines::Canny>()?;
     registry.register_mask::<lines::Xdog>()?;
     registry.register_mask::<mask::Threshold>()?;
@@ -43,6 +45,7 @@ mod tests {
 
     #[test]
     fn every_mask_is_registered() {
+        assert!(registered("lines/adaptive"));
         assert!(registered("lines/canny"));
         assert!(registered("lines/xdog"));
         assert!(registered("mask/threshold"));

@@ -329,3 +329,21 @@ pub fn stroke_on_gradient(width: u32, height: u32) -> Vec<u8> {
         })
         .collect()
 }
+
+pub fn block_sigma(block_size: u32) -> f32 {
+    0.3 * ((block_size as f32 - 1.0) * 0.5 - 1.0) + 0.8
+}
+
+/// The threshold step `lines/adaptive` runs, with `offset` in U8 units.
+pub fn adaptive(plane: &[f32], width: u32, height: u32, block_size: u32, offset: f32) -> Vec<u8> {
+    let smoothed = blur_with_radius(plane, width, height, 0.8, 1);
+    let sigma = block_sigma(block_size);
+    let mean = blur_with_radius(&smoothed, width, height, sigma, block_size / 2);
+    let offset = offset / 255.0;
+
+    smoothed
+        .iter()
+        .zip(&mean)
+        .map(|(sample, local)| if *sample <= local - offset { 255 } else { 0 })
+        .collect()
+}
