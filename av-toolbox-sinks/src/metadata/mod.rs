@@ -266,6 +266,7 @@ mod tests {
             width: 4,
             height: 2,
             sample: SampleFormat::U8,
+            chroma: None,
         });
 
         let result = accepts(offered);

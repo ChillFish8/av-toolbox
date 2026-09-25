@@ -58,6 +58,7 @@ pub(crate) fn produces_mask(
         width,
         height,
         sample: SampleFormat::U8,
+        chroma: None,
     };
 
     Ok(OutputFormats {
@@ -77,6 +78,7 @@ mod tests {
             width,
             height,
             sample,
+            chroma: None,
         })
     }
 
@@ -130,6 +132,7 @@ mod tests {
             width: 7,
             height: 5,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         assert_eq!(produced.template, StreamTemplate::Mask(expected));
         assert_eq!(produced.samples, FormatSet::of([SampleFormat::U8]));

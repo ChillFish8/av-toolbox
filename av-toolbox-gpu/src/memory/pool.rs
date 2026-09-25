@@ -12,6 +12,7 @@ use crate::frame::{
     HostPlanes,
     HostStreamItem,
     Mask,
+    MaskChroma,
     MaskFormat,
     Plane,
     PlaneBuffer,
@@ -33,7 +34,7 @@ use crate::memory::ring::{Ring, RingGeometry, RingSpec};
 pub struct BufferPool {
     inner: Arc<PoolInner>,
     /// Charged by every frame shaped allocation: `alloc_frame`, `alloc_like`, `alloc_mask`,
-    /// `load_frame` and `load_mask`. Rings and scratch never touch it.
+    /// `add_chroma`, `load_frame` and `load_mask`. Rings and scratch never touch it.
     budget: Option<Arc<FrameBudget>>,
 }
 
@@ -222,17 +223,53 @@ impl BufferPool {
         self.alloc_frame(frame.format(), meta)
     }
 
-    /// A mask of `format`, which is one buffer.
+    /// A mask of `format`, which is one buffer for the full plane and one for the chroma plane
+    /// when the format has one.
     ///
-    /// That buffer is recycled memory holding an earlier mask's samples, so a stage that writes
-    /// only part of it has to fill the rest.
+    /// Those buffers are recycled memory holding an earlier mask's samples, so a stage that writes
+    /// only part of them has to fill the rest. Waits once for both planes' bytes, for the same
+    /// reason [BufferPool::alloc_frame] does.
     pub fn alloc_mask(&self, format: &MaskFormat, meta: FrameMeta) -> Mask {
-        let counted = self.wait_for_room(format.bytes());
+        let full_bytes = format.bytes();
+        let chroma_bytes = format.chroma_bytes();
+        let counted = self.wait_for_room(full_bytes + chroma_bytes);
 
-        let buffer = self.reserve_impl(format.bytes(), counted);
+        let buffer = self.reserve_impl(full_bytes, counted);
         let plane = Plane::new(buffer, format.width, format.height);
 
-        Mask::new(*format, plane, meta)
+        let chroma = format.chroma_dimensions().map(|(width, height)| {
+            let chroma_buffer = self.reserve_impl(chroma_bytes, counted);
+
+            Plane::new(chroma_buffer, width, height)
+        });
+
+        Mask::new(*format, plane, meta, chroma)
+    }
+
+    /// `mask` carrying a chroma plane shaped by `chroma`, beside the full plane it already has.
+    ///
+    /// The chroma plane is recycled memory holding an earlier mask's samples, so the caller has to
+    /// fill it. A chroma plane `mask` already carries is released before the new one is reserved,
+    /// so a tight budget is not left waiting on memory only this call holds.
+    pub fn add_chroma(&self, mut mask: Mask, chroma: MaskChroma) -> Mask {
+        let replaced = mask.take_chroma();
+        drop(replaced);
+
+        let current = *mask.format();
+        let format = MaskFormat {
+            chroma: Some(chroma),
+            ..current
+        };
+        let (width, height) = format
+            .chroma_dimensions()
+            .expect("the format was just given its chroma");
+        let bytes = format.chroma_bytes();
+
+        let counted = self.wait_for_room(bytes);
+        let buffer = self.reserve_impl(bytes, counted);
+        let plane = Plane::new(buffer, width, height);
+
+        mask.with_chroma(chroma, plane)
     }
 
     /// Uploads `planes` as a frame of `format`, carrying `meta`.
@@ -300,6 +337,10 @@ impl BufferPool {
 
     /// Uploads `planes` as a mask of `format`, carrying `meta`, from any host side source of plane
     /// bytes.
+    ///
+    /// The full plane is read from [Channel::Y](crate::Channel::Y) and a chroma plane from
+    /// [Channel::U](crate::Channel::U). Waits once for both planes' bytes first, for the same reason
+    /// [BufferPool::alloc_frame] does.
     pub(crate) fn load_mask_from(
         &self,
         item: usize,
@@ -307,20 +348,35 @@ impl BufferPool {
         planes: &dyn HostPlaneSource,
         meta: FrameMeta,
     ) -> Result<Mask, RuntimeError> {
-        let counted = self.wait_for_room(format.bytes());
+        let full_bytes = format.bytes();
+        let chroma_bytes = format.chroma_bytes();
+        let counted = self.wait_for_room(full_bytes + chroma_bytes);
 
         let upload = PlaneUpload {
             item,
             channel: Channel::Y,
             width: format.width,
             height: format.height,
-            expected: format.bytes(),
+            expected: full_bytes,
             counted,
         };
-
         let plane = self.load_plane(upload, planes)?;
 
-        Ok(Mask::new(*format, plane, meta))
+        let Some((width, height)) = format.chroma_dimensions() else {
+            return Ok(Mask::new(*format, plane, meta, None));
+        };
+
+        let chroma_upload = PlaneUpload {
+            item,
+            channel: Channel::U,
+            width,
+            height,
+            expected: chroma_bytes,
+            counted,
+        };
+        let chroma = self.load_plane(chroma_upload, planes)?;
+
+        Ok(Mask::new(*format, plane, meta, Some(chroma)))
     }
 
     /// The plane `upload` names, uploaded from `planes`.
@@ -405,10 +461,12 @@ mod tests {
     use crate::testing::CountingAllocator;
     use crate::{
         Channel,
+        ChromaLocation,
         ColourInfo,
         FrameFormat,
         FrameLayout,
         FrameMeta,
+        MaskChroma,
         MaskFormat,
         SampleFormat,
         StreamFormat,
@@ -568,11 +626,156 @@ mod tests {
             width: 64,
             height: 32,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let mask = pool.alloc_mask(&format, FrameMeta::at(0));
 
         assert_eq!(allocator.requests(), vec![64 * 32]);
         assert_eq!(mask.plane().dimensions(), (64, 32));
+        assert!(mask.chroma_plane().is_none());
+    }
+
+    fn chroma_mask_format() -> MaskFormat {
+        MaskFormat {
+            width: 7,
+            height: 5,
+            sample: SampleFormat::U8,
+            chroma: Some(MaskChroma {
+                subsampling: Subsampling::Yuv420,
+                location: ChromaLocation::Left,
+            }),
+        }
+    }
+
+    fn plain_mask_format() -> MaskFormat {
+        let base = chroma_mask_format();
+
+        MaskFormat { chroma: None, ..base }
+    }
+
+    fn chroma() -> MaskChroma {
+        MaskChroma {
+            subsampling: Subsampling::Yuv420,
+            location: ChromaLocation::Left,
+        }
+    }
+
+    #[test]
+    fn a_mask_with_420_chroma_gets_a_second_buffer_at_half_size_rounded_up() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let shared = allocator.clone();
+        let pool = pool(shared);
+        let format = chroma_mask_format();
+        let meta = FrameMeta::at(0);
+
+        let mask = pool.alloc_mask(&format, meta);
+        let chroma_plane = mask.chroma_plane().expect("the format carries chroma");
+
+        assert_eq!(allocator.requests(), vec![35, 12]);
+        assert_eq!(mask.plane().dimensions(), (7, 5));
+        assert_eq!(chroma_plane.dimensions(), (4, 3));
+    }
+
+    #[test]
+    fn a_mask_with_chroma_is_charged_for_both_planes() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let budget = FrameBudget::new(1 << 20);
+        let shared_budget = budget.clone();
+        let pool = pool(allocator).with_budget(shared_budget);
+        let format = chroma_mask_format();
+        let meta = FrameMeta::at(0);
+
+        let mask = pool.alloc_mask(&format, meta);
+        assert_eq!(budget.outstanding(), 35 + 12);
+
+        drop(mask);
+        assert_eq!(budget.outstanding(), 0);
+    }
+
+    #[test]
+    fn adding_chroma_keeps_the_full_plane_and_reserves_only_the_chroma_plane() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let shared = allocator.clone();
+        let pool = pool(shared);
+        let format = plain_mask_format();
+        let meta = FrameMeta::at(4);
+
+        let mask_chroma = chroma();
+
+        let mask = pool.alloc_mask(&format, meta);
+        let full = mask.plane().clone();
+        let with_chroma = pool.add_chroma(mask, mask_chroma);
+        let chroma_plane = with_chroma.chroma_plane().expect("chroma was added");
+
+        let kept = with_chroma.plane().buffer();
+        let original = full.buffer();
+        let expected = chroma_mask_format();
+
+        assert_eq!(allocator.requests(), vec![35, 12]);
+        assert!(std::ptr::eq(kept, original), "the full plane was replaced");
+        assert_eq!(chroma_plane.dimensions(), (4, 3));
+        assert_eq!(with_chroma.format(), &expected);
+        assert_eq!(with_chroma.meta().index, 4);
+    }
+
+    #[test]
+    fn adding_chroma_charges_the_chroma_plane_to_the_budget() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let budget = FrameBudget::new(1 << 20);
+        let shared_budget = budget.clone();
+        let pool = pool(allocator).with_budget(shared_budget);
+        let format = plain_mask_format();
+        let meta = FrameMeta::at(0);
+
+        let mask_chroma = chroma();
+
+        let mask = pool.alloc_mask(&format, meta);
+        let with_chroma = pool.add_chroma(mask, mask_chroma);
+        assert_eq!(budget.outstanding(), 35 + 12);
+
+        drop(with_chroma);
+        assert_eq!(budget.outstanding(), 0);
+    }
+
+    #[test]
+    fn loading_a_mask_with_chroma_uploads_each_plane_of_its_own_bytes() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let shared = allocator.clone();
+        let pool = pool(shared);
+        let format = chroma_mask_format();
+        let stream = StreamFormat::Mask(format);
+        let mut planes = HostPlanes::zeroed(&stream);
+        planes
+            .plane_mut(Channel::Y)
+            .expect("carries the full plane")
+            .fill(3);
+        planes.plane_mut(Channel::U).expect("carries chroma").fill(8);
+        let meta = FrameMeta::at(0);
+
+        let mask = pool
+            .load_mask(0, &format, &planes, meta)
+            .expect("the planes match the format");
+        let chroma_plane = mask.chroma_plane().expect("the format carries chroma");
+
+        assert_eq!(allocator.uploads(), vec![vec![3; 35], vec![8; 12]]);
+        assert_eq!(chroma_plane.dimensions(), (4, 3));
+    }
+
+    #[test]
+    fn loading_a_mask_with_chroma_from_planes_without_it_reports_the_missing_plane() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let pool = pool(allocator);
+        let format = chroma_mask_format();
+        let plain_format = plain_mask_format();
+        let plain = StreamFormat::Mask(plain_format);
+        let planes = HostPlanes::zeroed(&plain);
+        let meta = FrameMeta::at(0);
+
+        let error = pool
+            .load_mask(0, &format, &planes, meta)
+            .expect_err("the planes carry no chroma");
+
+        assert!(error.to_string().contains('U'), "{error}");
     }
 
     #[test]
@@ -601,6 +804,7 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let planes = HostPlanes::zeroed(&StreamFormat::Mask(mask_format));
 
@@ -622,11 +826,13 @@ mod tests {
             width: 8,
             height: 8,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let target = MaskFormat {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let planes = HostPlanes::zeroed(&StreamFormat::Mask(short));
 
@@ -679,6 +885,7 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let budget = FrameBudget::new(format.bytes());
         let pool = pool(allocator).with_budget(budget);
@@ -748,5 +955,38 @@ mod tests {
         result_receiver
             .recv_timeout(Duration::from_secs(5))
             .expect("a budget smaller than one frame should still allocate rather than hang");
+    }
+
+    /// The budget fits the mask with one chroma plane, so the replacement only fits once the old
+    /// chroma plane is credited back.
+    #[test]
+    fn replacing_a_chroma_plane_under_a_tight_budget_completes() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let format = chroma_mask_format();
+        let limit = format.bytes() + format.chroma_bytes();
+        let budget = FrameBudget::new(limit);
+        let shared_budget = budget.clone();
+        let pool = pool(allocator).with_budget(shared_budget);
+        let meta = FrameMeta::at(0);
+        let mask_chroma = chroma();
+
+        let mask = pool.alloc_mask(&format, meta);
+
+        let (result_sender, result_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let replaced = pool.add_chroma(mask, mask_chroma);
+            result_sender.send(replaced).ok();
+        });
+
+        let replaced = result_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("replacing the chroma plane should not wait on the plane it replaces");
+        let chroma_plane = replaced.chroma_plane().expect("chroma was added");
+
+        assert_eq!(chroma_plane.dimensions(), (4, 3));
+        assert_eq!(budget.outstanding(), limit);
+
+        drop(replaced);
+        assert_eq!(budget.outstanding(), 0);
     }
 }

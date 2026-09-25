@@ -6,7 +6,7 @@ use cubecl::prelude::{ArrayArg, CubePrimitive, Runtime};
 use cubecl::server::Handle;
 
 use crate::frame::attachments::{Attachments, MetaValue};
-use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat, StreamFormat};
+use crate::frame::format::{ColourInfo, FrameFormat, MaskChroma, MaskFormat, StreamFormat};
 use crate::frame::layout::Channel;
 use crate::memory::FrameBudget;
 
@@ -336,11 +336,36 @@ pub struct Mask {
     format: MaskFormat,
     plane: Plane,
     meta: FrameMeta,
+    chroma: Option<Plane>,
 }
 
 impl Mask {
-    pub(crate) fn new(format: MaskFormat, plane: Plane, meta: FrameMeta) -> Self {
-        Self { format, plane, meta }
+    pub(crate) fn new(format: MaskFormat, plane: Plane, meta: FrameMeta, chroma: Option<Plane>) -> Self {
+        debug_assert_eq!(
+            chroma.is_some(),
+            format.chroma.is_some(),
+            "a mask carries a chroma plane exactly when its format has one",
+        );
+
+        Self {
+            format,
+            plane,
+            meta,
+            chroma,
+        }
+    }
+
+    /// Takes this mask's chroma plane away, leaving its format without chroma.
+    pub(crate) fn take_chroma(&mut self) -> Option<Plane> {
+        self.format.chroma = None;
+        self.chroma.take()
+    }
+
+    /// This mask carrying `plane` as its chroma plane, with `chroma` as its format's chroma.
+    pub(crate) fn with_chroma(mut self, chroma: MaskChroma, plane: Plane) -> Self {
+        self.format.chroma = Some(chroma);
+        self.chroma = Some(plane);
+        self
     }
 
     pub const fn format(&self) -> &MaskFormat {
@@ -364,6 +389,24 @@ impl Mask {
 
     pub const fn plane(&self) -> &Plane {
         &self.plane
+    }
+
+    pub const fn chroma_plane(&self) -> Option<&Plane> {
+        self.chroma.as_ref()
+    }
+
+    /// The plane `channel` of a frame in `frame`'s format is blended with.
+    ///
+    /// A channel at the frame's full size takes the full plane, and a subsampled one takes the
+    /// chroma plane, which is `None` when this mask does not carry one.
+    pub fn plane_for(&self, channel: Channel, frame: &FrameFormat) -> Option<&Plane> {
+        let dimensions = frame.channel_dimensions(channel)?;
+        let full = (frame.width, frame.height);
+        if dimensions == full {
+            return Some(&self.plane);
+        }
+
+        self.chroma.as_ref()
     }
 }
 
@@ -443,12 +486,14 @@ impl StreamItem {
 
     /// The plane carrying `channel`, if this item has one.
     ///
-    /// A mask carries a single plane, addressed as [Channel::Y](crate::frame::Channel::Y).
+    /// A mask's full plane answers to [Channel::Y](crate::frame::Channel::Y), and its chroma plane
+    /// to both [Channel::U](crate::frame::Channel::U) and [Channel::V](crate::frame::Channel::V).
     pub(crate) fn plane(&self, channel: Channel) -> Option<&Plane> {
-        match self {
-            Self::Frame(frame) => frame.plane(channel),
-            Self::Mask(mask) if channel == Channel::Y => Some(mask.plane()),
-            Self::Mask(_) => None,
+        match (self, channel) {
+            (Self::Frame(frame), _) => frame.plane(channel),
+            (Self::Mask(mask), Channel::Y) => Some(mask.plane()),
+            (Self::Mask(mask), Channel::U | Channel::V) => mask.chroma_plane(),
+            (Self::Mask(_), _) => None,
         }
     }
 }
@@ -484,7 +529,7 @@ mod tests {
     use cubecl::wgpu::WgpuRuntime as TestRuntime;
 
     use super::*;
-    use crate::frame::format::ColourRange;
+    use crate::frame::format::{ChromaLocation, ColourRange};
     use crate::frame::layout::{FrameLayout, Subsampling};
     use crate::frame::sample::SampleFormat;
     use crate::testing::CountingAllocator;
@@ -608,11 +653,117 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         };
 
-        let mask = Mask::new(format, plane(64, 64), FrameMeta::at(3));
+        let mask = Mask::new(format, plane(64, 64), FrameMeta::at(3), None);
         assert_eq!(mask.plane().dimensions(), (64, 64));
         assert_eq!(mask.meta().index, 3);
+    }
+
+    fn chroma_mask(chroma: Option<Plane>) -> Mask {
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+            chroma: Some(MaskChroma {
+                subsampling: Subsampling::Yuv420,
+                location: ChromaLocation::Left,
+            }),
+        };
+        let full = plane(64, 64);
+        let meta = FrameMeta::at(0);
+
+        Mask::new(format, full, meta, chroma)
+    }
+
+    fn plain_mask() -> Mask {
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+            chroma: None,
+        };
+        let full = plane(64, 64);
+        let meta = FrameMeta::at(0);
+
+        Mask::new(format, full, meta, None)
+    }
+
+    fn same_plane(actual: Option<&Plane>, expected: &Plane) -> bool {
+        actual.is_some_and(|plane| std::ptr::eq(plane.buffer(), expected.buffer()))
+    }
+
+    #[test]
+    fn a_mask_without_chroma_has_no_chroma_plane() {
+        let mask = plain_mask();
+
+        assert!(mask.chroma_plane().is_none());
+    }
+
+    #[test]
+    fn a_420_frame_blends_luma_with_the_full_plane_and_chroma_with_the_chroma_plane() {
+        let chroma = plane(32, 32);
+        let shared = chroma.clone();
+        let mask = chroma_mask(Some(shared));
+        let frame = format();
+
+        let luma_plane = mask.plane_for(Channel::Y, &frame);
+        let blue_plane = mask.plane_for(Channel::U, &frame);
+        let red_plane = mask.plane_for(Channel::V, &frame);
+
+        assert!(same_plane(luma_plane, mask.plane()));
+        assert!(same_plane(blue_plane, &chroma));
+        assert!(same_plane(red_plane, &chroma));
+    }
+
+    #[test]
+    fn a_444_frame_blends_every_channel_with_the_full_plane() {
+        let chroma = plane(32, 32);
+        let mask = chroma_mask(Some(chroma));
+        let base = format();
+        let frame = FrameFormat {
+            layout: FrameLayout::Yuv {
+                subsampling: Subsampling::Yuv444,
+            },
+            ..base
+        };
+
+        for channel in [Channel::Y, Channel::U, Channel::V] {
+            let blended = mask.plane_for(channel, &frame);
+
+            assert!(same_plane(blended, mask.plane()), "{channel}");
+        }
+    }
+
+    #[test]
+    fn a_subsampled_channel_has_no_plane_when_the_mask_carries_no_chroma() {
+        let mask = plain_mask();
+        let frame = format();
+
+        assert!(mask.plane_for(Channel::U, &frame).is_none());
+    }
+
+    #[test]
+    fn a_channel_the_frame_does_not_carry_has_no_plane() {
+        let chroma = plane(32, 32);
+        let mask = chroma_mask(Some(chroma));
+        let frame = format();
+
+        assert!(mask.plane_for(Channel::R, &frame).is_none());
+    }
+
+    #[test]
+    fn a_mask_stream_item_answers_chroma_channels_with_its_chroma_plane() {
+        let chroma = plane(32, 32);
+        let mask = chroma_mask(Some(chroma));
+        let item = StreamItem::Mask(mask);
+
+        let blue_plane = item.plane(Channel::U).expect("the mask carries chroma");
+
+        assert_eq!(blue_plane.dimensions(), (32, 32));
+        assert!(item.plane(Channel::V).is_some());
+        assert!(item.plane(Channel::R).is_none());
     }
 
     #[test]
@@ -621,8 +772,9 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         };
-        let mask = Mask::new(format, plane(64, 64), FrameMeta::at(3));
+        let mask = Mask::new(format, plane(64, 64), FrameMeta::at(3), None);
 
         let from_frame: StreamItem = frame().into();
         let from_mask: StreamItem = mask.into();
@@ -792,6 +944,7 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let meta = FrameMeta {
             index: 7,
@@ -800,7 +953,7 @@ mod tests {
             scene_score: None,
             attachments: Attachments::new(),
         };
-        let mut mask = Mask::new(format, plane(64, 64), meta);
+        let mut mask = Mask::new(format, plane(64, 64), meta, None);
 
         mask.set_index(11);
 
@@ -836,6 +989,7 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let meta = FrameMeta {
             index: 7,
@@ -844,7 +998,7 @@ mod tests {
             scene_score: None,
             attachments: Attachments::new(),
         };
-        let mask = Mask::new(format, plane(64, 64), meta);
+        let mask = Mask::new(format, plane(64, 64), meta, None);
         let mut item = StreamItem::Mask(mask);
 
         item.set_index(11);

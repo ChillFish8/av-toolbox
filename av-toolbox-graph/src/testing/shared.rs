@@ -51,6 +51,7 @@ pub(super) fn fixture_mask_format() -> MaskFormat {
         width: 64,
         height: 64,
         sample: SampleFormat::U8,
+        chroma: None,
     }
 }
 
@@ -66,6 +67,7 @@ pub(super) fn mask_template(chosen: StreamFormat) -> StreamTemplate {
         width: 64,
         height: 64,
         sample: chosen.sample(),
+        chroma: None,
     })
 }
 

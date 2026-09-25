@@ -169,6 +169,7 @@ mod tests {
             width: 4,
             height: 2,
             sample: SampleFormat::U8,
+            chroma: None,
         });
 
         assert!(accepts(mask, None).is_err());

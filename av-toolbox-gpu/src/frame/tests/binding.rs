@@ -3,7 +3,7 @@
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat};
+use crate::frame::format::{ChromaLocation, ColourInfo, FrameFormat, MaskChroma, MaskFormat};
 use crate::frame::gpu::FrameMeta;
 use crate::frame::layout::{Channel, FrameLayout, Subsampling};
 use crate::frame::sample::SampleFormat;
@@ -111,6 +111,7 @@ fn oversized_format(units_per_cube: usize, axis_limit: usize) -> MaskFormat {
         width: OVERSIZED_WIDTH as u32,
         height: height as u32,
         sample: SampleFormat::U8,
+        chroma: None,
     }
 }
 
@@ -185,6 +186,50 @@ impl BuildTask for WriteMiddleSlot {
     }
 }
 
+/// Writes a mask's full plane, adds a chroma plane and writes that, then hands both back.
+struct WriteAddedChroma;
+
+impl BuildTask for WriteAddedChroma {
+    type Output = (Vec<u32>, Vec<u32>);
+
+    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+        let frames = context.frame_context();
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+            chroma: None,
+        };
+        let chroma = MaskChroma {
+            subsampling: Subsampling::Yuv420,
+            location: ChromaLocation::Left,
+        };
+
+        let meta = FrameMeta::at(0);
+
+        let mask = frames.alloc_mask(&format, meta);
+        let full_bytes = mask.plane().buffer().bytes();
+        let full_count = elements(full_bytes);
+        let full_binding = mask.plane().array::<u32, R>();
+        launch(context, full_binding, full_count, BASELINE);
+
+        let mask = frames.add_chroma(mask, chroma);
+        let chroma_plane = mask.chroma_plane().expect("chroma was added");
+        let chroma_bytes = chroma_plane.buffer().bytes();
+        let chroma_count = elements(chroma_bytes);
+        let chroma_binding = chroma_plane.array::<u32, R>();
+        launch(context, chroma_binding, chroma_count, 0);
+
+        let client = context.client();
+        let full_handle = mask.plane().buffer().handle();
+        let chroma_handle = chroma_plane.buffer().handle();
+        let full = read_back(client, full_handle);
+        let chroma = read_back(client, chroma_handle);
+
+        (full, chroma)
+    }
+}
+
 fn backend() -> Backend {
     Backend::open_default(Device::Default).expect("a backend should open")
 }
@@ -229,4 +274,18 @@ fn a_kernel_writing_one_ring_slot_leaves_the_others_alone() {
 
         assert_eq!(slots[slot], untouched, "slot {slot} was written through");
     }
+}
+
+/// A chroma plane added to a mask is memory of its own, so writing it leaves the full plane alone.
+#[test]
+fn a_chroma_plane_added_to_a_mask_binds_apart_from_its_full_plane() {
+    let (full, chroma) = backend().build(WriteAddedChroma);
+
+    let untouched: Vec<u32> = (BASELINE..BASELINE + full.len() as u32).collect();
+    let written: Vec<u32> = (0..chroma.len() as u32).collect();
+
+    assert_eq!(full.len(), elements(64 * 64));
+    assert_eq!(chroma.len(), elements(32 * 32));
+    assert_eq!(full, untouched, "the full plane was written through");
+    assert_eq!(chroma, written, "the chroma plane's samples were not written");
 }

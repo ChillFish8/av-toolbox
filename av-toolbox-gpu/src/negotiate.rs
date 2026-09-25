@@ -173,7 +173,17 @@ impl ResolvedFormats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ColourInfo, Depth, FrameFormat, FrameLayout, MaskFormat, SampleFormat, Subsampling};
+    use crate::{
+        ChromaLocation,
+        ColourInfo,
+        Depth,
+        FrameFormat,
+        FrameLayout,
+        MaskChroma,
+        MaskFormat,
+        SampleFormat,
+        Subsampling,
+    };
 
     fn frames(sample: SampleFormat) -> StreamFormat {
         StreamFormat::Frames(FrameFormat {
@@ -270,11 +280,32 @@ mod tests {
     }
 
     #[test]
+    fn the_sample_can_be_swapped_without_losing_chroma() {
+        let format = MaskFormat {
+            width: 7,
+            height: 5,
+            sample: SampleFormat::U8,
+            chroma: Some(MaskChroma {
+                subsampling: Subsampling::Yuv422,
+                location: ChromaLocation::Left,
+            }),
+        };
+        let template = StreamTemplate::Mask(format);
+
+        let swapped = template.with_sample(SampleFormat::F16);
+        let swapped_chroma = swapped.as_mask().and_then(|mask| mask.chroma);
+
+        assert_eq!(swapped.sample(), SampleFormat::F16);
+        assert_eq!(swapped_chroma, format.chroma);
+    }
+
+    #[test]
     fn a_mask_template_stays_a_mask() {
         let mask = StreamFormat::Mask(MaskFormat {
             width: 32,
             height: 16,
             sample: SampleFormat::U8,
+            chroma: None,
         });
 
         let chosen = StreamTemplate::from_format(&mask).with_sample(SampleFormat::F16);

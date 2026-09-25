@@ -17,6 +17,7 @@ use crate::frame::{
     HostPlanes,
     HostStreamItem,
     Mask,
+    MaskChroma,
     MaskFormat,
     PlaneBuffer,
     StreamFormat,
@@ -104,6 +105,14 @@ impl FrameContext {
         self.pool.alloc_mask(format, meta)
     }
 
+    /// `mask` carrying a chroma plane shaped by `chroma`, beside the full plane it already has.
+    ///
+    /// The chroma plane is recycled memory holding an earlier mask's samples, so the caller has to
+    /// fill it.
+    pub fn add_chroma(&self, mask: Mask, chroma: MaskChroma) -> Mask {
+        self.pool.add_chroma(mask, chroma)
+    }
+
     /// A writable host frame of `format`, carrying `meta`, charged to this context's budget.
     ///
     /// Its planes are recycled memory holding an earlier frame's samples, so a stage that writes
@@ -119,8 +128,8 @@ impl FrameContext {
 
     /// Uploads every plane of every item and returns them as device items.
     ///
-    /// A frame and a mask may sit in the same batch, because a mask is the same machinery with one
-    /// plane.
+    /// A frame and a mask may sit in the same batch, because a mask is the same machinery with
+    /// fewer planes.
     pub fn load(&self, items: &[LoadItem<'_>]) -> Result<Vec<StreamItem>, RuntimeError> {
         let mut loaded = Vec::with_capacity(items.len());
         for (item, entry) in items.iter().enumerate() {
@@ -298,11 +307,11 @@ mod tests {
     use crate::{
         Accelerator,
         Attachments,
+        ChromaLocation,
         ColourInfo,
         FrameBudget,
         FrameLayout,
         HostStreamItem,
-        MaskFormat,
         MetaValue,
         SampleFormat,
         SceneScore,
@@ -364,6 +373,7 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         }
     }
 
@@ -515,6 +525,7 @@ mod tests {
             width: 32,
             height: 32,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let items = vec![
             StreamItem::Frame(context.alloc_frame(&frame_format(), FrameMeta::at(0))),
@@ -848,5 +859,143 @@ mod tests {
 
         assert!(landed.is_mask());
         assert_eq!(landed.meta().index, 1);
+    }
+
+    fn chroma() -> MaskChroma {
+        MaskChroma {
+            subsampling: Subsampling::Yuv420,
+            location: ChromaLocation::Left,
+        }
+    }
+
+    fn chroma_mask_format() -> MaskFormat {
+        let mask_chroma = chroma();
+
+        MaskFormat {
+            width: 7,
+            height: 5,
+            sample: SampleFormat::U8,
+            chroma: Some(mask_chroma),
+        }
+    }
+
+    fn counting_context() -> (Arc<CountingAllocator>, FrameContext) {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let shared = allocator.clone();
+        let table = capabilities();
+        let context = FrameContext::for_testing(shared, table);
+
+        (allocator, context)
+    }
+
+    #[test]
+    fn adding_chroma_to_a_mask_keeps_its_full_plane_and_adds_a_chroma_plane() {
+        let (allocator, context) = counting_context();
+        let base = chroma_mask_format();
+        let plain = MaskFormat { chroma: None, ..base };
+        let meta = FrameMeta::at(2);
+        let mask_chroma = chroma();
+
+        let mask = context.alloc_mask(&plain, meta);
+        let full = mask.plane().clone();
+        let with_chroma = context.add_chroma(mask, mask_chroma);
+        let chroma_plane = with_chroma.chroma_plane().expect("chroma was added");
+
+        let kept = with_chroma.plane().buffer();
+        let original = full.buffer();
+
+        assert_eq!(allocator.requests(), vec![35, 12]);
+        assert!(std::ptr::eq(kept, original), "the full plane was replaced");
+        assert_eq!(chroma_plane.dimensions(), (4, 3));
+        assert_eq!(with_chroma.format().chroma, Some(mask_chroma));
+        assert_eq!(with_chroma.meta().index, 2);
+    }
+
+    #[test]
+    fn loading_a_batch_of_chroma_masks_uploads_both_planes_of_each() {
+        let (allocator, context) = counting_context();
+        let mask_format = chroma_mask_format();
+        let format = StreamFormat::Mask(mask_format);
+        let first = HostPlanes::zeroed(&format);
+        let second = HostPlanes::zeroed(&format);
+        let first_meta = FrameMeta::at(0);
+        let second_meta = FrameMeta::at(1);
+        let items = vec![
+            LoadItem::new(&first, first_meta),
+            LoadItem::new(&second, second_meta),
+        ];
+
+        let loaded = context.load(&items).expect("should load");
+
+        assert_eq!(allocator.requests(), vec![35, 12, 35, 12]);
+        for item in &loaded {
+            let mask = item.as_mask().expect("a mask went in");
+            let chroma_plane = mask.chroma_plane().expect("the format carries chroma");
+
+            assert_eq!(chroma_plane.dimensions(), (4, 3));
+        }
+    }
+
+    #[test]
+    fn unloading_a_chroma_mask_reads_back_both_planes() {
+        let (_, context) = counting_context();
+        let format = chroma_mask_format();
+        let first_meta = FrameMeta::at(0);
+        let second_meta = FrameMeta::at(1);
+        let first = context.alloc_mask(&format, first_meta);
+        let second = context.alloc_mask(&format, second_meta);
+        let items = vec![StreamItem::Mask(first), StreamItem::Mask(second)];
+
+        let landed = context.unload(items).wait().expect("the fake lands");
+
+        for (index, item) in landed.iter().enumerate() {
+            let full = item.plane(Channel::Y).expect("a mask carries its full plane");
+            let chroma_plane = item.plane(Channel::U).expect("the format carries chroma");
+            let full_marker = index as u8 * 2;
+
+            assert_eq!(item.len(), 2);
+            assert_eq!(chroma_plane.len(), 12);
+            assert_eq!(marker_of(full), full_marker);
+            assert_eq!(marker_of(chroma_plane), full_marker + 1);
+        }
+    }
+
+    #[test]
+    fn an_unloaded_chroma_mask_lands_as_a_host_mask_carrying_both_planes() {
+        let (_, context) = counting_context();
+        let format = chroma_mask_format();
+        let meta = FrameMeta::at(1);
+        let mask = context.alloc_mask(&format, meta);
+
+        let landed = context
+            .unload_host(StreamItem::Mask(mask))
+            .expect("the fake lands");
+        let host_mask = landed.into_mask().expect("a mask");
+        let full = host_mask.plane().bytes();
+        let chroma_plane = host_mask.chroma_plane().expect("the format carries chroma");
+
+        assert_eq!(host_mask.format(), &format);
+        assert_eq!((chroma_plane.width(), chroma_plane.height()), (4, 3));
+        assert!(full.iter().all(|&byte| byte == 0));
+        assert!(chroma_plane.bytes().iter().all(|&byte| byte == 1));
+    }
+
+    #[test]
+    fn a_host_mask_with_chroma_uploads_both_planes() {
+        let (allocator, context) = counting_context();
+        let format = chroma_mask_format();
+        let meta = FrameMeta::at(5);
+        let mut mask = context.alloc_host_mask(&format, meta);
+        mask.plane_mut().fill(3);
+        mask.chroma_plane_mut()
+            .expect("the format carries chroma")
+            .fill(8);
+        let frozen = mask.freeze();
+        let item = HostStreamItem::Mask(frozen);
+
+        let loaded = context.load_host(&item).expect("the fake uploads");
+
+        assert_eq!(allocator.uploads(), vec![vec![3; 35], vec![8; 12]]);
+        assert_eq!(loaded.format(), StreamFormat::Mask(format));
     }
 }

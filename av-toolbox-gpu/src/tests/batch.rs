@@ -9,6 +9,7 @@ use crate::{
     BuildContext,
     BuildTask,
     Channel,
+    ChromaLocation,
     ColourInfo,
     Device,
     FrameContext,
@@ -19,6 +20,7 @@ use crate::{
     HostPlanes,
     HostStreamItem,
     LoadItem,
+    MaskChroma,
     MaskFormat,
     PendingBatch,
     SampleFormat,
@@ -55,6 +57,7 @@ fn mask_format(width: u32, height: u32) -> StreamFormat {
         width,
         height,
         sample: SampleFormat::U8,
+        chroma: None,
     })
 }
 
@@ -198,6 +201,81 @@ fn a_host_frame_keeps_its_bytes_and_place_through_an_upload_and_unload() {
 
         assert_plane_matches(actual.bytes(), expected.bytes(), &what);
     }
+}
+
+fn chroma_mask_format() -> MaskFormat {
+    MaskFormat {
+        width: 37,
+        height: 23,
+        sample: SampleFormat::U8,
+        chroma: Some(MaskChroma {
+            subsampling: Subsampling::Yuv420,
+            location: ChromaLocation::Left,
+        }),
+    }
+}
+
+/// The two masks have the same shape, so only their contents tell one item's planes from the
+/// other's.
+#[test]
+fn a_batch_of_two_chroma_masks_comes_back_with_both_planes_of_each() {
+    let frames = backend().frame_context();
+    let mask_format = chroma_mask_format();
+    let format = StreamFormat::Mask(mask_format);
+
+    let first = filled(&format, 3);
+    let second = filled(&format, 150);
+    let first_meta = FrameMeta::at(0);
+    let second_meta = FrameMeta::at(1);
+    let items = vec![
+        LoadItem::new(&first, first_meta),
+        LoadItem::new(&second, second_meta),
+    ];
+    let loaded = frames.load(&items).expect("the planes match their formats");
+    let returned = frames
+        .unload(loaded)
+        .wait()
+        .expect("the device should hand back what it was given");
+
+    assert_eq!(returned.len(), 2);
+    assert_eq!(returned[0].len(), 2, "a mask with chroma has two planes");
+    assert_eq!(returned[1].len(), 2, "a mask with chroma has two planes");
+    assert_planes_match(&returned[0], &first, "the first mask");
+    assert_planes_match(&returned[1], &second, "the second mask");
+}
+
+#[test]
+fn a_host_mask_with_chroma_keeps_both_planes_through_an_upload_and_unload() {
+    let frames = backend().frame_context();
+    let format = chroma_mask_format();
+    let meta = FrameMeta::at(4);
+
+    let mut host_mask = frames.alloc_host_mask(&format, meta);
+    let full = host_mask.plane_mut();
+    fill_pattern(full, 9);
+    let chroma = host_mask.chroma_plane_mut().expect("the format carries chroma");
+    fill_pattern(chroma, 120);
+
+    let frozen = host_mask.freeze();
+    let uploaded = HostStreamItem::from(frozen);
+
+    let loaded = frames.load_host(&uploaded).expect("the mask should upload");
+    let landed = frames.unload_host(loaded).expect("the mask should come back");
+
+    assert_eq!(landed.meta().index, 4);
+
+    let original = uploaded.into_mask().expect("a mask went up");
+    let returned = landed.into_mask().expect("a mask came back");
+    let original_full = original.plane().bytes();
+    let returned_full = returned.plane().bytes();
+    let original_chroma = original.chroma_plane().expect("the format carries chroma");
+    let returned_chroma = returned.chroma_plane().expect("the format carries chroma");
+    let original_chroma_bytes = original_chroma.bytes();
+    let returned_chroma_bytes = returned_chroma.bytes();
+
+    assert_eq!(returned.format(), &format);
+    assert_plane_matches(returned_full, original_full, "the full plane");
+    assert_plane_matches(returned_chroma_bytes, original_chroma_bytes, "the chroma plane");
 }
 
 /// Loads a frame, writes indices across its luma plane, and unloads what the device then holds.

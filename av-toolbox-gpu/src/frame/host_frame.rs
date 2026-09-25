@@ -148,11 +148,28 @@ pub struct HostMask {
     format: MaskFormat,
     plane: HostPlane,
     meta: FrameMeta,
+    chroma: Option<HostPlane>,
 }
 
 impl HostMask {
-    pub(crate) fn new(format: MaskFormat, plane: HostPlane, meta: FrameMeta) -> Self {
-        Self { format, plane, meta }
+    pub(crate) fn new(
+        format: MaskFormat,
+        plane: HostPlane,
+        meta: FrameMeta,
+        chroma: Option<HostPlane>,
+    ) -> Self {
+        debug_assert_eq!(
+            chroma.is_some(),
+            format.chroma.is_some(),
+            "a mask carries a chroma plane exactly when its format has one",
+        );
+
+        Self {
+            format,
+            plane,
+            meta,
+            chroma,
+        }
     }
 
     pub const fn format(&self) -> &MaskFormat {
@@ -176,9 +193,14 @@ impl HostMask {
         &self.plane
     }
 
-    /// Takes this mask for writing, or hands it back when somebody else holds it.
+    pub const fn chroma_plane(&self) -> Option<&HostPlane> {
+        self.chroma.as_ref()
+    }
+
+    /// Takes this mask for writing, or hands it back when somebody else holds a plane.
     pub fn try_into_mut(self) -> Result<HostMaskMut, Self> {
-        if self.plane.is_exclusive() {
+        let chroma_is_exclusive = self.chroma.as_ref().is_none_or(HostPlane::is_exclusive);
+        if self.plane.is_exclusive() && chroma_is_exclusive {
             return Ok(HostMaskMut { mask: self });
         }
 
@@ -186,7 +208,7 @@ impl HostMask {
     }
 }
 
-/// A host mask no one else holds, so its plane can be written.
+/// A host mask no one else holds, so its planes can be written.
 #[derive(Debug)]
 pub struct HostMaskMut {
     mask: HostMask,
@@ -203,6 +225,12 @@ impl HostMaskMut {
 
     pub fn plane_mut(&mut self) -> &mut [u8] {
         self.mask.plane.bytes_mut()
+    }
+
+    pub fn chroma_plane_mut(&mut self) -> Option<&mut [u8]> {
+        let chroma = self.mask.chroma.as_mut()?;
+
+        Some(chroma.bytes_mut())
     }
 
     /// Hands the mask back, ready to pass downstream.
@@ -280,12 +308,16 @@ impl HostStreamItem {
         self.meta_mut().index = index;
     }
 
-    /// The bytes carrying `channel`, where a mask's one plane answers to [Channel::Y](crate::Channel::Y).
+    /// The bytes carrying `channel`.
+    ///
+    /// A mask's full plane answers to [Channel::Y](crate::Channel::Y), and its chroma plane to both
+    /// [Channel::U](crate::Channel::U) and [Channel::V](crate::Channel::V).
     pub(crate) fn plane_bytes(&self, channel: Channel) -> Option<&[u8]> {
-        match self {
-            Self::Frame(frame) => frame.plane(channel).map(HostPlane::bytes),
-            Self::Mask(mask) if channel == Channel::Y => Some(mask.plane().bytes()),
-            Self::Mask(_) => None,
+        match (self, channel) {
+            (Self::Frame(frame), _) => frame.plane(channel).map(HostPlane::bytes),
+            (Self::Mask(mask), Channel::Y) => Some(mask.plane().bytes()),
+            (Self::Mask(mask), Channel::U | Channel::V) => mask.chroma_plane().map(HostPlane::bytes),
+            (Self::Mask(_), _) => None,
         }
     }
 }
@@ -307,9 +339,11 @@ mod tests {
     use super::*;
     use crate::frame::{
         Channel,
+        ChromaLocation,
         ColourInfo,
         FrameLayout,
         FrameMeta,
+        MaskChroma,
         SampleFormat,
         StreamFormat,
         Subsampling,
@@ -334,6 +368,7 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         }
     }
 
@@ -399,6 +434,79 @@ mod tests {
         );
         assert!(item.plane_bytes(Channel::U).is_none());
         assert!(item.is_mask());
+    }
+
+    fn chroma_mask_format() -> MaskFormat {
+        let base = mask_format();
+
+        MaskFormat {
+            chroma: Some(MaskChroma {
+                subsampling: Subsampling::Yuv420,
+                location: ChromaLocation::Left,
+            }),
+            ..base
+        }
+    }
+
+    #[test]
+    fn a_host_mask_without_chroma_has_no_chroma_plane() {
+        let format = mask_format();
+        let meta = FrameMeta::at(0);
+        let mut mask = HostPool::new().alloc_mask(&format, meta);
+
+        assert!(mask.chroma_plane_mut().is_none());
+        assert!(mask.freeze().chroma_plane().is_none());
+    }
+
+    #[test]
+    fn a_host_mask_with_chroma_carries_a_chroma_plane_that_answers_to_u_and_v() {
+        let format = chroma_mask_format();
+        let meta = FrameMeta::at(0);
+        let mut mask = HostPool::new().alloc_mask(&format, meta);
+        mask.plane_mut().fill(4);
+        mask.chroma_plane_mut().expect("the mask carries chroma").fill(6);
+
+        let frozen = mask.freeze();
+        let chroma = frozen.chroma_plane().expect("the mask carries chroma");
+        assert_eq!((chroma.width(), chroma.height()), (32, 32));
+
+        let item = HostStreamItem::from(frozen);
+        let luma = item.plane_bytes(Channel::Y).expect("the full plane");
+        let blue = item.plane_bytes(Channel::U).expect("the chroma plane");
+        let red = item.plane_bytes(Channel::V).expect("the chroma plane");
+
+        assert!(luma.iter().all(|&byte| byte == 4));
+        assert_eq!(blue.len(), 32 * 32);
+        assert!(blue.iter().all(|&byte| byte == 6));
+        assert_eq!(blue, red);
+    }
+
+    #[test]
+    fn a_host_mask_whose_chroma_plane_is_shared_cannot_be_written() {
+        let format = chroma_mask_format();
+        let meta = FrameMeta::at(0);
+        let mask = HostPool::new().alloc_mask(&format, meta).freeze();
+        let held = mask.chroma_plane().expect("the mask carries chroma").clone();
+
+        let mask = mask.try_into_mut().expect_err("the chroma plane is still held");
+        drop(held);
+
+        assert!(mask.try_into_mut().is_ok());
+    }
+
+    #[test]
+    fn a_host_mask_with_chroma_is_charged_for_both_planes() {
+        let budget = FrameBudget::new(1 << 20);
+        let shared_budget = budget.clone();
+        let pool = HostPool::new().with_budget(shared_budget);
+        let format = chroma_mask_format();
+        let meta = FrameMeta::at(0);
+
+        let mask = pool.alloc_mask(&format, meta);
+        assert_eq!(budget.outstanding(), 64 * 64 + 32 * 32);
+
+        drop(mask);
+        assert_eq!(budget.outstanding(), 0);
     }
 
     #[test]

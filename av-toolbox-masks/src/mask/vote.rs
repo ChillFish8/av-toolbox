@@ -262,6 +262,7 @@ mod tests {
             width: 4,
             height: 4,
             sample: SampleFormat::U8,
+            chroma: None,
         });
 
         vec![Some(format); count]

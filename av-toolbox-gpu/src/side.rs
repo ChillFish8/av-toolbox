@@ -265,6 +265,7 @@ mod tests {
                 width: 8,
                 height: 8,
                 sample: SampleFormat::U8,
+                chroma: None,
             },
             FrameMeta::at(0),
         );

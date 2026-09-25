@@ -82,6 +82,7 @@ pub use self::frame::{
     HostPlanes,
     HostStreamItem,
     Mask,
+    MaskChroma,
     MaskFormat,
     Matrix,
     MetaValue,

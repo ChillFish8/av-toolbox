@@ -311,6 +311,7 @@ mod tests {
             width,
             height,
             sample,
+            chroma: None,
         })
     }
 

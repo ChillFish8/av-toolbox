@@ -137,14 +137,28 @@ impl HostPool {
                 HostStreamItem::Frame(HostFrame::new(format, planes, meta))
             },
             StreamFormat::Mask(format) => {
-                let bytes = planes
-                    .into_iter()
-                    .next()
-                    .expect("a mask lands as exactly one plane");
-                let buffer = Self::adopt(bytes);
-                let plane = HostPlane::new(buffer, format.width, format.height);
+                let stream_format = StreamFormat::Mask(format);
+                assert_eq!(
+                    planes.len(),
+                    stream_format.plane_sizes().len(),
+                    "a mask lands as one plane per plane its format carries",
+                );
 
-                HostStreamItem::Mask(HostMask::new(format, plane, meta))
+                let mut planes = planes.into_iter();
+                let full_bytes = planes.next().expect("a mask carries a full plane");
+                let full_buffer = Self::adopt(full_bytes);
+                let plane = HostPlane::new(full_buffer, format.width, format.height);
+
+                let chroma = format.chroma_dimensions().map(|(width, height)| {
+                    let chroma_bytes = planes.next().expect("the count was checked above");
+                    let chroma_buffer = Self::adopt(chroma_bytes);
+
+                    HostPlane::new(chroma_buffer, width, height)
+                });
+
+                let mask = HostMask::new(format, plane, meta, chroma);
+
+                HostStreamItem::Mask(mask)
             },
         }
     }
@@ -176,13 +190,25 @@ impl HostPool {
             .expect("a frame fresh from the pool is held by nothing else")
     }
 
-    /// A writable mask of `format`, which is one buffer.
+    /// A writable mask of `format`, which is one buffer for the full plane and one for the chroma
+    /// plane when the format has one.
+    ///
+    /// Waits once for both planes' bytes before reserving either.
     pub fn alloc_mask(&self, format: &MaskFormat, meta: FrameMeta) -> HostMaskMut {
-        let counted = self.wait_for_room(format.bytes());
-        let buffer = self.reserve(format.bytes(), counted);
+        let full_bytes = format.bytes();
+        let chroma_bytes = format.chroma_bytes();
+        let counted = self.wait_for_room(full_bytes + chroma_bytes);
+
+        let buffer = self.reserve(full_bytes, counted);
         let plane = HostPlane::new(buffer, format.width, format.height);
 
-        HostMask::new(*format, plane, meta)
+        let chroma = format.chroma_dimensions().map(|(width, height)| {
+            let chroma_buffer = self.reserve(chroma_bytes, counted);
+
+            HostPlane::new(chroma_buffer, width, height)
+        });
+
+        HostMask::new(*format, plane, meta, chroma)
             .try_into_mut()
             .expect("a mask fresh from the pool is held by nothing else")
     }

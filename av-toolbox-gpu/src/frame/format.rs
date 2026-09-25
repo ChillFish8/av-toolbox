@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::frame::layout::{Channel, FrameLayout};
+use crate::frame::layout::{Channel, FrameLayout, Subsampling};
 use crate::frame::rate::FrameRate;
 use crate::frame::sample::SampleFormat;
 
@@ -170,12 +170,32 @@ impl fmt::Display for FrameFormat {
     }
 }
 
-/// What a mask is, which is a single plane at its own dimensions.
+/// The shape of a mask's chroma plane, matching the frames it is blended with.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct MaskChroma {
+    pub subsampling: Subsampling,
+    pub location: ChromaLocation,
+}
+
+impl MaskChroma {
+    /// How many luma samples one chroma sample spans across and down.
+    pub const fn factors(&self) -> (u32, u32) {
+        match self.subsampling {
+            Subsampling::Yuv420 => (2, 2),
+            Subsampling::Yuv422 => (2, 1),
+            Subsampling::Yuv444 => (1, 1),
+        }
+    }
+}
+
+/// What a mask is, which is a full plane at its own dimensions and an optional chroma plane.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct MaskFormat {
     pub width: u32,
     pub height: u32,
     pub sample: SampleFormat,
+    /// The chroma plane this mask carries, `None` when it has only the full plane.
+    pub chroma: Option<MaskChroma>,
 }
 
 impl MaskFormat {
@@ -183,14 +203,38 @@ impl MaskFormat {
         self.width as usize * self.height as usize
     }
 
+    /// How many bytes the full plane occupies.
     pub const fn bytes(&self) -> usize {
         self.samples() * self.sample.bytes()
+    }
+
+    /// The dimensions of the chroma plane, or `None` when this mask has none.
+    pub fn chroma_dimensions(&self) -> Option<(u32, u32)> {
+        let chroma = self.chroma?;
+        let dimensions = chroma.subsampling.chroma_dimensions(self.width, self.height);
+
+        Some(dimensions)
+    }
+
+    /// How many bytes the chroma plane occupies, which is 0 when this mask has none.
+    pub fn chroma_bytes(&self) -> usize {
+        let Some((width, height)) = self.chroma_dimensions() else {
+            return 0;
+        };
+
+        width as usize * height as usize * self.sample.bytes()
     }
 }
 
 impl fmt::Display for MaskFormat {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "mask {}x{} {}", self.width, self.height, self.sample)
+        write!(formatter, "mask {}x{} {}", self.width, self.height, self.sample)?;
+
+        if let Some(chroma) = self.chroma {
+            write!(formatter, " with {} chroma", chroma.subsampling)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -236,6 +280,7 @@ impl StreamFormat {
     pub fn plane_sizes(&self) -> Vec<usize> {
         match self {
             Self::Frames(format) => format.plane_sizes(),
+            Self::Mask(format) if format.chroma.is_some() => vec![format.bytes(), format.chroma_bytes()],
             Self::Mask(format) => vec![format.bytes()],
         }
     }
@@ -244,7 +289,7 @@ impl StreamFormat {
     pub fn total_bytes(&self) -> usize {
         match self {
             Self::Frames(format) => format.total_bytes(),
-            Self::Mask(format) => format.bytes(),
+            Self::Mask(format) => format.bytes() + format.chroma_bytes(),
         }
     }
 }
@@ -348,6 +393,7 @@ mod tests {
             width: 1920,
             height: 1080,
             sample: SampleFormat::U8,
+            chroma: None,
         };
 
         assert_eq!(mask.samples(), 1920 * 1080);
@@ -376,6 +422,7 @@ mod tests {
             width: 64,
             height: 32,
             sample: SampleFormat::U8,
+            chroma: None,
         });
 
         assert_eq!(mask.plane_sizes(), vec![64 * 32]);
@@ -392,6 +439,7 @@ mod tests {
             width: 8,
             height: 8,
             sample: SampleFormat::U8,
+            chroma: None,
         });
 
         assert_eq!(frames.sample(), SampleFormat::U8);
@@ -402,6 +450,7 @@ mod tests {
             width: 8,
             height: 8,
             sample: SampleFormat::U16 { depth: Depth::TEN },
+            chroma: None,
         });
         assert_eq!(wide.sample(), SampleFormat::U16 { depth: Depth::TEN });
     }
@@ -414,6 +463,7 @@ mod tests {
             width: 8,
             height: 8,
             sample: SampleFormat::U8,
+            chroma: None,
         };
         let mask = StreamFormat::Mask(mask_format);
 
@@ -421,6 +471,65 @@ mod tests {
         assert_eq!(frames.as_mask(), None);
         assert_eq!(mask.as_mask(), Some(&mask_format));
         assert_eq!(mask.as_frames(), None);
+    }
+
+    fn chroma_mask(width: u32, height: u32, subsampling: Subsampling) -> MaskFormat {
+        MaskFormat {
+            width,
+            height,
+            sample: SampleFormat::U8,
+            chroma: Some(MaskChroma {
+                subsampling,
+                location: ChromaLocation::Left,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_420_mask_carries_a_chroma_plane_of_half_size_rounded_up() {
+        let format = chroma_mask(7, 5, Subsampling::Yuv420);
+        let stream = StreamFormat::Mask(format);
+
+        assert_eq!(format.chroma_dimensions(), Some((4, 3)));
+        assert_eq!(format.chroma_bytes(), 12);
+        assert_eq!(stream.plane_sizes(), vec![35, 12]);
+        assert_eq!(stream.total_bytes(), 47);
+    }
+
+    #[test]
+    fn a_mask_without_chroma_has_one_plane() {
+        let base = chroma_mask(7, 5, Subsampling::Yuv420);
+        let format = MaskFormat { chroma: None, ..base };
+        let stream = StreamFormat::Mask(format);
+
+        assert_eq!(format.chroma_dimensions(), None);
+        assert_eq!(format.chroma_bytes(), 0);
+        assert_eq!(stream.plane_sizes(), vec![35]);
+        assert_eq!(stream.total_bytes(), 35);
+    }
+
+    #[test]
+    fn mask_chroma_factors_follow_the_subsampling() {
+        let factors_of = |subsampling| {
+            let chroma = MaskChroma {
+                subsampling,
+                location: ChromaLocation::Left,
+            };
+
+            chroma.factors()
+        };
+
+        assert_eq!(factors_of(Subsampling::Yuv420), (2, 2));
+        assert_eq!(factors_of(Subsampling::Yuv422), (2, 1));
+        assert_eq!(factors_of(Subsampling::Yuv444), (1, 1));
+    }
+
+    #[test]
+    fn a_mask_with_chroma_renders_its_subsampling() {
+        let format = chroma_mask(64, 32, Subsampling::Yuv420);
+        let mask = StreamFormat::Mask(format);
+
+        assert_eq!(mask.to_string(), "mask 64x32 u8 with 4:2:0 chroma");
     }
 
     #[test]
@@ -454,6 +563,7 @@ mod tests {
             width: 64,
             height: 32,
             sample: SampleFormat::U8,
+            chroma: None,
         });
         assert_eq!(mask.to_string(), "mask 64x32 u8");
     }

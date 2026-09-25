@@ -2,7 +2,8 @@
 //!
 //! A [FrameFormat] describes what a frame is: its dimensions, which channels it carries, how they
 //! are subsampled, and what each sample is stored as. A [Frame] is that description plus one
-//! [Plane] per channel. A [Mask] is the same machinery with a single plane.
+//! [Plane] per channel. A [Mask] is the same machinery with a full plane and an optional chroma
+//! plane.
 //!
 //! Planes are flat, with one sample per pixel per row and no padding between rows.
 
@@ -23,6 +24,7 @@ pub use self::format::{
     ColourInfo,
     ColourRange,
     FrameFormat,
+    MaskChroma,
     MaskFormat,
     Matrix,
     Primaries,

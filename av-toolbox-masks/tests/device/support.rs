@@ -36,6 +36,7 @@ pub fn mask_format(width: u32, height: u32) -> MaskFormat {
         width,
         height,
         sample: SampleFormat::U8,
+        chroma: None,
     }
 }
 

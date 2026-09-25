@@ -165,6 +165,7 @@ mod tests {
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
+            chroma: None,
         }
     }
 

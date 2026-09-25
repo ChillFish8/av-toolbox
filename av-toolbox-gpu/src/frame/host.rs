@@ -124,12 +124,17 @@ impl HostPlanes {
 
     /// Which plane holds `channel`, or `None` when this format does not carry it.
     ///
-    /// A mask is a single plane and answers to [Channel::Y], because it has one channel and no
-    /// colour meaning to give it a name of its own.
+    /// A mask's full plane answers to [Channel::Y], because it has no colour meaning to give it a
+    /// name of its own. Its chroma plane, when it has one, answers to both [Channel::U] and
+    /// [Channel::V].
     fn index_of(&self, channel: Channel) -> Option<usize> {
-        match &self.format {
-            StreamFormat::Frames(format) => format.channels().iter().position(|carried| *carried == channel),
-            StreamFormat::Mask(_) => (channel == Channel::Y).then_some(0),
+        match (&self.format, channel) {
+            (StreamFormat::Frames(format), _) => {
+                format.channels().iter().position(|carried| *carried == channel)
+            },
+            (StreamFormat::Mask(_), Channel::Y) => Some(0),
+            (StreamFormat::Mask(format), Channel::U | Channel::V) => format.chroma.is_some().then_some(1),
+            (StreamFormat::Mask(_), _) => None,
         }
     }
 
@@ -142,7 +147,7 @@ impl HostPlanes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::format::{ColourInfo, FrameFormat, MaskFormat};
+    use crate::frame::format::{ChromaLocation, ColourInfo, FrameFormat, MaskChroma, MaskFormat};
     use crate::frame::layout::{FrameLayout, Subsampling};
     use crate::frame::sample::SampleFormat;
 
@@ -187,6 +192,7 @@ mod tests {
             width: 64,
             height: 32,
             sample: SampleFormat::U8,
+            chroma: None,
         });
 
         let planes = HostPlanes::zeroed(&mask);
@@ -195,6 +201,45 @@ mod tests {
             planes.plane(Channel::Y).expect("should carry the mask").len(),
             64 * 32
         );
+    }
+
+    #[test]
+    fn a_mask_with_chroma_answers_luma_with_the_full_plane_and_chroma_with_the_second() {
+        let mask = StreamFormat::Mask(MaskFormat {
+            width: 7,
+            height: 5,
+            sample: SampleFormat::U8,
+            chroma: Some(MaskChroma {
+                subsampling: Subsampling::Yuv420,
+                location: ChromaLocation::Left,
+            }),
+        });
+        let planes = HostPlanes::zeroed(&mask);
+
+        assert_eq!(planes.len(), 2);
+        assert_eq!(planes.index_of(Channel::Y), Some(0));
+        assert_eq!(planes.index_of(Channel::U), Some(1));
+        assert_eq!(planes.index_of(Channel::V), Some(1));
+        assert_eq!(planes.index_of(Channel::R), None);
+        assert_eq!(
+            planes.plane(Channel::U).expect("should carry chroma").len(),
+            4 * 3
+        );
+    }
+
+    #[test]
+    fn a_mask_without_chroma_answers_no_chroma_channel() {
+        let mask = StreamFormat::Mask(MaskFormat {
+            width: 7,
+            height: 5,
+            sample: SampleFormat::U8,
+            chroma: None,
+        });
+        let planes = HostPlanes::zeroed(&mask);
+
+        assert_eq!(planes.index_of(Channel::Y), Some(0));
+        assert_eq!(planes.index_of(Channel::U), None);
+        assert_eq!(planes.index_of(Channel::V), None);
     }
 
     /// Reusing one buffer across frames is the point, so resizing to the same format must not

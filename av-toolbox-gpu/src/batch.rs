@@ -151,13 +151,29 @@ fn push_shapes(item: usize, format: &StreamFormat, shapes: &mut Vec<PlaneShape>)
                 });
             }
         },
-        StreamFormat::Mask(mask) => shapes.push(PlaneShape {
-            item,
-            channel: Channel::Y,
-            width: mask.width,
-            height: mask.height,
-            bytes: mask.bytes(),
-        }),
+        StreamFormat::Mask(mask) => {
+            let full_bytes = mask.bytes();
+
+            shapes.push(PlaneShape {
+                item,
+                channel: Channel::Y,
+                width: mask.width,
+                height: mask.height,
+                bytes: full_bytes,
+            });
+
+            if let Some((width, height)) = mask.chroma_dimensions() {
+                let bytes = mask.chroma_bytes();
+
+                shapes.push(PlaneShape {
+                    item,
+                    channel: Channel::U,
+                    width,
+                    height,
+                    bytes,
+                });
+            }
+        },
     }
 }
 
@@ -354,6 +370,7 @@ mod tests {
             width,
             height,
             sample: SampleFormat::U8,
+            chroma: None,
         })
     }
 

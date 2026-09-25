@@ -612,6 +612,7 @@ fn a_crossing_passes_its_one_input_through_and_runs_frame_by_frame() {
         width: 8,
         height: 8,
         sample: av_toolbox_gpu::SampleFormat::U8,
+        chroma: None,
     });
     let capabilities = capabilities();
 

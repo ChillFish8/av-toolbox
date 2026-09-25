@@ -38,6 +38,7 @@ fn mask_format(format: &FrameFormat) -> MaskFormat {
         width: format.width,
         height: format.height,
         sample: SampleFormat::U8,
+        chroma: None,
     }
 }
 

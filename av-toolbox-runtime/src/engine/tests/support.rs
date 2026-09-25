@@ -42,6 +42,7 @@ pub(crate) fn mask_format() -> MaskFormat {
         width: 512,
         height: 512,
         sample: SampleFormat::U8,
+        chroma: None,
     }
 }
 
