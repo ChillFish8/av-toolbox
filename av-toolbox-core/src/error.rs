@@ -45,6 +45,12 @@ pub enum RegistryError {
     InvalidSchema { identifier: String, reason: String },
     #[error("the identifier {identifier} is reserved for the transfers the graph inserts")]
     ReservedIdentifier { identifier: String },
+    #[error("stage {identifier} input {param} has an invalid planes_of: {reason}")]
+    InvalidPlanesOf {
+        identifier: String,
+        param: &'static str,
+        reason: &'static str,
+    },
 }
 
 /// A failure raised while binding a pipeline's inputs to a stage's signature.

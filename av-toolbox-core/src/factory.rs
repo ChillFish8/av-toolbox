@@ -47,6 +47,7 @@ use crate::{
     StageError,
     StageKind,
     StageSide,
+    StreamType,
     Tag,
     TransformDefinition,
     bind_inputs,
@@ -441,6 +442,8 @@ impl<D: StageDefinition> Definition<D> {
 
         let full_identifier = format!("{}/{}", D::package(), D::identifier());
 
+        Self::check_planes_of(&full_identifier)?;
+
         let generator = schemars::SchemaGenerator::default();
         let generated = generator.into_root_schema_for::<D::Args>();
         let schema = serde_json::to_value(&generated).map_err(|error| RegistryError::InvalidSchema {
@@ -508,6 +511,37 @@ impl<D: StageDefinition> Definition<D> {
             identifier: self.full_identifier.clone(),
             source,
         }
+    }
+
+    /// Rejects a `planes_of` that names no input of the signature, or that is set on an input
+    /// that does not take masks.
+    fn check_planes_of(full_identifier: &str) -> Result<(), RegistryError> {
+        let params = D::inputs().params();
+
+        for param in params {
+            let Some(named) = param.planes_of_input() else {
+                continue;
+            };
+
+            let names_an_input = params.iter().any(|other| other.name() == named);
+            if !names_an_input {
+                return Err(RegistryError::InvalidPlanesOf {
+                    identifier: full_identifier.to_string(),
+                    param: param.name(),
+                    reason: "it names no input of this stage",
+                });
+            }
+
+            if param.accepts() != Some(StreamType::Mask) {
+                return Err(RegistryError::InvalidPlanesOf {
+                    identifier: full_identifier.to_string(),
+                    param: param.name(),
+                    reason: "it is only allowed on an input that takes masks",
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Rejects a segment that would produce a malformed `package/stage` identifier.

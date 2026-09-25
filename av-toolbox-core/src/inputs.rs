@@ -23,6 +23,7 @@ pub struct InputParam {
     required: bool,
     accepts: Option<StreamType>,
     authority: bool,
+    planes_of: Option<&'static str>,
 }
 
 impl InputParam {
@@ -32,6 +33,7 @@ impl InputParam {
             required: true,
             accepts: None,
             authority: false,
+            planes_of: None,
         }
     }
 
@@ -41,6 +43,7 @@ impl InputParam {
             required: false,
             accepts: None,
             authority: false,
+            planes_of: None,
         }
     }
 
@@ -61,6 +64,12 @@ impl InputParam {
         self
     }
 
+    /// Asks for this mask input to carry planes matching the layout of the frame input `name`.
+    pub const fn planes_of(mut self, name: &'static str) -> Self {
+        self.planes_of = Some(name);
+        self
+    }
+
     pub const fn name(&self) -> &'static str {
         self.name
     }
@@ -75,6 +84,10 @@ impl InputParam {
 
     pub const fn is_chunk_authority(&self) -> bool {
         self.authority
+    }
+
+    pub const fn planes_of_input(&self) -> Option<&'static str> {
+        self.planes_of
     }
 }
 

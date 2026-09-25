@@ -416,6 +416,22 @@ fn a_tail_that_accepts_anything_is_not_the_same_as_having_no_tail() {
 }
 
 #[test]
+fn a_mask_input_can_ask_for_the_planes_of_a_frame_input() {
+    let param = InputParam::required("mask")
+        .accepting(StreamType::Mask)
+        .planes_of("base");
+
+    assert_eq!(param.planes_of_input(), Some("base"));
+}
+
+#[test]
+fn an_input_asks_for_no_planes_by_default() {
+    let param = InputParam::required("mask");
+
+    assert_eq!(param.planes_of_input(), None);
+}
+
+#[test]
 fn a_param_is_not_the_chunk_authority_unless_it_says_so() {
     let param = InputParam::required("reference");
 
