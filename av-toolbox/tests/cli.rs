@@ -29,7 +29,7 @@ fn written(content: &str) -> tempfile::NamedTempFile {
 
 #[test]
 fn every_example_explains_without_a_device() {
-    for name in ["passthrough.toml", "scenes.toml", "chunked.toml"] {
+    for name in ["passthrough.toml", "scenes.toml", "chunked.toml", "metadata.toml"] {
         let path = example(name);
         let path = path.to_str().expect("utf-8 path");
 
@@ -365,6 +365,10 @@ mod device {
 
     const FRAME_COUNT: u64 = 5;
 
+    /// `scene/detect` needs more frames in view than its lookahead before it scores any of
+    /// them, so the metadata example's stream runs longer than the other device fixtures.
+    const METADATA_FRAME_COUNT: u64 = 8;
+
     fn y4m_stream() -> Vec<u8> {
         let mut bytes = Vec::new();
         let ratio = y4m::Ratio::new(30000, 1001);
@@ -378,6 +382,51 @@ mod device {
         let chroma_size = (FRAME_SIZE / 2) * (FRAME_SIZE / 2);
         for index in 0..FRAME_COUNT {
             let luma = vec![index as u8; luma_size];
+            let u_plane = vec![100u8; chroma_size];
+            let v_plane = vec![150u8; chroma_size];
+            let frame = y4m::Frame::new([&luma, &u_plane, &v_plane], None);
+            encoder.write_frame(&frame).expect("writes a frame");
+        }
+
+        bytes
+    }
+
+    /// A pseudo-random luma plane that differs between the first half of the metadata stream
+    /// and the second half, giving `scene/detect` real spatial detail and a real change to
+    /// score, unlike the flat frames in `y4m_stream`.
+    fn noisy_luma(index: u64) -> Vec<u8> {
+        let half = if index < METADATA_FRAME_COUNT / 2 {
+            0u32
+        } else {
+            1u32
+        };
+        let mut luma = vec![0u8; FRAME_SIZE * FRAME_SIZE];
+
+        for row in 0..FRAME_SIZE {
+            for column in 0..FRAME_SIZE {
+                let hash = (row as u32).wrapping_mul(2_654_435_761)
+                    ^ (column as u32).wrapping_mul(40_503)
+                    ^ half.wrapping_mul(0x9E37_79B9)
+                    ^ (index as u32);
+                luma[row * FRAME_SIZE + column] = (hash % 256) as u8;
+            }
+        }
+
+        luma
+    }
+
+    fn textured_y4m_stream() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let ratio = y4m::Ratio::new(30000, 1001);
+        let range = y4m::VendorExtensionString::new(b"COLORRANGE=FULL".to_vec()).expect("valid");
+        let mut encoder = y4m::encode(FRAME_SIZE, FRAME_SIZE, ratio)
+            .append_vendor_extension(range)
+            .write_header(&mut bytes)
+            .expect("writes the header");
+
+        let chroma_size = (FRAME_SIZE / 2) * (FRAME_SIZE / 2);
+        for index in 0..METADATA_FRAME_COUNT {
+            let luma = noisy_luma(index);
             let u_plane = vec![100u8; chroma_size];
             let v_plane = vec![150u8; chroma_size];
             let frame = y4m::Frame::new([&luma, &u_plane, &v_plane], None);
@@ -451,6 +500,51 @@ args.path = "{output_path}"
         assert!(output.status.success(), "{stderr}");
         assert!(stdout.contains("output"));
         assert!(!stderr.contains("reads a live stream"));
+    }
+
+    #[test]
+    fn executing_the_metadata_example_logs_one_line_per_frame() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let log_path = directory.path().join("metadata.ndjson");
+        let log_path = log_path.to_str().expect("utf-8 path");
+        let path = example("metadata.toml");
+        let path = path.to_str().expect("utf-8 path");
+        let metadata_var = format!("metadata={log_path}");
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args(["--color", "never", "execute", path])
+            .args(["--var", &metadata_var])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the binary runs");
+
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let input = textured_y4m_stream();
+        let feeder = thread::spawn(move || {
+            stdin.write_all(&input).expect("writes the stream");
+        });
+
+        let output = child.wait_with_output().expect("the binary finishes");
+        feeder.join().expect("the feeder thread finishes");
+        let stderr = text(&output.stderr);
+
+        assert!(output.status.success(), "{stderr}");
+
+        let logged = std::fs::read_to_string(log_path).expect("reads the log");
+        let lines: Vec<serde_json::Value> = logged
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("valid json"))
+            .collect();
+        assert_eq!(lines.len() as u64, METADATA_FRAME_COUNT);
+
+        for (position, line) in lines.iter().enumerate() {
+            assert_eq!(line["index"], position as u64, "{lines:?}");
+        }
+
+        let has_a_real_score = lines.iter().any(|line| line["scene_score"].is_number());
+        assert!(has_a_real_score, "{lines:?}");
     }
 
     #[test]

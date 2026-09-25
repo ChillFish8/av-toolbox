@@ -1,0 +1,24 @@
+# Reads a y4m stream from standard input, marks its scene changes, writes it to standard output and logs each
+# frame's metadata as one line of JSON.
+
+[variable.metadata]
+type = "path"
+description = "Where to write the metadata log"
+default = "metadata.ndjson"
+
+[source.input]
+type = "y4m/stdin"
+
+[transform.detect]
+type = "scene/detect"
+inputs = ["input"]
+args.mode = "natural"
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["detect"]
+
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["detect"]
+args.path = "{{ metadata }}"
