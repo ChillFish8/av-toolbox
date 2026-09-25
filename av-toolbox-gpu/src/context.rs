@@ -724,6 +724,29 @@ mod tests {
     }
 
     #[test]
+    fn a_host_frame_with_attachments_keeps_them_once_loaded() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let context = FrameContext::for_testing(allocator, capabilities());
+        let mut attachments = Attachments::new();
+        attachments.attach("scene", MetaValue::Bool(true));
+        attachments.stamp("scene/detect");
+        let stamped = FrameMeta {
+            index: 6,
+            chunk: 1,
+            timestamp: None,
+            scene_score: None,
+            attachments,
+        };
+
+        let frame = context.alloc_host_frame(&frame_format(), stamped.clone());
+        let loaded = context
+            .load_host(&HostStreamItem::Frame(frame.freeze()))
+            .expect("the fake uploads");
+
+        assert_eq!(loaded.meta(), &stamped);
+    }
+
+    #[test]
     fn a_host_mask_uploads_as_a_device_mask() {
         let allocator = Arc::new(CountingAllocator::new(64));
         let context = FrameContext::for_testing(allocator, capabilities());

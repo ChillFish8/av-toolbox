@@ -119,14 +119,14 @@ impl PlaneMap {
 
         let landing = self.formats.iter().zip(source);
         for (item, (format, device_item)) in items.iter_mut().zip(landing.clone()) {
-            item.reshape(format, device_item.meta().clone());
+            let meta = device_item.meta().clone();
+            item.reshape(format, meta);
         }
 
         for (format, device_item) in landing.skip(items.len()) {
-            items.push(HostItem::new(
-                HostPlanes::zeroed(format),
-                device_item.meta().clone(),
-            ));
+            let planes = HostPlanes::zeroed(format);
+            let meta = device_item.meta().clone();
+            items.push(HostItem::new(planes, meta));
         }
     }
 }

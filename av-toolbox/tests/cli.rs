@@ -365,8 +365,7 @@ mod device {
 
     const FRAME_COUNT: u64 = 5;
 
-    /// `scene/detect` needs more frames in view than its lookahead before it scores any of
-    /// them, so the metadata example's stream runs longer than the other device fixtures.
+    /// Frames in the textured metadata stream.
     const METADATA_FRAME_COUNT: u64 = 8;
 
     fn y4m_stream() -> Vec<u8> {
@@ -391,9 +390,8 @@ mod device {
         bytes
     }
 
-    /// A pseudo-random luma plane that differs between the first half of the metadata stream
-    /// and the second half, giving `scene/detect` real spatial detail and a real change to
-    /// score, unlike the flat frames in `y4m_stream`.
+    /// A luma plane of repeatable noise, with a different pattern in the second half of the
+    /// stream.
     fn noisy_luma(index: u64) -> Vec<u8> {
         let half = if index < METADATA_FRAME_COUNT / 2 {
             0u32

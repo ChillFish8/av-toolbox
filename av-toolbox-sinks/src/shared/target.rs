@@ -53,9 +53,8 @@ fn claimed_file(claims: &Claims, stage: &str, fd: u32) -> Result<File, StageErro
 fn claim_error(stage: &str, fd: RawFd, error: ClaimError) -> StageError {
     match error {
         ClaimError::StandardDescriptor(_) => {
-            let message = format!(
-                "{stage} cannot write descriptor {fd}, standard output is written by its own sink such as y4m/stdout"
-            );
+            let message =
+                format!("{stage} cannot write descriptor {fd}, which is standard input, output or error");
 
             StageError::msg(message)
         },
@@ -94,7 +93,11 @@ mod tests {
         for fd in 0..=2 {
             let error = claimed_file(&claims, "y4m/pipe", fd).expect_err("a standard descriptor");
 
-            assert!(error.to_string().contains("y4m/stdout"), "{fd}");
+            assert!(
+                error.to_string().contains("standard input, output or error"),
+                "{fd}"
+            );
+            assert!(error.to_string().contains("y4m/pipe"), "{fd}");
         }
     }
 }

@@ -883,6 +883,33 @@ mod tests {
         }
     }
 
+    /// Holds every item, releasing it stamped with `flushed` once the stream ends.
+    struct HoldingUntilEnd {
+        held: Option<MetaItem>,
+    }
+
+    impl StageInstance for HoldingUntilEnd {}
+
+    impl MetaTransform for HoldingUntilEnd {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: MetaInputs,
+        ) -> Result<Vec<MetaItem>, StageError> {
+            let arrived = inputs.take(0).expect("an item");
+            self.held = Some(arrived);
+
+            Ok(vec![])
+        }
+
+        fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<MetaItem>, StageError> {
+            let mut released = self.held.take().expect("an item was held");
+            released.meta_mut().attach("flushed", MetaValue::Bool(true));
+
+            Ok(vec![released])
+        }
+    }
+
     fn stage_paths(item: &AnyItem) -> Vec<String> {
         item.meta()
             .attachments
@@ -962,5 +989,28 @@ mod tests {
 
         assert_eq!(flushed.len(), 1);
         assert_eq!(stage_paths(&flushed[0]), vec!["transform.tag"]);
+    }
+
+    #[test]
+    fn an_item_released_at_end_of_stream_is_stamped_with_its_path() {
+        let context = testing_context();
+        let head = NodeId::new(0);
+        let nodes = vec![(
+            head,
+            StageBox::MetaTransform(Box::new(HoldingUntilEnd { held: None })),
+        )];
+        let edges = RegionEdges::new(vec![], vec![head]).with_paths(paths(&[(head, "transform.flush")]));
+        let mut runner = RegionRunner::new(nodes, edges);
+        let mut stage_context = context_of(&context);
+
+        let produced = runner
+            .run(&mut stage_context, vec![Some(item(&context, 4, 0))])
+            .expect("should run");
+        assert!(produced.is_empty());
+
+        let flushed = runner.end(&mut stage_context).expect("should end");
+
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(stage_paths(&flushed[0]), vec!["transform.flush"]);
     }
 }

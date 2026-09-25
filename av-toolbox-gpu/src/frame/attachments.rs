@@ -98,7 +98,10 @@ impl Attachments {
                     upsert(values, key, value);
                 }
             },
-            None => stored.stages.push((Arc::from(path), pending)),
+            None => {
+                let path = Arc::from(path);
+                stored.stages.push((path, pending));
+            },
         }
     }
 

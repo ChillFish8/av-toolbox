@@ -139,7 +139,7 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         let flushed = self.output.flush();
 
-        flushed.map_err(|error| write_error("the end of the stream", &error))
+        flushed.map_err(|error| flush_error(&error))
     }
 }
 
@@ -149,6 +149,17 @@ fn write_error(position: &str, error: &io::Error) -> StageError {
             format!("the reader closed the metadata stream before {position} was written")
         },
         _ => format!("writing {position} of the metadata stream failed: {error}"),
+    };
+
+    StageError::msg(message)
+}
+
+fn flush_error(error: &io::Error) -> StageError {
+    let message = match error.kind() {
+        io::ErrorKind::BrokenPipe => {
+            "the reader closed the metadata stream before it was flushed".to_string()
+        },
+        _ => format!("flushing the metadata stream failed: {error}"),
     };
 
     StageError::msg(message)
