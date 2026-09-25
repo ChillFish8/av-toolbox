@@ -4,6 +4,7 @@ use std::io::{BufWriter, Write};
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{
     Channel,
+    ChromaLocation,
     ColourRange,
     FrameFormat,
     FrameLayout,
@@ -86,6 +87,25 @@ impl<W: Write> Y4mWriter<W> {
 /// The y4m colourspace name for `format`, without its leading `C`.
 pub(crate) fn colourspace_of(format: &FrameFormat) -> Result<&'static str, StageError> {
     let bits = bits_of(format.sample);
+    let chroma_location = format.colour.chroma_location;
+    let is_yuv420_eight_bit = matches!(
+        (format.layout, bits),
+        (
+            FrameLayout::Yuv {
+                subsampling: Subsampling::Yuv420,
+            },
+            Some(8),
+        )
+    );
+
+    if is_yuv420_eight_bit && chroma_location == ChromaLocation::Center {
+        return Ok("420jpeg");
+    }
+
+    if is_yuv420_eight_bit && chroma_location == ChromaLocation::TopLeft {
+        return Ok("420paldv");
+    }
+
     let name = match (format.layout, bits) {
         (
             FrameLayout::Yuv {
@@ -220,7 +240,7 @@ fn write_error(position: &str, error: &io::Error) -> StageError {
 mod tests {
     use std::io::Cursor;
 
-    use av_toolbox_gpu::{ColourRange, Depth, FrameMeta, testing_context};
+    use av_toolbox_gpu::{ChromaLocation, ColourRange, Depth, FrameMeta, testing_context};
 
     use super::*;
     use crate::shared::testing::{SharedBuffer, filled_frame, yuv420};
@@ -279,6 +299,31 @@ mod tests {
 
             assert_eq!(colourspace_of(&format).expect("writable"), expected, "{format}");
         }
+    }
+
+    #[test]
+    fn an_eight_bit_yuv420_chroma_location_selects_the_colourspace() {
+        let mut center = yuv420(4, 2, SampleFormat::U8, None);
+        center.colour.chroma_location = ChromaLocation::Center;
+        let mut top_left = yuv420(4, 2, SampleFormat::U8, None);
+        top_left.colour.chroma_location = ChromaLocation::TopLeft;
+        let mut left = yuv420(4, 2, SampleFormat::U8, None);
+        left.colour.chroma_location = ChromaLocation::Left;
+        let mut bottom = yuv420(4, 2, SampleFormat::U8, None);
+        bottom.colour.chroma_location = ChromaLocation::Bottom;
+
+        assert_eq!(colourspace_of(&center).expect("writable"), "420jpeg");
+        assert_eq!(colourspace_of(&top_left).expect("writable"), "420paldv");
+        assert_eq!(colourspace_of(&left).expect("writable"), "420");
+        assert_eq!(colourspace_of(&bottom).expect("writable"), "420");
+    }
+
+    #[test]
+    fn a_ten_bit_yuv420_chroma_location_is_ignored() {
+        let mut center = yuv420(4, 2, ten_bit(), None);
+        center.colour.chroma_location = ChromaLocation::Center;
+
+        assert_eq!(colourspace_of(&center).expect("writable"), "420p10");
     }
 
     #[test]

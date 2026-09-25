@@ -45,6 +45,57 @@ pub enum Transfer {
     Hlg,
 }
 
+/// Where chroma samples sit relative to the luma samples they cover.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum ChromaLocation {
+    #[default]
+    Left,
+    Center,
+    TopLeft,
+    Top,
+    BottomLeft,
+    Bottom,
+}
+
+/// Where along an axis a chroma sample sits within the samples it covers.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Siting {
+    First,
+    Centred,
+    Last,
+}
+
+impl Siting {
+    fn offset(self, factor: u32) -> f32 {
+        let span = factor as f32 - 1.0;
+
+        match self {
+            Self::First => 0.0,
+            Self::Centred => span / 2.0,
+            Self::Last => span,
+        }
+    }
+}
+
+impl ChromaLocation {
+    /// How far a chroma sample sits past `factor * i` along each axis, in luma samples.
+    pub fn offsets(self, factor_x: u32, factor_y: u32) -> (f32, f32) {
+        let (horizontal, vertical) = match self {
+            Self::Left => (Siting::First, Siting::Centred),
+            Self::Center => (Siting::Centred, Siting::Centred),
+            Self::TopLeft => (Siting::First, Siting::First),
+            Self::Top => (Siting::Centred, Siting::First),
+            Self::BottomLeft => (Siting::First, Siting::Last),
+            Self::Bottom => (Siting::Centred, Siting::Last),
+        };
+
+        let offset_x = horizontal.offset(factor_x);
+        let offset_y = vertical.offset(factor_y);
+
+        (offset_x, offset_y)
+    }
+}
+
 /// How a frame's samples are to be interpreted as colour.
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct ColourInfo {
@@ -52,6 +103,7 @@ pub struct ColourInfo {
     pub matrix: Matrix,
     pub primaries: Primaries,
     pub transfer: Transfer,
+    pub chroma_location: ChromaLocation,
 }
 
 /// What a frame is.
@@ -369,6 +421,26 @@ mod tests {
         assert_eq!(frames.as_mask(), None);
         assert_eq!(mask.as_mask(), Some(&mask_format));
         assert_eq!(mask.as_frames(), None);
+    }
+
+    #[test]
+    fn chroma_location_defaults_to_left() {
+        assert_eq!(ColourInfo::default().chroma_location, ChromaLocation::Left);
+    }
+
+    #[test]
+    fn each_chroma_location_places_its_samples() {
+        assert_eq!(ChromaLocation::Left.offsets(2, 2), (0.0, 0.5));
+        assert_eq!(ChromaLocation::Center.offsets(2, 2), (0.5, 0.5));
+        assert_eq!(ChromaLocation::TopLeft.offsets(2, 2), (0.0, 0.0));
+        assert_eq!(ChromaLocation::Top.offsets(2, 2), (0.5, 0.0));
+        assert_eq!(ChromaLocation::BottomLeft.offsets(2, 2), (0.0, 1.0));
+        assert_eq!(ChromaLocation::Bottom.offsets(2, 2), (0.5, 1.0));
+    }
+
+    #[test]
+    fn an_axis_that_is_not_subsampled_has_no_offset() {
+        assert_eq!(ChromaLocation::Bottom.offsets(2, 1), (0.5, 0.0));
     }
 
     /// A negotiation failure names an edge with these, so they have to read as something a user can

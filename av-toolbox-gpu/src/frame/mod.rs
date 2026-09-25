@@ -19,6 +19,7 @@ pub(crate) mod tests;
 
 pub use self::attachments::{Attachments, MetaValue};
 pub use self::format::{
+    ChromaLocation,
     ColourInfo,
     ColourRange,
     FrameFormat,

@@ -62,6 +62,7 @@ pub use self::enumerate::{BackendDevices, enumerate_devices};
 pub use self::frame::{
     Attachments,
     Channel,
+    ChromaLocation,
     ColourInfo,
     ColourRange,
     Depth,

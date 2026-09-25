@@ -221,6 +221,11 @@ impl Frame<'_> {
         self.frame.TransferCharateristics
     }
 
+    /// The frame's chroma location, as ffms2's raw `FFMS_ChromaLocations` value.
+    pub(crate) fn chroma_location(&self) -> i32 {
+        self.frame.ChromaLocation
+    }
+
     /// One plane of the frame as `rows` rows of `row_bytes`.
     ///
     /// Gives `None` when the plane is missing or its stride cannot hold `rows` rows of

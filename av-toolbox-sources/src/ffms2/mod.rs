@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
+    ChromaLocation,
     ColourInfo,
     ColourRange,
     FrameContext,
@@ -135,6 +136,7 @@ impl SourceDefinition for File {
         let matrix = probe.colour_space();
         let primaries = probe.colour_primaries();
         let transfer = probe.transfer();
+        let chroma_location = probe.chroma_location();
 
         let resolved_name = pixel_format_name(encoded_id);
         let choice = resolve_choice(&args.path, encoded_id, resolved_name, args.format)?;
@@ -146,15 +148,14 @@ impl SourceDefinition for File {
 
         let (layout, sample) = choice.output.layout();
         let source_layout = resolved_name.and_then(format::mapped_layout);
-        let colour = colour_of(
+        let raw_colour = RawColour {
             range,
             matrix,
             primaries,
             transfer,
-            choice.full_range,
-            source_layout,
-            layout,
-        );
+            chroma_location,
+        };
+        let colour = colour_of(raw_colour, choice.full_range, source_layout, layout);
         let format = FrameFormat {
             width: width as u32,
             height: height as u32,
@@ -352,6 +353,15 @@ fn resolve_choice(
     }
 }
 
+/// A frame's colour properties as ffms2 reports them, before mapping.
+struct RawColour {
+    range: i32,
+    matrix: i32,
+    primaries: i32,
+    transfer: i32,
+    chroma_location: i32,
+}
+
 /// The colour a frame carries, mapped from its ffms2 properties.
 ///
 /// A forced format that crosses the RGB/YUV family boundary overrides the source's matrix and
@@ -359,19 +369,17 @@ fn resolve_choice(
 /// from a YUV source is identity matrix at full range, and a YUV output made from an RGB source
 /// carries no matrix or range at all.
 fn colour_of(
-    range: i32,
-    matrix: i32,
-    primaries: i32,
-    transfer: i32,
+    raw: RawColour,
     full_range: bool,
     source_layout: Option<FrameLayout>,
     output_layout: FrameLayout,
 ) -> ColourInfo {
     let mapped = ColourInfo {
-        range: range_of(range, full_range),
-        matrix: matrix_of(matrix),
-        primaries: primaries_of(primaries),
-        transfer: transfer_of(transfer),
+        range: range_of(raw.range, full_range),
+        matrix: matrix_of(raw.matrix),
+        primaries: primaries_of(raw.primaries),
+        transfer: transfer_of(raw.transfer),
+        chroma_location: chroma_location_of(raw.chroma_location),
     };
 
     match (source_layout, output_layout) {
@@ -427,6 +435,18 @@ fn transfer_of(value: i32) -> Transfer {
         16 => Transfer::Pq,
         18 => Transfer::Hlg,
         _ => Transfer::Unspecified,
+    }
+}
+
+/// Maps ffms2's chroma location, where 0 is unspecified and 1 to 6 follow its enum.
+fn chroma_location_of(raw: i32) -> ChromaLocation {
+    match raw {
+        2 => ChromaLocation::Center,
+        3 => ChromaLocation::TopLeft,
+        4 => ChromaLocation::Top,
+        5 => ChromaLocation::BottomLeft,
+        6 => ChromaLocation::Bottom,
+        _ => ChromaLocation::Left,
     }
 }
 
@@ -532,6 +552,7 @@ mod tests {
 
     use av_toolbox_gpu::{
         Channel,
+        ChromaLocation,
         ColourRange,
         FrameLayout,
         FrameRate,
@@ -604,6 +625,14 @@ mod tests {
         let (_folder, opened) = opened("yuv420p.mkv", None);
 
         assert_eq!(opened.format().frame_rate, FrameRate::new(25, 1));
+    }
+
+    #[test]
+    fn ffms2_chroma_location_values_map_to_their_position() {
+        assert_eq!(chroma_location_of(0), ChromaLocation::Left);
+        assert_eq!(chroma_location_of(1), ChromaLocation::Left);
+        assert_eq!(chroma_location_of(2), ChromaLocation::Center);
+        assert_eq!(chroma_location_of(6), ChromaLocation::Bottom);
     }
 
     #[test]

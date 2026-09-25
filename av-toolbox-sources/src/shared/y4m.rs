@@ -7,6 +7,7 @@ use std::time::Duration;
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{
     Channel,
+    ChromaLocation,
     ColourInfo,
     ColourRange,
     Depth,
@@ -62,8 +63,10 @@ impl<R: Read> Y4mReader<R> {
         let (layout, sample) = layout_of(colorspace)?;
         let raw_params = decoder.get_raw_params();
         let range = range_of(raw_params);
+        let chroma_location = chroma_location_of(colorspace);
         let colour = ColourInfo {
             range,
+            chroma_location,
             ..ColourInfo::default()
         };
         let frame_rate = decoder.get_framerate();
@@ -192,6 +195,15 @@ fn range_of(raw_params: &[u8]) -> ColourRange {
     ColourRange::Unspecified
 }
 
+/// The chroma location the colourspace implies.
+fn chroma_location_of(colorspace: Colorspace) -> ChromaLocation {
+    match colorspace {
+        Colorspace::C420jpeg => ChromaLocation::Center,
+        Colorspace::C420paldv => ChromaLocation::TopLeft,
+        _ => ChromaLocation::Left,
+    }
+}
+
 fn rate_of(ratio: y4m::Ratio) -> Option<FrameRate> {
     let numerator = u32::try_from(ratio.num).ok()?;
     let denominator = u32::try_from(ratio.den).ok()?;
@@ -229,6 +241,7 @@ mod tests {
 
     use av_toolbox_gpu::{
         Channel,
+        ChromaLocation,
         ColourRange,
         Depth,
         FrameLayout,
@@ -423,6 +436,24 @@ mod tests {
         assert_eq!(full.format().colour.range, ColourRange::Full);
         assert_eq!(limited.format().colour.range, ColourRange::Limited);
         assert_eq!(unset.format().colour.range, ColourRange::Unspecified);
+    }
+
+    #[test]
+    fn the_colourspace_sets_the_chroma_location() {
+        let jpeg_stream = stream(Colorspace::C420jpeg, 0, None);
+        let paldv_stream = stream(Colorspace::C420paldv, 0, None);
+        let plain_stream = stream(Colorspace::C420, 0, None);
+        let mpeg2_stream = stream(Colorspace::C420mpeg2, 0, None);
+
+        let jpeg = Y4mReader::open(Cursor::new(jpeg_stream)).expect("opens");
+        let paldv = Y4mReader::open(Cursor::new(paldv_stream)).expect("opens");
+        let plain = Y4mReader::open(Cursor::new(plain_stream)).expect("opens");
+        let mpeg2 = Y4mReader::open(Cursor::new(mpeg2_stream)).expect("opens");
+
+        assert_eq!(jpeg.format().colour.chroma_location, ChromaLocation::Center);
+        assert_eq!(paldv.format().colour.chroma_location, ChromaLocation::TopLeft);
+        assert_eq!(plain.format().colour.chroma_location, ChromaLocation::Left);
+        assert_eq!(mpeg2.format().colour.chroma_location, ChromaLocation::Left);
     }
 
     #[test]
