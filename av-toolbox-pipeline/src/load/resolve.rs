@@ -19,7 +19,6 @@ pub(super) enum Given<'a> {
     /// The root file, filled from flags and the environment.
     Root(&'a Supplied),
     /// A called file, filled from its call's `variables` table.
-    #[expect(dead_code, reason = "used by call expansion")]
     Call(&'a [GivenValue]),
 }
 

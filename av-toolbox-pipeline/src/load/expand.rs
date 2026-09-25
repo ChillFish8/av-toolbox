@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use av_toolbox_graph::{
@@ -14,6 +14,8 @@ use av_toolbox_graph::{
 };
 use serde_json::Value;
 
+use super::aliases::{drop_unread, follow};
+use super::calls::{CallSite, Link};
 use super::files::{Files, SourceMap};
 use super::resolve::{Given, resolve_variables};
 use super::{LoadFailure, Loaded};
@@ -22,30 +24,36 @@ use crate::variables::{FillError, Supplied, Values, fill};
 
 /// Reads a pipeline and every file it calls into one flat list of stages.
 pub(super) struct Loader<'a> {
-    files: &'a dyn Files,
+    pub(super) files: &'a dyn Files,
     supplied: &'a Supplied,
-    sources: SourceMap,
-    diagnostics: Diagnostics,
+    pub(super) sources: SourceMap,
+    pub(super) diagnostics: Diagnostics,
     specs: Vec<StageSpec>,
+    /// Input, output and call names mapped to the name they stand for.
+    pub(super) aliases: HashMap<String, String>,
+    /// The aliases which are outputs of a called file.
+    pub(super) outputs: HashSet<String>,
 }
 
 /// One file being expanded, and where its names and paths are rooted.
-struct Instance<'a> {
-    file: FileId,
-    directory: PathBuf,
+pub(super) struct Instance<'a> {
+    pub(super) file: FileId,
+    pub(super) directory: PathBuf,
     /// Put in front of every name in the file, such as `outer.inner.`.
-    prefix: String,
-    given: Given<'a>,
+    pub(super) prefix: String,
+    pub(super) given: Given<'a>,
+    /// This file and every file that called it on the way here.
+    pub(super) chain: Vec<Link>,
+    /// The call that named this file, or `None` for the root file.
+    pub(super) call: Option<CallSite>,
 }
 
-/// Everything needed to fill templates in one stage's args and workers.
-struct Filling<'a> {
-    arg_spans: &'a ArgSpans,
-    /// The span reported when a template's own span cannot be found.
-    fallback: Span,
-    values: &'a Values,
-    declared: &'a HashSet<&'a str>,
-    path: &'a str,
+/// What filling templates needs, and the path problems are reported under.
+pub(super) struct Filling<'a> {
+    pub(super) values: &'a Values,
+    /// The file's declared variable names, in the order they are declared.
+    pub(super) declared: &'a [&'a str],
+    pub(super) path: &'a str,
 }
 
 impl<'a> Loader<'a> {
@@ -56,6 +64,8 @@ impl<'a> Loader<'a> {
             sources: SourceMap::new(),
             diagnostics: Diagnostics::new(),
             specs: Vec::new(),
+            aliases: HashMap::new(),
+            outputs: HashSet::new(),
         }
     }
 
@@ -76,13 +86,21 @@ impl<'a> Loader<'a> {
 
         let directory = directory_of(root);
         let path = root.to_path_buf();
+        let found = self.files.canonicalize(root);
+        let canonical = found.unwrap_or_else(|_| path.clone());
         let file = self.sources.push(path, text, Vec::new());
         let supplied = self.supplied;
+        let root_link = Link {
+            canonical,
+            entered_by: None,
+        };
         let instance = Instance {
             file,
             directory,
             prefix: String::new(),
             given: Given::Root(supplied),
+            chain: vec![root_link],
+            call: None,
         };
 
         self.expand(&instance);
@@ -93,6 +111,8 @@ impl<'a> Loader<'a> {
             sources,
             diagnostics,
             mut specs,
+            aliases,
+            outputs,
             ..
         } = self;
 
@@ -100,13 +120,41 @@ impl<'a> Loader<'a> {
             return Err(LoadFailure { diagnostics, sources });
         }
 
+        let mut read_outputs: HashSet<String> = HashSet::new();
+        let mut resolve_diagnostics = Diagnostics::new();
+
+        for spec in &mut specs {
+            for input in &mut spec.inputs {
+                let resolved = follow(&aliases, &outputs, &input.value.target, &mut read_outputs);
+                match resolved {
+                    Some(target) => input.value.target = target,
+                    None => {
+                        let message = format!("{} loops back to itself through calls", input.value.target);
+                        let diagnostic = Diagnostic::error(DiagnosticCode::Cycle, "", input.span, message);
+                        resolve_diagnostics.push(diagnostic);
+                    },
+                }
+            }
+        }
+
+        if !resolve_diagnostics.is_empty() {
+            return Err(LoadFailure {
+                diagnostics: resolve_diagnostics,
+                sources,
+            });
+        }
+
+        drop_unread(&mut specs, &aliases, &outputs, &read_outputs);
+
         specs.sort_by_key(|spec| (spec.span.file.index(), spec.span.start));
 
         Ok(Loaded { specs, sources })
     }
 
-    /// Expands one file into specs.
-    fn expand(&mut self, instance: &Instance<'_>) {
+    /// Expands one file into specs, returning its output names.
+    ///
+    /// Returns `None` when the file could not be parsed.
+    pub(super) fn expand(&mut self, instance: &Instance<'_>) -> Option<Vec<String>> {
         let source = self.sources.get(instance.file).expect("the file was just added");
         let text = source.text.clone();
         let parsed = toml::parse(&text, instance.file);
@@ -114,7 +162,7 @@ impl<'a> Loader<'a> {
             Ok(raw) => raw,
             Err(found) => {
                 self.diagnostics.extend(found);
-                return;
+                return None;
             },
         };
 
@@ -124,20 +172,43 @@ impl<'a> Loader<'a> {
             &instance.directory,
             &mut self.diagnostics,
         );
-        let declared: HashSet<&str> = raw
+        let declared: Vec<&str> = raw
             .variables
             .iter()
             .map(|declaration| declaration.name.value.as_str())
             .collect();
 
-        if let Given::Root(_) = instance.given {
-            self.refuse_root_ports(&raw);
+        match &instance.call {
+            None => self.refuse_root_ports(&raw),
+            Some(site) => self.bind_inputs(instance, site, &raw),
         }
+
+        self.check_names(&raw);
+
+        let mut outputs_of: HashMap<String, Option<Vec<String>>> = HashMap::new();
+        for call in &raw.calls {
+            let expanded = self.call(instance, call, &values, &declared);
+            outputs_of.insert(call.name.value.clone(), expanded);
+        }
+
+        self.check_references(&raw, &outputs_of);
 
         for stage in raw.stages {
             let converted = self.stage(instance, stage, &values, &declared);
             self.specs.extend(converted);
         }
+
+        let mut output_names = Vec::with_capacity(raw.outputs.len());
+        for output in raw.outputs {
+            let alias = format!("{}{}", instance.prefix, output.name.value);
+            let target = format!("{}{}", instance.prefix, output.source.value);
+
+            self.aliases.insert(alias.clone(), target);
+            self.outputs.insert(alias);
+            output_names.push(output.name.value);
+        }
+
+        Some(output_names)
     }
 
     fn refuse_root_ports(&mut self, raw: &RawFile) {
@@ -163,7 +234,7 @@ impl<'a> Loader<'a> {
         instance: &Instance<'_>,
         stage: RawStage,
         values: &Values,
-        declared: &HashSet<&str>,
+        declared: &[&str],
     ) -> Option<StageSpec> {
         let RawStage {
             name,
@@ -184,13 +255,11 @@ impl<'a> Loader<'a> {
         }
 
         let args_filling = Filling {
-            arg_spans: &arg_spans,
-            fallback: args.span,
             values,
             declared,
             path: &path,
         };
-        let filled_args = self.fill_value(&args.value, "", &args_filling);
+        let filled_args = self.fill_value(&args.value, "", &arg_spans, args.span, &args_filling);
         let workers = self.workers(workers, values, declared, &path);
 
         let (Some(filled_args), Ok(workers)) = (filled_args, workers) else {
@@ -211,10 +280,19 @@ impl<'a> Loader<'a> {
     }
 
     /// Fills every template under `value`, or `None` after reporting each that cannot be.
-    fn fill_value(&mut self, value: &Value, pointer: &str, filling: &Filling<'_>) -> Option<Value> {
+    ///
+    /// A template is reported at its span in `arg_spans`, or at `fallback` when it has none.
+    pub(super) fn fill_value(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        arg_spans: &ArgSpans,
+        fallback: Span,
+        filling: &Filling<'_>,
+    ) -> Option<Value> {
         match value {
             Value::String(text) => {
-                let span = filling.arg_spans.narrowest(pointer).unwrap_or(filling.fallback);
+                let span = arg_spans.narrowest(pointer).unwrap_or(fallback);
                 self.fill_string(text, span, filling)
             },
             Value::Array(items) => {
@@ -223,7 +301,7 @@ impl<'a> Loader<'a> {
 
                 for (index, item) in items.iter().enumerate() {
                     let nested = format!("{pointer}/{index}");
-                    let converted = self.fill_value(item, &nested, filling);
+                    let converted = self.fill_value(item, &nested, arg_spans, fallback, filling);
                     match converted {
                         Some(converted) => filled.push(converted),
                         None => failed = true,
@@ -239,7 +317,7 @@ impl<'a> Loader<'a> {
                 for (key, item) in entries {
                     let escaped = key.replace('~', "~0").replace('/', "~1");
                     let nested = format!("{pointer}/{escaped}");
-                    let converted = self.fill_value(item, &nested, filling);
+                    let converted = self.fill_value(item, &nested, arg_spans, fallback, filling);
                     match converted {
                         Some(converted) => {
                             filled.insert(key.clone(), converted);
@@ -258,13 +336,13 @@ impl<'a> Loader<'a> {
     ///
     /// A template naming a variable that was declared but could not be resolved is left
     /// unreported here, since resolving it already reported the problem.
-    fn fill_string(&mut self, text: &str, span: Span, filling: &Filling<'_>) -> Option<Value> {
+    pub(super) fn fill_string(&mut self, text: &str, span: Span, filling: &Filling<'_>) -> Option<Value> {
         let filled = fill(text, filling.values);
 
         match filled {
             Ok(value) => Some(value),
             Err(FillError::Unknown(name)) => {
-                if filling.declared.contains(name.as_str()) {
+                if filling.declared.contains(&name.as_str()) {
                     return None;
                 }
 
@@ -296,7 +374,7 @@ impl<'a> Loader<'a> {
         &mut self,
         workers: Option<Spanned<RawWorkers>>,
         values: &Values,
-        declared: &HashSet<&str>,
+        declared: &[&str],
         path: &str,
     ) -> Result<Option<usize>, ()> {
         let Some(workers) = workers else {
@@ -309,10 +387,7 @@ impl<'a> Loader<'a> {
         };
 
         let workers_path = format!("{path}.workers");
-        let no_spans = ArgSpans::new();
         let workers_filling = Filling {
-            arg_spans: &no_spans,
-            fallback: workers.span,
             values,
             declared,
             path: &workers_path,
@@ -345,7 +420,7 @@ impl<'a> Loader<'a> {
 /// The directory relative paths in `path` resolve against.
 ///
 /// A bare file name has an empty parent, which resolves against the working directory.
-fn directory_of(path: &Path) -> PathBuf {
+pub(super) fn directory_of(path: &Path) -> PathBuf {
     let parent = path.parent();
     parent.map(Path::to_path_buf).unwrap_or_default()
 }

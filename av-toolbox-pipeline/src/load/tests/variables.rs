@@ -134,6 +134,33 @@ fn an_unknown_flag_suggests_the_closest_variable() {
 }
 
 #[test]
+fn an_unknown_template_suggests_the_first_declared_of_tied_names() {
+    let pipeline = r#"
+[variable.sigmb]
+type = "float"
+default = 1.0
+
+[variable.sigmc]
+type = "float"
+default = 1.0
+
+[source.src]
+type = "y4m/pipe"
+args.sigma = "{{ sigma }}"
+"#;
+
+    let diagnostics = failed(
+        &[("/work/main.toml", pipeline)],
+        "/work/main.toml",
+        &Supplied::new(),
+    );
+    let note = &diagnostics[0].notes()[0].message;
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::UnknownVariable]);
+    assert!(note.contains("did you mean `sigmb`?"));
+}
+
+#[test]
 fn an_unknown_environment_variable_is_ignored() {
     let variables = [
         ("AVTB_VAR_SIGMA".to_string(), "1".to_string()),
