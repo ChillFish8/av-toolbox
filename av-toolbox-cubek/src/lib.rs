@@ -1,14 +1,16 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Shared CubeCL kernels for av-toolbox stages
+//!
+//! Every module launches its kernels over planes the caller already holds on the device:
+//!
+//! - [blur] for separable gaussian blurs.
+//! - [reduce] for the extremes and sums of a plane.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod blur;
+mod border;
+mod dispatch;
+mod plane;
+pub mod reduce;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use self::border::reflect;
+pub use self::dispatch::Dispatch;
+pub use self::plane::DevicePlane;
