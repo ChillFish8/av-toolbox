@@ -10,7 +10,7 @@ av-toolbox-graph = { path = "../av-toolbox-graph" }
 av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 av-toolbox-sinks = { path = "../av-toolbox-sinks" }
 av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
-av-toolbox-transforms = { path = "../av-toolbox-transforms", default-features = false }
+av-toolbox-transforms = { path = "../av-toolbox-transforms" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
@@ -23,9 +23,8 @@ tempfile = { workspace = true }
 y4m = { workspace = true }
 
 [features]
-default = ["ffms2", "scene"]
+default = ["ffms2"]
 ffms2 = ["av-toolbox-sources/ffms2"]
-scene = ["av-toolbox-transforms/scene"]
 vulkan = [
     "av-toolbox-gpu/vulkan",
     "av-toolbox-core/vulkan",

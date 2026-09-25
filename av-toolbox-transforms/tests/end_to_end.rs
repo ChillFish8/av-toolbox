@@ -1,4 +1,4 @@
-#![cfg(all(feature = "gpu-tests", feature = "scene", unix))]
+#![cfg(all(feature = "gpu-tests", unix))]
 
 use std::io::Write;
 use std::os::fd::{IntoRawFd, RawFd};

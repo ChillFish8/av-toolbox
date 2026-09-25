@@ -32,6 +32,7 @@ mod tests {
         assert!(registered(StageKind::Source, "y4m/pipe"));
         assert!(registered(StageKind::Sink, "y4m/stdout"));
         assert!(registered(StageKind::Sink, "y4m/pipe"));
+        assert!(registered(StageKind::Transform, "scene/detect"));
         assert!(registered(StageKind::Transform, "scene/split"));
     }
 
@@ -39,11 +40,5 @@ mod tests {
     #[test]
     fn the_ffms2_source_is_registered() {
         assert!(registered(StageKind::Source, "ffms2/file"));
-    }
-
-    #[cfg(feature = "scene")]
-    #[test]
-    fn scene_detection_is_registered() {
-        assert!(registered(StageKind::Transform, "scene/detect"));
     }
 }

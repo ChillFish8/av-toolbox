@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-av-scenechange = { workspace = true, optional = true }
+av-scenechange = { workspace = true }
 av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-gpu = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
-v_frame = { workspace = true, optional = true }
+v_frame = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
@@ -20,8 +20,6 @@ serde_json = { workspace = true }
 y4m = { workspace = true }
 
 [features]
-default = ["scene"]
-scene = ["dep:av-scenechange", "dep:v_frame"]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan"]
 metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal"]
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda"]

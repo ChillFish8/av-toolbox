@@ -1,15 +1,12 @@
 //! Transforms that change how a stream is divided into chunks.
 
-#[cfg(feature = "scene")]
 mod scene;
-
 mod split;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
 /// Registers every transform this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
-    #[cfg(feature = "scene")]
     registry.register_transform::<scene::SceneDetect>()?;
     registry.register_meta_transform::<split::SceneSplit>()?;
 
