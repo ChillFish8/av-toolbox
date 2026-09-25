@@ -36,6 +36,8 @@ mod tests {
         assert!(registered(StageKind::Transform, "scene/detect"));
         assert!(registered(StageKind::Transform, "scene/split"));
         assert!(registered(StageKind::Mask, "mask/threshold"));
+        assert!(registered(StageKind::Mask, "mask/union"));
+        assert!(registered(StageKind::Mask, "mask/vote"));
     }
 
     #[cfg(feature = "ffms2")]

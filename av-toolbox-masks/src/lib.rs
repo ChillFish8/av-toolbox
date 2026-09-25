@@ -3,6 +3,8 @@
 //! Every mask is a single U8 plane, where 0 is background and 255 is fully selected.
 //!
 //! - `mask/threshold` hardens a mask to 0 or 255 at a cutoff.
+//! - `mask/union` keeps the largest sample of every input.
+//! - `mask/vote` selects the pixels enough of its inputs agree on.
 
 mod mask;
 
@@ -11,6 +13,8 @@ use av_toolbox_core::{PipelineRegistry, RegistryError};
 /// Registers every mask this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_mask::<mask::Threshold>()?;
+    registry.register_mask::<mask::Union>()?;
+    registry.register_mask::<mask::Vote>()?;
 
     Ok(())
 }
@@ -33,5 +37,7 @@ mod tests {
     #[test]
     fn every_mask_is_registered() {
         assert!(registered("mask/threshold"));
+        assert!(registered("mask/union"));
+        assert!(registered("mask/vote"));
     }
 }

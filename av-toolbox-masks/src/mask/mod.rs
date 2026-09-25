@@ -1,9 +1,13 @@
 mod threshold;
+mod union;
+mod vote;
 
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{FormatSet, MaskFormat, OutputFormats, SampleFormat, StreamFormat, StreamTemplate};
 
 pub(crate) use self::threshold::Threshold;
+pub(crate) use self::union::Union;
+pub(crate) use self::vote::Vote;
 
 /// Takes U8 masks and leaves every other sample out.
 pub(crate) fn accepts_mask(stage: &str, offered: StreamFormat) -> Result<FormatSet, StageError> {
