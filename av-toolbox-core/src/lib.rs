@@ -18,6 +18,7 @@
 //! validates arguments against the schema and binds inputs to the signature before handing them
 //! to the stage.
 
+mod chroma;
 mod claims;
 mod crossing;
 mod error;

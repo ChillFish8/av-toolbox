@@ -227,6 +227,7 @@ dependencies = [
 name = "av-toolbox-core"
 version = "0.1.0"
 dependencies = [
+ "av-toolbox-cubek",
  "av-toolbox-gpu",
  "cubecl",
  "jsonschema",

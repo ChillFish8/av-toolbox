@@ -17,6 +17,7 @@ use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::chroma::add_chroma_plane;
 use crate::{
     ArgsError,
     BindInputsError,
@@ -566,8 +567,26 @@ pub(crate) struct Prepared<D: StageDefinition> {
     slot: OpenSlot,
 }
 
+/// Hands back a built stage as it is, for the kinds with nothing to add after building.
+fn keep<R: Runtime, T>(
+    _context: &BuildContext<R>,
+    _formats: &ResolvedFormats,
+    built: T,
+) -> Result<T, StageError> {
+    Ok(built)
+}
+
+/// Writes a stage kind's build task and factory, handing each built stage to `$finish`.
 macro_rules! impl_stage_factory {
-    ($kind_trait:ident, $definition_trait:ident, $prepared_trait:ident, $task:ident, $built:ty, $wrap:ident) => {
+    (
+        $kind_trait:ident,
+        $definition_trait:ident,
+        $prepared_trait:ident,
+        $task:ident,
+        $built:ty,
+        $wrap:ident,
+        $finish:path
+    ) => {
         /// Carries a stage's pieces into whichever runtime the backend opened.
         struct $task<'a, D: $definition_trait> {
             args: D::Args,
@@ -579,8 +598,10 @@ macro_rules! impl_stage_factory {
             type Output = Result<$built, StageError>;
 
             fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-                D::build::<R>(context, self.args, self.inputs, self.formats)
-                    .map(<D::Side as StageSide>::$wrap)
+                let stage = D::build::<R>(context, self.args, self.inputs, self.formats)?;
+                let built = <D::Side as StageSide>::$wrap(stage);
+
+                $finish(context, self.formats, built)
             }
         }
 
@@ -846,16 +867,26 @@ impl_stage_factory!(
     PreparedFilter,
     BuildFilter,
     BuiltFilter,
-    filter
+    filter,
+    keep
 );
-impl_stage_factory!(Mask, MaskDefinition, PreparedMask, BuildMask, BuiltMask, mask);
+impl_stage_factory!(
+    Mask,
+    MaskDefinition,
+    PreparedMask,
+    BuildMask,
+    BuiltMask,
+    mask,
+    add_chroma_plane
+);
 impl_stage_factory!(
     Transform,
     TransformDefinition,
     PreparedTransform,
     BuildTransform,
     BuiltTransform,
-    transform
+    transform,
+    keep
 );
 impl_sink_factory!(BuildSink);
 
