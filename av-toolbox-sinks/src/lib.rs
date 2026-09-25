@@ -1,5 +1,6 @@
 //! Sinks that write the finished stream out of the pipeline from host frames.
 
+mod metadata;
 mod pipe;
 mod shared;
 mod stdout;

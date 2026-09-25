@@ -22,6 +22,9 @@
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-sinks/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-sinks/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-transforms/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-pipeline/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-pipeline/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
