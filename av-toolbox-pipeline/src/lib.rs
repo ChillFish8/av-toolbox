@@ -9,6 +9,7 @@ mod error;
 mod pipeline;
 mod registry;
 pub mod toml;
+pub mod variables;
 
 pub use self::backend::{OpenBackendError, open_backend};
 pub use self::error::PipelineError;
