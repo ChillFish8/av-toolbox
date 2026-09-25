@@ -27,6 +27,7 @@
 //! ```
 
 mod build;
+mod chroma;
 mod diagnostic;
 mod graph;
 mod instantiate;
@@ -41,6 +42,7 @@ mod suggest;
 mod testing;
 
 pub use self::build::{Built, build};
+pub use self::chroma::settle_mask_planes;
 pub use self::diagnostic::{Diagnostic, DiagnosticCode, Diagnostics, Note, Severity};
 pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, NodeRole, Sharing};
 pub use self::instantiate::StageBox;

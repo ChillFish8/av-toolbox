@@ -15,6 +15,7 @@ use av_toolbox_graph::{
     plan,
     render_ascii,
     render_html,
+    settle_mask_planes,
     solve,
 };
 use av_toolbox_runtime::{Engine, Settings};
@@ -96,6 +97,7 @@ impl<'r> Pipeline<'r> {
 
         let capabilities = backend.capabilities();
         let mut formats = solve(&graph, registry, capabilities)?;
+        settle_mask_planes(&graph, registry, &mut formats)?;
 
         let placed = place_transfers(&mut graph, registry, &mut formats)?;
         warnings.extend(placed.iter().cloned());

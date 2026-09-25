@@ -54,6 +54,14 @@ impl SolvedFormats {
     pub(crate) fn push(&mut self, formats: ResolvedFormats) {
         self.per_node.push(formats);
     }
+
+    pub(crate) fn set_output(&mut self, node: NodeId, format: StreamFormat) {
+        self.per_node[node.index()].set_output(format);
+    }
+
+    pub(crate) fn set_input(&mut self, node: NodeId, slot: usize, format: StreamFormat) {
+        self.per_node[node.index()].set_input(slot, format);
+    }
 }
 
 /// Chooses one sample format per edge, in the graph's topological order.
@@ -720,7 +728,7 @@ fn signature_slots(registry: &PipelineRegistry, node: &Node) -> SignatureSlots {
     slots
 }
 
-fn signature_of(registry: &PipelineRegistry, node: &Node) -> Option<&'static InputSignature> {
+pub(crate) fn signature_of(registry: &PipelineRegistry, node: &Node) -> Option<&'static InputSignature> {
     let stage = registry
         .stages()
         .find(|info| info.kind() == node.kind() && info.full_identifier() == node.identifier());

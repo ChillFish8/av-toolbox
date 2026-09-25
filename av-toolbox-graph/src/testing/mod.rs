@@ -5,6 +5,7 @@ mod endpoints;
 mod filters;
 mod host;
 mod masks;
+mod planes;
 mod rated;
 mod shared;
 mod specs;
@@ -37,6 +38,7 @@ pub(crate) use self::filters::{
 };
 use self::host::{HostBlur, HostFile, HostStdout, Log, Restamp};
 use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
+use self::planes::{Blend, Combine, HostMasker, LayoutFile, PlainBlend};
 use self::rated::{Rated, Retime};
 pub(crate) use self::specs::{named, positional, spec};
 
@@ -81,6 +83,11 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_meta_sink::<Log>().expect("should register");
     registry.register_source::<Rated>().expect("should register");
     registry.register_filter::<Retime>().expect("should register");
+    registry.register_source::<LayoutFile>().expect("should register");
+    registry.register_mask::<Combine>().expect("should register");
+    registry.register_mask::<HostMasker>().expect("should register");
+    registry.register_filter::<Blend>().expect("should register");
+    registry.register_filter::<PlainBlend>().expect("should register");
 
     registry
 }
@@ -97,7 +104,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 32);
+        assert_eq!(identifiers.len(), 37);
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
         assert!(identifiers.contains(&"test/blur"));

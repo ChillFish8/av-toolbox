@@ -50,6 +50,8 @@ pub enum DiagnosticCode {
     UnknownCallOutput,
     UnreadableFile,
     CallCycle,
+    ConflictingMaskPlanes,
+    HostMaskPlanes,
 }
 
 impl DiagnosticCode {
@@ -81,6 +83,8 @@ impl DiagnosticCode {
             Self::UnknownCallOutput => "unknown-call-output",
             Self::UnreadableFile => "unreadable-file",
             Self::CallCycle => "call-cycle",
+            Self::ConflictingMaskPlanes => "conflicting-mask-planes",
+            Self::HostMaskPlanes => "host-mask-planes",
         }
     }
 }
@@ -334,6 +338,15 @@ mod tests {
         assert_eq!(DiagnosticCode::UnknownCallOutput.as_str(), "unknown-call-output");
         assert_eq!(DiagnosticCode::UnreadableFile.as_str(), "unreadable-file");
         assert_eq!(DiagnosticCode::CallCycle.as_str(), "call-cycle");
+    }
+
+    #[test]
+    fn the_mask_plane_codes_render_as_kebab_case() {
+        assert_eq!(
+            DiagnosticCode::ConflictingMaskPlanes.as_str(),
+            "conflicting-mask-planes"
+        );
+        assert_eq!(DiagnosticCode::HostMaskPlanes.as_str(), "host-mask-planes");
     }
 
     #[test]

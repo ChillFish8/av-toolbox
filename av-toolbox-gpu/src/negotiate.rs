@@ -168,6 +168,17 @@ impl ResolvedFormats {
     pub fn output(&self) -> Option<StreamFormat> {
         self.output
     }
+
+    /// Replaces the format in one signature slot.
+    ///
+    /// Panics when `index` is past the end of the signature.
+    pub fn set_input(&mut self, index: usize, format: StreamFormat) {
+        self.inputs[index] = Some(format);
+    }
+
+    pub fn set_output(&mut self, format: StreamFormat) {
+        self.output = Some(format);
+    }
 }
 
 #[cfg(test)]
