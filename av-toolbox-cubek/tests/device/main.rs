@@ -2,6 +2,7 @@
 
 mod blur;
 mod histogram;
+mod labels;
 mod reduce;
 mod sobel;
 mod support;

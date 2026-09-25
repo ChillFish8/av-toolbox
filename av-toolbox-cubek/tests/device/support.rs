@@ -26,6 +26,10 @@ pub fn upload_f32<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Hand
     client.create_from_slice(bytes)
 }
 
+pub fn upload_u8<R: Runtime>(client: &ComputeClient<R>, values: &[u8]) -> Handle {
+    client.create_from_slice(values)
+}
+
 pub fn empty<R: Runtime>(client: &ComputeClient<R>, bytes: usize) -> Handle {
     client.empty(bytes)
 }
@@ -37,6 +41,24 @@ pub fn read_f32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<f
         .expect("the device should hand back the buffer");
 
     f32::from_bytes(&bytes).to_vec()
+}
+
+pub fn read_u32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u32> {
+    let owned = handle.clone();
+    let bytes = client
+        .read_one(owned)
+        .expect("the device should hand back the buffer");
+
+    u32::from_bytes(&bytes).to_vec()
+}
+
+pub fn read_u8<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u8> {
+    let owned = handle.clone();
+    let bytes = client
+        .read_one(owned)
+        .expect("the device should hand back the buffer");
+
+    bytes.to_vec()
 }
 
 /// A plane over `handle`, which the caller made large enough.

@@ -6,11 +6,13 @@
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
 //! - [sobel] for image gradients.
+//! - [labels] for connected components.
 
 pub mod blur;
 mod border;
 mod dispatch;
 pub mod histogram;
+pub mod labels;
 mod plane;
 pub mod reduce;
 pub mod sobel;
