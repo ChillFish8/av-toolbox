@@ -25,7 +25,6 @@ impl TemplateError {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) enum FillError {
     Template(TemplateError),
     Unknown(String),
@@ -71,7 +70,6 @@ pub(crate) fn pieces(text: &str) -> Result<Vec<Piece<'_>>, TemplateError> {
 ///
 /// A string that is exactly one template becomes that variable's typed value. Any other string
 /// stays a string, with each template replaced by its value's text.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn fill(text: &str, values: &Values) -> Result<Value, FillError> {
     let found = pieces(text).map_err(FillError::Template)?;
 
@@ -96,7 +94,6 @@ pub(crate) fn fill(text: &str, values: &Values) -> Result<Value, FillError> {
     Ok(Value::String(filled))
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 fn lookup<'v>(values: &'v Values, name: &str) -> Result<&'v super::VariableValue, FillError> {
     let found = values.get(name);
     found.ok_or_else(|| FillError::Unknown(name.to_string()))

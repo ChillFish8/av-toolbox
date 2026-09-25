@@ -11,14 +11,12 @@ use av_toolbox_graph::Spanned;
 use serde_json::{Number, Value};
 
 pub use self::supplied::Supplied;
-#[cfg_attr(not(test), expect(unused_imports, reason = "used by the loader"))]
 pub(crate) use self::supplied::{SuppliedValue, environment_name};
-#[cfg_attr(not(test), expect(unused_imports, reason = "used by the loader"))]
-pub(crate) use self::template::{FillError, Piece, TemplateError, fill};
-pub(crate) use self::template::{has_template, pieces};
+pub(crate) use self::template::{FillError, fill, has_template, pieces};
+#[cfg(test)]
+pub(crate) use self::template::{Piece, TemplateError};
 
 /// Every variable of one file, by name, once resolved.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) type Values = HashMap<String, VariableValue>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -123,7 +121,6 @@ pub(crate) fn is_variable_name(name: &str) -> bool {
 }
 
 /// Reads text from the command line or environment as a value of `variable_type`.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn parse_text(
     variable_type: VariableType,
     text: &str,
@@ -157,7 +154,6 @@ pub(crate) fn parse_text(
 }
 
 /// Reads a value written in a pipeline file as a value of `variable_type`.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn from_json(
     variable_type: VariableType,
     value: &Value,
@@ -178,7 +174,6 @@ pub(crate) fn from_json(
 }
 
 /// Checks `value` against the declaration's `min`, `max` and `choices`.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn check_rules(declaration: &Declaration, value: &VariableValue) -> Result<(), String> {
     let number = match value {
         VariableValue::Integer(number) => Some(*number as f64),
@@ -216,7 +211,6 @@ pub(crate) fn check_rules(declaration: &Declaration, value: &VariableValue) -> R
     Err(format!("{shown} is not one of {joined}"))
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 fn render_choice(choice: &Value) -> String {
     match choice {
         Value::String(text) => text.clone(),
@@ -225,7 +219,6 @@ fn render_choice(choice: &Value) -> String {
 }
 
 /// Resolves `text` against `directory` into an absolute path.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn resolve_path(directory: &Path, text: &str) -> String {
     let joined = directory.join(text);
     let absolute = std::path::absolute(&joined).unwrap_or(joined);

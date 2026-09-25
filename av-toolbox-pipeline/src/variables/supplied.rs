@@ -4,12 +4,10 @@ const PREFIX: &str = "AVTB_VAR_";
 #[derive(Debug, Clone, Default)]
 pub struct Supplied {
     flags: Vec<(String, String)>,
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
     environment: Vec<(String, String)>,
 }
 
 /// Where a supplied value came from, and its text.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) enum SuppliedValue<'a> {
     Flag(&'a str),
@@ -61,7 +59,6 @@ impl Supplied {
         self.flags.push(entry);
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
     pub(crate) fn get(&self, name: &str) -> Option<SuppliedValue<'_>> {
         let flag = self.flags.iter().rev().find(|(flag_name, _)| flag_name == name);
         if let Some((_, value)) = flag {
@@ -76,13 +73,11 @@ impl Supplied {
         from_environment.map(|(_, value)| SuppliedValue::Environment(value))
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
     pub(crate) fn flag_names(&self) -> impl Iterator<Item = &str> {
         self.flags.iter().map(|(name, _)| name.as_str())
     }
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the loader"))]
 pub(crate) fn environment_name(name: &str) -> String {
     let upper = name.to_ascii_uppercase();
     format!("{PREFIX}{upper}")

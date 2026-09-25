@@ -216,7 +216,12 @@ inputs = ["input"]
 "#;
 
     fn specs(text: &str) -> Vec<StageSpec> {
-        crate::toml::parse_specs(text).expect("the file should parse")
+        let files = crate::testing::MemoryFiles::new(&[("/pipeline.toml", text)]);
+        let supplied = crate::Supplied::new();
+        let path = std::path::Path::new("/pipeline.toml");
+
+        let loaded = crate::load(path, &files, &supplied).expect("the file should load");
+        loaded.specs
     }
 
     #[test]

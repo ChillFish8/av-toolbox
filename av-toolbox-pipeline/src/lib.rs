@@ -6,12 +6,17 @@
 
 mod backend;
 mod error;
+mod load;
 mod pipeline;
 mod registry;
+#[cfg(test)]
+mod testing;
 pub mod toml;
 pub mod variables;
 
 pub use self::backend::{OpenBackendError, open_backend};
 pub use self::error::PipelineError;
+pub use self::load::{DiskFiles, Files, LoadFailure, Loaded, SourceFile, SourceMap, load};
 pub use self::pipeline::{CompiledPipeline, LiveSource, Pipeline, StageRef};
 pub use self::registry::registry;
+pub use self::variables::Supplied;
