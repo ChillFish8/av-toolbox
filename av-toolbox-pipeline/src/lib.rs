@@ -1,8 +1,9 @@
 //! Building and running av-toolbox pipelines
 //!
-//! A pipeline is read from TOML with [toml::parse], or built in code as a list of
-//! [StageSpec](av_toolbox_graph::StageSpec) values. [Pipeline::build] checks it against a registry, such as
-//! [registry], and [Pipeline::compile] plans it on a backend from [open_backend], ready to run.
+//! A pipeline is read from its TOML files with [load], which fills in variables and expands calls
+//! to other files, or built in code as a list of [StageSpec](av_toolbox_graph::StageSpec) values.
+//! [Pipeline::build] checks it against a registry, such as [registry], and [Pipeline::compile]
+//! plans it on a backend from [open_backend], ready to run.
 
 mod backend;
 mod error;

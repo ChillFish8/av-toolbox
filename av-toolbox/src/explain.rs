@@ -14,7 +14,7 @@ const DEFAULT_HTML_PATH: &str = "plan.html";
 pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
     let mut stderr = report::stderr(args.color);
 
-    let Some(loaded) = load::load(&explain.pipeline, &mut stderr) else {
+    let Some(loaded) = load::load(&explain.pipeline, &explain.vars, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 
@@ -59,7 +59,7 @@ fn draw_structure(
     stderr: &mut dyn WriteColor,
 ) -> ExitCode {
     let warnings = pipeline.warnings();
-    report::diagnostics(stderr, &loaded.file, warnings);
+    report::diagnostics(stderr, &loaded.files, warnings);
 
     let drawn = if explain.html {
         pipeline.render_html()

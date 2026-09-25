@@ -13,7 +13,7 @@ const CANCELLED: u8 = 130;
 pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
     let mut stderr = report::stderr(args.color);
 
-    let Some(loaded) = load::load(&execute.pipeline, &mut stderr) else {
+    let Some(loaded) = load::load(&execute.pipeline, &execute.vars, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 
@@ -42,7 +42,7 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
         Ok(engine) => engine,
         Err(error) => {
             let found = error.into_diagnostics().into_inner();
-            report::diagnostics(&mut stderr, &loaded.file, &found);
+            report::diagnostics(&mut stderr, &loaded.files, &found);
 
             return ExitCode::FAILURE;
         },
@@ -56,7 +56,7 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
         Ok(run) => finish(&run),
         Err(error) => {
             let stage = error.node().and_then(|node| compiled.stage_of(node));
-            report::run_error(&mut stderr, &loaded.file, &error, stage);
+            report::run_error(&mut stderr, &loaded.files, &error, stage);
 
             ExitCode::FAILURE
         },

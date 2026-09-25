@@ -1,15 +1,13 @@
-use std::fs;
 use std::path::Path;
 
 use av_toolbox_core::PipelineRegistry;
 use av_toolbox_gpu::{Backend, COMPILATION_CACHE_ENV, install_compilation_cache};
 use av_toolbox_graph::{Diagnostic, StageSpec};
-use av_toolbox_pipeline::{CompiledPipeline, Pipeline, PipelineError};
-use codespan_reporting::files::SimpleFile;
+use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline, PipelineError, Supplied};
 use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::cli::Args;
-use crate::report::{self, PipelineFile};
+use crate::report::{self, PipelineFiles};
 
 /// Every built-in stage, or `None` after saying why they could not be registered.
 pub(crate) fn registry(stderr: &mut dyn WriteColor) -> Option<PipelineRegistry> {
@@ -26,35 +24,33 @@ pub(crate) fn registry(stderr: &mut dyn WriteColor) -> Option<PipelineRegistry> 
     }
 }
 
-/// A pipeline file and the stages it defines.
+/// A pipeline's files and the stages they define.
 pub(crate) struct Loaded {
-    pub(crate) file: PipelineFile,
+    pub(crate) files: PipelineFiles,
     pub(crate) specs: Vec<StageSpec>,
 }
 
-/// Reads and parses a pipeline file, or prints why it cannot be.
-pub(crate) fn load(path: &Path, stderr: &mut dyn WriteColor) -> Option<Loaded> {
-    let display = path.display();
-    let name = display.to_string();
-    let read = fs::read_to_string(path);
-    let text = match read {
-        Ok(text) => text,
-        Err(error) => {
-            let message = format!("cannot read {name}: {error}");
-            report::error_line(stderr, &message);
+/// Reads a pipeline and every file it calls, or prints why it cannot be.
+pub(crate) fn load(path: &Path, vars: &[(String, String)], stderr: &mut dyn WriteColor) -> Option<Loaded> {
+    let mut supplied = Supplied::from_env();
+    for (name, value) in vars {
+        supplied.set_flag(name.clone(), value.clone());
+    }
 
-            return None;
+    let loaded = av_toolbox_pipeline::load(path, &DiskFiles, &supplied);
+
+    match loaded {
+        Ok(loaded) => {
+            let files = PipelineFiles::new(loaded.sources);
+            Some(Loaded {
+                files,
+                specs: loaded.specs,
+            })
         },
-    };
-
-    let parsed = av_toolbox_pipeline::toml::parse_specs(&text);
-    let file = SimpleFile::new(name, text);
-
-    match parsed {
-        Ok(specs) => Some(Loaded { file, specs }),
-        Err(diagnostics) => {
-            let found = diagnostics.into_inner();
-            report::diagnostics(stderr, &file, &found);
+        Err(failure) => {
+            let files = PipelineFiles::new(failure.sources);
+            let found = failure.diagnostics.into_inner();
+            report::diagnostics(stderr, &files, &found);
 
             None
         },
@@ -73,7 +69,7 @@ pub(crate) fn build<'r>(
         Ok(pipeline) => Some(pipeline),
         Err(error) => {
             let warnings = Vec::new();
-            print_error(error, warnings, &loaded.file, stderr);
+            print_error(error, warnings, &loaded.files, stderr);
 
             None
         },
@@ -124,12 +120,12 @@ pub(crate) fn compile<'r, 'b>(
     match compiled {
         Ok(compiled) => {
             let compiled_warnings = compiled.warnings();
-            report::diagnostics(stderr, &loaded.file, compiled_warnings);
+            report::diagnostics(stderr, &loaded.files, compiled_warnings);
 
             Some(compiled)
         },
         Err(error) => {
-            print_error(error, warnings, &loaded.file, stderr);
+            print_error(error, warnings, &loaded.files, stderr);
 
             None
         },
@@ -139,11 +135,11 @@ pub(crate) fn compile<'r, 'b>(
 fn print_error(
     error: PipelineError,
     warnings: Vec<Diagnostic>,
-    file: &PipelineFile,
+    files: &PipelineFiles,
     stderr: &mut dyn WriteColor,
 ) {
     let mut found = error.into_diagnostics().into_inner();
     found.extend(warnings);
 
-    report::diagnostics(stderr, file, &found);
+    report::diagnostics(stderr, files, &found);
 }

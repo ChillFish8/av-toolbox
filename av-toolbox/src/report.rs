@@ -1,8 +1,8 @@
 use av_toolbox_graph::{Diagnostic, Severity};
-use av_toolbox_pipeline::StageRef;
+use av_toolbox_pipeline::{SourceMap, StageRef};
 use av_toolbox_runtime::RunError;
 use codespan_reporting::diagnostic::{Diagnostic as Report, Label, Severity as Level};
-use codespan_reporting::files::{Error as FilesError, SimpleFile};
+use codespan_reporting::files::{Error as FilesError, SimpleFiles};
 use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 use codespan_reporting::term::{self, Config};
 
@@ -29,18 +29,35 @@ fn write_line(writer: &mut dyn WriteColor, level: &str, colour: Color, message: 
     writeln!(writer, ": {message}")
 }
 
-/// A pipeline file's name and text, for pointing diagnostics at.
-pub(crate) type PipelineFile = SimpleFile<String, String>;
+/// Every file a pipeline was read from, for pointing diagnostics at.
+pub(crate) struct PipelineFiles {
+    files: SimpleFiles<String, String>,
+    sources: SourceMap,
+}
 
-/// Prints every diagnostic against the file, errors first, then a count of what was found.
-pub(crate) fn diagnostics(writer: &mut dyn WriteColor, file: &PipelineFile, diagnostics: &[Diagnostic]) {
+impl PipelineFiles {
+    pub(crate) fn new(sources: SourceMap) -> Self {
+        let mut files = SimpleFiles::new();
+
+        for (_, source) in sources.iter() {
+            let display = source.path.display();
+            let name = display.to_string();
+            files.add(name, source.text.clone());
+        }
+
+        Self { files, sources }
+    }
+}
+
+/// Prints every diagnostic against the files, errors first, then a count of what was found.
+pub(crate) fn diagnostics(writer: &mut dyn WriteColor, files: &PipelineFiles, diagnostics: &[Diagnostic]) {
     // Nothing is left to report a failed write to stderr to.
-    let _ = write_diagnostics(writer, file, diagnostics);
+    let _ = write_diagnostics(writer, files, diagnostics);
 }
 
 fn write_diagnostics(
     writer: &mut dyn WriteColor,
-    file: &PipelineFile,
+    files: &PipelineFiles,
     diagnostics: &[Diagnostic],
 ) -> Result<(), FilesError> {
     if diagnostics.is_empty() {
@@ -56,8 +73,9 @@ fn write_diagnostics(
         .filter(|diagnostic| diagnostic.severity() == Severity::Warning);
 
     for diagnostic in errors.chain(warnings) {
-        let report = convert(diagnostic);
-        term::emit_to_write_style(writer, &config, file, &report)?;
+        let noted = files.sources.with_call_notes(diagnostic.clone());
+        let report = convert(&noted);
+        term::emit_to_write_style(writer, &config, &files.files, &report)?;
     }
 
     write_summary(writer, diagnostics)?;
@@ -65,7 +83,7 @@ fn write_diagnostics(
     Ok(())
 }
 
-fn convert(diagnostic: &Diagnostic) -> Report<()> {
+fn convert(diagnostic: &Diagnostic) -> Report<usize> {
     let level = match diagnostic.severity() {
         Severity::Error => Level::Error,
         Severity::Warning => Level::Warning,
@@ -77,7 +95,8 @@ fn convert(diagnostic: &Diagnostic) -> Report<()> {
     let span = diagnostic.span();
     let path = diagnostic.path();
     if !span.is_unknown() {
-        let label = Label::primary((), span.start..span.end);
+        let file_id = span.file.index();
+        let label = Label::primary(file_id, span.start..span.end);
         labels.push(label);
     } else if !path.is_empty() {
         let located = format!("in {path}");
@@ -91,7 +110,8 @@ fn convert(diagnostic: &Diagnostic) -> Report<()> {
             continue;
         }
 
-        let label = Label::secondary((), note.span.start..note.span.end).with_message(&note.message);
+        let note_file = note.span.file.index();
+        let label = Label::secondary(note_file, note.span.start..note.span.end).with_message(&note.message);
         labels.push(label);
     }
 
@@ -149,7 +169,7 @@ fn plural(count: usize, noun: &str) -> String {
 /// back to the error's own `Display`.
 pub(crate) fn run_error(
     writer: &mut dyn WriteColor,
-    file: &PipelineFile,
+    files: &PipelineFiles,
     error: &RunError,
     stage: Option<StageRef<'_>>,
 ) {
@@ -162,13 +182,14 @@ pub(crate) fn run_error(
 
     let cause = innermost(error);
     let message = format!("{} {} failed: {cause}", stage.kind, stage.name);
-    let label = Label::primary((), stage.span.start..stage.span.end);
+    let file_id = stage.span.file.index();
+    let label = Label::primary(file_id, stage.span.start..stage.span.end);
     let labels = vec![label];
     let report = Report::error().with_message(message).with_labels(labels);
     let config = Config::default();
 
     // Nothing is left to report a failed write to stderr to.
-    let _ = term::emit_to_write_style(writer, &config, file, &report);
+    let _ = term::emit_to_write_style(writer, &config, &files.files, &report);
 }
 
 /// The message for a run error with no written stage to point at.
@@ -198,17 +219,19 @@ fn innermost(error: &RunError) -> String {
 mod tests {
     use av_toolbox_core::{StageError, StageKind};
     use av_toolbox_graph::{DiagnosticCode, NodeId, Span};
-    use av_toolbox_pipeline::StageRef;
+    use av_toolbox_pipeline::{SourceMap, StageRef};
     use av_toolbox_runtime::RunError;
-    use codespan_reporting::files::SimpleFile;
     use codespan_reporting::term::termcolor::NoColor;
 
     use super::*;
 
     const TEXT: &str = "[filter.blur]\ntype = \"test/blur\"\n";
 
-    fn file(text: &str) -> PipelineFile {
-        SimpleFile::new("pipeline.toml".to_string(), text.to_string())
+    fn file(text: &str) -> PipelineFiles {
+        let mut sources = SourceMap::new();
+        sources.push("pipeline.toml".into(), text.to_string(), Vec::new());
+
+        PipelineFiles::new(sources)
     }
 
     fn rendered(text: &str, diagnostics: &[Diagnostic]) -> String {
@@ -349,6 +372,25 @@ mod tests {
     #[test]
     fn nothing_to_report_prints_nothing() {
         assert_eq!(rendered(TEXT, &[]), "");
+    }
+
+    #[test]
+    fn a_diagnostic_in_a_called_file_shows_that_file_and_the_call() {
+        let mut sources = SourceMap::new();
+        let root_text = "[call.part]\npath = \"part.toml\"\n";
+        let root = sources.push("main.toml".into(), root_text.to_string(), Vec::new());
+        let call_header = Span::in_file(root, 0, 11);
+        let part = sources.push("part.toml".into(), TEXT.to_string(), vec![call_header]);
+        let files = PipelineFiles::new(sources);
+        let failure = error(Span::in_file(part, 21, 32));
+        let mut writer = NoColor::new(Vec::new());
+
+        super::diagnostics(&mut writer, &files, &[failure]);
+        let output = String::from_utf8(writer.into_inner()).expect("utf-8");
+
+        assert!(output.contains("part.toml:2:8"));
+        assert!(output.contains("main.toml:1:1"));
+        assert!(output.contains("called from here"));
     }
 
     #[test]

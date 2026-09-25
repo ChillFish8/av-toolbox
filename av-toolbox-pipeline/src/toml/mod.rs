@@ -11,17 +11,7 @@ use std::borrow::Cow;
 use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeTable, DeValue};
 use av_toolbox_core::StageKind;
-use av_toolbox_graph::{
-    ArgSpans,
-    Diagnostic,
-    DiagnosticCode,
-    Diagnostics,
-    FileId,
-    InputRef,
-    Span,
-    Spanned,
-    StageSpec,
-};
+use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, Diagnostics, FileId, InputRef, Span, Spanned};
 use serde_json::Value;
 
 use self::call::{read_call, read_input, read_output};
@@ -194,32 +184,6 @@ fn read_entry(
             raw.outputs.extend(read);
         },
     }
-}
-
-/// Reads a pipeline file that uses no variables, calls, inputs or outputs.
-pub fn parse_specs(text: &str) -> Result<Vec<StageSpec>, Diagnostics> {
-    let raw = parse(text, FileId::ROOT)?;
-    let mut specs = Vec::with_capacity(raw.stages.len());
-
-    for stage in raw.stages {
-        let workers = match stage.workers.map(|workers| workers.value) {
-            Some(RawWorkers::Count(count)) => Some(count),
-            _ => None,
-        };
-
-        specs.push(StageSpec {
-            name: stage.name,
-            kind: stage.kind,
-            stage_type: stage.stage_type,
-            inputs: stage.inputs,
-            args: stage.args,
-            arg_spans: stage.arg_spans,
-            workers,
-            span: stage.span,
-        });
-    }
-
-    Ok(specs)
 }
 
 fn table_named(name: &str) -> Option<Table> {

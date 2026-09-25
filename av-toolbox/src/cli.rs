@@ -81,6 +81,12 @@ pub(crate) struct ExecuteArgs {
     /// The pipeline file to run.
     pub(crate) pipeline: PathBuf,
 
+    /// Sets a pipeline variable, such as `--var clip_input=in.mkv`. Can be given many times.
+    ///
+    /// Takes precedence over an `AVTB_VAR_<NAME>` environment variable for the same variable.
+    #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
+    pub(crate) vars: Vec<(String, String)>,
+
     /// How much memory frames in flight may occupy.
     ///
     /// Takes a size such as `8GB`, `4.5GiB` or `512MB`, or a plain byte count. `GB` is 10^9 while
@@ -89,6 +95,21 @@ pub(crate) struct ExecuteArgs {
     /// Left unset, the budget is worked out from the pipeline.
     #[arg(long, value_name = "SIZE", value_parser = parse_frame_budget)]
     pub(crate) frame_budget: Option<usize>,
+}
+
+/// Reads `NAME=VALUE` into its name and value.
+fn parse_var(raw: &str) -> Result<(String, String), String> {
+    let invalid = format!("invalid variable '{raw}'. Give it as NAME=VALUE");
+
+    let Some((name, value)) = raw.split_once('=') else {
+        return Err(invalid);
+    };
+
+    if name.is_empty() {
+        return Err(invalid);
+    }
+
+    Ok((name.to_string(), value.to_string()))
 }
 
 /// Reads a size such as `8GB` into a byte count.
@@ -116,6 +137,12 @@ pub(crate) struct ListStagesArgs {
 pub(crate) struct ExplainArgs {
     /// The pipeline file to draw.
     pub(crate) pipeline: PathBuf,
+
+    /// Sets a pipeline variable, such as `--var clip_input=in.mkv`. Can be given many times.
+    ///
+    /// Takes precedence over an `AVTB_VAR_<NAME>` environment variable for the same variable.
+    #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
+    pub(crate) vars: Vec<(String, String)>,
 
     /// Write an HTML page instead of drawing in the terminal.
     #[arg(long)]
@@ -163,5 +190,25 @@ mod tests {
         let error = parse_frame_budget("lots").expect_err("not a size");
 
         assert!(error.contains("4.5GiB"));
+    }
+
+    #[test]
+    fn a_var_splits_at_the_first_equals() {
+        assert_eq!(
+            parse_var("path=a=b.y4m"),
+            Ok(("path".to_string(), "a=b.y4m".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_var_without_equals_is_refused() {
+        let error = parse_var("sigma").expect_err("no value");
+
+        assert!(error.contains("NAME=VALUE"));
+    }
+
+    #[test]
+    fn a_var_without_a_name_is_refused() {
+        assert!(parse_var("=1").is_err());
     }
 }
