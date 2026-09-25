@@ -1,3 +1,4 @@
+use av_toolbox_cubek::resize::Taps;
 use av_toolbox_cubek::{DevicePlane, Dispatch};
 use av_toolbox_gpu::{Backend, Device, FrameContext};
 use cubecl::prelude::*;
@@ -106,6 +107,42 @@ pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -
                 total += rows[(source * width + column) as usize] * weight;
             }
             output[(row * width + column) as usize] = total;
+        }
+    }
+
+    output
+}
+
+/// Applies `across` then `down` on the CPU, rounding to U8 at the end.
+pub fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, down: &Taps) -> Vec<u8> {
+    let out_width = across.starts.len() as u32;
+    let out_height = down.starts.len() as u32;
+
+    let mut rows = vec![0.0f32; (out_width * height) as usize];
+    for row in 0..height {
+        for column in 0..out_width {
+            let mut total = 0.0f32;
+            for step in 0..across.count {
+                let tap = across.starts[column as usize] + step as i32;
+                let source = reflect(tap, width as i32) as u32;
+                let weight = across.weights[(column * across.count + step) as usize];
+                total += f32::from(input[(row * width + source) as usize]) * weight;
+            }
+            rows[(row * out_width + column) as usize] = total;
+        }
+    }
+
+    let mut output = Vec::with_capacity((out_width * out_height) as usize);
+    for row in 0..out_height {
+        for column in 0..out_width {
+            let mut total = 0.0f32;
+            for step in 0..down.count {
+                let tap = down.starts[row as usize] + step as i32;
+                let source = reflect(tap, height as i32) as u32;
+                let weight = down.weights[(row * down.count + step) as usize];
+                total += rows[(source * out_width + column) as usize] * weight;
+            }
+            output.push(total.round().clamp(0.0, 255.0) as u8);
         }
     }
 

@@ -4,5 +4,6 @@ mod blur;
 mod histogram;
 mod labels;
 mod reduce;
+mod resize;
 mod sobel;
 mod support;

@@ -7,6 +7,7 @@
 //! - [histogram] for percentiles.
 //! - [sobel] for image gradients.
 //! - [labels] for connected components.
+//! - [resize] for separable resizing through per axis weight tables.
 
 pub mod blur;
 mod border;
@@ -15,6 +16,7 @@ pub mod histogram;
 pub mod labels;
 mod plane;
 pub mod reduce;
+pub mod resize;
 pub mod sobel;
 
 pub use self::border::reflect;
