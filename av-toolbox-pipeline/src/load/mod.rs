@@ -2,6 +2,7 @@ mod aliases;
 mod calls;
 mod expand;
 mod files;
+mod references;
 mod resolve;
 #[cfg(test)]
 mod tests;

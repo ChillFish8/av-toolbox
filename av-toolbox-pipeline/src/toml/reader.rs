@@ -40,7 +40,9 @@ impl TableReader<'_> {
         }
     }
 
-    /// Reports every key of `table` not in `allowed`, calling it a `noun`, with `note` saying what is.
+    /// Reports every key of `table` not in `allowed`.
+    ///
+    /// Each report calls the key a `noun` and adds `note`, which lists the keys that are allowed.
     pub(super) fn check_keys(&mut self, table: &DeTable<'_>, allowed: &[&str], noun: &str, note: &str) {
         for key in table.keys() {
             let name = key.get_ref();

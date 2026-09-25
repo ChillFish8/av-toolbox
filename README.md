@@ -50,12 +50,18 @@ the streams it gives back as `[output.<name>]`.
 
 ```toml
 # parts/scenes.toml
+[variable.speed]
+type = "string"
+default = "standard"
+choices = ["standard", "fast"]
+
 [input.clip]
 
 [transform.detect]
 type = "scene/detect"
 inputs = ["clip"]
 args.mode = "natural"
+args.speed = "{{ speed }}"
 
 [output.scenes]
 inputs = ["detect"]

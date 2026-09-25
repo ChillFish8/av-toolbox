@@ -1,8 +1,9 @@
 use av_toolbox_core::StageKind;
+use av_toolbox_graph::FileId;
 use serde_json::json;
 
 use super::parsed;
-use crate::toml::RawWorkers;
+use crate::toml::{RawWorkers, parse};
 
 const PASSTHROUGH: &str = r#"
 [source.input]
@@ -187,10 +188,46 @@ fn templated_workers_are_kept_as_written() {
 
 #[test]
 fn spans_carry_the_file_they_were_parsed_from() {
-    let file_id = av_toolbox_graph::FileId::new(2);
+    let file_id = FileId::new(2);
 
-    let file = crate::toml::parse("[source.a]\ntype = \"a/b\"\n", file_id).expect("parses");
+    let file = parse("[source.a]\ntype = \"a/b\"\n", file_id).expect("parses");
 
     assert_eq!(file.stages[0].span.file, file_id);
     assert_eq!(file.stages[0].stage_type.span.file, file_id);
+}
+
+#[test]
+fn variable_call_input_and_output_spans_carry_their_file() {
+    let text = r#"
+[variable.a]
+type = "string"
+default = "x"
+
+[call.b]
+path = "b.toml"
+inputs = ["c"]
+variables.d = 1
+
+[input.c]
+
+[output.e]
+inputs = ["c"]
+"#;
+    let file_id = FileId::new(2);
+
+    let file = parse(text, file_id).expect("parses");
+    let variable = &file.variables[0];
+    let call = &file.calls[0];
+    let output = &file.outputs[0];
+    let default_file = variable.default.as_ref().map(|default| default.span.file);
+
+    assert_eq!(variable.name.span.file, file_id);
+    assert_eq!(default_file, Some(file_id));
+    assert_eq!(call.span.file, file_id);
+    assert_eq!(call.path.span.file, file_id);
+    assert_eq!(call.inputs[0].span.file, file_id);
+    assert_eq!(call.variables[0].value.span.file, file_id);
+    assert_eq!(file.inputs[0].name.span.file, file_id);
+    assert_eq!(output.name.span.file, file_id);
+    assert_eq!(output.source.span.file, file_id);
 }

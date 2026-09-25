@@ -70,6 +70,7 @@ pub(super) fn read_call(
         Some(value) => reader.inputs(value),
         None => Vec::new(),
     };
+
     let inputs_span = inputs_value.map(|value| {
         let range = value.span();
         reader.span(range)
@@ -220,7 +221,12 @@ pub(super) fn read_output(
         return None;
     };
 
+    let failed_before = reader.failed;
     let inputs = reader.inputs(inputs_value);
+    if reader.failed && !failed_before {
+        return None;
+    }
+
     let range = inputs_value.span();
     let inputs_span = reader.span(range);
     let single = match inputs.as_slice() {

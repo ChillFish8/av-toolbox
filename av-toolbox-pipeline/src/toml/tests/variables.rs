@@ -113,3 +113,40 @@ fn an_unknown_variable_key_lists_the_allowed_keys() {
             .contains("type, description, default")
     );
 }
+
+#[test]
+fn a_datetime_default_is_refused_without_naming_stages() {
+    let diagnostics = reported("[variable.a]\ntype = \"string\"\ndefault = 1979-05-27\n");
+
+    assert_eq!(diagnostics[0].message(), "dates and times are not supported here");
+}
+
+#[test]
+fn a_template_in_a_default_is_refused_on_its_value() {
+    let text = "[variable.a]\ntype = \"string\"\ndefault = \"{{ b }}\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code(), DiagnosticCode::InvalidDefinition);
+    assert_eq!(
+        diagnostics[0].message(),
+        "templates cannot be used in a variable's default"
+    );
+    assert_eq!(diagnostics[0].span(), locate(text, "\"{{ b }}\""));
+}
+
+#[test]
+fn a_template_in_choices_is_refused_on_its_choice() {
+    let text = "[variable.a]\ntype = \"string\"\nchoices = [\"x\", \"{{ b\"]\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code(), DiagnosticCode::InvalidDefinition);
+    assert_eq!(
+        diagnostics[0].message(),
+        "templates cannot be used in a variable's choices"
+    );
+    assert_eq!(diagnostics[0].span(), locate(text, "\"{{ b\""));
+}

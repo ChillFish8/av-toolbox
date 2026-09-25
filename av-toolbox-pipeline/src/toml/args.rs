@@ -105,7 +105,7 @@ impl Conversion<'_> {
             DeValue::Integer(integer) => self.integer(integer, pointer, span),
             DeValue::Float(float) => self.float(float, pointer, span),
             DeValue::Boolean(flag) => Value::Bool(*flag),
-            DeValue::Datetime(_) => self.refuse(pointer, span, "dates and times cannot be passed to a stage"),
+            DeValue::Datetime(_) => self.refuse(pointer, span, "dates and times are not supported here"),
             DeValue::Array(items) => self.array(items, pointer),
             DeValue::Table(table) => self.table(table, pointer),
         }
@@ -129,11 +129,7 @@ impl Conversion<'_> {
 
         match number {
             Some(number) => Value::Number(number),
-            None => self.refuse(
-                pointer,
-                span,
-                "NaN and infinite numbers cannot be passed to a stage",
-            ),
+            None => self.refuse(pointer, span, "NaN and infinite numbers are not supported here"),
         }
     }
 

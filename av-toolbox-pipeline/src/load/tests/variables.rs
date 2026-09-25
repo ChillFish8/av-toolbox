@@ -134,6 +134,18 @@ fn an_unknown_flag_suggests_the_closest_variable() {
 }
 
 #[test]
+fn an_upper_case_flag_suggests_the_lower_case_name() {
+    let mut supplied = with_flag("sigma", "1");
+    supplied.set_flag("DIR", "elsewhere");
+
+    let diagnostics = failed(&[("/work/main.toml", PIPELINE)], "/work/main.toml", &supplied);
+    let note = &diagnostics[0].notes()[0].message;
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::UnknownVariable]);
+    assert_eq!(note, "variable names are lower case, did you mean `dir`?");
+}
+
+#[test]
 fn an_unknown_template_suggests_the_first_declared_of_tied_names() {
     let pipeline = r#"
 [variable.sigmb]

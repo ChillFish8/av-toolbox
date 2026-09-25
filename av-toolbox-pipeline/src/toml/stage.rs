@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use super::args::convert_args;
 use super::reader::{TableReader, entry, is_stage_name};
 use super::{RawStage, RawWorkers};
-use crate::variables::pieces;
+use crate::variables::{has_template, pieces};
 
 const KEYS: [&str; 4] = ["type", "inputs", "workers", "args"];
 
@@ -82,7 +82,7 @@ pub(super) fn read_stage(
 }
 
 fn stage_type(reader: &mut TableReader<'_>, table: &DeTable<'_>) -> Option<Spanned<String>> {
-    if entry(table, "type").is_none() {
+    let Some(written) = entry(table, "type") else {
         let header = reader.header;
         reader.error(
             "type",
@@ -90,9 +90,17 @@ fn stage_type(reader: &mut TableReader<'_>, table: &DeTable<'_>) -> Option<Spann
             "type is missing, it names the stage to run, such as y4m/pipe",
         );
         return None;
-    }
+    };
 
-    let stage_type = reader.string(table, "type")?;
+    let range = written.span();
+    let span = reader.span(range);
+    let inner = written.get_ref();
+    let Some(text) = inner.as_str() else {
+        reader.error("type", span, "type must be a string, such as \"y4m/pipe\"");
+        return None;
+    };
+
+    let stage_type = Spanned::new(text.to_string(), span);
     reader.refuse_template("type", &stage_type);
 
     Some(stage_type)
@@ -104,7 +112,8 @@ fn workers(reader: &mut TableReader<'_>, table: &DeTable<'_>) -> Option<Spanned<
     let span = reader.span(range);
     let inner = value.get_ref();
 
-    if let Some(text) = inner.as_str() {
+    let template = inner.as_str().filter(|text| has_template(text));
+    if let Some(text) = template {
         let checked = pieces(text);
         if let Err(problem) = checked {
             reader.error("workers", span, problem.message());

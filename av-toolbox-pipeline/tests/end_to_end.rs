@@ -34,7 +34,7 @@ use av_toolbox_gpu::{
     StreamTemplate,
 };
 use av_toolbox_graph::NodeRole;
-use av_toolbox_pipeline::Pipeline;
+use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -181,9 +181,9 @@ args.path = "{output_path}"
     let pipeline_directory = tempfile::tempdir().expect("a temp dir");
     let pipeline_path = pipeline_directory.path().join("pipeline.toml");
     fs::write(&pipeline_path, &text).expect("writes the pipeline");
-    let supplied = av_toolbox_pipeline::Supplied::new();
-    let loaded = av_toolbox_pipeline::load(&pipeline_path, &av_toolbox_pipeline::DiskFiles, &supplied)
-        .expect("the file should load");
+    let supplied = Supplied::new();
+    let loaded =
+        av_toolbox_pipeline::load(&pipeline_path, &DiskFiles, &supplied).expect("the file should load");
     let specs = loaded.specs;
 
     let pipeline = Pipeline::build(&registry, &specs).expect("should build");

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Error;
 use std::path::{Path, PathBuf};
 
 use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, InputRef, Span, Spanned};
@@ -31,7 +32,8 @@ pub(super) struct Link {
 impl Loader<'_> {
     /// Expands one call, returning the called file's output names.
     ///
-    /// Returns `None` when the called file could not be read or parsed.
+    /// Returns `None` when the path template cannot be filled, the call loops back to a file
+    /// already being called, or the called file cannot be read or parsed.
     pub(super) fn call(
         &mut self,
         instance: &Instance<'_>,
@@ -63,7 +65,7 @@ impl Loader<'_> {
 
         let looped = instance.chain.iter().position(|link| link.canonical == canonical);
         if let Some(start) = looped {
-            self.report_cycle(&instance.chain[start..], call, &path);
+            self.report_cycle(&instance.chain[start..], call, &written);
             return None;
         }
 
@@ -134,7 +136,7 @@ impl Loader<'_> {
         }
     }
 
-    fn unreadable(&mut self, path: &Path, span: Span, error: &std::io::Error) {
+    fn unreadable(&mut self, path: &Path, span: Span, error: &Error) {
         let display = path.display();
         let message = format!("cannot read {display}: {error}");
         let diagnostic = Diagnostic::error(DiagnosticCode::UnreadableFile, "", span, message);
@@ -146,9 +148,8 @@ impl Loader<'_> {
     ///
     /// `looped` starts at the file being called again. The call that first entered it sits
     /// outside the loop, so it gets no note.
-    fn report_cycle(&mut self, looped: &[Link], call: &RawCall, path: &Path) {
-        let display = path.display();
-        let message = format!("calling {display} here loops back to a file already being called");
+    fn report_cycle(&mut self, looped: &[Link], call: &RawCall, written: &str) {
+        let message = format!("calling {written} here loops back to a file already being called");
         let mut diagnostic = Diagnostic::error(DiagnosticCode::CallCycle, "", call.span, message);
 
         let entries = looped.iter().skip(1).filter_map(|link| link.entered_by);
@@ -179,9 +180,6 @@ impl Loader<'_> {
         for variable in &call.variables {
             let span = variable.value.span;
             let filled = self.fill_value(&variable.value.value, "", &no_spans, span, &filling);
-            let Some(filled) = filled else {
-                continue;
-            };
 
             given.push(GivenValue {
                 name: variable.name.value.clone(),
@@ -258,7 +256,7 @@ impl Loader<'_> {
 
     /// Reports an input, output or call sharing a name with anything else in the file.
     ///
-    /// Two stages sharing a name are left to the graph, which reports them the same way.
+    /// Two stages sharing a name are not reported here.
     pub(super) fn check_names(&mut self, raw: &RawFile) {
         let stages = raw.stages.iter().map(|stage| (&stage.name, true));
         let inputs = raw.inputs.iter().map(|input| (&input.name, false));
@@ -345,10 +343,13 @@ impl Loader<'_> {
     }
 
     fn unknown_output(&mut self, span: Span, message: String, outputs: &[String]) {
-        let listed = outputs.join(", ");
-        let note = format!("the outputs are {listed}");
-        let diagnostic = Diagnostic::error(DiagnosticCode::UnknownCallOutput, "", span, message)
-            .with_note(note, Span::unknown());
+        let mut diagnostic = Diagnostic::error(DiagnosticCode::UnknownCallOutput, "", span, message);
+
+        if !outputs.is_empty() {
+            let listed = outputs.join(", ");
+            let note = format!("the outputs are {listed}");
+            diagnostic = diagnostic.with_note(note, Span::unknown());
+        }
 
         self.diagnostics.push(diagnostic);
     }

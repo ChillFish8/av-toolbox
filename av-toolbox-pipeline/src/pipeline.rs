@@ -202,9 +202,13 @@ fn live_sources<'a>(graph: &'a CompiledGraph, registry: &PipelineRegistry) -> Ve
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use av_toolbox_graph::{DiagnosticCode, NodeId};
 
     use super::*;
+    use crate::testing::MemoryFiles;
+    use crate::{Supplied, load};
 
     const PASSTHROUGH: &str = r#"
 [source.input]
@@ -216,11 +220,11 @@ inputs = ["input"]
 "#;
 
     fn specs(text: &str) -> Vec<StageSpec> {
-        let files = crate::testing::MemoryFiles::new(&[("/pipeline.toml", text)]);
-        let supplied = crate::Supplied::new();
-        let path = std::path::Path::new("/pipeline.toml");
+        let files = MemoryFiles::new(&[("/pipeline.toml", text)]);
+        let supplied = Supplied::new();
+        let path = Path::new("/pipeline.toml");
 
-        let loaded = crate::load(path, &files, &supplied).expect("the file should load");
+        let loaded = load(path, &files, &supplied).expect("the file should load");
         loaded.specs
     }
 

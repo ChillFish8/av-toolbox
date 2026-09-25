@@ -12,7 +12,7 @@ use av_toolbox_graph::{
     StageSpec,
     suggest_name,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::aliases::{drop_unread, follow};
 use super::calls::{CallSite, Link};
@@ -192,6 +192,7 @@ impl<'a> Loader<'a> {
         }
 
         self.check_references(&raw, &outputs_of);
+        self.check_targets(&raw, &outputs_of);
 
         for stage in raw.stages {
             let converted = self.stage(instance, stage, &values, &declared);
@@ -311,7 +312,7 @@ impl<'a> Loader<'a> {
                 (!failed).then_some(Value::Array(filled))
             },
             Value::Object(entries) => {
-                let mut filled = serde_json::Map::new();
+                let mut filled = Map::new();
                 let mut failed = false;
 
                 for (key, item) in entries {

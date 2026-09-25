@@ -1,6 +1,8 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, Span, suggest_name};
+use serde_json::Value;
 
 use crate::variables::{
     Declaration,
@@ -26,10 +28,11 @@ pub(super) enum Given<'a> {
 pub(super) struct GivenValue {
     pub(super) name: String,
     pub(super) name_span: Span,
-    pub(super) value: serde_json::Value,
+    /// The filled value, or `None` when filling it failed and was already reported.
+    pub(super) value: Option<Value>,
     pub(super) value_span: Span,
     /// The directory of the calling file, which a path value is relative to.
-    pub(super) directory: std::path::PathBuf,
+    pub(super) directory: PathBuf,
 }
 
 /// Resolves every declared variable to a value, reporting each one that cannot be.
@@ -122,7 +125,8 @@ fn supplied_value(
         },
         Given::Call(values) => {
             let entry = values.iter().find(|entry| entry.name == *name)?;
-            let read = from_json(variable_type, &entry.value, &entry.directory);
+            let value = entry.value.as_ref()?;
+            let read = from_json(variable_type, value, &entry.directory);
             let origin = String::from("the call");
             (read, origin, entry.value_span)
         },
@@ -190,7 +194,7 @@ fn report_unknown(declarations: &[Declaration], given: &Given<'_>, diagnostics: 
 
     match given {
         Given::Root(supplied) => {
-            let names: std::collections::BTreeSet<&str> = supplied.flag_names().collect();
+            let names: BTreeSet<&str> = supplied.flag_names().collect();
 
             for name in names {
                 if is_declared(name) {
@@ -201,8 +205,12 @@ fn report_unknown(declarations: &[Declaration], given: &Given<'_>, diagnostics: 
                 let mut diagnostic =
                     Diagnostic::error(DiagnosticCode::UnknownVariable, "", Span::unknown(), message);
 
+                let lower = name.to_ascii_lowercase();
                 let closest = suggest_name(name, declared());
-                if let Some(closest) = closest {
+                if lower != name && is_declared(&lower) {
+                    let note = format!("variable names are lower case, did you mean `{lower}`?");
+                    diagnostic = diagnostic.with_note(note, Span::unknown());
+                } else if let Some(closest) = closest {
                     let note = format!("did you mean `{closest}`?");
                     diagnostic = diagnostic.with_note(note, Span::unknown());
                 }

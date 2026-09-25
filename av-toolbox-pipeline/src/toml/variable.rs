@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::args::convert_value;
 use super::reader::{TableReader, entry};
-use crate::variables::{Declaration, VariableType, is_variable_name};
+use crate::variables::{Declaration, VariableType, has_template, is_variable_name};
 
 const KEYS: [&str; 6] = ["type", "description", "default", "min", "max", "choices"];
 
@@ -112,6 +112,12 @@ fn written_value(reader: &mut TableReader<'_>, table: &DeTable<'_>, key: &str) -
     let key_span = reader.span(key_range);
     let value_range = value.span();
     let value_span = reader.span(value_range);
+
+    let takes_literals = matches!(key, "default" | "choices");
+    if takes_literals && refuse_templates(reader, key, value) {
+        return None;
+    }
+
     let path = reader.key_path(key);
     let converted = convert_value(value, &path, reader.file, reader.diagnostics);
     let Some(json) = converted else {
@@ -123,6 +129,36 @@ fn written_value(reader: &mut TableReader<'_>, table: &DeTable<'_>, key: &str) -
         key: key_span,
         value: Spanned::new(json, value_span),
     })
+}
+
+/// Reports each string in `value`, or in its list, that holds a template.
+///
+/// Returns whether any did.
+fn refuse_templates(reader: &mut TableReader<'_>, key: &str, value: &TomlSpanned<DeValue<'_>>) -> bool {
+    let items: Vec<&TomlSpanned<DeValue<'_>>> = match value.get_ref() {
+        DeValue::Array(items) => items.iter().collect(),
+        _ => vec![value],
+    };
+    let mut refused = false;
+
+    for item in items {
+        let inner = item.get_ref();
+        let Some(text) = inner.as_str() else {
+            continue;
+        };
+
+        if !has_template(text) {
+            continue;
+        }
+
+        let range = item.span();
+        let span = reader.span(range);
+        let message = format!("templates cannot be used in a variable's {key}");
+        reader.error(key, span, message);
+        refused = true;
+    }
+
+    refused
 }
 
 /// Checks `min` or `max` is allowed on the type and holds a number of that type.

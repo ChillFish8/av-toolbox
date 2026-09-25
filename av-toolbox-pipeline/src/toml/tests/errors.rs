@@ -89,6 +89,10 @@ fn a_type_that_is_not_a_string_is_refused() {
 
     assert_eq!(diagnostics[0].path(), "filter.a.type");
     assert_eq!(diagnostics[0].span(), locate(text, "4"));
+    assert_eq!(
+        diagnostics[0].message(),
+        "type must be a string, such as \"y4m/pipe\""
+    );
 }
 
 #[test]
@@ -115,6 +119,20 @@ fn zero_workers_are_refused() {
     let diagnostics = reported("[filter.a]\ntype = \"a/b\"\nworkers = 0\n");
 
     assert_eq!(diagnostics[0].path(), "filter.a.workers");
+}
+
+#[test]
+fn workers_written_as_text_without_a_template_are_refused() {
+    let text = "[filter.a]\ntype = \"a/b\"\nworkers = \"8\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert_eq!(
+        diagnostics[0].message(),
+        "workers must be a whole number of at least 1"
+    );
+    assert_eq!(diagnostics[0].span(), locate(text, "\"8\""));
 }
 
 #[test]
@@ -237,4 +255,13 @@ fn a_template_in_a_named_input_slot_is_refused() {
 
     assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
     assert_eq!(diagnostics[0].span(), locate(text, "\"{{ x }}\""));
+}
+
+#[test]
+fn an_output_with_inputs_that_are_not_names_is_one_error() {
+    let listed = reported("[output.o]\ninputs = [1]\n");
+    let text = reported("[output.o]\ninputs = \"x\"\n");
+
+    assert_eq!(codes(&listed), [DiagnosticCode::InvalidDefinition]);
+    assert_eq!(codes(&text), [DiagnosticCode::InvalidDefinition]);
 }

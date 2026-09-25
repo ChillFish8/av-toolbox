@@ -1,6 +1,10 @@
-use av_toolbox_graph::{DiagnosticCode, FileId};
+use std::path::Path;
+
+use av_toolbox_graph::{DiagnosticCode, FileId, Span};
 
 use super::{codes, failed, loaded, stage};
+use crate::load;
+use crate::testing::MemoryFiles;
 use crate::variables::Supplied;
 
 const PART: &str = r#"
@@ -222,31 +226,83 @@ inputs = ["second"]
 
 #[test]
 fn a_file_calling_itself_is_a_call_cycle() {
-    let looping = "[input.clip]\n\n[call.again]\npath = \"denoise.toml\"\ninputs = [\"clip\"]\n\n[output.o]\ninputs = [\"again\"]\n";
+    let looping = r#"
+[input.clip]
+
+[call.again]
+path = "./denoise.toml"
+inputs = ["clip"]
+
+[output.o]
+inputs = ["again"]
+"#;
 
     let diagnostics = failed(&files(MAIN, looping), "/work/main.toml", &Supplied::new());
+    let cycle = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code() == DiagnosticCode::CallCycle)
+        .expect("a call cycle");
 
-    assert!(codes(&diagnostics).contains(&DiagnosticCode::CallCycle));
+    assert!(cycle.message().contains("calling ./denoise.toml here"));
 }
 
 #[test]
 fn two_files_calling_each_other_is_a_call_cycle_with_notes() {
-    let first =
-        "[input.clip]\n\n[call.b]\npath = \"b.toml\"\ninputs = [\"clip\"]\n\n[output.o]\ninputs = [\"b\"]\n";
-    let second = "[input.clip]\n\n[call.a]\npath = \"denoise.toml\"\ninputs = [\"clip\"]\n\n[output.o]\ninputs = [\"a\"]\n";
+    let first = r#"
+[input.clip]
+
+[call.b]
+path = "b.toml"
+inputs = ["clip"]
+
+[output.o]
+inputs = ["b"]
+"#;
+    let second = r#"
+[input.clip]
+
+[call.a]
+path = "denoise.toml"
+inputs = ["clip"]
+
+[output.o]
+inputs = ["a"]
+"#;
     let entries = [
         ("/work/main.toml", MAIN),
         ("/work/parts/denoise.toml", first),
         ("/work/parts/b.toml", second),
     ];
+    let header_start = first.find("[call.b]").expect("present");
+    let header_end = header_start + "[call.b]".len();
+    let call_b = Span::in_file(FileId::new(1), header_start, header_end);
 
     let diagnostics = failed(&entries, "/work/main.toml", &Supplied::new());
     let cycle = diagnostics
         .iter()
         .find(|diagnostic| diagnostic.code() == DiagnosticCode::CallCycle)
         .expect("a call cycle");
+    let spans: Vec<Span> = cycle.notes().iter().map(|note| note.span).collect();
 
-    assert!(!cycle.notes().is_empty());
+    assert_eq!(spans, [call_b]);
+}
+
+#[test]
+fn a_call_reading_its_own_output_is_a_cycle() {
+    let part = "[input.clip]\n\n[output.same]\ninputs = [\"clip\"]\n";
+    let main = r#"
+[call.looped]
+path = "parts/denoise.toml"
+inputs = ["looped"]
+
+[sink.out]
+type = "y4m/stdout"
+inputs = ["looped"]
+"#;
+
+    let diagnostics = failed(&files(main, part), "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::Cycle]);
 }
 
 #[test]
@@ -272,9 +328,9 @@ fn a_broken_called_file_does_not_report_its_outputs_as_unknown() {
 fn an_error_in_a_called_file_points_into_that_file() {
     let broken = PART.replace("[\"denoise\"]", "[\"denoise\", \"extra\"]");
 
-    let files = crate::testing::MemoryFiles::new(&files(MAIN, &broken));
-    let path = std::path::Path::new("/work/main.toml");
-    let failure = crate::load(path, &files, &Supplied::new()).expect_err("should fail");
+    let files = MemoryFiles::new(&files(MAIN, &broken));
+    let path = Path::new("/work/main.toml");
+    let failure = load(path, &files, &Supplied::new()).expect_err("should fail");
     let diagnostic = failure.diagnostics.iter().next().expect("one diagnostic");
     let noted = failure.sources.with_call_notes(diagnostic.clone());
 
@@ -296,9 +352,15 @@ fn a_duplicate_name_across_a_call_and_a_stage_is_reported() {
 
 #[test]
 fn an_unread_output_drops_its_stages() {
-    let part = format!(
-        "{PART}\n[filter.spare]\ntype = \"test/denoise\"\ninputs = [\"clip\"]\n\n[output.extra]\ninputs = [\"spare\"]\n"
-    );
+    let extra = r#"
+[filter.spare]
+type = "test/denoise"
+inputs = ["clip"]
+
+[output.extra]
+inputs = ["spare"]
+"#;
+    let part = format!("{PART}{extra}");
     let main = MAIN.replace("inputs = [\"denoised\"]", "inputs = [\"denoised.clean\"]");
 
     let loaded = loaded(&files(&main, &part), "/work/main.toml", &Supplied::new());
@@ -320,7 +382,18 @@ fn a_called_stage_reaching_nothing_is_kept() {
 
 #[test]
 fn a_stage_feeding_an_unread_output_and_a_kept_stage_is_kept() {
-    let extra = "\n[filter.shared]\ntype = \"test/denoise\"\ninputs = [\"clip\"]\n\n[filter.lost]\ntype = \"test/denoise\"\ninputs = [\"shared\"]\n\n[output.extra]\ninputs = [\"shared\"]\n";
+    let extra = r#"
+[filter.shared]
+type = "test/denoise"
+inputs = ["clip"]
+
+[filter.lost]
+type = "test/denoise"
+inputs = ["shared"]
+
+[output.extra]
+inputs = ["shared"]
+"#;
     let part = format!("{PART}{extra}");
     let main = MAIN.replace("inputs = [\"denoised\"]", "inputs = [\"denoised.clean\"]");
 
@@ -353,4 +426,73 @@ fn a_single_listed_input_for_several_inputs_is_one_error_on_the_list() {
 
     assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidInputs]);
     assert_eq!(diagnostics[0].span().start, list_start);
+}
+
+#[test]
+fn a_call_input_typo_is_reported_on_the_callers_input() {
+    let main = MAIN.replace("{ clip = \"src\" }", "{ clip = \"scr\" }");
+    let input_start = main.find("clip = \"scr\"").expect("present");
+
+    let diagnostics = failed(&files(&main, PART), "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::UnknownStageReference]);
+    assert_eq!(diagnostics[0].span().file, FileId::ROOT);
+    assert_eq!(diagnostics[0].span().start, input_start);
+    assert!(diagnostics[0].notes()[0].message.contains("did you mean `src`?"));
+}
+
+#[test]
+fn an_unread_output_with_a_typo_is_reported_in_the_called_file() {
+    let part = format!("{PART}\n[output.extra]\ninputs = [\"denoies\"]\n");
+    let main = MAIN.replace("inputs = [\"denoised\"]", "inputs = [\"denoised.clean\"]");
+    let source_start = part.find("\"denoies\"").expect("present");
+
+    let diagnostics = failed(&files(&main, &part), "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::UnknownStageReference]);
+    assert_ne!(diagnostics[0].span().file, FileId::ROOT);
+    assert_eq!(diagnostics[0].span().start, source_start);
+}
+
+#[test]
+fn a_failed_call_variable_is_reported_once() {
+    let part = PART.replace("default = 0.8\n", "");
+    let main = MAIN.replace(
+        "variables.strength = 1.2",
+        "variables.strength = \"{{ strenght }}\"",
+    );
+
+    let diagnostics = failed(&files(&main, &part), "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::UnknownVariable]);
+}
+
+#[test]
+fn a_path_call_value_resolves_against_the_calling_file() {
+    let part = r#"
+[variable.clip]
+type = "path"
+
+[source.read]
+type = "y4m/pipe"
+args.path = "{{ clip }}"
+
+[output.done]
+inputs = ["read"]
+"#;
+    let main = r#"
+[call.part]
+path = "parts/p.toml"
+variables.clip = "media/x.y4m"
+
+[sink.out]
+type = "y4m/stdout"
+inputs = ["part"]
+"#;
+    let entries = [("/work/main.toml", main), ("/work/parts/p.toml", part)];
+
+    let loaded = loaded(&entries, "/work/main.toml", &Supplied::new());
+    let read = stage(&loaded.specs, "part.read");
+
+    assert_eq!(read.args.value["path"], serde_json::json!("/work/media/x.y4m"));
 }

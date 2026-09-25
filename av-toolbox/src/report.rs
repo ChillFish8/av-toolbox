@@ -184,7 +184,18 @@ pub(crate) fn run_error(
     let message = format!("{} {} failed: {cause}", stage.kind, stage.name);
     let file_id = stage.span.file.index();
     let label = Label::primary(file_id, stage.span.start..stage.span.end);
-    let labels = vec![label];
+    let mut labels = vec![label];
+
+    let source = files.sources.get(stage.span.file);
+    let called_from = source
+        .map(|source| source.called_from.as_slice())
+        .unwrap_or_default();
+    for call in called_from {
+        let call_file = call.file.index();
+        let call_label = Label::secondary(call_file, call.start..call.end).with_message("called from here");
+        labels.push(call_label);
+    }
+
     let report = Report::error().with_message(message).with_labels(labels);
     let config = Config::default();
 
@@ -412,6 +423,33 @@ mod tests {
         assert!(output.contains("filter blur failed: the reader closed the stream"));
         assert!(output.contains("^^^^^^^^^^^^^"));
         assert!(!output.contains("NodeId"));
+    }
+
+    #[test]
+    fn a_run_error_in_a_called_file_notes_the_call() {
+        let mut sources = SourceMap::new();
+        let root_text = "[call.part]\npath = \"part.toml\"\n";
+        let root = sources.push("main.toml".into(), root_text.to_string(), Vec::new());
+        let call_header = Span::in_file(root, 0, 11);
+        let part = sources.push("part.toml".into(), TEXT.to_string(), vec![call_header]);
+        let files = PipelineFiles::new(sources);
+        let failure = RunError::Stage {
+            node: NodeId::new(0),
+            source: StageError::msg("the reader closed the stream"),
+        };
+        let stage = StageRef {
+            kind: StageKind::Filter,
+            name: "part.blur",
+            span: Span::in_file(part, 0, 13),
+        };
+        let mut writer = NoColor::new(Vec::new());
+
+        run_error(&mut writer, &files, &failure, Some(stage));
+        let output = String::from_utf8(writer.into_inner()).expect("utf-8");
+
+        assert!(output.contains("part.toml:1:1"));
+        assert!(output.contains("main.toml:1:1"));
+        assert!(output.contains("called from here"));
     }
 
     #[test]
