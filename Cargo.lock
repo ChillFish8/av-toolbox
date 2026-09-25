@@ -288,11 +288,13 @@ name = "av-toolbox-masks"
 version = "0.1.0"
 dependencies = [
  "av-toolbox-core",
+ "av-toolbox-cubek",
  "av-toolbox-gpu",
  "cubecl",
  "schemars",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

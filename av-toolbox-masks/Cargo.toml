@@ -6,18 +6,20 @@ description = "Masks that select pixels in av-toolbox pipelines."
 
 [dependencies]
 av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-cubek = { path = "../av-toolbox-cubek" }
 av-toolbox-gpu = { workspace = true }
 cubecl = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }
 
 [features]
-vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan"]
-metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal"]
-cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda"]
-rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm"]
+vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-cubek/vulkan"]
+metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-cubek/metal"]
+cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda", "av-toolbox-cubek/cuda"]
+rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-cubek/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
