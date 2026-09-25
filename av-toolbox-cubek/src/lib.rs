@@ -4,12 +4,16 @@
 //!
 //! - [blur] for separable gaussian blurs.
 //! - [reduce] for the extremes and sums of a plane.
+//! - [histogram] for percentiles.
+//! - [sobel] for image gradients.
 
 pub mod blur;
 mod border;
 mod dispatch;
+pub mod histogram;
 mod plane;
 pub mod reduce;
+pub mod sobel;
 
 pub use self::border::reflect;
 pub use self::dispatch::Dispatch;
