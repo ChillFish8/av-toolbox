@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
     FormatSet,
     FrameContext,
     Mask as GpuMask,
+    MaskFormat,
     Offered,
     OutputFormats,
     PlaneBuffer,
@@ -33,6 +34,14 @@ use serde::Deserialize;
 use super::{accepts_mask, produces_mask};
 
 const NAME: &str = "mask/vote";
+
+fn missing_first_mask() -> StageError {
+    StageError::msg("mask/vote expected a mask in slot 0")
+}
+
+fn missing_mask() -> StageError {
+    StageError::msg("mask/vote expected a mask in every slot")
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -112,12 +121,15 @@ impl<R: Runtime> StageInstance for VoteMask<R> {}
 
 impl<R: Runtime> Mask for VoteMask<R> {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
-        let first = inputs
-            .take_mask(0)
-            .ok_or_else(|| StageError::msg("mask/vote expected a mask in slot 0"))?;
+        let first = inputs.take_mask(0).ok_or_else(missing_first_mask)?;
 
         let meta = first.meta().clone();
-        let output = context.alloc_mask(first.format(), meta);
+        let format = MaskFormat {
+            chroma: None,
+            ..*first.format()
+        };
+
+        let output = context.alloc_mask(&format, meta);
         let samples = output.plane().samples();
 
         let tally = context.scratch(samples * size_of::<u32>());
@@ -137,22 +149,21 @@ impl<R: Runtime> Mask for VoteMask<R> {
         self.cast(context, &first, &tally, samples);
 
         for index in 1..inputs.len() {
-            let input = inputs
-                .take_mask(index)
-                .ok_or_else(|| StageError::msg("mask/vote expected a mask in every slot"))?;
+            let input = inputs.take_mask(index).ok_or_else(missing_mask)?;
 
             self.cast(context, &input, &tally, samples);
         }
 
         let tally_handle = tally.handle().clone();
 
-        // Safety: as above.
+        // Safety: the tally was allocated to hold exactly `samples` u32 values.
         let counts = unsafe { ArrayArg::from_raw_parts(tally_handle, samples) };
         let write = output.plane().array::<u8, R>();
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
 
-        // Safety: as above.
+        // Safety: every binding names no more elements than its buffer holds, and the kernel writes
+        // nothing past the length it is given.
         unsafe {
             tally_votes::launch_unchecked::<R>(&self.client, cubes, shape, counts, write, self.votes);
         }
@@ -249,7 +260,7 @@ impl MaskDefinition for Vote {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{MaskFormat, SampleFormat};
+    use av_toolbox_gpu::SampleFormat;
 
     use super::*;
 
@@ -269,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_follow_the_script() {
+    fn the_defaults_are_two_votes_at_56() {
         let args: VoteArgs = serde_json::from_value(serde_json::json!({})).expect("the defaults apply");
 
         assert_eq!(args.votes, 2);

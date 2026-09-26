@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
     FormatSet,
     FrameContext,
     Mask as GpuMask,
+    MaskFormat,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -32,6 +33,10 @@ use serde::Deserialize;
 use super::{accepts_mask, produces_mask};
 
 const NAME: &str = "mask/threshold";
+
+fn missing_mask() -> StageError {
+    StageError::msg("mask/threshold expected a mask in slot 0")
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -68,12 +73,15 @@ impl<R: Runtime> StageInstance for ThresholdMask<R> {}
 
 impl<R: Runtime> Mask for ThresholdMask<R> {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
-        let input = inputs
-            .take_mask(0)
-            .ok_or_else(|| StageError::msg("mask/threshold expected a mask in slot 0"))?;
+        let input = inputs.take_mask(0).ok_or_else(missing_mask)?;
 
         let meta = input.meta().clone();
-        let output = context.alloc_mask(input.format(), meta);
+        let format = MaskFormat {
+            chroma: None,
+            ..*input.format()
+        };
+
+        let output = context.alloc_mask(&format, meta);
 
         let samples = output.plane().samples();
         let cubes = context.cube_count(samples);

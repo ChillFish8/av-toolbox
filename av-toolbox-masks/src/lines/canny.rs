@@ -174,12 +174,13 @@ impl<R: Runtime> Mask for CannyMask<R> {
         let samples = self.luma.samples();
 
         let luma = Scratch::new::<f32>(context, width, height);
-        load_luma(&self.client, &sizing, &frame, &self.luma, luma.plane())?;
+        let luma_plane = luma.plane();
+        load_luma(&self.client, &sizing, &frame, &self.luma, luma_plane)?;
 
         let temporary = Scratch::new::<f32>(context, width, height);
         let smoothed = Scratch::new::<f32>(context, width, height);
         let smooth_planes = BlurPlanes {
-            input: luma.plane(),
+            input: luma_plane,
             scratch: temporary.plane(),
             output: smoothed.plane(),
         };

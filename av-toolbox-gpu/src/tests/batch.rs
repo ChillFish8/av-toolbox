@@ -71,14 +71,25 @@ fn fill_pattern(plane: &mut [u8], seed: u8) {
     }
 }
 
+/// The channels that name each of `format`'s planes once.
+///
+/// A mask's chroma plane answers to both U and V, so a mask lists only U for it.
+fn distinct_channels(format: &StreamFormat) -> &'static [Channel] {
+    match format {
+        StreamFormat::Frames(_) => &[Channel::Y, Channel::U, Channel::V],
+        StreamFormat::Mask(_) => &[Channel::Y, Channel::U],
+    }
+}
+
 /// Planes for `format`, each one filled with a pattern of its own.
 ///
 /// U and V are the same size at 4:2:0, so their patterns are what tells a plane that came back
 /// from its neighbour.
 fn filled(format: &StreamFormat, seed: u8) -> HostPlanes {
     let mut planes = HostPlanes::zeroed(format);
+    let channels = distinct_channels(format);
 
-    for (offset, channel) in [Channel::Y, Channel::U, Channel::V].iter().enumerate() {
+    for (offset, channel) in channels.iter().enumerate() {
         let Some(plane) = planes.plane_mut(*channel) else {
             continue;
         };

@@ -486,10 +486,10 @@ fn a_fan_out_that_suits_no_reader_names_every_one_that_refused() {
     assert!(notes.contains(&"exact takes f32"), "{notes:?}");
 }
 
-/// The same diamond as above with the two filters declared the other way round, so the picky
-/// one is decided first. The mask turns F32 down there while steering on a proposal that has
-/// not settled, and a turndown made on a proposal only sets a sample aside. Declaration order
-/// must not decide whether a coupled pipeline solves.
+/// A diamond of two filters reading `test/wide` into `test/matched`, with the filters declared the
+/// other way round, so the picky one is decided first. The mask turns F32 down there while
+/// steering on a proposal that has not settled, and a turndown made on a proposal only sets a
+/// sample aside. Declaration order must not decide whether a coupled pipeline solves.
 #[test]
 fn a_coupled_mask_still_agrees_when_its_producers_are_declared_the_other_way_round() {
     let registry = testing::registry();

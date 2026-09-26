@@ -398,7 +398,7 @@ impl Mask {
     /// The plane `channel` of a frame in `frame`'s format is blended with.
     ///
     /// A channel at the frame's full size takes the full plane, and a subsampled one takes the
-    /// chroma plane, which is `None` when this mask does not carry one.
+    /// chroma plane. It is `None` when this mask carries no chroma plane of the channel's size.
     pub fn plane_for(&self, channel: Channel, frame: &FrameFormat) -> Option<&Plane> {
         let dimensions = frame.channel_dimensions(channel)?;
         let full = (frame.width, frame.height);
@@ -406,7 +406,12 @@ impl Mask {
             return Some(&self.plane);
         }
 
-        self.chroma.as_ref()
+        let chroma = self.chroma.as_ref()?;
+        if chroma.dimensions() != dimensions {
+            return None;
+        }
+
+        Some(chroma)
     }
 }
 
@@ -751,6 +756,77 @@ mod tests {
         let frame = format();
 
         assert!(mask.plane_for(Channel::R, &frame).is_none());
+    }
+
+    fn mask_with_chroma_at(subsampling: Subsampling, chroma: Plane) -> Mask {
+        let format = MaskFormat {
+            width: 64,
+            height: 64,
+            sample: SampleFormat::U8,
+            chroma: Some(MaskChroma {
+                subsampling,
+                location: ChromaLocation::Left,
+            }),
+        };
+
+        let full = plane(64, 64);
+        let meta = FrameMeta::at(0);
+
+        Mask::new(format, full, meta, Some(chroma))
+    }
+
+    fn format_at(subsampling: Subsampling) -> FrameFormat {
+        let base = format();
+
+        FrameFormat {
+            layout: FrameLayout::Yuv { subsampling },
+            ..base
+        }
+    }
+
+    #[test]
+    fn a_422_frame_blends_chroma_with_a_422_chroma_plane() {
+        let chroma = plane(32, 64);
+        let shared = chroma.clone();
+        let mask = mask_with_chroma_at(Subsampling::Yuv422, shared);
+        let frame = format_at(Subsampling::Yuv422);
+
+        let luma_plane = mask.plane_for(Channel::Y, &frame);
+        let blue_plane = mask.plane_for(Channel::U, &frame);
+        let red_plane = mask.plane_for(Channel::V, &frame);
+
+        assert!(same_plane(luma_plane, mask.plane()));
+        assert!(same_plane(blue_plane, &chroma));
+        assert!(same_plane(red_plane, &chroma));
+    }
+
+    #[test]
+    fn a_chroma_plane_of_another_shape_is_not_blended_with() {
+        let chroma = plane(32, 32);
+        let mask = mask_with_chroma_at(Subsampling::Yuv420, chroma);
+        let frame = format_at(Subsampling::Yuv422);
+
+        assert!(mask.plane_for(Channel::U, &frame).is_none());
+        assert!(mask.plane_for(Channel::V, &frame).is_none());
+    }
+
+    #[test]
+    fn an_rgb_frame_blends_every_channel_with_the_full_plane() {
+        let chroma = plane(32, 32);
+        let mask = mask_with_chroma_at(Subsampling::Yuv420, chroma);
+        let base = format();
+        let frame = FrameFormat {
+            layout: FrameLayout::Rgb,
+            ..base
+        };
+
+        for channel in [Channel::R, Channel::G, Channel::B] {
+            let blended = mask.plane_for(channel, &frame);
+
+            assert!(same_plane(blended, mask.plane()), "{channel}");
+        }
+
+        assert!(mask.plane_for(Channel::U, &frame).is_none());
     }
 
     #[test]

@@ -240,8 +240,9 @@ impl BufferPool {
     /// when the format has one.
     ///
     /// Those buffers are recycled memory holding an earlier mask's samples, so a stage that writes
-    /// only part of them has to fill the rest. Waits once for both planes' bytes, for the same
-    /// reason [BufferPool::alloc_frame] does.
+    /// only part of them has to fill the rest. Waits once for both planes' bytes before reserving
+    /// either, so a tight budget cannot leave the full plane the only thing that could free the
+    /// room the chroma plane is waiting for.
     pub fn alloc_mask(&self, format: &MaskFormat, meta: FrameMeta) -> Mask {
         let full_bytes = format.bytes();
         let chroma_bytes = format.chroma_bytes();
@@ -352,8 +353,9 @@ impl BufferPool {
     /// bytes.
     ///
     /// The full plane is read from [Channel::Y](crate::Channel::Y) and a chroma plane from
-    /// [Channel::U](crate::Channel::U). Waits once for both planes' bytes first, for the same reason
-    /// [BufferPool::alloc_frame] does.
+    /// [Channel::U](crate::Channel::U). Waits once for both planes' bytes before reserving either,
+    /// so a tight budget cannot leave the full plane the only thing that could free the room the
+    /// chroma plane is waiting for.
     pub(crate) fn load_mask_from(
         &self,
         item: usize,

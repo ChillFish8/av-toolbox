@@ -170,7 +170,7 @@ impl fmt::Display for FrameFormat {
     }
 }
 
-/// The shape of a mask's chroma plane, matching the frames it is blended with.
+/// The shape of a mask's chroma plane, as a subsampling and where its samples sit.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct MaskChroma {
     pub subsampling: Subsampling,

@@ -33,6 +33,7 @@ use cubecl::prelude::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::arguments::{finite_positive, reachable_sigma};
 use crate::luma::{Luma, accepts_luma, load_luma, produces_luma_mask};
 use crate::sizing::{Reduction, Scratch, Sizing, mask_plane};
 
@@ -77,8 +78,10 @@ fn default_eps_percentile() -> f32 {
 
 impl XdogArgs {
     fn validate(&self) -> Result<(), StageError> {
-        if self.sigma <= 0.0 {
-            let message = format!("{NAME} needs sigma above 0, got {}", self.sigma);
+        reachable_sigma(NAME, "sigma", self.sigma)?;
+
+        if !self.k.is_finite() {
+            let message = format!("{NAME} needs a finite k, got {}", self.k);
             return Err(StageError::msg(message));
         }
 
@@ -87,11 +90,11 @@ impl XdogArgs {
             return Err(StageError::msg(message));
         }
 
-        if let Some(phi) = self.phi
-            && phi <= 0.0
-        {
-            let message = format!("{NAME} needs phi above 0, got {phi}");
-            return Err(StageError::msg(message));
+        let far_sigma = self.sigma * self.k;
+        reachable_sigma(NAME, "sigma * k", far_sigma)?;
+
+        if let Some(phi) = self.phi {
+            finite_positive(NAME, "phi", phi)?;
         }
 
         if !(0.0..=100.0).contains(&self.eps_percentile) {
@@ -274,14 +277,15 @@ impl<R: Runtime> Mask for XdogMask<R> {
         let samples = self.luma.samples();
 
         let luma = Scratch::new::<f32>(context, width, height);
-        load_luma(&self.client, &sizing, &frame, &self.luma, luma.plane())?;
+        let luma_plane = luma.plane();
+        load_luma(&self.client, &sizing, &frame, &self.luma, luma_plane)?;
 
         let temporary = Scratch::new::<f32>(context, width, height);
         let near = Scratch::new::<f32>(context, width, height);
         let far = Scratch::new::<f32>(context, width, height);
 
         let near_planes = BlurPlanes {
-            input: luma.plane(),
+            input: luma_plane,
             scratch: temporary.plane(),
             output: near.plane(),
         };
@@ -313,7 +317,8 @@ impl<R: Runtime> Mask for XdogMask<R> {
             );
         }
 
-        let parameters = self.parameters(context, &sizing, difference.plane());
+        let difference_plane = difference.plane();
+        let parameters = self.parameters(context, &sizing, difference_plane);
 
         let edges = Scratch::new::<f32>(context, width, height);
         let difference_read = difference.plane().array::<R>();
@@ -322,7 +327,8 @@ impl<R: Runtime> Mask for XdogMask<R> {
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
-        // Safety: as above, with the two parameters in their own buffer.
+        // Safety: the difference and edges hold `samples` f32 values, the parameters two, and the
+        // kernel writes nothing past the edges' length.
         unsafe {
             soft_threshold::launch_unchecked::<R>(
                 &self.client,
@@ -336,7 +342,8 @@ impl<R: Runtime> Mask for XdogMask<R> {
 
         let range = Scratch::line::<f32>(context, 2);
         let reduction = Reduction::new(context, samples);
-        let range_planes = reduction.planes(edges.plane(), &range);
+        let edges_plane = edges.plane();
+        let range_planes = reduction.planes(edges_plane, &range);
         extremes(&self.client, &sizing, range_planes);
 
         let meta = frame.meta().clone();
@@ -479,6 +486,118 @@ mod tests {
     #[test]
     fn a_zero_phi_is_refused() {
         assert!(args(json!({ "phi": 0.0 })).validate().is_err());
+    }
+
+    fn refusal(args: XdogArgs) -> String {
+        let error = args.validate().expect_err("the args should be refused");
+
+        error.to_string()
+    }
+
+    #[test]
+    fn a_nan_sigma_is_refused() {
+        let defaults = args(json!({}));
+        let message = refusal(XdogArgs {
+            sigma: f32::NAN,
+            ..defaults
+        });
+
+        assert!(
+            message.contains("lines/xdog needs a finite sigma, got NaN"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_infinite_sigma_is_refused() {
+        let defaults = args(json!({}));
+        let message = refusal(XdogArgs {
+            sigma: f32::INFINITY,
+            ..defaults
+        });
+
+        assert!(
+            message.contains("lines/xdog needs a finite sigma, got inf"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_sigma_too_wide_to_blur_is_refused() {
+        let wide = args(json!({ "sigma": 1.0e9 }));
+        let message = refusal(wide);
+
+        assert!(
+            message.contains("lines/xdog needs sigma of at most 1024"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_nan_k_is_refused() {
+        let defaults = args(json!({}));
+        let message = refusal(XdogArgs {
+            k: f32::NAN,
+            ..defaults
+        });
+
+        assert!(
+            message.contains("lines/xdog needs a finite k, got NaN"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_infinite_k_is_refused() {
+        let defaults = args(json!({}));
+        let message = refusal(XdogArgs {
+            k: f32::INFINITY,
+            ..defaults
+        });
+
+        assert!(
+            message.contains("lines/xdog needs a finite k, got inf"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_k_widening_the_blur_too_far_is_refused() {
+        let widened = args(json!({ "sigma": 1000.0, "k": 1.6 }));
+        let message = refusal(widened);
+
+        assert!(
+            message.contains("lines/xdog needs sigma * k of at most 1024"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_nan_phi_is_refused() {
+        let defaults = args(json!({}));
+        let message = refusal(XdogArgs {
+            phi: Some(f32::NAN),
+            ..defaults
+        });
+
+        assert!(
+            message.contains("lines/xdog needs a finite phi, got NaN"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_infinite_phi_is_refused() {
+        let defaults = args(json!({}));
+        let message = refusal(XdogArgs {
+            phi: Some(f32::INFINITY),
+            ..defaults
+        });
+
+        assert!(
+            message.contains("lines/xdog needs a finite phi, got inf"),
+            "{message}"
+        );
     }
 
     #[test]

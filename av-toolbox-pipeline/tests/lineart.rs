@@ -16,9 +16,17 @@ const BASE_LUMA: u8 = 200;
 
 const STROKE_LUMA: u8 = 20;
 
-const OVERLAY_LUMA: u8 = 0;
+const BASE_CHROMA: Chroma = Chroma { u: 128, v: 128 };
 
-const SECOND_OVERLAY_LUMA: u8 = 100;
+const OVERLAY: Colour = Colour {
+    luma: 0,
+    chroma: Chroma { u: 40, v: 220 },
+};
+
+const SECOND_OVERLAY: Colour = Colour {
+    luma: 100,
+    chroma: Chroma { u: 90, v: 170 },
+};
 
 const STROKE: Range<usize> = 30..34;
 
@@ -26,16 +34,44 @@ const STROKE_COLUMN: usize = 31;
 
 const BACKGROUND_COLUMN: usize = 5;
 
-/// A decoded y4m stream's header and the luma of each of its frames.
+/// The 4:2:0 chroma column sited on luma column 32, whose bilinear taps on luma columns `31..=33`
+/// all fall inside the stroke.
+const STROKE_CHROMA_COLUMN: usize = 16;
+
+/// The 4:2:0 chroma column sited on luma column 4, whose taps all fall well clear of the stroke.
+const BACKGROUND_CHROMA_COLUMN: usize = 2;
+
+/// One U and V sample pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Chroma {
+    u: u8,
+    v: u8,
+}
+
+/// A flat clip's luma and chroma.
+#[derive(Debug, Clone, Copy)]
+struct Colour {
+    luma: u8,
+    chroma: Chroma,
+}
+
+/// One decoded frame's planes.
+struct DecodedFrame {
+    luma: Vec<u8>,
+    u_plane: Vec<u8>,
+    v_plane: Vec<u8>,
+}
+
+/// A decoded y4m stream's header and the planes of each of its frames.
 struct Decoded {
     width: usize,
     height: usize,
     colorspace: y4m::Colorspace,
-    lumas: Vec<Vec<u8>>,
+    frames: Vec<DecodedFrame>,
 }
 
-/// A C420 y4m clip whose luma comes from `luma_at(column)` on every row, with neutral chroma.
-fn clip(luma_at: impl Fn(usize) -> u8) -> Vec<u8> {
+/// A C420 y4m clip whose luma comes from `luma_at(column)` on every row, with flat `chroma`.
+fn clip(luma_at: impl Fn(usize) -> u8, chroma: Chroma) -> Vec<u8> {
     let mut bytes = Vec::new();
     let ratio = y4m::Ratio::new(24, 1);
     let range_text = b"COLORRANGE=FULL".to_vec();
@@ -47,9 +83,11 @@ fn clip(luma_at: impl Fn(usize) -> u8) -> Vec<u8> {
 
     let row: Vec<u8> = (0..SIZE).map(&luma_at).collect();
     let luma = row.repeat(SIZE);
-    let chroma = vec![128u8; (SIZE / 2) * (SIZE / 2)];
+    let chroma_samples = (SIZE / 2) * (SIZE / 2);
+    let u_plane = vec![chroma.u; chroma_samples];
+    let v_plane = vec![chroma.v; chroma_samples];
     for _ in 0..FRAMES {
-        let frame = y4m::Frame::new([&luma, &chroma, &chroma], None);
+        let frame = y4m::Frame::new([&luma, &u_plane, &v_plane], None);
         encoder.write_frame(&frame).expect("writes a frame");
     }
 
@@ -58,17 +96,19 @@ fn clip(luma_at: impl Fn(usize) -> u8) -> Vec<u8> {
 
 /// A bright clip with a dark vertical stroke across `STROKE`.
 fn stroked_clip() -> Vec<u8> {
-    clip(|column| {
+    let luma_at = |column| {
         if STROKE.contains(&column) {
             STROKE_LUMA
         } else {
             BASE_LUMA
         }
-    })
+    };
+
+    clip(luma_at, BASE_CHROMA)
 }
 
-fn flat_clip(luma: u8) -> Vec<u8> {
-    clip(|_| luma)
+fn flat_clip(colour: Colour) -> Vec<u8> {
+    clip(|_| colour.luma, colour.chroma)
 }
 
 fn decode(stream: &[u8]) -> Decoded {
@@ -77,39 +117,67 @@ fn decode(stream: &[u8]) -> Decoded {
     let height = decoder.get_height();
     let colorspace = decoder.get_colorspace();
 
-    let mut lumas = Vec::new();
+    let mut frames = Vec::new();
     while let Ok(frame) = decoder.read_frame() {
         let luma = frame.get_y_plane().to_vec();
-        lumas.push(luma);
+        let u_plane = frame.get_u_plane().to_vec();
+        let v_plane = frame.get_v_plane().to_vec();
+        frames.push(DecodedFrame {
+            luma,
+            u_plane,
+            v_plane,
+        });
     }
 
     Decoded {
         width,
         height,
         colorspace,
-        lumas,
+        frames,
     }
 }
 
-/// Checks `path` holds every frame at the clips' format, each taking `overlay_luma` on the stroke.
-fn assert_blended(path: &Path, overlay_luma: u8) {
+/// Checks `path` holds every frame at the clips' format, each taking `overlay` on the stroke.
+fn assert_blended(path: &Path, overlay: Colour) {
     let written = fs::read(path).expect("reads the output");
     let decoded = decode(&written);
 
     assert_eq!((decoded.width, decoded.height), (SIZE, SIZE));
     assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
-    assert_eq!(decoded.lumas.len(), FRAMES as usize);
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
 
     let row_start = SIZE / 2 * SIZE;
-    for luma in &decoded.lumas {
-        let middle_row = &luma[row_start..row_start + SIZE];
+    let chroma_width = SIZE / 2;
+    let chroma_row_start = SIZE / 4 * chroma_width;
+    for frame in &decoded.frames {
+        let middle_row = &frame.luma[row_start..row_start + SIZE];
+        let u_row = &frame.u_plane[chroma_row_start..chroma_row_start + chroma_width];
+        let v_row = &frame.v_plane[chroma_row_start..chroma_row_start + chroma_width];
+        let stroke_chroma = Chroma {
+            u: u_row[STROKE_CHROMA_COLUMN],
+            v: v_row[STROKE_CHROMA_COLUMN],
+        };
+
+        let background_chroma = Chroma {
+            u: u_row[BACKGROUND_CHROMA_COLUMN],
+            v: v_row[BACKGROUND_CHROMA_COLUMN],
+        };
+
         assert_eq!(
-            middle_row[STROKE_COLUMN], overlay_luma,
+            middle_row[STROKE_COLUMN], overlay.luma,
             "the stroke did not take the overlay"
         );
         assert_eq!(
             middle_row[BACKGROUND_COLUMN], BASE_LUMA,
             "the background did not keep the base"
+        );
+        assert_eq!(
+            stroke_chroma, overlay.chroma,
+            "the stroke's chroma did not take the overlay"
+        );
+        assert_eq!(
+            background_chroma, BASE_CHROMA,
+            "the background's chroma did not keep the base"
         );
     }
 }
@@ -130,7 +198,7 @@ fn the_lineart_example_blends_the_overlay_into_the_lines() {
     let output = folder.path().join("output.y4m");
 
     let base_clip = stroked_clip();
-    let overlay_clip = flat_clip(OVERLAY_LUMA);
+    let overlay_clip = flat_clip(OVERLAY);
     fs::write(&base, base_clip).expect("writes the base");
     fs::write(&overlay, overlay_clip).expect("writes the overlay");
 
@@ -153,7 +221,7 @@ fn the_lineart_example_blends_the_overlay_into_the_lines() {
     let report = engine.run().expect("should run");
 
     assert_eq!(report.frames, FRAMES);
-    assert_blended(&output, OVERLAY_LUMA);
+    assert_blended(&output, OVERLAY);
 }
 
 #[test]
@@ -166,8 +234,8 @@ fn one_mask_read_by_two_blends_is_downscaled_once() {
     let second_output = folder.path().join("second_output.y4m");
 
     let base_clip = stroked_clip();
-    let first_overlay_clip = flat_clip(OVERLAY_LUMA);
-    let second_overlay_clip = flat_clip(SECOND_OVERLAY_LUMA);
+    let first_overlay_clip = flat_clip(OVERLAY);
+    let second_overlay_clip = flat_clip(SECOND_OVERLAY);
     fs::write(&base, base_clip).expect("writes the base");
     fs::write(&first_overlay, first_overlay_clip).expect("writes the first overlay");
     fs::write(&second_overlay, second_overlay_clip).expect("writes the second overlay");
@@ -249,6 +317,6 @@ args.path = "{second_output_path}"
     let report = engine.run().expect("should run");
 
     assert_eq!(report.frames, FRAMES * 2, "each sink counts every frame it wrote");
-    assert_blended(&first_output, OVERLAY_LUMA);
-    assert_blended(&second_output, SECOND_OVERLAY_LUMA);
+    assert_blended(&first_output, OVERLAY);
+    assert_blended(&second_output, SECOND_OVERLAY);
 }

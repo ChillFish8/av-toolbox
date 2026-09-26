@@ -214,7 +214,9 @@ pub fn apply<R: Runtime>(
     let cubes = dispatch.cube_count(output_samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: as above, with every tap folded back inside its column.
+    // Safety: the scratch holds `out_width * in_height` f32 values, the output
+    // `out_width * out_height` bytes, the tables `out_height` starts and `out_height * count`
+    // weights, and every tap is folded back inside its column before it is read.
     unsafe {
         resize_columns::launch_unchecked::<R>(
             client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count,

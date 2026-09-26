@@ -69,7 +69,7 @@ pub fn plane(handle: &Handle, width: u32, height: u32) -> DevicePlane<'_> {
     unsafe { DevicePlane::new(handle, width, height) }
 }
 
-/// Mirrors [av_toolbox_cubek::reflect] on the CPU.
+/// Mirrors [reflect](av_toolbox_cubek::reflect) on the CPU.
 pub fn reflect(index: i32, length: i32) -> i32 {
     if length <= 1 {
         return 0;
@@ -80,7 +80,7 @@ pub fn reflect(index: i32, length: i32) -> i32 {
     if folded >= length { period - folded } else { folded }
 }
 
-/// A CPU blur following the spec, reflect-101 borders and all.
+/// A separable blur on the CPU with `weights` along each axis and reflect-101 borders.
 pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -> Vec<f32> {
     let radius = (weights.len() / 2) as i32;
     let width = width as i32;
@@ -94,6 +94,7 @@ pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -
                 let source = reflect(column + tap as i32 - radius, width);
                 total += input[(row * width + source) as usize] * weight;
             }
+
             rows[(row * width + column) as usize] = total;
         }
     }
@@ -106,6 +107,7 @@ pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -
                 let source = reflect(row + tap as i32 - radius, height);
                 total += rows[(source * width + column) as usize] * weight;
             }
+
             output[(row * width + column) as usize] = total;
         }
     }
@@ -128,6 +130,7 @@ pub fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, do
                 let weight = across.weights[(column * across.count + step) as usize];
                 total += f32::from(input[(row * width + source) as usize]) * weight;
             }
+
             rows[(row * out_width + column) as usize] = total;
         }
     }
@@ -142,6 +145,7 @@ pub fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, do
                 let weight = down.weights[(row * down.count + step) as usize];
                 total += rows[(source * out_width + column) as usize] * weight;
             }
+
             output.push(total.round().clamp(0.0, 255.0) as u8);
         }
     }

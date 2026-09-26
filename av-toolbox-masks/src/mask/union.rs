@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
     FormatSet,
     FrameContext,
     Mask as GpuMask,
+    MaskFormat,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -32,6 +33,14 @@ use serde::Deserialize;
 use super::{accepts_mask, produces_mask};
 
 const NAME: &str = "mask/union";
+
+fn missing_first_mask() -> StageError {
+    StageError::msg("mask/union expected a mask in slot 0")
+}
+
+fn missing_mask() -> StageError {
+    StageError::msg("mask/union expected a mask in every slot")
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -65,12 +74,15 @@ impl<R: Runtime> StageInstance for UnionMask<R> {}
 
 impl<R: Runtime> Mask for UnionMask<R> {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
-        let first = inputs
-            .take_mask(0)
-            .ok_or_else(|| StageError::msg("mask/union expected a mask in slot 0"))?;
+        let first = inputs.take_mask(0).ok_or_else(missing_first_mask)?;
 
         let meta = first.meta().clone();
-        let output = context.alloc_mask(first.format(), meta);
+        let format = MaskFormat {
+            chroma: None,
+            ..*first.format()
+        };
+
+        let output = context.alloc_mask(&format, meta);
         let samples = output.plane().samples();
 
         let read = first.plane().array::<u8, R>();
@@ -85,16 +97,15 @@ impl<R: Runtime> Mask for UnionMask<R> {
         }
 
         for index in 1..inputs.len() {
-            let input = inputs
-                .take_mask(index)
-                .ok_or_else(|| StageError::msg("mask/union expected a mask in every slot"))?;
+            let input = inputs.take_mask(index).ok_or_else(missing_mask)?;
 
             let read = input.plane().array::<u8, R>();
             let write = output.plane().array::<u8, R>();
             let cubes = context.cube_count(samples);
             let shape = context.cube_dim();
 
-            // Safety: as above.
+            // Safety: both bindings name exactly as many elements as their plane holds, and the
+            // kernel writes nothing past the length it is given.
             unsafe {
                 keep_largest::launch_unchecked::<R>(&self.client, cubes, shape, read, write);
             }

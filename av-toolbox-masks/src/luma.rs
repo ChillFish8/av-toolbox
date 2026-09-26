@@ -148,7 +148,8 @@ pub(crate) fn load_luma<R: Runtime>(
 
     let scale = 1.0 / luma.largest;
     let written = output.array::<R>();
-    let cubes = sizing.0.cube_count(luma.samples());
+    let samples = luma.samples();
+    let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
 
     // Safety: the luma plane holds `samples` values of the declared width, `output` holds

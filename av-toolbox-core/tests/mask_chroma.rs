@@ -334,7 +334,7 @@ fn read_plane<R: Runtime>(build: &BuildContext<R>, plane: &av_toolbox_gpu::Plane
     bytes[..samples].to_vec()
 }
 
-/// Mirrors [av_toolbox_cubek::reflect] on the CPU.
+/// Mirrors [reflect](av_toolbox_cubek::reflect) on the CPU.
 fn reflect(index: i32, length: i32) -> i32 {
     if length <= 1 {
         return 0;

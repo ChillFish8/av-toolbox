@@ -99,7 +99,8 @@ pub fn percentile<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
 
-    // Safety: as above.
+    // Safety: the input holds `samples` f32 values, the range two and the bins `BINS` u32 values,
+    // and the kernel reads and writes nothing past those lengths.
     unsafe {
         count_bins::launch_unchecked::<R>(client, cubes, shape, input, range, bins, BINS);
     }
@@ -111,7 +112,8 @@ pub fn percentile<R: Runtime>(
     let single = CubeCount::Static(1, 1, 1);
     let lone = CubeDim::new_1d(1);
 
-    // Safety: as above.
+    // Safety: the bins hold `BINS` u32 values, the range two and the result one, and the kernel
+    // reads and writes nothing past those lengths.
     unsafe {
         find_percentile::launch_unchecked::<R>(client, single, lone, bins, range, result, target, BINS);
     }

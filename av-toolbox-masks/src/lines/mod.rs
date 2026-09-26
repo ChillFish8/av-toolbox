@@ -1,4 +1,5 @@
 mod adaptive;
+mod arguments;
 mod canny;
 mod xdog;
 

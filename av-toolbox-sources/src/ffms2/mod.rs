@@ -438,7 +438,7 @@ fn transfer_of(value: i32) -> Transfer {
     }
 }
 
-/// Maps ffms2's chroma location, where 0 is unspecified and 1 to 6 follow its enum.
+/// Maps ffms2's chroma location, where 0 is unspecified and `1..=6` follow its enum.
 fn chroma_location_of(raw: i32) -> ChromaLocation {
     match raw {
         2 => ChromaLocation::Center,

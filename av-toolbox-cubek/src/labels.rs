@@ -208,7 +208,7 @@ pub fn label<R: Runtime>(
             let cubes = dispatch.cube_count(samples);
             let shape = dispatch.cube_dim();
 
-            // Safety: as above.
+            // Safety: the labels hold `samples` u32 values and the flag one.
             unsafe {
                 jump::launch_unchecked::<R>(client, cubes, shape, labels, changed);
             }
@@ -258,7 +258,7 @@ pub fn keep<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
 
-    // Safety: as above.
+    // Safety: every plane holds `samples` elements, and a label is always an index below `samples`.
     unsafe {
         keep_counted::launch_unchecked::<R>(client, cubes, shape, labels, counts, output, minimum);
     }

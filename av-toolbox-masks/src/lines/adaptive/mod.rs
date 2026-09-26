@@ -15,7 +15,7 @@ use av_toolbox_core::{
     StreamType,
 };
 use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::blur::{BlurPlanes, Gaussian};
+use av_toolbox_cubek::blur::{BlurPlanes, Gaussian, MAX_RADIUS};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -35,6 +35,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use self::shadows::{ShadowRecovery, remove_specks};
+use super::arguments::{finite_positive, reachable_sigma};
 use crate::luma::{Luma, accepts_luma, load_luma, produces_luma_mask};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
@@ -88,15 +89,6 @@ pub(crate) struct Settings {
     pub(crate) shadows: Option<Shadows>,
 }
 
-fn positive(name: &str, value: f32) -> Result<f32, StageError> {
-    if value <= 0.0 {
-        let message = format!("{NAME} needs {name} above 0, got {value}");
-        return Err(StageError::msg(message));
-    }
-
-    Ok(value)
-}
-
 impl AdaptiveArgs {
     /// The first shadow argument set, by name.
     fn first_shadow_argument(&self) -> Option<&'static str> {
@@ -120,6 +112,16 @@ impl AdaptiveArgs {
             return Err(StageError::msg(message));
         }
 
+        let block_radius = self.block_size / 2;
+        if block_radius > MAX_RADIUS {
+            let widest = 2 * MAX_RADIUS + 1;
+            let message = format!(
+                "{NAME} needs block_size of at most {widest}, got {}",
+                self.block_size
+            );
+            return Err(StageError::msg(message));
+        }
+
         if !self.recover_shadows {
             let first_shadow_argument = self.first_shadow_argument();
             if let Some(name) = first_shadow_argument {
@@ -137,9 +139,9 @@ impl AdaptiveArgs {
         let blur_sigma = self.shadow_blur_sigma.unwrap_or(25.0);
         let clahe_clip = self.shadow_clahe_clip.unwrap_or(1.8);
         let denoise = self.shadow_denoise.unwrap_or(50.0);
-        let checked_blur_sigma = positive("shadow_blur_sigma", blur_sigma)?;
-        let checked_clahe_clip = positive("shadow_clahe_clip", clahe_clip)?;
-        let checked_denoise = positive("shadow_denoise", denoise)?;
+        let checked_blur_sigma = reachable_sigma(NAME, "shadow_blur_sigma", blur_sigma)?;
+        let checked_clahe_clip = finite_positive(NAME, "shadow_clahe_clip", clahe_clip)?;
+        let checked_denoise = finite_positive(NAME, "shadow_denoise", denoise)?;
         let shadows = Shadows {
             c: self.shadow_c.unwrap_or(9.0),
             blur_sigma: checked_blur_sigma,
@@ -252,7 +254,8 @@ impl<R: Runtime> Mask for AdaptiveMask<R> {
         let height = self.luma.height;
 
         let luma = Scratch::new::<f32>(context, width, height);
-        load_luma(&self.client, &sizing, &frame, &self.luma, luma.plane())?;
+        let luma_plane = luma.plane();
+        load_luma(&self.client, &sizing, &frame, &self.luma, luma_plane)?;
 
         let meta = frame.meta().clone();
         let format = self.luma.mask_format();
@@ -260,20 +263,22 @@ impl<R: Runtime> Mask for AdaptiveMask<R> {
         let output_plane = mask_plane(&output);
 
         let Some((recovery, min_speck)) = &self.recovery else {
-            self.threshold(context, &sizing, luma.plane(), output_plane);
+            self.threshold(context, &sizing, luma_plane, output_plane);
             return Ok(output);
         };
 
         let flattened = Scratch::new::<f32>(context, width, height);
-        recovery.flatten(&self.client, context, &sizing, luma.plane(), flattened.plane());
+        let flattened_plane = flattened.plane();
+        recovery.flatten(&self.client, context, &sizing, luma_plane, flattened_plane);
 
         let lines = Scratch::new::<u8>(context, width, height);
-        self.threshold(context, &sizing, flattened.plane(), lines.plane());
+        let lines_plane = lines.plane();
+        self.threshold(context, &sizing, flattened_plane, lines_plane);
         remove_specks(
             &self.client,
             context,
             &sizing,
-            lines.plane(),
+            lines_plane,
             output_plane,
             *min_speck,
         );
@@ -420,6 +425,81 @@ mod tests {
         let refused = settings(json!({ "recover_shadows": true, "shadow_blur_sigma": 0.0 }));
 
         assert!(refused.is_err());
+    }
+
+    fn shadow_refusal(shadow_blur_sigma: f32, shadow_clahe_clip: f32, shadow_denoise: f32) -> String {
+        let defaults: AdaptiveArgs =
+            serde_json::from_value(json!({ "recover_shadows": true })).expect("the args parse");
+        let args = AdaptiveArgs {
+            shadow_blur_sigma: Some(shadow_blur_sigma),
+            shadow_clahe_clip: Some(shadow_clahe_clip),
+            shadow_denoise: Some(shadow_denoise),
+            ..defaults
+        };
+
+        let error = args.settings().expect_err("the args should be refused");
+
+        error.to_string()
+    }
+
+    #[test]
+    fn a_nan_blur_sigma_is_refused() {
+        let message = shadow_refusal(f32::NAN, 1.8, 50.0);
+
+        assert!(
+            message.contains("lines/adaptive needs a finite shadow_blur_sigma, got NaN"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_infinite_blur_sigma_is_refused() {
+        let message = shadow_refusal(f32::INFINITY, 1.8, 50.0);
+
+        assert!(
+            message.contains("lines/adaptive needs a finite shadow_blur_sigma, got inf"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_blur_sigma_too_wide_to_blur_is_refused() {
+        let message = shadow_refusal(1.0e9, 1.8, 50.0);
+
+        assert!(
+            message.contains("lines/adaptive needs shadow_blur_sigma of at most 1024"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_nan_clahe_clip_is_refused() {
+        let message = shadow_refusal(25.0, f32::NAN, 50.0);
+
+        assert!(
+            message.contains("lines/adaptive needs a finite shadow_clahe_clip, got NaN"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_infinite_denoise_is_refused() {
+        let message = shadow_refusal(25.0, 1.8, f32::INFINITY);
+
+        assert!(
+            message.contains("lines/adaptive needs a finite shadow_denoise, got inf"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_block_size_too_wide_to_blur_is_refused() {
+        let error = settings(json!({ "block_size": 1_000_001 })).expect_err("the block is too wide");
+
+        assert!(
+            error.to_string().contains("block_size of at most 8193"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -174,7 +174,7 @@ impl BuildTask for BlendOnce {
     }
 }
 
-/// The spec's blend of one plane, per sample, as `base + (overlay - base) * m / 255`, rounded.
+/// Blends one plane on the CPU, per sample, as `base + (overlay - base) * m / 255`, rounded.
 fn reference(base: &[u16], overlay: &[u16], mask: &[u8]) -> Vec<u16> {
     let mut blended = Vec::with_capacity(base.len());
 
@@ -287,7 +287,7 @@ fn planes_of(format: &FrameFormat, fill: impl Fn(usize, usize) -> u8) -> Vec<Vec
         .collect()
 }
 
-/// Mirrors [av_toolbox_cubek::border::reflect] on the CPU.
+/// Mirrors [reflect](av_toolbox_cubek::reflect) on the CPU.
 fn reflect(index: i32, length: i32) -> i32 {
     if length <= 1 {
         return 0;
@@ -299,7 +299,7 @@ fn reflect(index: i32, length: i32) -> i32 {
 }
 
 /// Applies `across` then `down` on the CPU, rounding to U8 at the end, mirroring
-/// `av_toolbox_cubek::resize::apply`.
+/// [apply](av_toolbox_cubek::resize::apply).
 fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, down: &Taps) -> Vec<u8> {
     let out_width = across.starts.len() as u32;
     let out_height = down.starts.len() as u32;
@@ -339,8 +339,8 @@ fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, down: 
     output
 }
 
-/// The spec's downscale of a mask's full plane into its chroma plane, following the same weight
-/// tables and reflect-101 edges a real mask stage's chroma wrapper uses.
+/// Downscales a mask's full plane into its chroma plane on the CPU, with bilinear weights placed
+/// by the chroma location and reflect-101 edges.
 fn downscaled_chroma(full: &[u8], width: u32, height: u32, chroma: MaskChroma) -> Vec<u8> {
     let (factor_x, factor_y) = chroma.factors();
     let (offset_x, offset_y) = chroma.location.offsets(factor_x, factor_y);
@@ -364,7 +364,7 @@ fn downscaled_chroma(full: &[u8], width: u32, height: u32, chroma: MaskChroma) -
     reference_resize(full, width, height, &across, &down)
 }
 
-/// The mask plane `channel` blends with, matching `Mask::plane_for`.
+/// The mask plane `channel` blends with, matching [plane_for](av_toolbox_gpu::Mask::plane_for).
 fn reference_mask_plane<'a>(
     format: &FrameFormat,
     channel: Channel,

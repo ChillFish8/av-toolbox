@@ -153,6 +153,8 @@ pub fn read_mask<R: Runtime>(build: &BuildContext<R>, mask: &GpuMask) -> Vec<u8>
 /// What a mask selected, and what its inputs held once it was done with them.
 pub struct Selected {
     pub output: Vec<u8>,
+    pub output_format: MaskFormat,
+    pub output_has_chroma_plane: bool,
     pub inputs_after: Vec<Vec<u8>>,
 }
 
@@ -189,9 +191,16 @@ impl BuildTask for SelectMasks {
             .expect("should select");
 
         let output = read_mask(build, &selected);
+        let output_format = *selected.format();
+        let output_has_chroma_plane = selected.chroma_plane().is_some();
         let inputs_after = held.iter().map(|mask| read_mask(build, mask)).collect();
 
-        Selected { output, inputs_after }
+        Selected {
+            output,
+            output_format,
+            output_has_chroma_plane,
+            inputs_after,
+        }
     }
 }
 

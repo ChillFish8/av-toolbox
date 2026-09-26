@@ -1,6 +1,6 @@
 //! Masks that select pixels from a stream
 //!
-//! Every mask is a single U8 plane, where 0 is background and 255 is fully selected.
+//! Every mask stage produces a single U8 plane, where 0 is background and 255 is fully selected.
 //!
 //! - `lines/adaptive` finds dark strokes against their neighbourhood, and can
 //!   even out lighting first to find them in deep shadow.
