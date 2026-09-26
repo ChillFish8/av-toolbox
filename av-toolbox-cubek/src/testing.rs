@@ -49,6 +49,21 @@ pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -
 /// Applies `across` then `down` on the CPU, rounding to U8 at the end, mirroring
 /// [apply](crate::resize::apply).
 pub fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, down: &Taps) -> Vec<u8> {
+    let wide: Vec<u16> = input.iter().map(|sample| u16::from(*sample)).collect();
+    let resized = reference_resize_wide(&wide, width, height, across, down, u16::from(u8::MAX));
+
+    resized.iter().map(|sample| *sample as u8).collect()
+}
+
+/// Applies `across` then `down` on the CPU, rounding and clamping to `0..=largest` at the end.
+pub fn reference_resize_wide(
+    input: &[u16],
+    width: u32,
+    height: u32,
+    across: &Taps,
+    down: &Taps,
+    largest: u16,
+) -> Vec<u16> {
     let out_width = across.starts.len() as u32;
     let out_height = down.starts.len() as u32;
 
@@ -68,6 +83,7 @@ pub fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, do
         }
     }
 
+    let ceiling = f32::from(largest);
     let mut output = Vec::with_capacity((out_width * out_height) as usize);
     for row in 0..out_height {
         for column in 0..out_width {
@@ -79,7 +95,7 @@ pub fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, do
                 total += rows[(source * out_width + column) as usize] * weight;
             }
 
-            let rounded = total.round().clamp(0.0, 255.0) as u8;
+            let rounded = total.round().clamp(0.0, ceiling) as u16;
             output.push(rounded);
         }
     }

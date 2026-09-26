@@ -1,16 +1,32 @@
-use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Taps, apply, taps, upload};
-use av_toolbox_cubek::testing::reference_resize;
+use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Samples, Taps, apply, taps, upload};
+use av_toolbox_cubek::testing::{reference_resize, reference_resize_wide};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_u8, upload_u8};
 
+const EVERY: [Kernel; 8] = [
+    Kernel::Point,
+    Kernel::Bilinear,
+    Kernel::Bicubic {
+        b: 1.0 / 3.0,
+        c: 1.0 / 3.0,
+    },
+    Kernel::Bicubic { b: 0.0, c: 0.5 },
+    Kernel::Lanczos { taps: 3 },
+    Kernel::Spline16,
+    Kernel::Spline36,
+    Kernel::Spline64,
+];
+
 struct Resize {
+    /// The input plane's bytes, little endian for U16.
     input: Vec<u8>,
     width: u32,
     height: u32,
     across: Taps,
     down: Taps,
+    samples: Samples,
 }
 
 impl BuildTask for Resize {
@@ -20,10 +36,14 @@ impl BuildTask for Resize {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
+        let sample_bytes = match self.samples {
+            Samples::U8 => 1,
+            Samples::U16 { .. } => 2,
+        };
         let out_width = self.across.starts.len() as u32;
         let out_height = self.down.starts.len() as u32;
         let scratch_bytes = (out_width * self.height) as usize * size_of::<f32>();
-        let output_bytes = (out_width * out_height) as usize;
+        let output_bytes = (out_width * out_height) as usize * sample_bytes;
 
         let input = upload_u8(client, &self.input);
         let scratch = empty(client, scratch_bytes);
@@ -38,7 +58,7 @@ impl BuildTask for Resize {
             scratch: scratch_plane,
             output: output_plane,
         };
-        apply(client, &sizing, planes, &across, &down);
+        apply(client, &sizing, planes, &across, &down, self.samples);
 
         read_u8(client, &output)
     }
@@ -56,6 +76,33 @@ const CHROMA_SHAPES: [(f32, f32, f32, f32); 8] = [
     (2.0, 1.0, 0.5, 0.0),
 ];
 
+/// Centre-aligned taps taking `input_len` samples to `output_len`.
+fn centred(input_len: u32, output_len: u32, kernel: &Kernel) -> Taps {
+    let scale = input_len as f32 / output_len as f32;
+    let offset = 0.5 * scale - 0.5;
+
+    taps(output_len, scale, offset, kernel)
+}
+
+fn largest_difference(found: &[u16], expected: &[u16]) -> u16 {
+    found
+        .iter()
+        .zip(expected)
+        .map(|(got, want)| got.abs_diff(*want))
+        .max()
+        .unwrap_or(0)
+}
+
+fn widen(samples: &[u16]) -> Vec<u8> {
+    samples.iter().flat_map(|sample| sample.to_le_bytes()).collect()
+}
+
+fn unwiden(bytes: &[u8]) -> Vec<u16> {
+    let (pairs, _) = bytes.as_chunks::<2>();
+
+    pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
+}
+
 fn check(input: &[u8], width: u32, height: u32, across: Taps, down: Taps) {
     let expected = reference_resize(input, width, height, &across, &down);
 
@@ -65,16 +112,35 @@ fn check(input: &[u8], width: u32, height: u32, across: Taps, down: Taps) {
         height,
         across,
         down,
+        samples: Samples::U8,
     });
 
-    let largest = found
-        .iter()
-        .zip(&expected)
-        .map(|(got, want)| got.abs_diff(*want))
-        .max()
-        .unwrap_or(0);
+    let found_wide: Vec<u16> = found.iter().map(|sample| u16::from(*sample)).collect();
+    let expected_wide: Vec<u16> = expected.iter().map(|sample| u16::from(*sample)).collect();
+    let largest = largest_difference(&found_wide, &expected_wide);
     assert_eq!(found.len(), expected.len());
     assert!(largest <= 1, "differed by {largest}");
+}
+
+/// Resizes a 10-bit plane on the device, checks it against the reference and hands back what the device made.
+fn check_ten_bit(input: &[u16], width: u32, height: u32, across: Taps, down: Taps) -> Vec<u16> {
+    let expected = reference_resize_wide(input, width, height, &across, &down, 1023);
+
+    let bytes = backend().build(Resize {
+        input: widen(input),
+        width,
+        height,
+        across,
+        down,
+        samples: Samples::U16 { largest: 1023 },
+    });
+
+    let found = unwiden(&bytes);
+    let largest = largest_difference(&found, &expected);
+    assert_eq!(found.len(), expected.len());
+    assert!(largest <= 1, "differed by {largest}");
+
+    found
 }
 
 fn check_chroma_shapes(input: &[u8], width: u32, height: u32) {
@@ -111,4 +177,81 @@ fn a_plane_doubles_with_bilinear() {
     let down = taps(6, 0.5, 0.0, &Kernel::Bilinear);
 
     check(&input, 4, 3, across, down);
+}
+
+#[test]
+fn every_kernel_matches_the_reference_up_and_down_in_u8() {
+    let input: Vec<u8> = (0..176).map(|index| (index * 37 % 256) as u8).collect();
+
+    for kernel in EVERY {
+        let up_across = centred(16, 23, &kernel);
+        let up_down = centred(11, 17, &kernel);
+        check(&input, 16, 11, up_across, up_down);
+
+        let down_across = centred(16, 7, &kernel);
+        let down_down = centred(11, 5, &kernel);
+        check(&input, 16, 11, down_across, down_down);
+    }
+}
+
+#[test]
+fn every_kernel_matches_the_reference_up_and_down_in_ten_bit() {
+    let input: Vec<u16> = (0..176).map(|index| (index * 149 % 1024) as u16).collect();
+
+    for kernel in EVERY {
+        let up_across = centred(16, 23, &kernel);
+        let up_down = centred(11, 17, &kernel);
+        check_ten_bit(&input, 16, 11, up_across, up_down);
+
+        let down_across = centred(16, 7, &kernel);
+        let down_down = centred(11, 5, &kernel);
+        check_ten_bit(&input, 16, 11, down_across, down_down);
+    }
+}
+
+#[test]
+fn a_ten_bit_edge_through_lanczos_stays_within_its_depth() {
+    let input: Vec<u16> = (0..64)
+        .map(|index| if index % 8 >= 4 { 1023 } else { 0 })
+        .collect();
+    let kernel = Kernel::Lanczos { taps: 4 };
+    let across = centred(8, 29, &kernel);
+    let down = centred(8, 8, &kernel);
+
+    let found = check_ten_bit(&input, 8, 8, across, down);
+
+    let brightest = found.iter().max().copied().unwrap_or(0);
+    assert_eq!(brightest, 1023);
+}
+
+#[test]
+fn lanczos_ringing_clamps_at_both_ends_of_u8() {
+    let input: Vec<u8> = (0..64)
+        .map(|index| if index % 8 >= 4 { 255 } else { 0 })
+        .collect();
+    let kernel = Kernel::Lanczos { taps: 4 };
+    let across = centred(8, 29, &kernel);
+    let down = centred(8, 8, &kernel);
+
+    check(&input, 8, 8, across, down);
+}
+
+#[test]
+fn a_plane_shrinks_to_one_sample_with_lanczos() {
+    let input: Vec<u8> = (0..64).map(|index| (index * 4) as u8).collect();
+    let kernel = Kernel::Lanczos { taps: 3 };
+    let across = centred(64, 1, &kernel);
+    let down = centred(1, 1, &kernel);
+
+    check(&input, 64, 1, across, down);
+}
+
+#[test]
+fn a_single_column_widens() {
+    let input: Vec<u8> = vec![10, 60, 110, 160, 210];
+    let kernel = Kernel::Spline36;
+    let across = centred(1, 4, &kernel);
+    let down = centred(5, 5, &kernel);
+
+    check(&input, 1, 5, across, down);
 }

@@ -1,4 +1,4 @@
-use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Weights, apply, taps, upload};
+use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Samples, Weights, apply, taps, upload};
 use av_toolbox_cubek::{DevicePlane, Dispatch};
 use av_toolbox_gpu::{
     BuildContext,
@@ -118,7 +118,14 @@ impl<R: Runtime> Mask for ChromaMask<R> {
             output,
         };
         let sizing = Sizing(context);
-        apply(&self.client, &sizing, planes, &self.across, &self.down);
+        apply(
+            &self.client,
+            &sizing,
+            planes,
+            &self.across,
+            &self.down,
+            Samples::U8,
+        );
 
         Ok(mask)
     }

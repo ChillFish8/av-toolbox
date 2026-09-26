@@ -249,9 +249,28 @@ pub struct ResizePlanes<'a> {
     pub output: DevicePlane<'a>,
 }
 
+/// How a plane's samples are stored.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Samples {
+    U8,
+    /// Samples held in `u16`, which never exceed `largest`.
+    U16 {
+        largest: u16,
+    },
+}
+
+impl Samples {
+    fn largest(self) -> f32 {
+        match self {
+            Self::U8 => f32::from(u8::MAX),
+            Self::U16 { largest } => f32::from(largest),
+        }
+    }
+}
+
 #[cube(launch_unchecked)]
-fn resize_rows(
-    input: &Array<u8>,
+fn resize_rows<E: Int>(
+    input: &Array<E>,
     starts: &Array<i32>,
     weights: &Array<f32>,
     output: &mut Array<f32>,
@@ -280,14 +299,15 @@ fn resize_rows(
 }
 
 #[cube(launch_unchecked)]
-fn resize_columns(
+fn resize_columns<E: Int>(
     input: &Array<f32>,
     starts: &Array<i32>,
     weights: &Array<f32>,
-    output: &mut Array<u8>,
+    output: &mut Array<E>,
     width: u32,
     in_height: u32,
     count: u32,
+    largest: f32,
 ) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
@@ -307,16 +327,33 @@ fn resize_columns(
     }
 
     let rounded = f32::round(total);
-    output[ABSOLUTE_POS] = u8::cast_from(f32::clamp(rounded, 0.0, 255.0));
+    output[ABSOLUTE_POS] = E::cast_from(f32::clamp(rounded, 0.0, largest));
 }
 
-/// Resizes a U8 plane through one table per axis.
+/// Resizes a plane through one table per axis.
 pub fn apply<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: ResizePlanes<'_>,
     across: &Weights,
     down: &Weights,
+    samples: Samples,
+) {
+    let largest = samples.largest();
+
+    match samples {
+        Samples::U8 => launch::<u8, R>(client, dispatch, planes, across, down, largest),
+        Samples::U16 { .. } => launch::<u16, R>(client, dispatch, planes, across, down, largest),
+    }
+}
+
+fn launch<E: Int, R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ResizePlanes<'_>,
+    across: &Weights,
+    down: &Weights,
+    largest: f32,
 ) {
     let in_width = planes.input.width();
     let in_height = planes.input.height();
@@ -330,11 +367,11 @@ pub fn apply<R: Runtime>(
     let cubes = dispatch.cube_count(row_samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: the input holds `in_width * in_height` bytes, the scratch `out_width * in_height`
-    // f32 values, the tables `out_width` starts and `out_width * count` weights, and every tap is
-    // folded back inside its row before it is read.
+    // Safety: the input holds `in_width * in_height` samples of `E`, the scratch
+    // `out_width * in_height` f32 values, the tables `out_width` starts and `out_width * count`
+    // weights, and every tap is folded back inside its row before it is read.
     unsafe {
-        resize_rows::launch_unchecked::<R>(
+        resize_rows::launch_unchecked::<E, R>(
             client,
             cubes,
             unit,
@@ -357,11 +394,12 @@ pub fn apply<R: Runtime>(
     let unit = dispatch.cube_dim();
 
     // Safety: the scratch holds `out_width * in_height` f32 values, the output
-    // `out_width * out_height` bytes, the tables `out_height` starts and `out_height * count`
-    // weights, and every tap is folded back inside its column before it is read.
+    // `out_width * out_height` samples of `E`, the tables `out_height` starts and
+    // `out_height * count` weights, and every tap is folded back inside its column before it is
+    // read.
     unsafe {
-        resize_columns::launch_unchecked::<R>(
-            client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count,
+        resize_columns::launch_unchecked::<E, R>(
+            client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count, largest,
         );
     }
 }
