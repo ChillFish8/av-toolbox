@@ -1,0 +1,155 @@
+use av_toolbox_core::FilterDefinition;
+use av_toolbox_gpu::{
+    Capabilities,
+    ColourInfo,
+    Depth as BitDepth,
+    FrameFormat,
+    FrameLayout,
+    MaskFormat,
+    Offered,
+    SampleFormat,
+    StreamFormat,
+    Subsampling,
+    default_accelerators,
+};
+use serde_json::json;
+
+use crate::resample::Depth;
+use crate::resample::depth::{DepthArgs, Dither};
+
+fn capabilities() -> Capabilities {
+    let accelerator = default_accelerators()[0];
+
+    Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .build()
+}
+
+fn frames(layout: FrameLayout, sample: SampleFormat) -> StreamFormat {
+    StreamFormat::Frames(FrameFormat {
+        width: 16,
+        height: 8,
+        layout,
+        sample,
+        colour: ColourInfo::default(),
+        frame_rate: None,
+    })
+}
+
+fn yuv420(sample: SampleFormat) -> StreamFormat {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+
+    frames(layout, sample)
+}
+
+fn args(value: serde_json::Value) -> Result<DepthArgs, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+fn produced(
+    input: StreamFormat,
+    value: serde_json::Value,
+) -> Result<StreamFormat, av_toolbox_core::StageError> {
+    let capabilities = capabilities();
+    let arguments = args(value).expect("parses");
+    let chosen = [Some(input)];
+    let outputs = Depth::produces(&capabilities, &arguments, &chosen)?;
+    let sample = outputs.samples.preferences()[0];
+
+    Ok(outputs.template.with_sample(sample))
+}
+
+#[test]
+fn dither_defaults_to_blue_noise() {
+    let parsed = args(json!({ "depth": 8 })).expect("parses");
+
+    assert_eq!(parsed.dither, Dither::BlueNoise);
+}
+
+#[test]
+fn every_dither_name_parses() {
+    for (name, dither) in [
+        ("none", Dither::None),
+        ("ordered", Dither::Ordered),
+        ("blue_noise", Dither::BlueNoise),
+    ] {
+        let parsed = args(json!({ "depth": 8, "dither": name })).expect("parses");
+
+        assert_eq!(parsed.dither, dither);
+    }
+}
+
+#[test]
+fn an_unknown_argument_is_refused() {
+    let refused = args(json!({ "depth": 8, "bits": 8 }));
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn ten_bits_gives_a_ten_bit_u16_and_keeps_everything_else() {
+    let input = yuv420(SampleFormat::U8);
+    let output = produced(input, json!({ "depth": 10 })).expect("converts");
+    let converted = output.as_frames().expect("frames");
+    let original = input.as_frames().expect("frames");
+
+    assert_eq!(converted.sample, SampleFormat::U16 { depth: BitDepth::TEN });
+    assert_eq!(converted.layout, original.layout);
+    assert_eq!(converted.colour, original.colour);
+}
+
+#[test]
+fn eight_bits_gives_u8() {
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let input = frames(FrameLayout::Grey, ten_bit);
+    let output = produced(input, json!({ "depth": 8 })).expect("converts");
+
+    assert_eq!(output.sample(), SampleFormat::U8);
+}
+
+#[test]
+fn a_chroma_clip_is_converted() {
+    let layout = FrameLayout::Chroma {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frames(layout, SampleFormat::U8);
+
+    let output = produced(input, json!({ "depth": 12 })).expect("converts");
+
+    assert_eq!(output.as_frames().expect("frames").layout, layout);
+}
+
+#[test]
+fn a_depth_outside_eight_to_sixteen_is_refused() {
+    for depth in [0, 7, 17] {
+        let input = yuv420(SampleFormat::U8);
+        let error = produced(input, json!({ "depth": depth })).expect_err("refused");
+
+        assert!(error.to_string().contains("between 8 and 16"), "{error}");
+    }
+}
+
+#[test]
+fn floats_are_left_out_and_masks_refused() {
+    let capabilities = capabilities();
+    let arguments = args(json!({ "depth": 10 })).expect("parses");
+    let inputs = [Offered::Unknown];
+    let float = yuv420(SampleFormat::F32);
+    let mask = StreamFormat::Mask(MaskFormat {
+        width: 16,
+        height: 8,
+        sample: SampleFormat::U8,
+        chroma: None,
+    });
+
+    let accepted =
+        Depth::accepts_input(&capabilities, &arguments, 0, float, &inputs).expect("frames are readable");
+    let refused = Depth::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
+
+    assert!(accepted.is_empty());
+    assert!(refused.is_err());
+}

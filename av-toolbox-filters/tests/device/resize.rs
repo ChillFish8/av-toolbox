@@ -1,147 +1,9 @@
-use av_toolbox_core::{
-    Filter,
-    InputArgument,
-    Inputs,
-    PipelineRegistry,
-    PreparedStage,
-    StageHandle,
-    StageKind,
-    StreamType,
-};
 use av_toolbox_cubek::resize::{Kernel, Taps, taps};
 use av_toolbox_cubek::testing::{reference_resize, reference_resize_wide};
-use av_toolbox_gpu::{
-    Backend,
-    BuildContext,
-    BuildTask,
-    ChromaLocation,
-    ColourInfo,
-    Depth,
-    Device,
-    FrameFormat,
-    FrameLayout,
-    FrameMeta,
-    HostPool,
-    HostStreamItem,
-    ResolvedFormats,
-    SampleFormat,
-    StreamFormat,
-    StreamItem,
-    Subsampling,
-};
-use cubecl::prelude::Runtime;
+use av_toolbox_gpu::{ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 use serde_json::json;
 
-fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
-}
-
-fn frame(
-    width: u32,
-    height: u32,
-    layout: FrameLayout,
-    sample: SampleFormat,
-    location: ChromaLocation,
-) -> FrameFormat {
-    let colour = ColourInfo {
-        chroma_location: location,
-        ..ColourInfo::default()
-    };
-
-    FrameFormat {
-        width,
-        height,
-        layout,
-        sample,
-        colour,
-        frame_rate: None,
-    }
-}
-
-/// Builds `stage` the way a pipeline would, through the registry and a real backend.
-fn built_resize(
-    backend: &Backend,
-    stage: &str,
-    input: FrameFormat,
-    output: FrameFormat,
-    args: serde_json::Value,
-) -> Box<dyn Filter> {
-    let mut registry = PipelineRegistry::new();
-    av_toolbox_filters::register(&mut registry).expect("the filters register");
-
-    let handle = StageHandle::new(1);
-    let arguments = [InputArgument::positional(handle, StreamType::Frames)];
-    let prepared = registry
-        .prepare(StageKind::Filter, stage, &args, &arguments)
-        .expect("should prepare");
-    let PreparedStage::Filter(prepared) = prepared else {
-        panic!("expected a filter");
-    };
-
-    let input_format = StreamFormat::Frames(input);
-    let output_format = StreamFormat::Frames(output);
-    let formats = ResolvedFormats::new(vec![Some(input_format)], Some(output_format));
-
-    prepared
-        .build(backend, &formats)
-        .expect("should build")
-        .into_device()
-        .expect("a device filter")
-}
-
-/// Resizes one frame on the device and reads every output plane back as bytes.
-struct ResizeOnce {
-    filter: Box<dyn Filter>,
-    input: FrameFormat,
-    output: FrameFormat,
-    planes: Vec<Vec<u8>>,
-}
-
-impl BuildTask for ResizeOnce {
-    type Output = Vec<Vec<u8>>;
-
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
-        let mut context = build.frame_context();
-        let host = HostPool::new();
-
-        let meta = FrameMeta::at(0);
-        let mut frame = host.alloc_frame(&self.input, meta);
-        for (index, channel) in self.input.channels().iter().enumerate() {
-            let plane = frame
-                .plane_mut(*channel)
-                .expect("the format carries this channel");
-            plane.copy_from_slice(&self.planes[index]);
-        }
-
-        let frozen = frame.freeze();
-        let item = HostStreamItem::Frame(frozen);
-        let loaded = context.load_host(&item).expect("the item should load");
-        let slots: Vec<Option<StreamItem>> = vec![Some(loaded)];
-
-        self.filter
-            .start_of_stream(&mut context)
-            .expect("should start the stream");
-
-        let inputs = Inputs::new(slots);
-        let resized = self.filter.process(&mut context, inputs).expect("should resize");
-
-        assert_eq!(resized.format(), &self.output);
-
-        self.output
-            .channels()
-            .iter()
-            .map(|channel| {
-                let plane = resized.plane(*channel).expect("the output carries this channel");
-                let handle = plane.buffer().handle().clone();
-                let bytes = build
-                    .client()
-                    .read_one(handle)
-                    .expect("the device should hand back the plane");
-                bytes.to_vec()
-            })
-            .collect()
-    }
-}
+use crate::support::{frame, run_once};
 
 fn planes_of(format: &FrameFormat, fill: impl Fn(usize, usize) -> u8) -> Vec<Vec<u8>> {
     format
@@ -161,24 +23,6 @@ fn resized_to(input: &FrameFormat, width: u32, height: u32) -> FrameFormat {
         height,
         ..*input
     }
-}
-
-fn run(
-    stage: &str,
-    input: FrameFormat,
-    output: FrameFormat,
-    args: serde_json::Value,
-    planes: Vec<Vec<u8>>,
-) -> Vec<Vec<u8>> {
-    let backend = backend();
-    let filter = built_resize(&backend, stage, input, output, args);
-
-    backend.build(ResizeOnce {
-        filter,
-        input,
-        output,
-        planes,
-    })
 }
 
 fn assert_within_one(found: &[u8], expected: &[u8]) {
@@ -222,7 +66,7 @@ fn check_420_doubling(location: ChromaLocation, siting_x: f32) {
     let planes = planes_of(&input, aligned_stripes);
     let args = json!({ "width": 32, "height": 16 });
 
-    let found = run("resize/bilinear", input, output, args, planes.clone());
+    let found = run_once("resize/bilinear", input, output, args, &planes);
 
     let kernel = Kernel::Bilinear;
     let luma_across = axis_taps(0.0, 16.0, 32, 1, 0.0, &kernel);
@@ -255,7 +99,7 @@ fn a_crop_window_picks_out_its_region() {
     let args =
         json!({ "width": 4, "height": 2, "src_left": 2, "src_top": 4, "src_width": 4, "src_height": 2 });
 
-    let found = run("resize/point", input, output, args, planes);
+    let found = run_once("resize/point", input, output, args, &planes);
 
     let expected: Vec<u8> = vec![34, 35, 36, 37, 42, 43, 44, 45];
     assert_eq!(found[0], expected);
@@ -268,7 +112,7 @@ fn a_window_left_of_the_frame_reflects() {
     let planes = planes_of(&input, |_, sample| (sample % 8 * 30) as u8);
     let args = json!({ "width": 8, "height": 4, "src_left": -2 });
 
-    let found = run("resize/point", input, output, args, planes);
+    let found = run_once("resize/point", input, output, args, &planes);
 
     let row: Vec<u8> = vec![60, 30, 0, 30, 60, 90, 120, 150];
     let expected: Vec<u8> = row.iter().copied().cycle().take(32).collect();
@@ -284,7 +128,7 @@ fn an_identity_resize_hands_back_the_input() {
     let planes = planes_of(&input, |plane, sample| (plane * 50 + sample) as u8);
     let args = json!({ "width": 8, "height": 4 });
 
-    let found = run("resize/spline36", input, input, args, planes.clone());
+    let found = run_once("resize/spline36", input, input, args, &planes);
 
     assert_eq!(found, planes);
 }
@@ -299,7 +143,7 @@ fn an_odd_sized_420_frame_resizes_every_plane() {
     let planes = planes_of(&input, |plane, sample| (plane * 40 + sample * 3) as u8);
     let args = json!({ "width": 16, "height": 10 });
 
-    let found = run("resize/spline16", input, output, args, planes.clone());
+    let found = run_once("resize/spline16", input, output, args, &planes);
 
     let kernel = Kernel::Spline16;
     let luma_across = axis_taps(0.0, 15.0, 16, 1, 0.0, &kernel);
@@ -324,7 +168,7 @@ fn a_ten_bit_frame_resizes_at_its_depth() {
     let bytes: Vec<u8> = luma.iter().flat_map(|value| value.to_le_bytes()).collect();
     let args = json!({ "width": 20, "height": 8, "taps": 4 });
 
-    let found = run("resize/lanczos", input, output, args, vec![bytes]);
+    let found = run_once("resize/lanczos", input, output, args, &[bytes]);
 
     let (pairs, _) = found[0].as_chunks::<2>();
     let samples: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();

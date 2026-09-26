@@ -3,12 +3,15 @@
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
+//! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
 
 mod blend;
+mod resample;
 mod resize;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
+use self::resample::Depth;
 use self::resize::{Bicubic, Bilinear, Lanczos, Point, Resize, Spline16, Spline36, Spline64};
 
 /// Registers every filter this crate provides.
@@ -21,6 +24,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<Resize<Spline16>>()?;
     registry.register_filter::<Resize<Spline36>>()?;
     registry.register_filter::<Resize<Spline64>>()?;
+    registry.register_filter::<Depth>()?;
 
     Ok(())
 }
@@ -50,5 +54,6 @@ mod tests {
         assert!(registered("resize/spline16"));
         assert!(registered("resize/spline36"));
         assert!(registered("resize/spline64"));
+        assert!(registered("resample/depth"));
     }
 }
