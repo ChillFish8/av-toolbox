@@ -39,9 +39,9 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use self::format::{Carried, Choice};
+use self::format::Choice;
 use self::sys::{Ffms2Error, StridedPlane, VideoSource};
-use crate::shared::produced_by;
+use crate::shared::{Carried, produced_by};
 
 /// Arguments for `ffms2/file`.
 #[derive(Debug, Deserialize, JsonSchema)]

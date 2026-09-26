@@ -1,5 +1,10 @@
 //! Sources that read video from outside the pipeline as host frames.
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used once the constant stages are registered")
+)]
+mod constant;
 #[cfg(feature = "ffms2")]
 mod ffms2;
 mod pipe;
