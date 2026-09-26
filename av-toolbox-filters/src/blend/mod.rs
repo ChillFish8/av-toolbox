@@ -344,6 +344,18 @@ mod tests {
     }
 
     #[test]
+    fn a_chroma_clip_is_accepted() {
+        let layout = FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        };
+        let clip = frames(layout, SampleFormat::U8);
+
+        let accepted = accepts_clip(clip, Offered::Unknown).expect("a chroma clip is frames");
+
+        assert!(accepted.accepts(SampleFormat::U8));
+    }
+
+    #[test]
     fn the_mask_param_asks_for_planes_of_base() {
         let signature = Masked::inputs();
         let mask = signature.params()[MASK];

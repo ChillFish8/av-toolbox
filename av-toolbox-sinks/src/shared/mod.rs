@@ -72,7 +72,7 @@ fn writable_samples(layout: FrameLayout) -> Option<FormatSet> {
     match layout {
         FrameLayout::Yuv { .. } => Some(FormatSet::of([SampleFormat::U8, ten_bit, twelve_bit])),
         FrameLayout::Grey => Some(FormatSet::of([SampleFormat::U8, twelve_bit])),
-        FrameLayout::Rgb => None,
+        FrameLayout::Rgb | FrameLayout::Chroma { .. } => None,
     }
 }
 
@@ -109,7 +109,7 @@ impl<W: Write + Send + 'static> Sink<HostSide> for Y4mSink<W> {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{FrameFormat, FrameRate, MaskFormat};
+    use av_toolbox_gpu::{FrameFormat, FrameRate, MaskFormat, Subsampling};
 
     use super::*;
     use crate::shared::testing::{SharedBuffer, resolved, yuv420};
@@ -161,6 +161,15 @@ mod tests {
         let error = accepts(frames(format), None).expect_err("refused");
 
         assert!(error.to_string().contains("rgb"));
+    }
+
+    #[test]
+    fn a_chroma_clip_is_not_writable() {
+        let layout = FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        };
+
+        assert_eq!(writable_samples(layout), None);
     }
 
     #[test]

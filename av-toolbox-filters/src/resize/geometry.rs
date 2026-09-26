@@ -97,15 +97,6 @@ struct Span {
     output: u32,
 }
 
-/// How many luma samples one chroma sample spans across and down.
-fn factors(subsampling: Subsampling) -> (u32, u32) {
-    match subsampling {
-        Subsampling::Yuv444 => (1, 1),
-        Subsampling::Yuv422 => (2, 1),
-        Subsampling::Yuv420 => (2, 2),
-    }
-}
-
 /// Maps one axis of a plane subsampled by `factor`, whose samples sit `siting` luma samples past
 /// `factor * i`.
 ///
@@ -155,7 +146,7 @@ pub(crate) fn geometry(input: &FrameFormat, window: &Window) -> Geometry {
         return Geometry { luma, chroma: None };
     }
 
-    let (factor_x, factor_y) = factors(subsampling);
+    let (factor_x, factor_y) = subsampling.factors();
     let (siting_x, siting_y) = input.colour.chroma_location.offsets(factor_x, factor_y);
     let (chroma_width, chroma_height) = subsampling.chroma_dimensions(window.width, window.height);
     let chroma_across = axis(&across, factor_x, siting_x);
@@ -185,7 +176,7 @@ pub(crate) fn check_output(input: &FrameFormat, window: &Window, stage: &str) ->
         return Ok(());
     };
 
-    let (factor_x, factor_y) = factors(subsampling);
+    let (factor_x, factor_y) = subsampling.factors();
     if !window.width.is_multiple_of(factor_x) {
         return Err(not_divisible(stage, "width", window.width, factor_x));
     }

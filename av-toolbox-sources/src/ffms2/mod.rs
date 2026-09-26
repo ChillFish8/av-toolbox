@@ -318,6 +318,7 @@ fn ffmpeg_plane_channels(layout: FrameLayout) -> &'static [Channel] {
         FrameLayout::Yuv { .. } => &[Channel::Y, Channel::U, Channel::V],
         FrameLayout::Grey => &[Channel::Y],
         FrameLayout::Rgb => &[Channel::G, Channel::B, Channel::R],
+        FrameLayout::Chroma { .. } => unreachable!("ffms2 never opens a source as chroma planes"),
     }
 }
 

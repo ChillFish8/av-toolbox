@@ -114,12 +114,18 @@ pub(crate) fn frame_format(shape: &Shape, stage: &str) -> Result<FrameFormat, St
     let matrix = match layout {
         FrameLayout::Rgb => Matrix::Identity,
         FrameLayout::Yuv { .. } | FrameLayout::Grey => given_matrix.matrix(),
+        FrameLayout::Chroma { .. } => {
+            unreachable!("a carried format never carries chroma planes on their own")
+        },
     };
     let range = match (shape.range, layout) {
         (Some(RangeArg::Limited), _) => ColourRange::Limited,
         (Some(RangeArg::Full), _) => ColourRange::Full,
         (None, FrameLayout::Yuv { .. }) => ColourRange::Limited,
         (None, FrameLayout::Rgb | FrameLayout::Grey) => ColourRange::Full,
+        (None, FrameLayout::Chroma { .. }) => {
+            unreachable!("a carried format never carries chroma planes on their own")
+        },
     };
     let colour = ColourInfo {
         range,

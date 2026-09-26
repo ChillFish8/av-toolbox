@@ -31,6 +31,11 @@ pub(crate) fn accepts_luma(stage: &str, offered: StreamFormat) -> Result<FormatS
         return Err(StageError::msg(message));
     }
 
+    if let FrameLayout::Chroma { .. } = format.layout {
+        let message = format!("{stage} reads YUV or Grey frames, not chroma planes");
+        return Err(StageError::msg(message));
+    }
+
     let accepted = match format.sample {
         SampleFormat::U8 | SampleFormat::U16 { .. } => FormatSet::of([format.sample]),
         SampleFormat::F16 | SampleFormat::F32 => FormatSet::new(),
@@ -191,6 +196,18 @@ mod tests {
         let error = accepts_luma("lines/test", offered).expect_err("rgb has no luma");
 
         assert!(error.to_string().contains("lines/test reads YUV or Grey"));
+    }
+
+    #[test]
+    fn a_chroma_clip_is_refused() {
+        let layout = FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        };
+        let offered = frames(layout, SampleFormat::U8);
+
+        let refused = accepts_luma("luma/test", offered);
+
+        assert!(refused.is_err());
     }
 
     #[test]

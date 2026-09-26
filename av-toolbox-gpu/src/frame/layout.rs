@@ -45,6 +45,15 @@ impl Subsampling {
             Self::Yuv420 => (width.div_ceil(2), height.div_ceil(2)),
         }
     }
+
+    /// How many luma samples one chroma sample spans across and down.
+    pub const fn factors(self) -> (u32, u32) {
+        match self {
+            Self::Yuv444 => (1, 1),
+            Self::Yuv422 => (2, 1),
+            Self::Yuv420 => (2, 2),
+        }
+    }
 }
 
 impl fmt::Display for Subsampling {
@@ -62,7 +71,16 @@ impl fmt::Display for Subsampling {
 /// Which channels a frame carries, and how they relate to each other.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum FrameLayout {
-    Yuv { subsampling: Subsampling },
+    Yuv {
+        subsampling: Subsampling,
+    },
+    /// The two chroma planes of a YUV clip, each at the frame's own size.
+    ///
+    /// `subsampling` is what the clip they came from was subsampled by, so they can still be sited
+    /// against that clip's luma.
+    Chroma {
+        subsampling: Subsampling,
+    },
     Rgb,
     Grey,
 }
@@ -72,6 +90,7 @@ impl FrameLayout {
     pub const fn channels(self) -> &'static [Channel] {
         match self {
             Self::Yuv { .. } => &[Channel::Y, Channel::U, Channel::V],
+            Self::Chroma { .. } => &[Channel::U, Channel::V],
             Self::Rgb => &[Channel::R, Channel::G, Channel::B],
             Self::Grey => &[Channel::Y],
         }
@@ -102,6 +121,7 @@ impl fmt::Display for FrameLayout {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Yuv { subsampling } => write!(formatter, "yuv {subsampling}"),
+            Self::Chroma { subsampling } => write!(formatter, "chroma ({subsampling})"),
             Self::Rgb => formatter.write_str("rgb"),
             Self::Grey => formatter.write_str("grey"),
         }
@@ -174,5 +194,24 @@ mod tests {
             subsampling: Subsampling::Yuv422,
         };
         assert_eq!(yuv.to_string(), "yuv 4:2:2");
+    }
+
+    #[test]
+    fn a_chroma_layout_carries_u_and_v_at_the_frame_size() {
+        let chroma = FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        };
+
+        assert_eq!(chroma.channels(), &[Channel::U, Channel::V]);
+        assert_eq!(chroma.channel_dimensions(Channel::U, 960, 540), Some((960, 540)));
+        assert_eq!(chroma.channel_dimensions(Channel::Y, 960, 540), None);
+        assert_eq!(chroma.to_string(), "chroma (4:2:0)");
+    }
+
+    #[test]
+    fn a_subsampling_knows_its_factors() {
+        assert_eq!(Subsampling::Yuv420.factors(), (2, 2));
+        assert_eq!(Subsampling::Yuv422.factors(), (2, 1));
+        assert_eq!(Subsampling::Yuv444.factors(), (1, 1));
     }
 }

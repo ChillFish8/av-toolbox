@@ -69,6 +69,7 @@ pub use self::frame::{
     Depth,
     DepthError,
     Frame,
+    FrameError,
     FrameFormat,
     FrameLayout,
     FrameMeta,

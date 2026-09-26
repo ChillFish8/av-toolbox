@@ -180,11 +180,7 @@ pub struct MaskChroma {
 impl MaskChroma {
     /// How many luma samples one chroma sample spans across and down.
     pub const fn factors(&self) -> (u32, u32) {
-        match self.subsampling {
-            Subsampling::Yuv420 => (2, 2),
-            Subsampling::Yuv422 => (2, 1),
-            Subsampling::Yuv444 => (1, 1),
-        }
+        self.subsampling.factors()
     }
 }
 

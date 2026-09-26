@@ -47,6 +47,12 @@ fn past_depth(stage: &str, value: u16, largest: u16) -> StageError {
     StageError::msg(message)
 }
 
+fn chroma_clip(stage: &str) -> StageError {
+    let message = format!("{stage} cannot fill a chroma clip");
+
+    StageError::msg(message)
+}
+
 pub(super) fn wrong_size(stage: &str, found: (u32, u32), format: &FrameFormat) -> StageError {
     let message = format!(
         "{stage} needs a {}x{} image to match its frames, got {}x{}. Resize the image, or use image/file \
@@ -67,6 +73,10 @@ pub(super) fn size_of_picture(picture: &Picture) -> Option<(u32, u32)> {
 
 /// Refuses a picture that cannot become a frame of `format`.
 pub(crate) fn check(picture: &Picture, format: &FrameFormat, stage: &str) -> Result<(), StageError> {
+    if let FrameLayout::Chroma { .. } = format.layout {
+        return Err(chroma_clip(stage));
+    }
+
     let Some(largest) = format.sample.max_value() else {
         return Err(float_target(stage, format.sample));
     };
@@ -251,6 +261,9 @@ fn signals(picture: &Picture, format: &FrameFormat) -> Vec<Signal> {
             vec![signal(grey.width, grey.height, grey.luma.clone())]
         },
         (Picture::Planes(_), _) => unreachable!("raw planes are filled, never encoded"),
+        (_, FrameLayout::Chroma { .. }) => {
+            unreachable!("check refuses a chroma clip before a picture is encoded into one")
+        },
     }
 }
 
@@ -660,5 +673,17 @@ mod tests {
         let refused = check(&solid(0.0, 0.0, 0.0), &target, "solid/like");
 
         assert!(refused.is_err());
+    }
+
+    #[test]
+    fn a_chroma_clip_is_refused() {
+        let layout = FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        };
+        let target = format(2, 2, layout, SampleFormat::U8, ColourInfo::default());
+
+        let error = check(&solid(0.0, 0.0, 0.0), &target, "solid/like").expect_err("chroma is refused");
+
+        assert!(error.to_string().contains("chroma"));
     }
 }

@@ -7,7 +7,7 @@ use cubecl::server::Handle;
 
 use crate::frame::attachments::{Attachments, MetaValue};
 use crate::frame::format::{ColourInfo, FrameFormat, MaskChroma, MaskFormat, StreamFormat};
-use crate::frame::layout::Channel;
+use crate::frame::layout::{Channel, FrameLayout};
 use crate::memory::FrameBudget;
 
 /// Where a plane's memory goes when its last holder drops it.
@@ -232,6 +232,64 @@ impl FrameMeta {
     }
 }
 
+/// Planes that do not fit the format a frame was to be built with.
+#[derive(Debug, thiserror::Error)]
+pub enum FrameError {
+    #[error("a {layout} frame needs {expected} planes, got {actual}")]
+    PlaneCount {
+        layout: FrameLayout,
+        expected: usize,
+        actual: usize,
+    },
+    #[error(
+        "the {channel} plane needs to be {expected_width}x{expected_height}, got {actual_width}x{actual_height}"
+    )]
+    PlaneSize {
+        channel: Channel,
+        expected_width: u32,
+        expected_height: u32,
+        actual_width: u32,
+        actual_height: u32,
+    },
+    #[error("the {channel} plane needs {expected} bytes, got {actual}")]
+    PlaneBytes {
+        channel: Channel,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+fn check_plane(format: &FrameFormat, channel: Channel, plane: &Plane) -> Result<(), FrameError> {
+    let (expected_width, expected_height) = format
+        .channel_dimensions(channel)
+        .expect("the layout carries every channel it lists");
+    let (actual_width, actual_height) = plane.dimensions();
+
+    if (actual_width, actual_height) != (expected_width, expected_height) {
+        return Err(FrameError::PlaneSize {
+            channel,
+            expected_width,
+            expected_height,
+            actual_width,
+            actual_height,
+        });
+    }
+
+    let expected = format
+        .channel_bytes(channel)
+        .expect("the layout carries every channel it lists");
+    let actual = plane.buffer().bytes();
+    if actual != expected {
+        return Err(FrameError::PlaneBytes {
+            channel,
+            expected,
+            actual,
+        });
+    }
+
+    Ok(())
+}
+
 /// A frame on the device.
 #[derive(Debug, Clone)]
 pub struct Frame {
@@ -249,6 +307,28 @@ impl Frame {
         );
 
         Self { format, planes, meta }
+    }
+
+    /// A frame of `format` holding `planes`, one per channel in plane order.
+    ///
+    /// The planes are shared rather than copied, so a stage can hand on planes it was given.
+    pub fn from_planes(format: FrameFormat, planes: Vec<Plane>, meta: FrameMeta) -> Result<Self, FrameError> {
+        let channels = format.channels();
+        if planes.len() != channels.len() {
+            return Err(FrameError::PlaneCount {
+                layout: format.layout,
+                expected: channels.len(),
+                actual: planes.len(),
+            });
+        }
+
+        for (channel, plane) in channels.iter().zip(&planes) {
+            check_plane(&format, *channel, plane)?;
+        }
+
+        let frame = Self::new(format, planes, meta);
+
+        Ok(frame)
     }
 
     pub const fn format(&self) -> &FrameFormat {

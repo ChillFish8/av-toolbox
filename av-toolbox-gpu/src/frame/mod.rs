@@ -31,7 +31,17 @@ pub use self::format::{
     StreamFormat,
     Transfer,
 };
-pub use self::gpu::{Frame, FrameMeta, FrameMut, Mask, Plane, PlaneBuffer, SceneScore, StreamItem};
+pub use self::gpu::{
+    Frame,
+    FrameError,
+    FrameMeta,
+    FrameMut,
+    Mask,
+    Plane,
+    PlaneBuffer,
+    SceneScore,
+    StreamItem,
+};
 pub use self::host::{HostItem, HostPlanes};
 pub use self::host_frame::{HostFrame, HostFrameMut, HostMask, HostMaskMut, HostPlane, HostStreamItem};
 pub use self::layout::{Channel, FrameLayout, Subsampling};

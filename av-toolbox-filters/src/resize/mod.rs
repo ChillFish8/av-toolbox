@@ -319,4 +319,19 @@ mod tests {
 
         assert_eq!(Resize::<Spline36>::parallelism(&arguments), Parallelism::Frame);
     }
+
+    #[test]
+    fn a_chroma_clip_resizes_as_two_full_planes() {
+        let layout = FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        };
+        let format = frames(8, 4, layout, SampleFormat::U8);
+        let value = json!({ "width": 16, "height": 8 });
+
+        let output = produced(format, value).expect("a chroma clip resizes");
+        let resized = output.as_frames().expect("frames");
+
+        assert_eq!((resized.width, resized.height), (16, 8));
+        assert_eq!(resized.layout, layout);
+    }
 }
