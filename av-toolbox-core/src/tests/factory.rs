@@ -970,11 +970,19 @@ fn frame_format() -> FrameFormat {
     }
 }
 
-static COUNTED_OPENS: AtomicUsize = AtomicUsize::new(0);
+/// How many times each counter has been opened, one per test so tests running at once never share.
+static COUNTED_OPENS: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
+
+const OPENED_ONCE: usize = 0;
+
+const OPENED_AGAIN: usize = 1;
+
+const FAILED_OPEN: usize = 2;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CountedArgs {
     fail: bool,
+    counter: usize,
 }
 
 struct CountedStage;
@@ -1010,7 +1018,7 @@ impl SourceDefinition for Counted {
     type Opened = StreamFormat;
 
     fn open(args: &Self::Args) -> Result<Self::Opened, StageError> {
-        COUNTED_OPENS.fetch_add(1, Ordering::SeqCst);
+        COUNTED_OPENS[args.counter].fetch_add(1, Ordering::SeqCst);
 
         if args.fail {
             return Err(StageError::msg("the input could not be opened"));
@@ -1036,45 +1044,45 @@ impl SourceDefinition for Counted {
     }
 }
 
-fn counted(slot: &OpenSlot, fail: bool) -> Box<dyn PreparedSource> {
+fn counted(slot: &OpenSlot, fail: bool, counter: usize) -> Box<dyn PreparedSource> {
     let definition = Definition::<Counted>::new(StageKind::Source).expect("should build");
-    let args = serde_json::json!({ "fail": fail });
+    let args = serde_json::json!({ "fail": fail, "counter": counter });
 
     StageFactory::<dyn PreparedSource>::prepare(&definition, &args, &[], slot).expect("should prepare")
 }
 
 #[test]
 fn a_source_prepared_twice_on_one_slot_opens_once() {
-    COUNTED_OPENS.store(0, Ordering::SeqCst);
     let slot = OpenSlot::new();
     let capabilities = capabilities();
 
-    counted(&slot, false).produces(&capabilities).expect("produces");
-    counted(&slot, false)
+    counted(&slot, false, OPENED_ONCE)
+        .produces(&capabilities)
+        .expect("produces");
+    counted(&slot, false, OPENED_ONCE)
         .produces(&capabilities)
         .expect("produces again");
 
-    assert_eq!(COUNTED_OPENS.load(Ordering::SeqCst), 1);
+    assert_eq!(COUNTED_OPENS[OPENED_ONCE].load(Ordering::SeqCst), 1);
 }
 
 #[test]
 fn a_source_on_a_fresh_slot_opens_again() {
-    COUNTED_OPENS.store(0, Ordering::SeqCst);
     let capabilities = capabilities();
 
-    counted(&OpenSlot::new(), false)
+    counted(&OpenSlot::new(), false, OPENED_AGAIN)
         .produces(&capabilities)
         .expect("produces");
-    counted(&OpenSlot::new(), false)
+    counted(&OpenSlot::new(), false, OPENED_AGAIN)
         .produces(&capabilities)
         .expect("produces");
 
-    assert_eq!(COUNTED_OPENS.load(Ordering::SeqCst), 2);
+    assert_eq!(COUNTED_OPENS[OPENED_AGAIN].load(Ordering::SeqCst), 2);
 }
 
 #[test]
 fn a_failed_open_is_the_error_produces_returns() {
-    let error = counted(&OpenSlot::new(), true)
+    let error = counted(&OpenSlot::new(), true, FAILED_OPEN)
         .produces(&capabilities())
         .expect_err("the open fails");
 

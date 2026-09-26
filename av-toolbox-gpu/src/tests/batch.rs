@@ -526,6 +526,36 @@ fn time_to_land_after_a_poll(frames: &FrameContext, format: &StreamFormat) -> Du
     started.elapsed()
 }
 
+/// How many drops of each kind are timed.
+const DROP_SAMPLES: usize = 5;
+
+/// The slowest drop of a polled read, out of [DROP_SAMPLES] reads.
+///
+/// A polled read can land before it is dropped when the thread is slow to get there, which makes
+/// that one drop free. The slowest drop is the one that really waited.
+fn slowest_polled_drop(frames: &FrameContext, format: &StreamFormat) -> Duration {
+    (0..DROP_SAMPLES)
+        .map(|_| {
+            let batch = polled_read(frames, format, 0);
+            time_of_drop(batch)
+        })
+        .max()
+        .expect("at least one drop is timed")
+}
+
+/// The fastest drop of an unpolled read, out of [DROP_SAMPLES] reads.
+///
+/// The thread can be preempted mid-drop on a busy machine, which only ever adds time.
+fn fastest_unpolled_drop(frames: &FrameContext, format: &StreamFormat) -> Duration {
+    (0..DROP_SAMPLES)
+        .map(|_| {
+            let batch = start_read(frames, format, 0);
+            time_of_drop(batch)
+        })
+        .min()
+        .expect("at least one drop is timed")
+}
+
 /// The drop rule in both directions, measured against what waiting for this read actually costs.
 ///
 /// A drop that waits costs about what a device wait costs, and one that does not costs orders less,
@@ -539,11 +569,8 @@ fn dropping_a_polled_batch_waits_for_it_and_dropping_an_unpolled_one_does_not() 
     time_to_land_after_a_poll(&frames, &format);
     let landing = fastest_landing(&frames, &format);
 
-    let polled_batch = polled_read(&frames, &format, 0);
-    let polled = time_of_drop(polled_batch);
-
-    let unpolled_batch = start_read(&frames, &format, 0);
-    let unpolled = time_of_drop(unpolled_batch);
+    let polled = slowest_polled_drop(&frames, &format);
+    let unpolled = fastest_unpolled_drop(&frames, &format);
 
     assert!(
         polled * 10 > landing,
