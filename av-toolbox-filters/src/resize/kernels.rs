@@ -102,18 +102,105 @@ fn three() -> u32 {
 /// The most taps `resize/lanczos` accepts.
 const MAX_TAPS: u32 = 32;
 
-fn zero_taps() -> StageError {
-    StageError::msg("resize/lanczos needs taps above 0")
-}
-
-fn too_many_taps(taps: u32) -> StageError {
-    let message = format!("resize/lanczos needs taps of at most {MAX_TAPS}, got {taps}");
+fn zero_taps(stage: &str) -> StageError {
+    let message = format!("{stage} needs taps above 0");
 
     StageError::msg(message)
 }
 
-fn cubic_not_finite() -> StageError {
-    StageError::msg("resize/bicubic needs b and c to be finite numbers")
+fn too_many_taps(stage: &str, taps: u32) -> StageError {
+    let message = format!("{stage} needs taps of at most {MAX_TAPS}, got {taps}");
+
+    StageError::msg(message)
+}
+
+fn cubic_not_finite(stage: &str) -> StageError {
+    let message = format!("{stage} needs b and c to be finite numbers");
+
+    StageError::msg(message)
+}
+
+fn setting_needs_kernel(stage: &str, setting: &str, kernel: &str) -> StageError {
+    let message = format!("{stage} only takes {setting} with the {kernel} kernel");
+
+    StageError::msg(message)
+}
+
+pub(crate) fn bicubic_kernel(stage: &str, b: f32, c: f32) -> Result<Kernel, StageError> {
+    if !b.is_finite() || !c.is_finite() {
+        return Err(cubic_not_finite(stage));
+    }
+
+    Ok(Kernel::Bicubic { b, c })
+}
+
+pub(crate) fn lanczos_kernel(stage: &str, taps: u32) -> Result<Kernel, StageError> {
+    if taps == 0 {
+        return Err(zero_taps(stage));
+    }
+
+    if taps > MAX_TAPS {
+        return Err(too_many_taps(stage, taps));
+    }
+
+    Ok(Kernel::Lanczos { taps })
+}
+
+/// A resampling kernel picked by name, for stages that take the kernel as an argument.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum KernelChoice {
+    Point,
+    Bilinear,
+    Bicubic,
+    Lanczos,
+    Spline16,
+    #[default]
+    Spline36,
+    Spline64,
+}
+
+impl KernelChoice {
+    /// The kernel this names, refusing a setting that belongs to another kernel.
+    pub(crate) fn kernel(
+        self,
+        stage: &str,
+        b: Option<f32>,
+        c: Option<f32>,
+        taps: Option<u32>,
+    ) -> Result<Kernel, StageError> {
+        let is_bicubic = self == Self::Bicubic;
+        let is_lanczos = self == Self::Lanczos;
+
+        if !is_bicubic && b.is_some() {
+            return Err(setting_needs_kernel(stage, "b", "bicubic"));
+        }
+
+        if !is_bicubic && c.is_some() {
+            return Err(setting_needs_kernel(stage, "c", "bicubic"));
+        }
+
+        if !is_lanczos && taps.is_some() {
+            return Err(setting_needs_kernel(stage, "taps", "lanczos"));
+        }
+
+        match self {
+            Self::Point => Ok(Kernel::Point),
+            Self::Bilinear => Ok(Kernel::Bilinear),
+            Self::Bicubic => {
+                let b = b.unwrap_or_else(one_third);
+                let c = c.unwrap_or_else(one_third);
+                bicubic_kernel(stage, b, c)
+            },
+            Self::Lanczos => {
+                let taps = taps.unwrap_or_else(three);
+                lanczos_kernel(stage, taps)
+            },
+            Self::Spline16 => Ok(Kernel::Spline16),
+            Self::Spline36 => Ok(Kernel::Spline36),
+            Self::Spline64 => Ok(Kernel::Spline64),
+        }
+    }
 }
 
 fn window_of(args: &ResizeArgs) -> Window {
@@ -184,11 +271,7 @@ impl ResizeKernel for Bicubic {
     }
 
     fn kernel(args: &Self::Args) -> Result<Kernel, StageError> {
-        if !args.b.is_finite() || !args.c.is_finite() {
-            return Err(cubic_not_finite());
-        }
-
-        Ok(Kernel::Bicubic { b: args.b, c: args.c })
+        bicubic_kernel("resize/bicubic", args.b, args.c)
     }
 }
 
@@ -213,15 +296,7 @@ impl ResizeKernel for Lanczos {
     }
 
     fn kernel(args: &Self::Args) -> Result<Kernel, StageError> {
-        if args.taps == 0 {
-            return Err(zero_taps());
-        }
-
-        if args.taps > MAX_TAPS {
-            return Err(too_many_taps(args.taps));
-        }
-
-        Ok(Kernel::Lanczos { taps: args.taps })
+        lanczos_kernel("resize/lanczos", args.taps)
     }
 }
 
@@ -383,6 +458,48 @@ mod tests {
         let parsed: Result<ResizeArgs, _> = parse(value);
 
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn a_kernel_choice_defaults_its_settings() {
+        let bicubic = KernelChoice::Bicubic.kernel("resample/chroma", None, None, None);
+        let lanczos = KernelChoice::Lanczos.kernel("resample/chroma", None, None, None);
+
+        assert_eq!(
+            bicubic.expect("valid"),
+            Kernel::Bicubic {
+                b: 1.0 / 3.0,
+                c: 1.0 / 3.0
+            }
+        );
+        assert_eq!(lanczos.expect("valid"), Kernel::Lanczos { taps: 3 });
+    }
+
+    #[test]
+    fn a_setting_for_another_kernel_is_refused_by_name() {
+        let taps = KernelChoice::Spline36.kernel("resample/chroma", None, None, Some(4));
+        let cubic = KernelChoice::Lanczos.kernel("resample/chroma", Some(0.0), None, None);
+
+        let taps_error = taps.expect_err("taps needs lanczos").to_string();
+        let cubic_error = cubic.expect_err("b needs bicubic").to_string();
+
+        assert!(taps_error.contains("taps"), "{taps_error}");
+        assert!(cubic_error.contains('b'), "{cubic_error}");
+    }
+
+    #[test]
+    fn a_kernel_choice_keeps_the_resize_limits() {
+        let refused = KernelChoice::Lanczos.kernel("resample/chroma", None, None, Some(33));
+        let error = refused.expect_err("too many taps").to_string();
+
+        assert!(error.starts_with("resample/chroma"), "{error}");
+    }
+
+    #[test]
+    fn kernel_names_parse_in_snake_case() {
+        let parsed: KernelChoice = serde_json::from_value(json!("spline64")).expect("parses");
+
+        assert_eq!(parsed, KernelChoice::Spline64);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+pub(crate) mod chroma;
 mod depth;
 #[cfg(test)]
 mod tests;
@@ -5,6 +6,7 @@ mod tests;
 use av_toolbox_cubek::Dispatch;
 use av_toolbox_gpu::{CubeCount, CubeDim, FrameContext};
 
+pub(crate) use self::chroma::Chroma;
 pub(crate) use self::depth::Depth;
 
 /// Sizes launches from the frame context a stage is handed.

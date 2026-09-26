@@ -12,6 +12,7 @@ use av_toolbox_gpu::{
     Backend,
     BuildContext,
     BuildTask,
+    Channel,
     ChromaLocation,
     ColourInfo,
     Device,
@@ -221,6 +222,174 @@ pub(crate) fn passes_through(
     let filter = built_filter(&backend, stage, input, output, args);
 
     backend.build(IdentityCheck {
+        filter,
+        input,
+        output,
+    })
+}
+
+/// Every plane of `format`, each sample `(index * 37 + plane * 11) % 256`.
+pub(crate) fn patterned_planes(format: &FrameFormat) -> Vec<Vec<u8>> {
+    format
+        .channels()
+        .iter()
+        .enumerate()
+        .map(|(plane, channel)| {
+            let samples = format.channel_samples(*channel).expect("a listed channel");
+            (0..samples)
+                .map(|index| ((index * 37 + plane * 11) % 256) as u8)
+                .collect()
+        })
+        .collect()
+}
+
+/// Checks every sample of `found` is within 1 of `expected`, naming `label` in a failure.
+pub(crate) fn assert_within_one(found: &[u8], expected: &[u8], label: &str) {
+    assert_eq!(found.len(), expected.len(), "{label}");
+
+    for (index, (got, want)) in found.iter().zip(expected).enumerate() {
+        assert!(
+            got.abs_diff(*want) <= 1,
+            "{label}: sample {index} was {got}, expected {want}"
+        );
+    }
+}
+
+/// Runs one frame through `stage` and reports whether the output's Y plane is the input's, rather
+/// than a fresh allocation.
+struct LumaSharedCheck {
+    filter: Box<dyn Filter>,
+    input: FrameFormat,
+    output: FrameFormat,
+}
+
+impl BuildTask for LumaSharedCheck {
+    type Output = bool;
+
+    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+        let mut context = build.frame_context();
+        let host = HostPool::new();
+
+        let meta = FrameMeta::at(0);
+        let frame = host.alloc_frame(&self.input, meta);
+        let frozen = frame.freeze();
+        let item = HostStreamItem::Frame(frozen);
+        let loaded = context.load_host(&item).expect("the item should load");
+
+        let StreamItem::Frame(loaded_frame) = &loaded else {
+            panic!("expected a frame");
+        };
+        let input_plane = loaded_frame
+            .plane(Channel::Y)
+            .expect("the input carries a Y plane");
+        let input_buffer: *const PlaneBuffer = input_plane.buffer();
+
+        let slots: Vec<Option<StreamItem>> = vec![Some(loaded)];
+
+        self.filter
+            .start_of_stream(&mut context)
+            .expect("should start the stream");
+
+        let inputs = Inputs::new(slots);
+        let output = self.filter.process(&mut context, inputs).expect("should process");
+
+        assert_eq!(output.format(), &self.output);
+
+        let output_plane = output.plane(Channel::Y).expect("the output carries a Y plane");
+        let output_buffer: *const PlaneBuffer = output_plane.buffer();
+
+        std::ptr::eq(input_buffer, output_buffer)
+    }
+}
+
+/// Whether `stage` hands the input's Y plane straight through, rather than copying it.
+pub(crate) fn luma_is_shared(
+    stage: &str,
+    input: FrameFormat,
+    output: FrameFormat,
+    args: serde_json::Value,
+) -> bool {
+    let backend = backend();
+    let filter = built_filter(&backend, stage, input, output, args);
+
+    backend.build(LumaSharedCheck {
+        filter,
+        input,
+        output,
+    })
+}
+
+/// Runs one frame through `stage` and reports whether every one of the input's planes is shared
+/// straight through to the output, rather than a fresh allocation.
+struct AllPlanesSharedCheck {
+    filter: Box<dyn Filter>,
+    input: FrameFormat,
+    output: FrameFormat,
+}
+
+impl BuildTask for AllPlanesSharedCheck {
+    type Output = bool;
+
+    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+        let mut context = build.frame_context();
+        let host = HostPool::new();
+
+        let meta = FrameMeta::at(0);
+        let frame = host.alloc_frame(&self.input, meta);
+        let frozen = frame.freeze();
+        let item = HostStreamItem::Frame(frozen);
+        let loaded = context.load_host(&item).expect("the item should load");
+
+        let StreamItem::Frame(loaded_frame) = &loaded else {
+            panic!("expected a frame");
+        };
+        let input_buffers: Vec<*const PlaneBuffer> = self
+            .input
+            .channels()
+            .iter()
+            .map(|channel| {
+                let plane = loaded_frame
+                    .plane(*channel)
+                    .expect("the input carries this channel");
+                plane.buffer() as *const PlaneBuffer
+            })
+            .collect();
+
+        let slots: Vec<Option<StreamItem>> = vec![Some(loaded)];
+
+        self.filter
+            .start_of_stream(&mut context)
+            .expect("should start the stream");
+
+        let inputs = Inputs::new(slots);
+        let output = self.filter.process(&mut context, inputs).expect("should process");
+
+        assert_eq!(output.format(), &self.output);
+
+        self.output
+            .channels()
+            .iter()
+            .zip(&input_buffers)
+            .all(|(channel, input_buffer)| {
+                let plane = output.plane(*channel).expect("the output carries this channel");
+                let output_buffer: *const PlaneBuffer = plane.buffer();
+
+                std::ptr::eq(*input_buffer, output_buffer)
+            })
+    }
+}
+
+/// Whether `stage` hands every one of the input's planes straight through to the output.
+pub(crate) fn every_plane_is_shared(
+    stage: &str,
+    input: FrameFormat,
+    output: FrameFormat,
+    args: serde_json::Value,
+) -> bool {
+    let backend = backend();
+    let filter = built_filter(&backend, stage, input, output, args);
+
+    backend.build(AllPlanesSharedCheck {
         filter,
         input,
         output,

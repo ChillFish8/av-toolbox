@@ -32,7 +32,16 @@ use av_toolbox_gpu::{
 
 use self::geometry::{check_output, check_source, geometry, is_identity};
 use self::instance::Resizer;
-pub(crate) use self::kernels::{Bicubic, Bilinear, Lanczos, Point, Spline16, Spline36, Spline64};
+pub(crate) use self::kernels::{
+    Bicubic,
+    Bilinear,
+    KernelChoice,
+    Lanczos,
+    Point,
+    Spline16,
+    Spline36,
+    Spline64,
+};
 use self::kernels::{ResizeKernel, stage_name};
 
 /// Resizes every plane of a clip through the kernel `K` names.

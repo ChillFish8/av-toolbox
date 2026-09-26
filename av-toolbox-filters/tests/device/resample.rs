@@ -1,6 +1,8 @@
 use av_toolbox_cubek::depth::{Conversion, Thresholds, plane_shift};
-use av_toolbox_cubek::testing::reference_depth;
+use av_toolbox_cubek::resize::{Kernel, taps};
+use av_toolbox_cubek::testing::{reference_depth, reference_resize};
 use av_toolbox_gpu::{
+    Channel,
     ChromaLocation,
     ColourInfo,
     ColourRange,
@@ -12,7 +14,15 @@ use av_toolbox_gpu::{
 };
 use serde_json::json;
 
-use crate::support::{frame, passes_through, run_once};
+use crate::support::{
+    assert_within_one,
+    every_plane_is_shared,
+    frame,
+    luma_is_shared,
+    passes_through,
+    patterned_planes,
+    run_once,
+};
 
 /// Every plane of `format`, each sample `(index * 13) % 1024`.
 fn ten_bit_values(format: &FrameFormat) -> Vec<Vec<u16>> {
@@ -124,4 +134,105 @@ fn an_unchanged_depth_hands_back_the_input() {
     let same = passes_through("resample/depth", input, input, args);
 
     assert!(same);
+}
+
+#[test]
+fn every_kernel_matches_the_reference_between_subsamplings() {
+    let kernels = [
+        ("point", Kernel::Point),
+        ("bilinear", Kernel::Bilinear),
+        (
+            "bicubic",
+            Kernel::Bicubic {
+                b: 1.0 / 3.0,
+                c: 1.0 / 3.0,
+            },
+        ),
+        ("lanczos", Kernel::Lanczos { taps: 3 }),
+        ("spline16", Kernel::Spline16),
+        ("spline36", Kernel::Spline36),
+        ("spline64", Kernel::Spline64),
+    ];
+    let changes = [
+        (Subsampling::Yuv420, Subsampling::Yuv444),
+        (Subsampling::Yuv444, Subsampling::Yuv420),
+        (Subsampling::Yuv422, Subsampling::Yuv420),
+    ];
+
+    for (name, kernel) in kernels {
+        for (from, to) in changes {
+            let input = frame(
+                32,
+                16,
+                FrameLayout::Yuv { subsampling: from },
+                SampleFormat::U8,
+                ChromaLocation::Left,
+            );
+            let output = FrameFormat {
+                layout: FrameLayout::Yuv { subsampling: to },
+                ..input
+            };
+            let target = json!(to.to_string());
+            let args = json!({ "subsampling": target, "kernel": name });
+
+            let planes = patterned_planes(&input);
+            let resampled = run_once("resample/chroma", input, output, args, &planes);
+
+            let (in_width, in_height) = input.channel_dimensions(Channel::U).expect("carried");
+            let (out_width, out_height) = output.channel_dimensions(Channel::U).expect("carried");
+            let (factor_in_x, factor_in_y) = from.factors();
+            let (factor_out_x, factor_out_y) = to.factors();
+            let (siting_in_x, siting_in_y) = ChromaLocation::Left.offsets(factor_in_x, factor_in_y);
+            let (siting_out_x, siting_out_y) = ChromaLocation::Left.offsets(factor_out_x, factor_out_y);
+            let scale_x = factor_out_x as f32 / factor_in_x as f32;
+            let scale_y = factor_out_y as f32 / factor_in_y as f32;
+            let offset_x = (siting_out_x - siting_in_x) / factor_in_x as f32;
+            let offset_y = (siting_out_y - siting_in_y) / factor_in_y as f32;
+            let across = taps(out_width, scale_x, offset_x, &kernel);
+            let down = taps(out_height, scale_y, offset_y, &kernel);
+
+            assert_eq!(resampled[0], planes[0], "{name}: luma must be untouched");
+            for index in [1, 2] {
+                let expected = reference_resize(&planes[index], in_width, in_height, &across, &down);
+                assert_within_one(&resampled[index], &expected, name);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_luma_plane_is_shared_not_copied() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(32, 16, layout, SampleFormat::U8, ChromaLocation::Left);
+    let output = FrameFormat {
+        layout: FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv444,
+        },
+        ..input
+    };
+    let args = json!({ "subsampling": "4:4:4" });
+
+    let shared = luma_is_shared("resample/chroma", input, output, args);
+
+    assert!(shared);
+}
+
+#[test]
+fn a_new_siting_at_444_relabels_every_plane_instead_of_resampling() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv444,
+    };
+    let input = frame(32, 16, layout, SampleFormat::U8, ChromaLocation::Left);
+    let colour = ColourInfo {
+        chroma_location: ChromaLocation::Center,
+        ..input.colour
+    };
+    let output = FrameFormat { colour, ..input };
+    let args = json!({ "subsampling": "4:4:4", "location": "center" });
+
+    let shared = every_plane_is_shared("resample/chroma", input, output, args);
+
+    assert!(shared);
 }

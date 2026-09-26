@@ -1,1 +1,2 @@
+mod chroma;
 mod depth;
