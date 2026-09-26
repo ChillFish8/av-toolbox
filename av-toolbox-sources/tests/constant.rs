@@ -1,7 +1,10 @@
 #![cfg(all(feature = "gpu-tests", unix))]
 
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::os::fd::{IntoRawFd, RawFd};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::thread;
+use std::thread::JoinHandle;
 
 use av_toolbox_core::{
     BoundInputs,
@@ -234,38 +237,42 @@ fn y4m_stream() -> Vec<u8> {
     bytes
 }
 
-/// Writes the y4m stream into `folder`, returning its path.
+/// Feeds the y4m stream into a new pipe from its own thread, returning the read end's descriptor.
 ///
-/// The reference is read from a file rather than a descriptor, since a claimed descriptor is never given back
-/// and every test here shares one process.
-fn reference_file(folder: &Path) -> PathBuf {
-    let path = folder.join("reference.y4m");
+/// The write end closes once every byte is written, so the stream can only be read once.
+fn piped_reference() -> (RawFd, JoinHandle<()>) {
     let bytes = y4m_stream();
-    std::fs::write(&path, bytes).expect("writes the stream");
+    let (reader, mut writer) = std::io::pipe().expect("a pipe");
+    let feeder = thread::spawn(move || {
+        writer.write_all(&bytes).expect("writes the stream");
+    });
+    let fd = reader.into_raw_fd();
 
-    path
+    (fd, feeder)
 }
 
-fn reference_stage(reference_path: &Path) -> StageSpec {
-    let reference_args = json!({ "path": reference_path });
+fn reference_stage(fd: RawFd) -> StageSpec {
+    let reference_args = json!({ "fd": fd });
 
     stage(StageKind::Source, "reference", "y4m/pipe", reference_args)
 }
 
 /// The format of the reference's frames, found by running it straight into the recording sink.
-fn format_of_reference(reference_path: &Path) -> FrameFormat {
-    let reference = reference_stage(reference_path);
+fn format_of_reference() -> FrameFormat {
+    let (fd, feeder) = piped_reference();
+    let reference = reference_stage(fd);
     let specs = [reference, sink_of("reference")];
     run(&specs).expect("the reference runs alone");
+    feeder.join().expect("the feeder finishes");
 
     let frames = take_recorded();
 
     frames[0].format
 }
 
-/// A y4m reference, the `like` stage following it, and the recording sink.
-fn following(stage_type: &str, args: serde_json::Value, reference_path: &Path) -> Vec<StageSpec> {
-    let reference = reference_stage(reference_path);
+/// A y4m reference read from `fd`, the `like` stage following it, and the recording sink.
+fn following(stage_type: &str, args: serde_json::Value, fd: RawFd) -> Vec<StageSpec> {
+    let reference = reference_stage(fd);
     let mut like = stage(StageKind::Filter, "like", stage_type, args);
     like.inputs = vec![positional("reference")];
 
@@ -332,12 +339,12 @@ fn solid_fill_refuses_zero_frames() {
 fn solid_like_follows_its_reference() {
     let _alone = alone();
 
-    let folder = tempfile::tempdir().expect("a folder");
-    let reference_path = reference_file(folder.path());
-    let reference_format = format_of_reference(&reference_path);
-    let specs = following("solid/like", json!({ "colour": "#000000" }), &reference_path);
+    let reference_format = format_of_reference();
+    let (fd, feeder) = piped_reference();
+    let specs = following("solid/like", json!({ "colour": "#000000" }), fd);
 
     let report = run(&specs).expect("should run");
+    feeder.join().expect("the feeder finishes");
 
     let seen = recorded();
     let indices: Vec<u64> = seen.iter().map(|frame| frame.index).collect();
@@ -369,11 +376,12 @@ fn image_like_follows_its_reference() {
     let white = image::GrayImage::from_pixel(size, size, image::Luma([255]));
     white.save(&path).expect("writes the image");
 
-    let reference_path = reference_file(folder.path());
-    let reference_format = format_of_reference(&reference_path);
-    let specs = following("image/like", json!({ "path": path }), &reference_path);
+    let reference_format = format_of_reference();
+    let (fd, feeder) = piped_reference();
+    let specs = following("image/like", json!({ "path": path }), fd);
 
     let report = run(&specs).expect("should run");
+    feeder.join().expect("the feeder finishes");
 
     let seen = recorded();
     let indices: Vec<u64> = seen.iter().map(|frame| frame.index).collect();
@@ -396,10 +404,11 @@ fn image_like_refuses_an_image_of_another_size() {
     let small = image::GrayImage::from_pixel(8, 8, image::Luma([255]));
     small.save(&path).expect("writes the image");
 
-    let reference_path = reference_file(folder.path());
-    let specs = following("image/like", json!({ "path": path }), &reference_path);
+    let (fd, feeder) = piped_reference();
+    let specs = following("image/like", json!({ "path": path }), fd);
 
     let error = run(&specs).expect_err("8x8 is not 64x64");
+    feeder.join().expect("the feeder finishes");
 
     assert!(error.contains("resize/"), "{error}");
     assert!(error.contains("8x8"), "{error}");
