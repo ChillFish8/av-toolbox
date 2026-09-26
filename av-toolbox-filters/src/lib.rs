@@ -5,8 +5,10 @@
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
 //! - `resample/chroma` changes a YUV clip's chroma subsampling and siting.
+//! - `planes/extract` pulls one plane, or the chroma pair, out of a clip.
 
 mod blend;
+mod planes;
 mod resample;
 mod resize;
 
@@ -27,6 +29,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<Resize<Spline64>>()?;
     registry.register_filter::<Depth>()?;
     registry.register_filter::<Chroma>()?;
+    registry.register_filter::<planes::Extract>()?;
 
     Ok(())
 }
@@ -58,5 +61,6 @@ mod tests {
         assert!(registered("resize/spline64"));
         assert!(registered("resample/depth"));
         assert!(registered("resample/chroma"));
+        assert!(registered("planes/extract"));
     }
 }
