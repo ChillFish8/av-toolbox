@@ -3,6 +3,7 @@
 //! Every module launches its kernels over planes the caller already holds on the device:
 //!
 //! - [blur] for separable gaussian blurs.
+//! - [depth] for changing a plane's bit depth, with dithering.
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
 //! - [sobel] for image gradients.
@@ -11,6 +12,7 @@
 
 pub mod blur;
 mod border;
+pub mod depth;
 mod dispatch;
 pub mod histogram;
 pub mod labels;
