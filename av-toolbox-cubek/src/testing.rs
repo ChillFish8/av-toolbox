@@ -1,3 +1,4 @@
+use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 use crate::resize::Taps;
 
 /// Mirrors [reflect](crate::reflect) on the CPU.
@@ -101,4 +102,25 @@ pub fn reference_resize_wide(
     }
 
     output
+}
+
+/// Converts a plane `width` samples across on the CPU, mirroring [convert](crate::depth::convert).
+pub fn reference_depth(
+    input: &[u16],
+    width: u32,
+    conversion: &Conversion,
+    thresholds: &Thresholds,
+    shift: Shift,
+) -> Vec<u16> {
+    input
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let column = index as u32 % width;
+            let row = index as u32 / width;
+            let threshold = thresholds.at(column, row, shift);
+
+            convert_sample(*value, conversion.multiplier, threshold, conversion.largest)
+        })
+        .collect()
 }
