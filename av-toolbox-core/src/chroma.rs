@@ -1,4 +1,4 @@
-use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, ResizePlanes, Weights, apply, bilinear, taps, upload};
+use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Weights, apply, taps, upload};
 use av_toolbox_cubek::{DevicePlane, Dispatch};
 use av_toolbox_gpu::{
     BuildContext,
@@ -53,20 +53,8 @@ impl<R: Runtime> ChromaMask<R> {
         let (offset_x, offset_y) = chroma.location.offsets(factor_x, factor_y);
         let (chroma_width, chroma_height) = chroma.subsampling.chroma_dimensions(format.width, format.height);
 
-        let across_taps = taps(
-            chroma_width,
-            factor_x as f32,
-            offset_x,
-            bilinear,
-            BILINEAR_SUPPORT,
-        );
-        let down_taps = taps(
-            chroma_height,
-            factor_y as f32,
-            offset_y,
-            bilinear,
-            BILINEAR_SUPPORT,
-        );
+        let across_taps = taps(chroma_width, factor_x as f32, offset_x, &Kernel::Bilinear);
+        let down_taps = taps(chroma_height, factor_y as f32, offset_y, &Kernel::Bilinear);
         let across = upload(&client, &across_taps);
         let down = upload(&client, &down_taps);
 

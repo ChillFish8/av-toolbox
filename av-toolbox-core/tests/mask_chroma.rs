@@ -17,7 +17,7 @@ use av_toolbox_core::{
     StageInstance,
     StageKind,
 };
-use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, bilinear, taps};
+use av_toolbox_cubek::resize::{Kernel, taps};
 use av_toolbox_cubek::testing::reference_resize;
 use av_toolbox_gpu::{
     Backend,
@@ -339,8 +339,8 @@ fn read_plane<R: Runtime>(build: &BuildContext<R>, plane: &av_toolbox_gpu::Plane
 /// samples past the first it covers.
 fn reference_chroma(offset_x: f32, offset_y: f32) -> Vec<u8> {
     let input = pattern();
-    let across = taps(CHROMA_WIDTH, 2.0, offset_x, bilinear, BILINEAR_SUPPORT);
-    let down = taps(CHROMA_HEIGHT, 2.0, offset_y, bilinear, BILINEAR_SUPPORT);
+    let across = taps(CHROMA_WIDTH, 2.0, offset_x, &Kernel::Bilinear);
+    let down = taps(CHROMA_HEIGHT, 2.0, offset_y, &Kernel::Bilinear);
 
     reference_resize(&input, WIDTH, HEIGHT, &across, &down)
 }

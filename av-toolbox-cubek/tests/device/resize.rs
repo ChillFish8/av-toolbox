@@ -1,4 +1,4 @@
-use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, ResizePlanes, Taps, apply, bilinear, taps, upload};
+use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Taps, apply, taps, upload};
 use av_toolbox_cubek::testing::reference_resize;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -81,8 +81,8 @@ fn check_chroma_shapes(input: &[u8], width: u32, height: u32) {
     for (scale_x, scale_y, offset_x, offset_y) in CHROMA_SHAPES {
         let out_width = width.div_ceil(scale_x as u32);
         let out_height = height.div_ceil(scale_y as u32);
-        let across = taps(out_width, scale_x, offset_x, bilinear, BILINEAR_SUPPORT);
-        let down = taps(out_height, scale_y, offset_y, bilinear, BILINEAR_SUPPORT);
+        let across = taps(out_width, scale_x, offset_x, &Kernel::Bilinear);
+        let down = taps(out_height, scale_y, offset_y, &Kernel::Bilinear);
 
         check(input, width, height, across, down);
     }
@@ -107,8 +107,8 @@ fn a_hard_mask_downscales_with_the_bilinear_edge_weights() {
 #[test]
 fn a_plane_doubles_with_bilinear() {
     let input: Vec<u8> = (0..12).map(|index| (index * 20) as u8).collect();
-    let across = taps(8, 0.5, 0.0, bilinear, BILINEAR_SUPPORT);
-    let down = taps(6, 0.5, 0.0, bilinear, BILINEAR_SUPPORT);
+    let across = taps(8, 0.5, 0.0, &Kernel::Bilinear);
+    let down = taps(6, 0.5, 0.0, &Kernel::Bilinear);
 
     check(&input, 4, 3, across, down);
 }

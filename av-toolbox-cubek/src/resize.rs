@@ -5,12 +5,154 @@ use cubecl::server::Handle;
 
 use crate::{DevicePlane, Dispatch, reflect};
 
-/// Bilinear, weighing a sample by how close it is.
-pub fn bilinear(distance: f32) -> f32 {
-    (1.0 - distance.abs()).max(0.0)
+/// How much an input sample weighs by its distance from where an output sample lands.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Kernel {
+    /// The nearest input sample only.
+    Point,
+    Bilinear,
+    /// The Mitchell-Netravali cubics, where `b` blurs and `c` sharpens.
+    Bicubic {
+        b: f32,
+        c: f32,
+    },
+    /// A sinc windowed by a wider sinc, reaching `taps` samples each side.
+    Lanczos {
+        taps: u32,
+    },
+    Spline16,
+    Spline36,
+    Spline64,
 }
 
-pub const BILINEAR_SUPPORT: f32 = 1.0;
+impl Kernel {
+    /// The weight of an input sample `distance` input samples from the output sample.
+    pub fn weight(&self, distance: f32) -> f32 {
+        if let Self::Point = self {
+            return point(distance);
+        }
+
+        let x = distance.abs();
+        if x >= self.support() {
+            return 0.0;
+        }
+
+        match self {
+            Self::Point => point(distance),
+            Self::Bilinear => 1.0 - x,
+            Self::Bicubic { b, c } => bicubic(x, *b, *c),
+            Self::Lanczos { taps } => lanczos(x, *taps as f32),
+            Self::Spline16 => spline16(x),
+            Self::Spline36 => spline36(x),
+            Self::Spline64 => spline64(x),
+        }
+    }
+
+    /// How far this kernel reaches either side, in input samples, before a downscale widens it.
+    pub fn support(&self) -> f32 {
+        match self {
+            Self::Point => 0.5,
+            Self::Bilinear => 1.0,
+            Self::Bicubic { .. } | Self::Spline16 => 2.0,
+            Self::Lanczos { taps } => *taps as f32,
+            Self::Spline36 => 3.0,
+            Self::Spline64 => 4.0,
+        }
+    }
+
+    /// Whether a downscale widens this kernel so it averages every input sample it covers.
+    ///
+    /// Point never widens, so it always picks exactly one sample.
+    pub fn widens(&self) -> bool {
+        !matches!(self, Self::Point)
+    }
+}
+
+fn point(distance: f32) -> f32 {
+    if (-0.5..0.5).contains(&distance) { 1.0 } else { 0.0 }
+}
+
+fn bicubic(x: f32, b: f32, c: f32) -> f32 {
+    if x < 1.0 {
+        let cubic = (12.0 - 9.0 * b - 6.0 * c) * x * x * x;
+        let square = (-18.0 + 12.0 * b + 6.0 * c) * x * x;
+        let constant = 6.0 - 2.0 * b;
+
+        return (cubic + square + constant) / 6.0;
+    }
+
+    let cubic = (-b - 6.0 * c) * x * x * x;
+    let square = (6.0 * b + 30.0 * c) * x * x;
+    let linear = (-12.0 * b - 48.0 * c) * x;
+    let constant = 8.0 * b + 24.0 * c;
+
+    (cubic + square + linear + constant) / 6.0
+}
+
+fn sinc(x: f32) -> f32 {
+    if x == 0.0 {
+        return 1.0;
+    }
+
+    let angle = std::f32::consts::PI * x;
+
+    angle.sin() / angle
+}
+
+fn lanczos(x: f32, taps: f32) -> f32 {
+    let centre = sinc(x);
+    let window = sinc(x / taps);
+
+    centre * window
+}
+
+fn spline16(x: f32) -> f32 {
+    if x < 1.0 {
+        return ((x - 9.0 / 5.0) * x - 1.0 / 5.0) * x + 1.0;
+    }
+
+    let t = x - 1.0;
+
+    ((-1.0 / 3.0 * t + 4.0 / 5.0) * t - 7.0 / 15.0) * t
+}
+
+fn spline36(x: f32) -> f32 {
+    if x < 1.0 {
+        return ((13.0 / 11.0 * x - 453.0 / 209.0) * x - 3.0 / 209.0) * x + 1.0;
+    }
+
+    if x < 2.0 {
+        let t = x - 1.0;
+
+        return ((-6.0 / 11.0 * t + 270.0 / 209.0) * t - 156.0 / 209.0) * t;
+    }
+
+    let t = x - 2.0;
+
+    ((1.0 / 11.0 * t - 45.0 / 209.0) * t + 26.0 / 209.0) * t
+}
+
+fn spline64(x: f32) -> f32 {
+    if x < 1.0 {
+        return ((49.0 / 41.0 * x - 6387.0 / 2911.0) * x - 3.0 / 2911.0) * x + 1.0;
+    }
+
+    if x < 2.0 {
+        let t = x - 1.0;
+
+        return ((-24.0 / 41.0 * t + 4032.0 / 2911.0) * t - 2328.0 / 2911.0) * t;
+    }
+
+    if x < 3.0 {
+        let t = x - 2.0;
+
+        return ((6.0 / 41.0 * t - 1008.0 / 2911.0) * t + 582.0 / 2911.0) * t;
+    }
+
+    let t = x - 3.0;
+
+    ((-1.0 / 41.0 * t + 168.0 / 2911.0) * t - 97.0 / 2911.0) * t
+}
 
 /// Which input samples each output sample of one axis reads, and how much each weighs.
 ///
@@ -25,11 +167,11 @@ pub struct Taps {
 
 /// The taps of one axis, with output sample `i` at input position `scale * i + offset`.
 ///
-/// When `scale` is above 1 the filter is widened by it, so a downscale averages every sample it
-/// covers. Each output sample's weights sum to 1.
-pub fn taps(output_len: u32, scale: f32, offset: f32, filter: impl Fn(f32) -> f32, support: f32) -> Taps {
-    let stretch = scale.max(1.0);
-    let reach = support * stretch;
+/// When `scale` is above 1 a kernel that widens is stretched by it, so a downscale averages every
+/// sample it covers. Each output sample's weights sum to 1.
+pub fn taps(output_len: u32, scale: f32, offset: f32, kernel: &Kernel) -> Taps {
+    let stretch = if kernel.widens() { scale.max(1.0) } else { 1.0 };
+    let reach = kernel.support() * stretch;
     let count = (2.0 * reach).ceil() as u32 + 1;
 
     let mut starts = Vec::with_capacity(output_len as usize);
@@ -42,7 +184,7 @@ pub fn taps(output_len: u32, scale: f32, offset: f32, filter: impl Fn(f32) -> f3
         let raw: Vec<f32> = (0..count)
             .map(|step| {
                 let distance = (start + step as i32) as f32 - position;
-                filter(distance / stretch)
+                kernel.weight(distance / stretch)
             })
             .collect();
         let total: f32 = raw.iter().sum();
@@ -228,6 +370,31 @@ pub fn apply<R: Runtime>(
 mod tests {
     use super::*;
 
+    const INTERPOLATING: [Kernel; 7] = [
+        Kernel::Bilinear,
+        Kernel::Bicubic { b: 0.0, c: 0.5 },
+        Kernel::Lanczos { taps: 2 },
+        Kernel::Lanczos { taps: 3 },
+        Kernel::Spline16,
+        Kernel::Spline36,
+        Kernel::Spline64,
+    ];
+
+    const EVERY: [Kernel; 9] = [
+        Kernel::Point,
+        Kernel::Bilinear,
+        Kernel::Bicubic {
+            b: 1.0 / 3.0,
+            c: 1.0 / 3.0,
+        },
+        Kernel::Bicubic { b: 0.0, c: 0.5 },
+        Kernel::Lanczos { taps: 3 },
+        Kernel::Lanczos { taps: 4 },
+        Kernel::Spline16,
+        Kernel::Spline36,
+        Kernel::Spline64,
+    ];
+
     /// The non-zero taps of output sample `index`, as input index and weight.
     fn nonzero(table: &Taps, index: usize) -> Vec<(i32, f32)> {
         let count = table.count as usize;
@@ -235,21 +402,92 @@ mod tests {
 
         row.iter()
             .enumerate()
-            .filter(|(_, weight)| **weight > 0.0)
+            .filter(|(_, weight)| **weight != 0.0)
             .map(|(step, weight)| (table.starts[index] + step as i32, *weight))
             .collect()
     }
 
+    fn assert_near(found: f32, expected: f32) {
+        assert!((found - expected).abs() < 1e-5, "{found} was not near {expected}");
+    }
+
+    #[test]
+    fn interpolating_kernels_are_one_at_zero_and_zero_at_whole_distances() {
+        for kernel in INTERPOLATING {
+            let reach = kernel.support() as i32;
+
+            assert_near(kernel.weight(0.0), 1.0);
+            for distance in 1..=reach {
+                let ahead = kernel.weight(distance as f32);
+                let behind = kernel.weight(-distance as f32);
+
+                assert_near(ahead, 0.0);
+                assert_near(behind, 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn every_kernel_is_zero_at_and_past_its_support() {
+        for kernel in EVERY {
+            let support = kernel.support();
+            let at = kernel.weight(support);
+            let past = kernel.weight(support + 0.25);
+            let before = kernel.weight(-support - 0.25);
+
+            assert_eq!(at, 0.0, "{kernel:?}");
+            assert_eq!(past, 0.0, "{kernel:?}");
+            assert_eq!(before, 0.0, "{kernel:?}");
+        }
+    }
+
+    #[test]
+    fn known_kernel_values() {
+        let mitchell = Kernel::Bicubic {
+            b: 1.0 / 3.0,
+            c: 1.0 / 3.0,
+        };
+        let lanczos = Kernel::Lanczos { taps: 3 };
+
+        assert_near(Kernel::Spline36.weight(0.5), 0.598_684);
+        assert_near(lanczos.weight(0.5), 0.607_927);
+        assert_near(mitchell.weight(0.0), 8.0 / 9.0);
+        assert_near(mitchell.weight(1.0), 1.0 / 18.0);
+    }
+
+    #[test]
+    fn point_picks_the_nearest_sample_on_a_4x_downscale() {
+        let table = taps(2, 4.0, 1.5, &Kernel::Point);
+
+        assert_eq!(nonzero(&table, 0), vec![(1, 1.0)]);
+        assert_eq!(nonzero(&table, 1), vec![(5, 1.0)]);
+    }
+
+    #[test]
+    fn every_kernels_weights_sum_to_one_up_and_down() {
+        for kernel in EVERY {
+            let upscale = taps(16, 0.5, -0.25, &kernel);
+            let downscale = taps(4, 2.5, 0.75, &kernel);
+
+            for table in [upscale, downscale] {
+                for row in table.weights.chunks(table.count as usize) {
+                    let total: f32 = row.iter().sum();
+                    assert_near(total, 1.0);
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_left_sited_halving_weighs_one_two_one() {
-        let table = taps(4, 2.0, 0.0, bilinear, BILINEAR_SUPPORT);
+        let table = taps(4, 2.0, 0.0, &Kernel::Bilinear);
 
         assert_eq!(nonzero(&table, 2), vec![(3, 0.25), (4, 0.5), (5, 0.25)]);
     }
 
     #[test]
     fn a_centred_halving_weighs_one_three_three_one() {
-        let table = taps(4, 2.0, 0.5, bilinear, BILINEAR_SUPPORT);
+        let table = taps(4, 2.0, 0.5, &Kernel::Bilinear);
 
         assert_eq!(
             nonzero(&table, 2),
@@ -259,25 +497,15 @@ mod tests {
 
     #[test]
     fn a_scale_of_one_copies() {
-        let table = taps(5, 1.0, 0.0, bilinear, BILINEAR_SUPPORT);
+        let table = taps(5, 1.0, 0.0, &Kernel::Bilinear);
 
         assert_eq!(nonzero(&table, 3), vec![(3, 1.0)]);
     }
 
     #[test]
     fn a_doubling_interpolates_between_neighbours() {
-        let table = taps(8, 0.5, 0.0, bilinear, BILINEAR_SUPPORT);
+        let table = taps(8, 0.5, 0.0, &Kernel::Bilinear);
 
         assert_eq!(nonzero(&table, 3), vec![(1, 0.5), (2, 0.5)]);
-    }
-
-    #[test]
-    fn every_output_samples_weights_sum_to_one() {
-        let table = taps(4, 2.0, 0.5, bilinear, BILINEAR_SUPPORT);
-
-        for row in table.weights.chunks(table.count as usize) {
-            let total: f32 = row.iter().sum();
-            assert!((total - 1.0).abs() < 1e-6);
-        }
     }
 }

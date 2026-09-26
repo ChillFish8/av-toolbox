@@ -8,7 +8,7 @@ use av_toolbox_core::{
     StageKind,
     StreamType,
 };
-use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, bilinear, taps};
+use av_toolbox_cubek::resize::{Kernel, taps};
 use av_toolbox_cubek::testing::reference_resize;
 use av_toolbox_gpu::{
     Backend,
@@ -295,20 +295,8 @@ fn downscaled_chroma(full: &[u8], width: u32, height: u32, chroma: MaskChroma) -
     let (offset_x, offset_y) = chroma.location.offsets(factor_x, factor_y);
     let (chroma_width, chroma_height) = chroma.subsampling.chroma_dimensions(width, height);
 
-    let across = taps(
-        chroma_width,
-        factor_x as f32,
-        offset_x,
-        bilinear,
-        BILINEAR_SUPPORT,
-    );
-    let down = taps(
-        chroma_height,
-        factor_y as f32,
-        offset_y,
-        bilinear,
-        BILINEAR_SUPPORT,
-    );
+    let across = taps(chroma_width, factor_x as f32, offset_x, &Kernel::Bilinear);
+    let down = taps(chroma_height, factor_y as f32, offset_y, &Kernel::Bilinear);
 
     reference_resize(full, width, height, &across, &down)
 }
