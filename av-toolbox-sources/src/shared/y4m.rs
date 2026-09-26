@@ -2,7 +2,6 @@ use std::io;
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{
@@ -21,6 +20,8 @@ use av_toolbox_gpu::{
     Subsampling,
 };
 use y4m::{Colorspace, Decoder};
+
+use super::timestamp::timestamp_of;
 
 /// A y4m stream read frame by frame into host frames.
 pub(crate) struct Y4mReader<R: Read> {
@@ -209,17 +210,6 @@ fn rate_of(ratio: y4m::Ratio) -> Option<FrameRate> {
     let denominator = u32::try_from(ratio.den).ok()?;
 
     FrameRate::new(numerator, denominator)
-}
-
-fn timestamp_of(index: u64, (numerator, denominator): (usize, usize)) -> Option<Duration> {
-    if numerator == 0 {
-        return None;
-    }
-
-    let nanos = index as u128 * denominator as u128 * 1_000_000_000 / numerator as u128;
-    let nanos = u64::try_from(nanos).ok()?;
-
-    Some(Duration::from_nanos(nanos))
 }
 
 fn header_error(error: &y4m::Error) -> StageError {

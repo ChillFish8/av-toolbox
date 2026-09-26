@@ -1,4 +1,5 @@
 mod carried;
+mod timestamp;
 mod y4m;
 
 #[cfg(test)]
@@ -19,6 +20,7 @@ use av_toolbox_gpu::{
 };
 
 pub(crate) use self::carried::Carried;
+pub(crate) use self::timestamp::timestamp_of;
 pub(crate) use self::y4m::Y4mReader;
 
 /// A source reading a y4m stream.

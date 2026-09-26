@@ -1,14 +1,27 @@
 use std::path::PathBuf;
 
-use av_toolbox_core::{BoundInputs, InputSignature, Source, SourceDefinition, StageDefinition, StageError};
+use av_toolbox_core::{
+    BoundInputs,
+    Filter,
+    FilterDefinition,
+    InputSignature,
+    Parallelism,
+    Source,
+    SourceDefinition,
+    StageDefinition,
+    StageError,
+};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     DeviceSide,
+    FormatSet,
+    Offered,
     OutputFormats,
     Primaries,
     ResolvedFormats,
     Runtime,
+    StreamFormat,
     Transfer,
 };
 use schemars::JsonSchema;
@@ -16,9 +29,10 @@ use serde::Deserialize;
 
 use super::Prepared;
 use super::args::{MatrixArg, RangeArg, Shape, check_frames, frame_format};
-use super::convert::convert;
-use super::picture::{Picture, decode};
-use super::repeat::RepeatSource;
+use super::convert::{convert, size_of_picture, wrong_size};
+use super::like::{REFERENCE_SIGNATURE, accepts_reference, reference_format};
+use super::picture::{decode, dimensions};
+use super::repeat::{RepeatFilter, RepeatSource};
 use crate::shared::{Carried, produced_by};
 
 const FILE: &str = "image/file";
@@ -39,14 +53,6 @@ pub(crate) struct FileArgs {
     pub(crate) range: Option<RangeArg>,
     /// Frames per second as a numerator and denominator, unknown by default.
     pub(crate) frame_rate: Option<[u32; 2]>,
-}
-
-fn picture_size(picture: &Picture) -> (u32, u32) {
-    match picture {
-        Picture::Rgb(rgb) => (rgb.width, rgb.height),
-        Picture::Grey(grey) => (grey.width, grey.height),
-        Picture::Planes(_) => (1, 1),
-    }
 }
 
 /// Produces frames showing one image.
@@ -76,7 +82,8 @@ impl SourceDefinition for File {
         check_frames(args.frames, FILE)?;
 
         let decoded = decode(&args.path, FILE)?;
-        let (width, height) = picture_size(&decoded.picture);
+        let found = size_of_picture(&decoded.picture);
+        let (width, height) = found.unwrap_or((1, 1));
         let shape = Shape {
             width,
             height,
@@ -112,5 +119,149 @@ impl SourceDefinition for File {
         let source = RepeatSource::new(opened.converted, opened.frames);
 
         Ok(Box::new(source))
+    }
+}
+
+const LIKE: &str = "image/like";
+
+/// Arguments for `image/like`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LikeArgs {
+    /// The PNG or JPEG image to show, the same size as the reference.
+    pub(crate) path: PathBuf,
+}
+
+/// Produces an image for each frame of a reference clip, in its format.
+pub(crate) struct ImageLike;
+
+impl StageDefinition for ImageLike {
+    type Args = LikeArgs;
+
+    fn package() -> &'static str {
+        "image"
+    }
+
+    fn identifier() -> &'static str {
+        "like"
+    }
+
+    fn parallelism(_args: &Self::Args) -> Parallelism {
+        Parallelism::Frame
+    }
+
+    fn inputs() -> &'static InputSignature {
+        REFERENCE_SIGNATURE
+    }
+}
+
+impl FilterDefinition for ImageLike {
+    type Side = DeviceSide;
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        accepts_reference(offered, LIKE)
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = reference_format(chosen, LIKE)?;
+        let found = dimensions(&args.path, LIKE)?;
+        if found != (format.width, format.height) {
+            return Err(wrong_size(LIKE, found, &format));
+        }
+
+        let produced = produced_by(&format);
+
+        Ok(produced)
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        args: Self::Args,
+        _inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        let inputs = formats.inputs();
+        let format = reference_format(inputs, LIKE)?;
+        let decoded = decode(&args.path, LIKE)?;
+        let converted = convert(&decoded.picture, &format, LIKE)?;
+        let filter = RepeatFilter::new(converted, LIKE);
+
+        Ok(Box::new(filter))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use av_toolbox_gpu::{ColourInfo, FrameFormat, FrameLayout, SampleFormat, default_accelerators};
+
+    use super::*;
+
+    fn capabilities() -> Capabilities {
+        let accelerator = default_accelerators()[0];
+
+        Capabilities::builder(accelerator)
+            .plane_size(32, 32)
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
+            .build()
+    }
+
+    fn grey_reference(width: u32, height: u32) -> StreamFormat {
+        StreamFormat::Frames(FrameFormat {
+            width,
+            height,
+            layout: FrameLayout::Grey,
+            sample: SampleFormat::U8,
+            colour: ColourInfo::default(),
+            frame_rate: None,
+        })
+    }
+
+    fn like_args_for(folder: &Path) -> LikeArgs {
+        let path = folder.join("small.png");
+        let small = image::GrayImage::from_pixel(8, 4, image::Luma([255]));
+        small.save(&path).expect("writes the image");
+
+        LikeArgs { path }
+    }
+
+    #[test]
+    fn image_like_produces_the_reference_format_for_an_image_of_its_size() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let args = like_args_for(folder.path());
+        let reference = grey_reference(8, 4);
+        let chosen = [Some(reference)];
+
+        let outputs = ImageLike::produces(&capabilities(), &args, &chosen).expect("the sizes match");
+
+        let produced = outputs.template.with_sample(SampleFormat::U8);
+        assert_eq!(produced, reference);
+    }
+
+    #[test]
+    fn image_like_refuses_an_image_of_another_size() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let args = like_args_for(folder.path());
+        let reference = grey_reference(16, 8);
+        let chosen = [Some(reference)];
+
+        let refused = ImageLike::produces(&capabilities(), &args, &chosen);
+
+        let error = refused.expect_err("8x4 is not 16x8").to_string();
+        assert!(error.contains("resize/"), "{error}");
+        assert!(error.contains("8x4"), "{error}");
+        assert!(error.contains("16x8"), "{error}");
     }
 }

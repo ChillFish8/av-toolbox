@@ -29,7 +29,7 @@ pub(crate) enum Carried {
 }
 
 impl Carried {
-    /// The layout and sample format a decoded frame carries.
+    /// The layout and sample format a frame of this format carries.
     pub(crate) fn layout(self) -> (FrameLayout, SampleFormat) {
         let yuv420 = FrameLayout::Yuv {
             subsampling: Subsampling::Yuv420,

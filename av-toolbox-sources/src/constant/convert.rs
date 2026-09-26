@@ -47,7 +47,7 @@ fn past_depth(stage: &str, value: u16, largest: u16) -> StageError {
     StageError::msg(message)
 }
 
-fn wrong_size(stage: &str, found: (u32, u32), format: &FrameFormat) -> StageError {
+pub(super) fn wrong_size(stage: &str, found: (u32, u32), format: &FrameFormat) -> StageError {
     let message = format!(
         "{stage} needs a {}x{} image to match its frames, got {}x{}. Resize the image, or use image/file \
          followed by a resize/* stage",
@@ -57,7 +57,7 @@ fn wrong_size(stage: &str, found: (u32, u32), format: &FrameFormat) -> StageErro
     StageError::msg(message)
 }
 
-fn size_of_picture(picture: &Picture) -> Option<(u32, u32)> {
+pub(super) fn size_of_picture(picture: &Picture) -> Option<(u32, u32)> {
     match picture {
         Picture::Rgb(rgb) => Some((rgb.width, rgb.height)),
         Picture::Grey(grey) => Some((grey.width, grey.height)),
