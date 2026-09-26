@@ -145,6 +145,7 @@ pub(crate) fn decode(path: &Path, stage: &str) -> Result<Decoded, StageError> {
 }
 
 /// An image's width and height, read from its header without decoding it.
+#[cfg_attr(not(test), expect(dead_code, reason = "read by image/like"))]
 pub(crate) fn dimensions(path: &Path, stage: &str) -> Result<(u32, u32), StageError> {
     let reader = open(path, stage)?;
 
