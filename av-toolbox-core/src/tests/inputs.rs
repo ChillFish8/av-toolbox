@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
     MaskFormat,
     SampleFormat,
     StreamItem,
+    StreamPolicy,
     Subsampling,
 };
 use cubecl::server::Handle;
@@ -51,6 +52,8 @@ impl DeviceAllocator for FakeAllocator {
         1
     }
 
+    fn flush(&self) {}
+
     /// Fills buffer `position` with the byte `position` repeated, so two same-sized handles
     /// still come back as distinguishable buffers.
     fn read(&self, handles: Vec<Handle>) -> DeviceRead {
@@ -67,7 +70,9 @@ impl DeviceAllocator for FakeAllocator {
 }
 
 fn pool() -> BufferPool {
-    BufferPool::new(Arc::new(FakeAllocator))
+    let allocator = Arc::new(FakeAllocator);
+
+    BufferPool::new(allocator, StreamPolicy::SharedStream)
 }
 
 fn frame() -> Frame {

@@ -20,6 +20,7 @@ use crate::frame::{
 use crate::memory::allocator::{DeviceAllocator, DeviceRead, RuntimeError};
 use crate::memory::budget::{FrameBudget, Room};
 use crate::memory::ring::{Ring, RingGeometry, RingSpec};
+use crate::stream_policy::StreamPolicy;
 
 /// Device buffers kept for reuse, keyed by size.
 ///
@@ -27,9 +28,9 @@ use crate::memory::ring::{Ring, RingGeometry, RingSpec};
 /// adds is that a buffer released by one frame is handed straight to the next frame wanting that
 /// size, which is what keeps a steady-state pipeline from asking at all.
 ///
-/// A pool's buffers are reserved and released from the one thread driving a device's work. A
-/// recycled handle carries the stream of whichever thread first allocated it, and CubeCL decides
-/// cross-stream synchronisation from that.
+/// Every thread working on a device shares one pool, so a buffer released on one thread can be
+/// reserved on another. Under [StreamPolicy::FlushAtHandOff] the releasing thread submits its
+/// queued work first, so nothing it still had to read is overwritten ahead of it.
 #[derive(Debug, Clone)]
 pub struct BufferPool {
     inner: Arc<PoolInner>,
@@ -69,14 +70,17 @@ struct PlaneUpload {
 #[derive(Debug)]
 struct PoolInner {
     allocator: Arc<dyn DeviceAllocator>,
+    policy: StreamPolicy,
     free: Mutex<HashMap<usize, Vec<Handle>>>,
 }
 
 impl BufferPool {
-    pub fn new(allocator: Arc<dyn DeviceAllocator>) -> Self {
+    /// A pool over `allocator`, keeping work across threads in order by `policy`.
+    pub fn new(allocator: Arc<dyn DeviceAllocator>, policy: StreamPolicy) -> Self {
         Self {
             inner: Arc::new(PoolInner {
                 allocator,
+                policy,
                 free: Mutex::new(HashMap::new()),
             }),
             budget: None,
@@ -92,6 +96,15 @@ impl BufferPool {
     /// The budget this pool charges, if it has one.
     pub(crate) fn budget(&self) -> Option<&Arc<FrameBudget>> {
         self.budget.as_ref()
+    }
+
+    pub fn stream_policy(&self) -> StreamPolicy {
+        self.inner.policy
+    }
+
+    /// Submits the calling thread's queued work under [StreamPolicy::FlushAtHandOff].
+    pub(crate) fn flush(&self) {
+        self.inner.flush();
     }
 
     /// A buffer of exactly `bytes`, reused if one is free and reserved otherwise.
@@ -439,8 +452,18 @@ impl BufferPool {
     }
 }
 
+impl PoolInner {
+    fn flush(&self) {
+        if self.policy == StreamPolicy::FlushAtHandOff {
+            self.allocator.flush();
+        }
+    }
+}
+
 impl Recycle for PoolInner {
     fn recycle(&self, bytes: usize, handle: Handle) {
+        self.flush();
+
         self.free
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -474,7 +497,7 @@ mod tests {
     };
 
     fn pool(allocator: Arc<CountingAllocator>) -> BufferPool {
-        BufferPool::new(allocator)
+        BufferPool::new(allocator, StreamPolicy::SharedStream)
     }
 
     fn frame_format() -> FrameFormat {
@@ -873,6 +896,34 @@ mod tests {
             1,
             "a cloned pool did not see the released buffer"
         );
+    }
+
+    #[test]
+    fn a_buffer_returning_to_a_flush_at_hand_off_pool_flushes_first() {
+        let counting = CountingAllocator::new(64);
+        let allocator = Arc::new(counting);
+        let shared = allocator.clone();
+        let pool = BufferPool::new(shared, StreamPolicy::FlushAtHandOff);
+
+        let buffer = pool.reserve(128);
+        assert_eq!(allocator.flushes(), 0);
+
+        drop(buffer);
+        assert_eq!(allocator.flushes(), 1);
+    }
+
+    #[test]
+    fn a_shared_stream_pool_never_flushes() {
+        let counting = CountingAllocator::new(64);
+        let allocator = Arc::new(counting);
+        let shared = allocator.clone();
+        let pool = pool(shared);
+
+        let buffer = pool.reserve(128);
+        drop(buffer);
+        pool.flush();
+
+        assert_eq!(allocator.flushes(), 0);
     }
 
     /// The wait belongs immediately before the charge, not merely alongside it, so an

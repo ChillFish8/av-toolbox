@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use cubecl::prelude::{CubeCount, CubeDim};
 
-use crate::Capabilities;
 #[cfg(test)]
 use crate::DeviceAllocator;
 use crate::batch::{PendingBatch, PlaneMap};
@@ -24,6 +23,7 @@ use crate::frame::{
     StreamItem,
 };
 use crate::memory::{BufferPool, FrameBudget, HostPool, Ring, RingSpec, RuntimeError};
+use crate::{Capabilities, StreamPolicy};
 
 /// One item to put on the device.
 ///
@@ -64,7 +64,9 @@ impl FrameContext {
     /// A context over a fake allocator, for tests that need no device.
     #[cfg(test)]
     fn for_testing(allocator: Arc<dyn DeviceAllocator>, capabilities: Capabilities) -> Self {
-        Self::new(BufferPool::new(allocator), capabilities)
+        let pool = BufferPool::new(allocator, StreamPolicy::SharedStream);
+
+        Self::new(pool, capabilities)
     }
 
     /// This context, charging every frame shaped allocation on either side to `budget`.
@@ -256,6 +258,19 @@ impl FrameContext {
         &self.capabilities
     }
 
+    pub fn stream_policy(&self) -> StreamPolicy {
+        self.pool.stream_policy()
+    }
+
+    /// Submits the work this thread has queued, so another thread can safely use or reuse the
+    /// buffers it touched.
+    ///
+    /// It does nothing under [StreamPolicy::SharedStream], where every thread already queues on
+    /// one stream.
+    pub fn flush(&self) {
+        self.pool.flush();
+    }
+
     /// How many cubes cover `samples`, given [FrameContext::cube_dim](crate::FrameContext::cube_dim).
     ///
     /// A device refuses a launch that overruns any one axis of its cube count, so a count too
@@ -390,6 +405,35 @@ mod tests {
 
         assert_eq!(frame.meta().index, 7);
         assert_eq!(allocator.count(), 3, "one per plane of a yuv frame");
+    }
+
+    #[test]
+    fn flushing_a_flush_at_hand_off_context_submits_its_work() {
+        let counting = CountingAllocator::new(64);
+        let allocator = Arc::new(counting);
+        let shared = allocator.clone();
+        let pool = BufferPool::new(shared, StreamPolicy::FlushAtHandOff);
+        let device = capabilities();
+        let context = FrameContext::new(pool, device);
+
+        context.flush();
+
+        assert_eq!(context.stream_policy(), StreamPolicy::FlushAtHandOff);
+        assert_eq!(allocator.flushes(), 1);
+    }
+
+    #[test]
+    fn flushing_a_shared_stream_context_does_nothing() {
+        let counting = CountingAllocator::new(64);
+        let allocator = Arc::new(counting);
+        let shared = allocator.clone();
+        let device = capabilities();
+        let context = FrameContext::for_testing(shared, device);
+
+        context.flush();
+
+        assert_eq!(context.stream_policy(), StreamPolicy::SharedStream);
+        assert_eq!(allocator.flushes(), 0);
     }
 
     /// The carried-forward defect: a stage that is not one frame in, one frame out must not

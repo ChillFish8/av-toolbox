@@ -535,7 +535,7 @@ mod tests {
     use crate::testing::CountingAllocator;
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::{Backend, Device};
-    use crate::{BufferPool, HostPlanes, RingSpec, StreamFormat};
+    use crate::{BufferPool, HostPlanes, RingSpec, StreamFormat, StreamPolicy};
 
     fn format() -> FrameFormat {
         FrameFormat {
@@ -875,7 +875,7 @@ mod tests {
     #[test]
     fn a_ring_slot_planes_binding_carries_its_own_offset_not_the_wholes_ring() {
         let allocator = Arc::new(CountingAllocator::new(64));
-        let pool = BufferPool::new(allocator);
+        let pool = BufferPool::new(allocator, StreamPolicy::SharedStream);
         let ring = pool.ring(RingSpec {
             slots: 2,
             format: format(),

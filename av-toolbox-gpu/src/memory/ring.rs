@@ -160,7 +160,7 @@ mod tests {
     use super::*;
     use crate::memory::pool::BufferPool;
     use crate::testing::CountingAllocator;
-    use crate::{Channel, ColourInfo, FrameLayout, SampleFormat, Subsampling};
+    use crate::{Channel, ColourInfo, FrameLayout, SampleFormat, StreamPolicy, Subsampling};
 
     fn format(width: u32, height: u32) -> FrameFormat {
         FrameFormat {
@@ -287,7 +287,7 @@ mod tests {
 
     fn ring(slots: usize) -> (Arc<CountingAllocator>, Ring) {
         let allocator = Arc::new(CountingAllocator::new(64));
-        let pool = BufferPool::new(allocator.clone());
+        let pool = BufferPool::new(allocator.clone(), StreamPolicy::SharedStream);
         let spec = RingSpec {
             slots,
             format: format(64, 64),
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn dropping_a_slot_view_recycles_nothing() {
         let allocator = Arc::new(CountingAllocator::new(64));
-        let pool = BufferPool::new(allocator.clone());
+        let pool = BufferPool::new(allocator.clone(), StreamPolicy::SharedStream);
         let ring = pool.ring(RingSpec {
             slots: 2,
             format: format(64, 64),
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn a_ring_dropped_while_a_view_lives_recycles_nothing() {
         let allocator = Arc::new(CountingAllocator::new(64));
-        let pool = BufferPool::new(allocator.clone());
+        let pool = BufferPool::new(allocator.clone(), StreamPolicy::SharedStream);
         let spec = RingSpec {
             slots: 2,
             format: format(64, 64),

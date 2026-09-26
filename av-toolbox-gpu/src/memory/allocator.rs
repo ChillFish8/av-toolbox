@@ -83,6 +83,9 @@ pub trait DeviceAllocator: Send + Sync + fmt::Debug {
     /// The future owns a clone of whatever it needs, so it is `'static`. Clients share their
     /// internals, so cloning one is cheap.
     fn read(&self, handles: Vec<Handle>) -> DeviceRead;
+
+    /// Submits the work the calling thread has queued, without waiting for it to finish.
+    fn flush(&self);
 }
 
 /// A [DeviceAllocator] backed by a CubeCL client.
@@ -136,6 +139,16 @@ impl<R: Runtime> DeviceAllocator for ClientAllocator<R> {
 
             Ok(buffers)
         })
+    }
+
+    /// Submits the calling thread's stream.
+    ///
+    /// A failure is logged rather than returned. It means the device is already broken, and the
+    /// next readback reports that.
+    fn flush(&self) {
+        if let Err(error) = self.client.flush() {
+            tracing::error!(error = ?error, "submitting queued device work failed");
+        }
     }
 }
 

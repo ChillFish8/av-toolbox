@@ -2,10 +2,14 @@ use std::sync::Arc;
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::Runtime;
+use cubecl::stream_id::StreamId;
 
 use crate::memory::{BufferPool, ClientAllocator};
 use crate::probe::{open_client, supported_device};
-use crate::{Accelerator, Capabilities, Device, FrameContext};
+use crate::{Accelerator, Capabilities, Device, FrameContext, StreamPolicy};
+
+/// The one stream every client of a [StreamPolicy::SharedStream] backend queues on.
+const SHARED_STREAM: StreamId = StreamId { value: 0 };
 
 /// What a stage is built against.
 ///
@@ -19,13 +23,52 @@ pub struct BuildContext<R: Runtime> {
 
 impl<R: Runtime> BuildContext<R> {
     fn new(accelerator: Accelerator, client: ComputeClient<R>) -> Self {
+        let policy = StreamPolicy::for_accelerator(accelerator);
+
+        Self::with_policy(accelerator, client, policy)
+    }
+
+    /// A context whose clients keep work across threads in order by `policy`.
+    ///
+    /// Under [StreamPolicy::SharedStream] the client is pinned to one stream before anything
+    /// clones it, so every clone queues on that stream whichever thread uses it.
+    pub(crate) fn with_policy(
+        accelerator: Accelerator,
+        mut client: ComputeClient<R>,
+        policy: StreamPolicy,
+    ) -> Self {
+        if policy == StreamPolicy::SharedStream {
+            // Safety: CubeCL gives no contract beyond warning against this. Every clone of this
+            // client is taken after this point, so all of them agree on the stream, and a stream
+            // shared between threads is ordered by the order work reaches it.
+            unsafe {
+                client.set_stream(SHARED_STREAM);
+            }
+        }
+
+        Self::assemble(accelerator, client, policy)
+    }
+
+    /// A context that leaves each thread on its own stream and never flushes, so work handed
+    /// between threads can run out of order.
+    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    pub(crate) fn unordered(accelerator: Accelerator, client: ComputeClient<R>) -> Self {
+        // The pool reports `SharedStream` only so it never flushes. The client is deliberately
+        // left unpinned, so each thread keeps its own stream.
+        Self::assemble(accelerator, client, StreamPolicy::SharedStream)
+    }
+
+    fn assemble(accelerator: Accelerator, client: ComputeClient<R>, policy: StreamPolicy) -> Self {
         let capabilities = Capabilities::from_properties(accelerator, client.properties());
-        let allocator = ClientAllocator::new(client.clone());
+        let pool_client = client.clone();
+        let allocator = ClientAllocator::new(pool_client);
+        let shared_allocator = Arc::new(allocator);
+        let pool = BufferPool::new(shared_allocator, policy);
 
         Self {
             client,
             capabilities,
-            pool: BufferPool::new(Arc::new(allocator)),
+            pool,
         }
     }
 
@@ -39,6 +82,10 @@ impl<R: Runtime> BuildContext<R> {
 
     pub const fn pool(&self) -> &BufferPool {
         &self.pool
+    }
+
+    pub fn stream_policy(&self) -> StreamPolicy {
+        self.pool.stream_policy()
     }
 
     /// The context this stage's work runs against.
@@ -144,6 +191,17 @@ impl Backend {
             Opened::Rocm(context) => context.capabilities(),
             #[cfg(any(feature = "vulkan", feature = "metal"))]
             Opened::Wgpu(context) => context.capabilities(),
+        }
+    }
+
+    pub fn stream_policy(&self) -> StreamPolicy {
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            Opened::Cuda(context) => context.stream_policy(),
+            #[cfg(feature = "rocm")]
+            Opened::Rocm(context) => context.stream_policy(),
+            #[cfg(any(feature = "vulkan", feature = "metal"))]
+            Opened::Wgpu(context) => context.stream_policy(),
         }
     }
 

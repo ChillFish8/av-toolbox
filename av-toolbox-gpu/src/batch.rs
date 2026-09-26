@@ -317,6 +317,7 @@ mod tests {
         Subsampling,
     };
     use crate::memory::BufferPool;
+    use crate::stream_policy::StreamPolicy;
     use crate::testing::CountingAllocator;
 
     /// A read that stays pending until its `lands_after`th poll.
@@ -395,7 +396,10 @@ mod tests {
     }
 
     fn pool() -> BufferPool {
-        BufferPool::new(Arc::new(CountingAllocator::new(64)))
+        let counting = CountingAllocator::new(64);
+        let allocator = Arc::new(counting);
+
+        BufferPool::new(allocator, StreamPolicy::SharedStream)
     }
 
     /// One item per format, over memory no device backs, each stamped with its own position.

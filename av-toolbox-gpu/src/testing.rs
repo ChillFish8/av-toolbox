@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cubecl::bytes::Bytes;
@@ -5,7 +6,15 @@ use cubecl::server::Handle;
 use cubecl::stream_id::StreamId;
 
 use crate::memory::DeviceRead;
-use crate::{BufferPool, Capabilities, DeviceAllocator, FrameContext, default_accelerators};
+use crate::{
+    Accelerator,
+    BufferPool,
+    Capabilities,
+    DeviceAllocator,
+    FrameContext,
+    StreamPolicy,
+    default_accelerators,
+};
 
 /// The wgpu-backed accelerator this build tests against.
 ///
@@ -29,15 +38,19 @@ pub(crate) struct CountingAllocator {
     requests: Mutex<Vec<usize>>,
     reads: Mutex<Vec<usize>>,
     uploads: Mutex<Vec<Vec<u8>>>,
+    flushes: Arc<AtomicUsize>,
 }
 
 impl CountingAllocator {
     pub(crate) fn new(alignment: usize) -> Self {
+        let flushes = AtomicUsize::new(0);
+
         Self {
             alignment,
             requests: Mutex::new(Vec::new()),
             reads: Mutex::new(Vec::new()),
             uploads: Mutex::new(Vec::new()),
+            flushes: Arc::new(flushes),
         }
     }
 
@@ -75,6 +88,12 @@ impl CountingAllocator {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
+    }
+
+    /// How many times queued work was submitted.
+    #[cfg(test)]
+    pub(crate) fn flushes(&self) -> usize {
+        self.flushes.load(Ordering::SeqCst)
     }
 }
 
@@ -125,6 +144,18 @@ impl DeviceAllocator for CountingAllocator {
 
         Box::pin(async move { Ok(buffers) })
     }
+
+    fn flush(&self) {
+        self.flushes.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn testing_capabilities(accelerator: Accelerator) -> Capabilities {
+    Capabilities::builder(accelerator)
+        .plane_size(16, 16)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .build()
 }
 
 /// A [FrameContext] over a fake allocator, for tests with no device.
@@ -135,11 +166,26 @@ impl DeviceAllocator for CountingAllocator {
 pub fn testing_context() -> FrameContext {
     let allocator = Arc::new(CountingAllocator::new(64));
     let accelerator = default_accelerators()[0];
-    let capabilities = Capabilities::builder(accelerator)
-        .plane_size(16, 16)
-        .max_units_per_cube(1024)
-        .max_cube_count(65535, 65535, 65535)
-        .build();
+    let capabilities = testing_capabilities(accelerator);
 
-    FrameContext::new(BufferPool::new(allocator), capabilities)
+    let policy = StreamPolicy::for_accelerator(accelerator);
+    let pool = BufferPool::new(allocator, policy);
+
+    FrameContext::new(pool, capabilities)
+}
+
+/// A [FrameContext] over a fake allocator under `policy`, with a count of how many times its
+/// queued work was flushed.
+#[cfg(any(test, feature = "test-support"))]
+pub fn flush_counting_context(policy: StreamPolicy) -> (FrameContext, Arc<AtomicUsize>) {
+    let counting = CountingAllocator::new(64);
+    let allocator = Arc::new(counting);
+    let flushes = allocator.flushes.clone();
+    let accelerator = default_accelerators()[0];
+    let capabilities = testing_capabilities(accelerator);
+
+    let pool = BufferPool::new(allocator, policy);
+    let context = FrameContext::new(pool, capabilities);
+
+    (context, flushes)
 }
