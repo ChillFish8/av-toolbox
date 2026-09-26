@@ -1,4 +1,5 @@
 use av_toolbox_core::StageError;
+use av_toolbox_gpu::{FrameFormat, FrameLayout, Subsampling};
 
 /// The output size and the part of the input it is made from, in input samples.
 ///
@@ -64,8 +65,152 @@ impl Window {
     }
 }
 
+/// Output sample `i` of one axis reads the input at `scale * i + offset`, in the plane's own samples.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub(crate) struct Axis {
+    pub(crate) scale: f32,
+    pub(crate) offset: f32,
+}
+
+/// The output size of one plane and where each of its axes reads from.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub(crate) struct PlaneShape {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) across: Axis,
+    pub(crate) down: Axis,
+}
+
+/// The shapes of every plane of a resize.
+///
+/// Chroma only has its own shape when it is subsampled. Every other plane is read like luma.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub(crate) struct Geometry {
+    pub(crate) luma: PlaneShape,
+    pub(crate) chroma: Option<PlaneShape>,
+}
+
+/// One axis of a window in luma samples.
+struct Span {
+    start: f32,
+    length: f32,
+    output: u32,
+}
+
+/// How many luma samples one chroma sample spans across and down.
+fn factors(subsampling: Subsampling) -> (u32, u32) {
+    match subsampling {
+        Subsampling::Yuv444 => (1, 1),
+        Subsampling::Yuv422 => (2, 1),
+        Subsampling::Yuv420 => (2, 2),
+    }
+}
+
+/// Maps one axis of a plane subsampled by `factor`, whose samples sit `siting` luma samples past
+/// `factor * i`.
+///
+/// Output luma sample `i` reads input luma position `start + (i + 0.5) * scale - 0.5`. A chroma
+/// sample is moved into luma space by its siting, mapped the same way, and moved back.
+fn axis(span: &Span, factor: u32, siting: f32) -> Axis {
+    let scale = span.length / span.output as f32;
+    let factor = factor as f32;
+    let luma_position = span.start + (siting + 0.5) * scale - 0.5;
+    let offset = (luma_position - siting) / factor;
+
+    Axis { scale, offset }
+}
+
+fn spans(input: &FrameFormat, window: &Window) -> (Span, Span) {
+    let across = Span {
+        start: window.src_left,
+        length: window.src_width.unwrap_or(input.width as f32),
+        output: window.width,
+    };
+    let down = Span {
+        start: window.src_top,
+        length: window.src_height.unwrap_or(input.height as f32),
+        output: window.height,
+    };
+
+    (across, down)
+}
+
+pub(crate) fn geometry(input: &FrameFormat, window: &Window) -> Geometry {
+    let (across, down) = spans(input, window);
+
+    let luma_across = axis(&across, 1, 0.0);
+    let luma_down = axis(&down, 1, 0.0);
+    let luma = PlaneShape {
+        width: window.width,
+        height: window.height,
+        across: luma_across,
+        down: luma_down,
+    };
+
+    let FrameLayout::Yuv { subsampling } = input.layout else {
+        return Geometry { luma, chroma: None };
+    };
+
+    if subsampling == Subsampling::Yuv444 {
+        return Geometry { luma, chroma: None };
+    }
+
+    let (factor_x, factor_y) = factors(subsampling);
+    let (siting_x, siting_y) = input.colour.chroma_location.offsets(factor_x, factor_y);
+    let (chroma_width, chroma_height) = subsampling.chroma_dimensions(window.width, window.height);
+    let chroma_across = axis(&across, factor_x, siting_x);
+    let chroma_down = axis(&down, factor_y, siting_y);
+    let chroma = PlaneShape {
+        width: chroma_width,
+        height: chroma_height,
+        across: chroma_across,
+        down: chroma_down,
+    };
+
+    Geometry {
+        luma,
+        chroma: Some(chroma),
+    }
+}
+
+fn not_divisible(stage: &str, field: &str, value: u32, factor: u32) -> StageError {
+    let message = format!("{stage} needs a {field} divisible by {factor} for this subsampling, got {value}");
+
+    StageError::msg(message)
+}
+
+/// Refuses an output size the input's subsampling cannot split evenly.
+pub(crate) fn check_output(input: &FrameFormat, window: &Window, stage: &str) -> Result<(), StageError> {
+    let FrameLayout::Yuv { subsampling } = input.layout else {
+        return Ok(());
+    };
+
+    let (factor_x, factor_y) = factors(subsampling);
+    if !window.width.is_multiple_of(factor_x) {
+        return Err(not_divisible(stage, "width", window.width, factor_x));
+    }
+
+    if !window.height.is_multiple_of(factor_y) {
+        return Err(not_divisible(stage, "height", window.height, factor_y));
+    }
+
+    Ok(())
+}
+
+/// Whether the resize would hand back exactly what it was given.
+pub(crate) fn is_identity(input: &FrameFormat, window: &Window) -> bool {
+    let (across, down) = spans(input, window);
+    let same_size = window.width == input.width && window.height == input.height;
+    let whole_across = across.start == 0.0 && across.length == input.width as f32;
+    let whole_down = down.start == 0.0 && down.length == input.height as f32;
+
+    same_size && whole_across && whole_down
+}
+
 #[cfg(test)]
 mod tests {
+    use av_toolbox_gpu::{ChromaLocation, ColourInfo, FrameLayout, SampleFormat, Subsampling};
+
     use super::*;
 
     fn window() -> Window {
@@ -139,5 +284,174 @@ mod tests {
         };
 
         assert!(shifted.check("resize/point").is_ok());
+    }
+
+    fn yuv(width: u32, height: u32, subsampling: Subsampling, location: ChromaLocation) -> FrameFormat {
+        let colour = ColourInfo {
+            chroma_location: location,
+            ..ColourInfo::default()
+        };
+
+        FrameFormat {
+            width,
+            height,
+            layout: FrameLayout::Yuv { subsampling },
+            sample: SampleFormat::U8,
+            colour,
+            frame_rate: None,
+        }
+    }
+
+    fn sized(width: u32, height: u32) -> Window {
+        Window {
+            width,
+            height,
+            ..window()
+        }
+    }
+
+    fn assert_axis(found: Axis, scale: f32, offset: f32) {
+        assert!(
+            (found.scale - scale).abs() < 1e-6,
+            "scale {} not {scale}",
+            found.scale
+        );
+        assert!(
+            (found.offset - offset).abs() < 1e-6,
+            "offset {} not {offset}",
+            found.offset
+        );
+    }
+
+    #[test]
+    fn luma_is_centre_aligned() {
+        let input = yuv(4, 4, Subsampling::Yuv444, ChromaLocation::Left);
+        let doubled = sized(8, 8);
+
+        let found = geometry(&input, &doubled);
+
+        assert_axis(found.luma.across, 0.5, -0.25);
+        assert_axis(found.luma.down, 0.5, -0.25);
+        assert_eq!(found.chroma, None);
+    }
+
+    #[test]
+    fn left_sited_chroma_doubles_where_it_sits() {
+        let input = yuv(8, 8, Subsampling::Yuv420, ChromaLocation::Left);
+        let doubled = sized(16, 16);
+
+        let found = geometry(&input, &doubled);
+        let chroma = found.chroma.expect("4:2:0 has its own chroma shape");
+
+        assert_eq!((chroma.width, chroma.height), (8, 8));
+        assert_axis(chroma.across, 0.5, -0.125);
+        assert_axis(chroma.down, 0.5, -0.25);
+    }
+
+    #[test]
+    fn centre_sited_chroma_doubles_where_it_sits() {
+        let input = yuv(8, 8, Subsampling::Yuv420, ChromaLocation::Center);
+        let doubled = sized(16, 16);
+
+        let found = geometry(&input, &doubled);
+        let chroma = found.chroma.expect("4:2:0 has its own chroma shape");
+
+        assert_axis(chroma.across, 0.5, -0.25);
+        assert_axis(chroma.down, 0.5, -0.25);
+    }
+
+    #[test]
+    fn left_sited_chroma_halves_where_it_sits() {
+        let input = yuv(16, 16, Subsampling::Yuv420, ChromaLocation::Left);
+        let halved = sized(8, 8);
+
+        let found = geometry(&input, &halved);
+        let chroma = found.chroma.expect("4:2:0 has its own chroma shape");
+
+        assert_eq!((chroma.width, chroma.height), (4, 4));
+        assert_axis(chroma.across, 2.0, 0.25);
+        assert_axis(chroma.down, 2.0, 0.5);
+    }
+
+    #[test]
+    fn centre_sited_chroma_halves_where_it_sits() {
+        let input = yuv(16, 16, Subsampling::Yuv420, ChromaLocation::Center);
+        let halved = sized(8, 8);
+
+        let found = geometry(&input, &halved);
+        let chroma = found.chroma.expect("4:2:0 has its own chroma shape");
+
+        assert_axis(chroma.across, 2.0, 0.5);
+        assert_axis(chroma.down, 2.0, 0.5);
+    }
+
+    #[test]
+    fn a_window_moves_and_scales_luma() {
+        let input = yuv(16, 16, Subsampling::Yuv444, ChromaLocation::Left);
+        let cropped = Window {
+            width: 4,
+            height: 2,
+            src_left: 2.0,
+            src_top: 4.0,
+            src_width: Some(4.0),
+            src_height: Some(2.0),
+        };
+
+        let found = geometry(&input, &cropped);
+
+        assert_axis(found.luma.across, 1.0, 2.0);
+        assert_axis(found.luma.down, 1.0, 4.0);
+    }
+
+    #[test]
+    fn a_422_frame_only_subsamples_across() {
+        let input = yuv(8, 6, Subsampling::Yuv422, ChromaLocation::Left);
+        let doubled = sized(16, 12);
+
+        let found = geometry(&input, &doubled);
+        let chroma = found.chroma.expect("4:2:2 has its own chroma shape");
+
+        assert_eq!((chroma.width, chroma.height), (8, 12));
+        assert_axis(chroma.down, 0.5, -0.25);
+    }
+
+    #[test]
+    fn an_odd_width_is_refused_at_420() {
+        let input = yuv(8, 8, Subsampling::Yuv420, ChromaLocation::Left);
+        let odd = sized(7, 8);
+
+        let error = check_output(&input, &odd, "resize/point").expect_err("7 is not even");
+
+        assert!(error.to_string().contains("width"));
+        assert!(error.to_string().contains('2'));
+    }
+
+    #[test]
+    fn an_odd_height_is_allowed_at_422() {
+        let input = yuv(8, 8, Subsampling::Yuv422, ChromaLocation::Left);
+        let odd = sized(8, 7);
+
+        let checked = check_output(&input, &odd, "resize/point");
+
+        assert!(checked.is_ok());
+    }
+
+    #[test]
+    fn a_resize_to_the_same_size_over_the_whole_frame_is_identity() {
+        let input = yuv(8, 8, Subsampling::Yuv420, ChromaLocation::Left);
+        let same = sized(8, 8);
+        let explicit = Window {
+            src_width: Some(8.0),
+            src_height: Some(8.0),
+            ..same
+        };
+        let shifted = Window {
+            src_left: 0.5,
+            ..same
+        };
+
+        assert!(is_identity(&input, &same));
+        assert!(is_identity(&input, &explicit));
+        assert!(!is_identity(&input, &shifted));
     }
 }
