@@ -155,7 +155,7 @@ fn recovering_shadows_gives_the_same_mask_when_a_frame_comes_round_again() {
     assert_eq!(masks[0], masks[2]);
 }
 
-/// A single column of bright samples over dark ones, with a darker line at the step.
+/// A single column of bright samples over dark ones, with one mid-tone sample at the step.
 const STEPPED_COLUMN: [u8; 9] = [200, 200, 200, 100, 30, 30, 30, 30, 30];
 
 fn recovered_with(luma: Vec<u8>, width: u32, height: u32, min_speck: u32) -> (Vec<u8>, Vec<u8>) {

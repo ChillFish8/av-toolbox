@@ -361,7 +361,9 @@ const TILES: u32 = 8;
 const LEVELS: usize = 256;
 
 fn level_of(value: f32) -> usize {
-    (value * 255.0).round().clamp(0.0, 255.0) as usize
+    let top_level = (LEVELS - 1) as f32;
+
+    (value * top_level).round().clamp(0.0, top_level) as usize
 }
 
 /// CLAHE over an 8x8 grid of equal tiles, extending the image with reflect-101 samples until each
