@@ -1,0 +1,30 @@
+# Reads a y4m stream from standard input, finds its line art and paints the lines one colour, writing the result
+# to standard output.
+#
+# solid/like makes a frame of the colour in the input's size and format for every input frame, which
+# blend/masked then takes wherever a line was found.
+
+[variable.colour]
+type = "string"
+description = "The colour to paint the lines, as #rrggbb"
+default = "#ff0000"
+
+[source.input]
+type = "y4m/stdin"
+
+[mask.lines]
+type = "lines/xdog"
+inputs = ["input"]
+
+[filter.paint]
+type = "solid/like"
+inputs = ["input"]
+args.colour = "{{ colour }}"
+
+[filter.blend]
+type = "blend/masked"
+inputs = ["input", "paint", "lines"]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["blend"]

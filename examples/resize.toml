@@ -1,0 +1,30 @@
+# Reads a y4m stream from standard input, resizes it with a Spline36 kernel and writes it to standard output.
+#
+# The other kernels are resize/point, resize/bilinear, resize/bicubic, resize/lanczos, resize/spline16 and
+# resize/spline64. Any of them can also crop or shift the picture with src_left, src_top, src_width and
+# src_height.
+
+[variable.width]
+type = "integer"
+description = "The output width"
+default = 1280
+min = 1
+
+[variable.height]
+type = "integer"
+description = "The output height"
+default = 720
+min = 1
+
+[source.input]
+type = "y4m/stdin"
+
+[filter.resize]
+type = "resize/spline36"
+inputs = ["input"]
+args.width = "{{ width }}"
+args.height = "{{ height }}"
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["resize"]

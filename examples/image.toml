@@ -1,0 +1,42 @@
+# Shows a PNG or JPEG image for a number of frames, resized with a Lanczos kernel, and writes it to standard
+# output.
+
+[variable.image]
+type = "path"
+description = "The image to show"
+default = "image.png"
+
+[variable.frames]
+type = "integer"
+description = "How many frames to write"
+default = 48
+min = 1
+
+[variable.width]
+type = "integer"
+description = "The output width"
+default = 1280
+min = 1
+
+[variable.height]
+type = "integer"
+description = "The output height"
+default = 720
+min = 1
+
+[source.image]
+type = "image/file"
+args.path = "{{ image }}"
+args.frames = "{{ frames }}"
+args.format = "yuv444p"
+args.frame_rate = [24, 1]
+
+[filter.resize]
+type = "resize/lanczos"
+inputs = ["image"]
+args.width = "{{ width }}"
+args.height = "{{ height }}"
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["resize"]

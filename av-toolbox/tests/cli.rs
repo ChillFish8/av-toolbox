@@ -29,7 +29,18 @@ fn written(content: &str) -> tempfile::NamedTempFile {
 
 #[test]
 fn every_example_explains_without_a_device() {
-    for name in ["passthrough.toml", "scenes.toml", "chunked.toml", "metadata.toml"] {
+    let names = [
+        "passthrough.toml",
+        "scenes.toml",
+        "chunked.toml",
+        "metadata.toml",
+        "resize.toml",
+        "solid.toml",
+        "image.toml",
+        "recolour-lines.toml",
+    ];
+
+    for name in names {
         let path = example(name);
         let path = path.to_str().expect("utf-8 path");
 
@@ -356,7 +367,7 @@ fn a_var_without_equals_exits_two() {
 #[cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::{Command, Output, Stdio};
     use std::thread;
 
     use super::{example, text};
@@ -570,5 +581,98 @@ args.path = "{output_path}"
 
         assert!(output.status.success(), "{stderr}");
         assert!(output.stdout.starts_with(b"YUV4MPEG2"));
+    }
+
+    /// Runs an example with `vars`, feeding it `input` on standard input.
+    fn execute(name: &str, vars: &[&str], input: Vec<u8>) -> Output {
+        let path = example(name);
+        let path = path.to_str().expect("utf-8 path");
+        let var_args = vars.iter().flat_map(|var| ["--var", var]);
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args(["--color", "never", "execute", path])
+            .args(var_args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the binary runs");
+
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let feeder = thread::spawn(move || {
+            stdin.write_all(&input).expect("writes the stream");
+        });
+
+        let output = child.wait_with_output().expect("the binary finishes");
+        feeder.join().expect("the feeder thread finishes");
+
+        output
+    }
+
+    /// The width, height and frame count of a y4m stream.
+    fn shape_of(stream: &[u8]) -> (usize, usize, u64) {
+        let mut decoder = y4m::decode(stream).expect("a y4m stream");
+        let width = decoder.get_width();
+        let height = decoder.get_height();
+
+        let mut frames = 0;
+        while decoder.read_frame().is_ok() {
+            frames += 1;
+        }
+
+        (width, height, frames)
+    }
+
+    #[test]
+    fn executing_the_resize_example_writes_the_new_size() {
+        let input = y4m_stream();
+
+        let output = execute("resize.toml", &["width=32", "height=24"], input);
+        let stderr = text(&output.stderr);
+
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(shape_of(&output.stdout), (32, 24, FRAME_COUNT));
+    }
+
+    #[test]
+    fn executing_the_solid_example_writes_its_frames() {
+        let vars = ["width=64", "height=48", "frames=3"];
+
+        let output = execute("solid.toml", &vars, Vec::new());
+        let stderr = text(&output.stderr);
+
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(shape_of(&output.stdout), (64, 48, 3));
+    }
+
+    #[test]
+    fn executing_the_image_example_writes_the_resized_image() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let image_path = directory.path().join("orange.png");
+        let orange = image::RgbImage::from_pixel(10, 6, image::Rgb([255, 128, 0]));
+        orange.save(&image_path).expect("writes the image");
+        let image_path = image_path.to_str().expect("utf-8 path");
+        let image_var = format!("image={image_path}");
+        let vars = [image_var.as_str(), "frames=2", "width=20", "height=12"];
+
+        let output = execute("image.toml", &vars, Vec::new());
+        let stderr = text(&output.stderr);
+
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(shape_of(&output.stdout), (20, 12, 2));
+    }
+
+    #[test]
+    fn executing_the_recolour_lines_example_keeps_the_input_shape() {
+        let input = textured_y4m_stream();
+
+        let output = execute("recolour-lines.toml", &[], input);
+        let stderr = text(&output.stderr);
+
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(
+            shape_of(&output.stdout),
+            (FRAME_SIZE, FRAME_SIZE, METADATA_FRAME_COUNT)
+        );
     }
 }

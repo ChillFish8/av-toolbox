@@ -1,0 +1,36 @@
+# Writes a clip of a single colour to standard output.
+
+[variable.colour]
+type = "string"
+description = "The colour of every pixel, as #rrggbb"
+default = "#202020"
+
+[variable.width]
+type = "integer"
+description = "The frame width"
+default = 1920
+min = 2
+
+[variable.height]
+type = "integer"
+description = "The frame height"
+default = 1080
+min = 2
+
+[variable.frames]
+type = "integer"
+description = "How many frames to write"
+default = 48
+min = 1
+
+[source.fill]
+type = "solid/fill"
+args.colour = "{{ colour }}"
+args.width = "{{ width }}"
+args.height = "{{ height }}"
+args.frames = "{{ frames }}"
+args.frame_rate = [24, 1]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["fill"]

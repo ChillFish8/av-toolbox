@@ -86,6 +86,19 @@ show up as `<call>.<stage>`, such as `scenes.detect`.
 av-toolbox execute examples/chunked.toml < input.y4m > output.y4m
 ```
 
+## Resizing and generated frames
+
+The `resize/*` filters resize a clip with a point, bilinear, bicubic, lanczos or spline kernel. `solid/fill` and
+`image/file` make a clip from a colour or a PNG or JPEG image, and `solid/like` and `image/like` make one in the
+size, format and length of another clip.
+
+```bash
+av-toolbox execute examples/resize.toml --var width=1280 --var height=720 < input.y4m > output.y4m
+av-toolbox execute examples/solid.toml --var colour=#202020 > solid.y4m
+av-toolbox execute examples/image.toml --var image=logo.png > logo.y4m
+av-toolbox execute examples/recolour-lines.toml --var colour=#ff0000 < input.y4m > output.y4m
+```
+
 ## Drawing a pipeline
 
 ```bash
