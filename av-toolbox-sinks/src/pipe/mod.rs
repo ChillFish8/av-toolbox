@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::path::PathBuf;
 
 use av_toolbox_core::{BoundInputs, InputSignature, Sink, SinkDefinition, StageDefinition, StageError};
@@ -15,7 +14,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::shared::{INPUTS, RateArg, Y4mSink, accepts, open_target, writer_for};
+use crate::shared::{INPUTS, RateArg, TargetFile, Y4mSink, accepts, open_target, writer_for};
 
 /// Arguments for `y4m/pipe`, which takes exactly one of `fd` or `path`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -74,7 +73,7 @@ impl SinkDefinition for Pipe {
     }
 }
 
-fn sink_for(args: &PipeArgs, formats: &ResolvedFormats) -> Result<Y4mSink<File>, StageError> {
+fn sink_for(args: &PipeArgs, formats: &ResolvedFormats) -> Result<Y4mSink<TargetFile<'static>>, StageError> {
     let path = args.path.as_deref();
     let file = open_target("y4m/pipe", args.fd, path)?;
     let writer = writer_for(file, formats, args.frame_rate)?;
@@ -111,7 +110,7 @@ mod tests {
         }
     }
 
-    fn write_frames(sink: &mut Y4mSink<File>, count: u64) {
+    fn write_frames(sink: &mut Y4mSink<TargetFile<'static>>, count: u64) {
         let rate = FrameRate::new(25, 1);
         let format = yuv420(4, 2, SampleFormat::U8, rate);
 

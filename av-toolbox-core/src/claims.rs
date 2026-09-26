@@ -1,19 +1,42 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 static PROCESS_CLAIMS: LazyLock<Claims> = LazyLock::new(Claims::new);
 
 /// The standard streams and descriptors stages have taken ownership of.
 ///
-/// A claim is never given back, since a closed descriptor's number can be reused by an unrelated
-/// file.
+/// A standard stream stays claimed for the life of the process. A descriptor is claimed for as long
+/// as its [DescriptorClaim](crate::DescriptorClaim) is held.
 #[derive(Debug, Default)]
 pub struct Claims {
     stdin: AtomicBool,
     stdout: AtomicBool,
     descriptors: Mutex<HashSet<i32>>,
+}
+
+/// A claimed descriptor, given back when this is dropped.
+///
+/// Drop it only after the descriptor is closed, so no other stage can claim it while it is still open.
+#[derive(Debug)]
+#[must_use = "the descriptor is given back as soon as the claim is dropped"]
+pub struct DescriptorClaim<'a> {
+    claims: &'a Claims,
+    fd: i32,
+}
+
+impl DescriptorClaim<'_> {
+    pub const fn fd(&self) -> i32 {
+        self.fd
+    }
+}
+
+impl Drop for DescriptorClaim<'_> {
+    fn drop(&mut self) {
+        let mut claimed = self.claims.claimed_descriptors();
+        claimed.remove(&self.fd);
+    }
 }
 
 /// Why a claim was refused.
@@ -54,22 +77,23 @@ impl Claims {
         Ok(())
     }
 
-    pub fn claim_descriptor(&self, fd: i32) -> Result<(), ClaimError> {
+    pub fn claim_descriptor(&self, fd: i32) -> Result<DescriptorClaim<'_>, ClaimError> {
         if (0..=2).contains(&fd) {
             return Err(ClaimError::StandardDescriptor(fd));
         }
 
-        let mut claimed = self
-            .descriptors
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut claimed = self.claimed_descriptors();
         let newly_claimed = claimed.insert(fd);
 
         if !newly_claimed {
             return Err(ClaimError::DescriptorTaken(fd));
         }
 
-        Ok(())
+        Ok(DescriptorClaim { claims: self, fd })
+    }
+
+    fn claimed_descriptors(&self) -> MutexGuard<'_, HashSet<i32>> {
+        self.descriptors.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -101,8 +125,33 @@ mod tests {
         let first = claims.claim_descriptor(7);
         let second = claims.claim_descriptor(7);
 
-        assert_eq!(first, Ok(()));
-        assert_eq!(second, Err(ClaimError::DescriptorTaken(7)));
+        let held = first.expect("the first claim succeeds");
+        assert_eq!(held.fd(), 7);
+        assert_eq!(second.err(), Some(ClaimError::DescriptorTaken(7)));
+    }
+
+    #[test]
+    fn a_dropped_claim_gives_its_descriptor_back() {
+        let claims = Claims::new();
+
+        let first = claims.claim_descriptor(7).expect("the first claim succeeds");
+        drop(first);
+        let second = claims.claim_descriptor(7);
+
+        assert!(second.is_ok());
+    }
+
+    #[test]
+    fn dropping_one_claim_leaves_the_others_held() {
+        let claims = Claims::new();
+
+        let seven = claims.claim_descriptor(7).expect("7 is free");
+        let eight = claims.claim_descriptor(8).expect("8 is free");
+        drop(seven);
+        let again = claims.claim_descriptor(8);
+
+        assert_eq!(again.err(), Some(ClaimError::DescriptorTaken(8)));
+        drop(eight);
     }
 
     #[test]
@@ -110,10 +159,9 @@ mod tests {
         let claims = Claims::new();
 
         for fd in 0..=2 {
-            assert_eq!(
-                claims.claim_descriptor(fd),
-                Err(ClaimError::StandardDescriptor(fd))
-            );
+            let refused = claims.claim_descriptor(fd);
+
+            assert_eq!(refused.err(), Some(ClaimError::StandardDescriptor(fd)));
         }
     }
 

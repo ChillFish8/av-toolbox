@@ -1,12 +1,21 @@
 use std::fs::File;
-use std::io::BufReader;
+use std::io;
+use std::io::{BufReader, Read};
 #[cfg(unix)]
 use std::os::fd::{FromRawFd, RawFd};
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 
-use av_toolbox_core::{BoundInputs, InputSignature, Source, SourceDefinition, StageDefinition, StageError};
+use av_toolbox_core::{
+    BoundInputs,
+    DescriptorClaim,
+    InputSignature,
+    Source,
+    SourceDefinition,
+    StageDefinition,
+    StageError,
+};
 #[cfg(unix)]
 use av_toolbox_core::{ClaimError, Claims};
 use av_toolbox_gpu::{BuildContext, Capabilities, HostSide, OutputFormats, ResolvedFormats, Runtime};
@@ -24,7 +33,27 @@ pub(crate) struct PipeArgs {
     pub(crate) path: Option<PathBuf>,
 }
 
-pub(crate) type Opened = Y4mReader<BufReader<File>>;
+pub(crate) type Opened = Y4mReader<BufReader<PipeFile<'static>>>;
+
+/// A file a pipe reads, holding its descriptor's claim until the file is closed.
+#[derive(Debug)]
+pub(crate) struct PipeFile<'a> {
+    // Declared before the claim so the descriptor is closed before its claim is given back.
+    file: File,
+    _claim: Option<DescriptorClaim<'a>>,
+}
+
+impl PipeFile<'_> {
+    fn unclaimed(file: File) -> Self {
+        Self { file, _claim: None }
+    }
+}
+
+impl Read for PipeFile<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.file.read(buffer)
+    }
+}
 
 pub(crate) struct Pipe;
 
@@ -54,7 +83,11 @@ impl SourceDefinition for Pipe {
     fn open(args: &Self::Args) -> Result<Self::Opened, StageError> {
         let file = match (args.fd, &args.path) {
             (Some(fd), None) => file_from_fd(fd)?,
-            (None, Some(path)) => open_path(path)?,
+            (None, Some(path)) => {
+                let opened = open_path(path)?;
+
+                PipeFile::unclaimed(opened)
+            },
             _ => return Err(StageError::msg("y4m/pipe takes exactly one of fd or path")),
         };
 
@@ -91,15 +124,15 @@ impl SourceDefinition for Pipe {
 }
 
 #[cfg(unix)]
-fn file_from_fd(fd: u32) -> Result<File, StageError> {
+fn file_from_fd(fd: u32) -> Result<PipeFile<'static>, StageError> {
     let claims = Claims::process();
 
     claimed_file(claims, fd)
 }
 
-/// Claims `fd` and takes ownership of it as a file.
+/// Claims `fd` and takes ownership of it as a file, giving the claim back once the file is closed.
 #[cfg(unix)]
-fn claimed_file(claims: &Claims, fd: u32) -> Result<File, StageError> {
+fn claimed_file(claims: &Claims, fd: u32) -> Result<PipeFile<'_>, StageError> {
     let parsed = RawFd::try_from(fd);
     let raw = parsed.map_err(|_| {
         let message = format!("{fd} is not a valid file descriptor");
@@ -108,13 +141,16 @@ fn claimed_file(claims: &Claims, fd: u32) -> Result<File, StageError> {
     })?;
 
     let claimed = claims.claim_descriptor(raw);
-    claimed.map_err(|error| claim_error(raw, error))?;
+    let claim = claimed.map_err(|error| claim_error(raw, error))?;
 
     // SAFETY: the pipeline was given this descriptor to read, and the claim has just made this
     // source its only owner, from here until the source drops.
     let file = unsafe { File::from_raw_fd(raw) };
 
-    Ok(file)
+    Ok(PipeFile {
+        file,
+        _claim: Some(claim),
+    })
 }
 
 #[cfg(unix)]
@@ -131,7 +167,7 @@ fn claim_error(fd: RawFd, error: ClaimError) -> StageError {
 }
 
 #[cfg(not(unix))]
-fn file_from_fd(_fd: u32) -> Result<File, StageError> {
+fn file_from_fd(_fd: u32) -> Result<PipeFile<'static>, StageError> {
     Err(StageError::msg(
         "y4m/pipe can only read a file descriptor on Unix, use path instead",
     ))
@@ -272,6 +308,23 @@ mod tests {
 
         let error = second.expect_err("the descriptor is already claimed");
         assert!(error.to_string().contains("already"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_closed_pipe_gives_its_descriptor_back() {
+        use std::os::fd::IntoRawFd;
+
+        let claims = Claims::new();
+        let (reader, _writer) = std::io::pipe().expect("a pipe");
+        let raw = reader.into_raw_fd();
+        let fd = raw as u32;
+
+        let file = claimed_file(&claims, fd).expect("claims the descriptor");
+        drop(file);
+        let again = claims.claim_descriptor(raw);
+
+        assert!(again.is_ok());
     }
 
     #[cfg(unix)]

@@ -43,7 +43,7 @@ mod tests;
 
 pub use av_toolbox_gpu::{AnyItem, DeviceSide, HostSide, Side};
 
-pub use self::claims::{ClaimError, Claims};
+pub use self::claims::{ClaimError, Claims, DescriptorClaim};
 pub use self::crossing::Crossing;
 pub use self::error::{
     ArgsError,

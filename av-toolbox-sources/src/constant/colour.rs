@@ -16,7 +16,14 @@ pub(crate) enum Colour {
     /// An RGB colour with each channel between 0 and 255.
     Rgb([u8; 3]),
     /// Raw sample values in the output format, one per plane in plane order.
-    Planes { planes: Vec<u16> },
+    Planes(PlaneValues),
+}
+
+/// Raw sample values, one per plane in plane order.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlaneValues {
+    pub(crate) planes: Vec<u16>,
 }
 
 fn bad_hex(stage: &str, text: &str) -> StageError {
@@ -65,7 +72,7 @@ impl Colour {
                 Ok(one_pixel(channels))
             },
             Self::Rgb(channels) => Ok(one_pixel(*channels)),
-            Self::Planes { planes } => Ok(Picture::Planes(planes.clone())),
+            Self::Planes(values) => Ok(Picture::Planes(values.planes.clone())),
         }
     }
 }
@@ -150,5 +157,14 @@ mod tests {
 
             assert!(error.to_string().contains("#rrggbb"), "{error}");
         }
+    }
+
+    #[test]
+    fn planes_with_an_extra_key_are_refused() {
+        let value = json!({ "planes": [16, 128, 128], "extra": 1 });
+
+        let error = parse(value).expect_err("extra is not a colour setting");
+
+        assert!(error.to_string().contains("#rrggbb"), "{error}");
     }
 }
