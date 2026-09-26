@@ -3,6 +3,7 @@
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 
 mod blend;
+mod resize;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
