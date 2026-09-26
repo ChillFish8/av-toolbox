@@ -133,6 +133,11 @@ impl CompiledPipeline<'_, '_> {
         &self.graph
     }
 
+    /// The format settled on each node's inputs and output.
+    pub fn formats(&self) -> &SolvedFormats {
+        &self.formats
+    }
+
     pub fn render_ascii(&self) -> String {
         let options = RenderOptions::default();
         render_ascii(&self.graph, &options)

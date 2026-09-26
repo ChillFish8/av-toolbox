@@ -1,0 +1,52 @@
+# Reads two y4m clips of the same format, finds the line art in the first, and writes the first
+# clip with the second clip's pixels wherever a line was found.
+
+[variable.base]
+type = "path"
+description = "The clip to find lines in, kept everywhere else"
+default = "base.y4m"
+
+[variable.overlay]
+type = "path"
+description = "The clip whose pixels replace the lines"
+default = "overlay.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.base]
+type = "y4m/pipe"
+args.path = "{{ base }}"
+
+[source.overlay]
+type = "y4m/pipe"
+args.path = "{{ overlay }}"
+
+[mask.xdog]
+type = "lines/xdog"
+inputs = ["base"]
+
+[mask.adaptive]
+type = "lines/adaptive"
+inputs = ["base"]
+
+[mask.shadows]
+type = "lines/adaptive"
+inputs = ["base"]
+args.recover_shadows = true
+
+[mask.lines]
+type = "mask/vote"
+inputs = ["xdog", "adaptive", "shadows"]
+args.votes = 2
+
+[filter.blend]
+type = "blend/masked"
+inputs = ["base", "overlay", "lines"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["blend"]
+args.path = "{{ output }}"
