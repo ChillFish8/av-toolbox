@@ -172,6 +172,9 @@ impl ExecutionPlan {
 /// node joins its producer's region when every input comes from that one region and the width
 /// matches, and heads a region of its own otherwise. A crossing only joins when it is its
 /// producer's only consumer.
+///
+/// A region may have at most one exit. When one has more, a node at its branch is sealed, so
+/// nothing reading it may join its region, and the regions are placed again.
 pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<ExecutionPlan, Diagnostics> {
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
@@ -181,6 +184,7 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
         prepared,
         nodes: (0..graph.len()).map(|_| None).collect(),
         regions: Vec::new(),
+        sealed: vec![false; graph.len()],
         diagnostics,
     };
 
@@ -189,11 +193,22 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
         planner.decide(*id);
     }
 
-    for id in graph.order() {
-        planner.place_in_region(*id);
+    // A region with more than one exit always yields a node not sealed before, so the loop ends.
+    loop {
+        planner.place_regions();
+        planner.compute_exits();
+
+        let sealed_any = planner.seal_regions_with_many_exits();
+        if !sealed_any {
+            break;
+        }
     }
 
-    planner.compute_exits();
+    debug_assert!(
+        planner.regions.iter().all(|region| region.exits.len() <= 1),
+        "every region has at most one exit once sealing ends",
+    );
+
     planner.compute_routing();
 
     planner.finish()
@@ -205,6 +220,7 @@ struct Planner<'a> {
     prepared: Vec<Option<PreparedStage>>,
     nodes: Vec<Option<NodePlan>>,
     regions: Vec<Region>,
+    sealed: Vec<bool>,
     diagnostics: Diagnostics,
 }
 
@@ -292,6 +308,16 @@ impl Planner<'_> {
         self.nodes[id.index()].as_ref().map(NodePlan::width).unwrap_or(1)
     }
 
+    /// Places every node into a region from scratch, in topological order.
+    fn place_regions(&mut self) {
+        self.regions.clear();
+
+        let graph = self.graph;
+        for id in graph.order() {
+            self.place_in_region(*id);
+        }
+    }
+
     /// Places one node into a region, following a producer's region or opening a new one.
     fn place_in_region(&mut self, id: NodeId) {
         let width = self.width_of(id);
@@ -318,8 +344,16 @@ impl Planner<'_> {
     }
 
     /// The one region every input already shares, when its width matches this node's own.
+    ///
+    /// A sealed input never counts, so a node reading one heads a region of its own.
     fn shared_producer_region(&self, sources: &[NodeId], width: usize) -> Option<RegionId> {
         let first_source = *sources.first()?;
+
+        let any_sealed = sources.iter().any(|source| self.sealed[source.index()]);
+        if any_sealed {
+            return None;
+        }
+
         let candidate = self.region_of(first_source);
 
         let all_agree = sources.iter().all(|source| self.region_of(*source) == candidate);
@@ -406,6 +440,51 @@ impl Planner<'_> {
                 })
                 .collect();
         }
+    }
+
+    /// Seals one branch in every region with more than one exit, returning whether any node was
+    /// newly sealed.
+    fn seal_regions_with_many_exits(&mut self) -> bool {
+        let mut to_seal = Vec::new();
+
+        for region in &self.regions {
+            if region.exits.len() > 1 {
+                let branch = self.branch_of(region);
+                to_seal.extend(branch);
+            }
+        }
+
+        let mut sealed_any = false;
+        for id in to_seal {
+            let already_sealed = self.sealed[id.index()];
+            self.sealed[id.index()] = true;
+            sealed_any |= !already_sealed;
+        }
+
+        sealed_any
+    }
+
+    /// The nodes to seal so a region's earliest exit stops sharing the region with another.
+    ///
+    /// The earliest exit is sealed itself when another member reads it. Otherwise its producers
+    /// inside the region are sealed, since the region branches there instead.
+    fn branch_of(&self, region: &Region) -> Vec<NodeId> {
+        let earliest_exit = region.exits[0];
+        let node = self.graph.node(earliest_exit);
+
+        let read_inside = node
+            .consumers()
+            .iter()
+            .any(|consumer| self.region_of(*consumer) == region.id);
+        if read_inside {
+            return vec![earliest_exit];
+        }
+
+        node.inputs()
+            .iter()
+            .map(|edge| edge.source())
+            .filter(|source| self.region_of(*source) == region.id)
+            .collect()
     }
 
     /// Settles how each region routes, once every node has joined one.
@@ -536,471 +615,4 @@ fn clamp_to_granularity(
     }
 
     (1, Some(Narrowed::Granularity))
-}
-
-#[cfg(test)]
-mod tests {
-    use av_toolbox_core::StageKind;
-    use serde_json::json;
-
-    use super::*;
-    use crate::graph::Node;
-    use crate::{
-        Diagnostics,
-        Severity,
-        Spanned,
-        StageSpec,
-        build,
-        place_transfers,
-        residency,
-        solve,
-        testing,
-    };
-
-    fn source(name: &str) -> StageSpec {
-        testing::spec(StageKind::Source, name, "test/wide")
-    }
-
-    fn sink(name: &str, from: &str) -> StageSpec {
-        let mut spec = testing::spec(StageKind::Sink, name, "test/stdout");
-        spec.inputs = vec![testing::positional(from)];
-
-        spec
-    }
-
-    fn temporal(name: &str, input: &str, radius: u32) -> StageSpec {
-        let mut spec = testing::spec(StageKind::Filter, name, "test/temporal");
-        spec.inputs = vec![testing::positional(input)];
-        spec.args = Spanned::unknown(json!({ "radius": radius }));
-
-        spec
-    }
-
-    fn plan_of(specs: &[StageSpec]) -> ExecutionPlan {
-        let registry = testing::registry();
-        let graph = build(&registry, specs).expect("should build").into_graph();
-
-        plan(&graph, &registry).expect("should plan")
-    }
-
-    /// Plans a graph while keeping the graph itself around, for a test that needs to look at an
-    /// edge alongside the plan.
-    fn graph_and_plan_of(specs: &[StageSpec]) -> (CompiledGraph, ExecutionPlan) {
-        let registry = testing::registry();
-        let graph = build(&registry, specs).expect("should build").into_graph();
-        let made = plan(&graph, &registry).expect("should plan");
-
-        (graph, made)
-    }
-
-    fn placed_graph_and_plan_of(specs: &[StageSpec]) -> (CompiledGraph, ExecutionPlan) {
-        let registry = testing::registry();
-        let capabilities = residency::tests::capabilities();
-        let mut graph = build(&registry, specs).expect("should build").into_graph();
-        let mut formats = solve(&graph, &registry, &capabilities).expect("should solve");
-        place_transfers(&mut graph, &registry, &mut formats).expect("should place");
-        let made = plan(&graph, &registry).expect("should plan");
-
-        (graph, made)
-    }
-
-    fn node_named(graph: &CompiledGraph, name: &str) -> NodeId {
-        graph
-            .nodes()
-            .iter()
-            .find(|node| node.name() == name)
-            .map(Node::id)
-            .expect("a node with that name")
-    }
-
-    fn plan_error(specs: &[StageSpec]) -> Diagnostics {
-        let registry = testing::registry();
-        let graph = build(&registry, specs).expect("should build").into_graph();
-
-        plan(&graph, &registry).expect_err("should fail to plan")
-    }
-
-    #[test]
-    fn a_stage_that_asked_for_nothing_runs_one_wide() {
-        let plan = plan_of(&[source("input"), sink("out", "input")]);
-
-        assert_eq!(plan.node(NodeId::new(0)).width(), 1);
-        assert_eq!(plan.node(NodeId::new(0)).narrowed(), Some(Narrowed::NotAsked));
-    }
-
-    #[test]
-    fn a_frame_stage_widens_to_what_it_asked_for() {
-        let mut spatial = temporal("spatial", "input", 0);
-        spatial.workers = Some(4);
-
-        let plan = plan_of(&[source("input"), spatial, sink("out", "spatial")]);
-
-        assert_eq!(plan.node(NodeId::new(1)).parallelism(), Parallelism::Frame);
-        assert_eq!(plan.node(NodeId::new(1)).width(), 4);
-        assert_eq!(plan.node(NodeId::new(1)).narrowed(), None);
-    }
-
-    #[test]
-    fn a_width_propagates_to_a_consumer_that_asked_for_nothing() {
-        let mut spatial = temporal("spatial", "input", 0);
-        spatial.workers = Some(4);
-        let next = temporal("next", "spatial", 0);
-
-        let plan = plan_of(&[source("input"), spatial, next, sink("out", "next")]);
-
-        assert_eq!(plan.node(NodeId::new(2)).width(), 4);
-    }
-
-    /// A sink is `Stream`, so a width reaching it stops rather than carrying on.
-    #[test]
-    fn a_stream_stage_stays_one_wide_however_wide_its_input_is() {
-        let mut spatial = temporal("spatial", "input", 0);
-        spatial.workers = Some(4);
-
-        let plan = plan_of(&[source("input"), spatial, sink("out", "spatial")]);
-
-        assert_eq!(plan.node(NodeId::new(2)).width(), 1);
-        assert_eq!(plan.node(NodeId::new(2)).narrowed(), Some(Narrowed::Granularity));
-    }
-
-    #[test]
-    fn a_stream_stage_asked_to_widen_is_an_error() {
-        let mut sink = sink("out", "input");
-        sink.workers = Some(4);
-
-        let diagnostics = plan_error(&[source("input"), sink]);
-
-        assert_eq!(diagnostics.iter().count(), 1);
-        let reported = diagnostics.iter().next().expect("a diagnostic");
-        assert_eq!(reported.code(), DiagnosticCode::InvalidWorkers);
-        assert!(reported.message().contains("whole stream"));
-    }
-
-    #[test]
-    fn asking_for_no_workers_at_all_is_an_error() {
-        let mut spatial = temporal("spatial", "input", 0);
-        spatial.workers = Some(0);
-
-        let diagnostics = plan_error(&[source("input"), spatial, sink("out", "spatial")]);
-
-        let reported = diagnostics.iter().next().expect("a diagnostic");
-        assert_eq!(reported.code(), DiagnosticCode::InvalidWorkers);
-    }
-
-    /// `test/temporal-merge` at `radius: 0` is `Frame`, so nothing about its own granularity
-    /// stops it widening. The mismatch between its two branches is the only reason it narrows.
-    #[test]
-    fn a_stage_reading_two_differently_widened_branches_narrows_to_one() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-        let narrow = temporal("narrow", "input", 0);
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/temporal-merge");
-        merge.inputs = vec![testing::positional("wide"), testing::positional("narrow")];
-        merge.args = Spanned::unknown(json!({ "radius": 0 }));
-
-        let plan = plan_of(&[source("input"), wide, narrow, merge, sink("out", "merge")]);
-
-        assert_eq!(plan.node(NodeId::new(3)).width(), 1);
-        assert_eq!(plan.node(NodeId::new(3)).narrowed(), Some(Narrowed::MixedInputs));
-    }
-
-    #[test]
-    fn a_stream_node_with_disagreeing_input_widths_reports_granularity() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-        let mut narrow = temporal("narrow", "input", 0);
-        narrow.workers = Some(2);
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/merge");
-        merge.inputs = vec![testing::positional("wide"), testing::positional("narrow")];
-
-        let plan = plan_of(&[source("input"), wide, narrow, merge, sink("out", "merge")]);
-
-        assert_eq!(plan.node(NodeId::new(3)).width(), 1);
-        assert_eq!(plan.node(NodeId::new(3)).narrowed(), Some(Narrowed::Granularity));
-    }
-
-    #[test]
-    fn a_chain_of_equal_width_nodes_is_one_region() {
-        let mut first = temporal("first", "input", 0);
-        first.workers = Some(4);
-        let second = temporal("second", "first", 0);
-
-        let plan = plan_of(&[source("input"), first, second, sink("out", "second")]);
-
-        let first_region = plan.node(NodeId::new(1)).region();
-        assert_eq!(plan.node(NodeId::new(2)).region(), first_region);
-        assert_eq!(
-            plan.region(first_region).nodes(),
-            &[NodeId::new(1), NodeId::new(2)]
-        );
-    }
-
-    #[test]
-    fn a_change_of_width_starts_a_new_region() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-
-        let plan = plan_of(&[source("input"), wide, sink("out", "wide")]);
-
-        assert_ne!(
-            plan.node(NodeId::new(0)).region(),
-            plan.node(NodeId::new(1)).region()
-        );
-        assert_ne!(
-            plan.node(NodeId::new(1)).region(),
-            plan.node(NodeId::new(2)).region()
-        );
-    }
-
-    /// A fan out and fan in below one widened stage runs entirely in one worker.
-    #[test]
-    fn a_diamond_below_one_widened_stage_stays_in_one_region() {
-        let mut spread = temporal("spread", "input", 0);
-        spread.workers = Some(4);
-        let left = temporal("left", "spread", 0);
-        let right = temporal("right", "spread", 0);
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/temporal-merge");
-        merge.inputs = vec![testing::positional("left"), testing::positional("right")];
-        merge.args = Spanned::unknown(json!({ "radius": 0 }));
-
-        let plan = plan_of(&[source("input"), spread, left, right, merge, sink("out", "merge")]);
-
-        let region = plan.node(NodeId::new(1)).region();
-        assert_eq!(plan.node(NodeId::new(2)).region(), region);
-        assert_eq!(plan.node(NodeId::new(3)).region(), region);
-        assert_eq!(plan.node(NodeId::new(4)).region(), region);
-        assert_eq!(plan.region(region).head(), NodeId::new(1));
-    }
-
-    #[test]
-    fn a_wide_region_has_both_exchanges() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-
-        let plan = plan_of(&[source("input"), wide, sink("out", "wide")]);
-
-        let region = plan.region(plan.node(NodeId::new(1)).region());
-        assert!(region.has_disperse());
-        assert!(region.has_aggregate());
-    }
-
-    /// One input and one worker means there is nothing to route and nothing to pair.
-    #[test]
-    fn a_narrow_single_input_region_has_neither_exchange() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-
-        let plan = plan_of(&[source("input"), wide, sink("out", "wide")]);
-
-        let region = plan.region(plan.node(NodeId::new(2)).region());
-        assert!(!region.has_disperse());
-        assert!(!region.has_aggregate());
-    }
-
-    /// Pairing two inputs is reason enough for a disperse even at one worker.
-    ///
-    /// Two sources sit in two regions, so the stage joining them cannot be in either.
-    #[test]
-    fn a_narrow_region_joining_two_inputs_still_has_a_disperse() {
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/merge");
-        merge.inputs = vec![testing::positional("left"), testing::positional("right")];
-
-        let plan = plan_of(&[source("left"), source("right"), merge, sink("out", "merge")]);
-
-        let region = plan.region(plan.node(NodeId::new(2)).region());
-        assert_eq!(region.width(), 1);
-        assert!(region.has_disperse());
-        assert!(!region.has_aggregate());
-    }
-
-    /// A source has nothing to route, so widening it alone is no reason for a disperse.
-    #[test]
-    fn a_widened_source_has_an_aggregate_but_no_disperse() {
-        let mut wide_source = testing::spec(StageKind::Source, "input", "test/widening-source");
-        wide_source.workers = Some(4);
-
-        let plan = plan_of(&[wide_source, sink("out", "input")]);
-
-        let region = plan.region(plan.node(NodeId::new(0)).region());
-        assert!(region.has_aggregate());
-        assert!(!region.has_disperse());
-    }
-
-    #[test]
-    fn a_region_carries_its_head_nodes_chunk_authority() {
-        let mut spatial = temporal("spatial", "input", 0);
-        spatial.workers = Some(4);
-
-        let plan = plan_of(&[source("input"), spatial, sink("out", "spatial")]);
-
-        let region = plan.region(plan.node(NodeId::new(1)).region());
-        assert_eq!(region.head(), NodeId::new(1));
-        assert_eq!(region.chunk_authority(), Some(0));
-    }
-
-    /// `test/temporal-merge` declares `[base, overlay]`. Writing them the other way round by
-    /// name puts edge order and signature order at odds, so a chunk authority read by edge
-    /// position rather than by slot would route by `overlay`'s chunks instead of `base`'s.
-    #[test]
-    fn a_chunk_authority_survives_inputs_written_out_of_signature_order() {
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/temporal-merge");
-        merge.inputs = vec![testing::named("overlay", "right"), testing::named("base", "left")];
-        merge.args = Spanned::unknown(json!({ "radius": 0 }));
-
-        let (graph, plan) =
-            graph_and_plan_of(&[source("left"), source("right"), merge, sink("out", "merge")]);
-
-        let region = plan.region(plan.node(NodeId::new(2)).region());
-        let authority = region.chunk_authority().expect("an authority");
-        let routed = graph
-            .node(NodeId::new(2))
-            .inputs()
-            .iter()
-            .find(|edge| edge.slot() == authority)
-            .expect("an edge fills the authority slot");
-
-        assert_eq!(routed.param(), Some("base"));
-    }
-
-    /// `test/gather` has an optional param ahead of its variadic tail. Binding only the tail
-    /// leaves the param empty, so the authority (the tail's slot) lands past the end of the one
-    /// edge the stage has, the exact shape that indexes `Inputs()` out of range rather than
-    /// looking an edge up by the slot it actually fills.
-    #[test]
-    fn a_chunk_authority_past_the_last_edge_is_found_by_slot_not_index() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-
-        let mut gather = testing::spec(StageKind::Mask, "gather", "test/gather");
-        gather.inputs = vec![testing::named("extra", "wide")];
-
-        let (graph, plan) = graph_and_plan_of(&[source("input"), wide, gather, sink("out", "gather")]);
-
-        let region = plan.region(plan.node(NodeId::new(2)).region());
-        let authority = region.chunk_authority().expect("an authority");
-        let node = graph.node(NodeId::new(2));
-
-        assert!(
-            authority >= node.inputs().len(),
-            "the authority should sit past the node's one edge"
-        );
-
-        let routed = node
-            .inputs()
-            .iter()
-            .find(|edge| edge.slot() == authority)
-            .expect("an edge fills the authority slot");
-
-        assert_eq!(routed.param(), None);
-    }
-
-    #[test]
-    fn a_region_of_only_frame_nodes_routes_by_frame() {
-        // a source into a frame mode node, widened, so the two share a region
-        let mut wide_source = testing::spec(StageKind::Source, "input", "test/widening-source");
-        wide_source.workers = Some(4);
-
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/temporal-merge");
-        merge.inputs = vec![testing::positional("input"), testing::positional("input")];
-        merge.args = Spanned::unknown(json!({ "radius": 0 }));
-
-        let plan = plan_of(&[wide_source, merge, sink("out", "merge")]);
-
-        let region = plan.node(NodeId::new(1)).region();
-        assert_eq!(plan.region(region).routing(), Routing::ByFrame);
-    }
-
-    #[test]
-    fn one_chunk_node_makes_the_whole_region_route_by_chunk() {
-        // a frame mode node and a chunk mode node at the same width in one region
-        let mut wide_source = testing::spec(StageKind::Source, "input", "test/widening-source");
-        wide_source.workers = Some(4);
-
-        let mut merge = testing::spec(StageKind::Mask, "merge", "test/temporal-merge");
-        merge.inputs = vec![testing::positional("input"), testing::positional("input")];
-        merge.args = Spanned::unknown(json!({ "radius": 1 }));
-
-        let plan = plan_of(&[wide_source, merge, sink("out", "merge")]);
-
-        let region = plan.node(NodeId::new(1)).region();
-        assert_eq!(plan.region(region).routing(), Routing::ByChunk);
-    }
-
-    #[test]
-    fn a_stream_region_routes_by_chunk() {
-        // routing is meaningless at width one, and ByChunk is the answer that changes nothing
-        let plan = plan_of(&[source("input"), sink("out", "input")]);
-
-        let region = plan.node(NodeId::new(0)).region();
-        assert_eq!(plan.region(region).routing(), Routing::ByChunk);
-    }
-
-    #[test]
-    fn a_graph_carries_its_plan_once_it_has_one() {
-        let registry = testing::registry();
-        let specs = vec![source("input"), sink("out", "input")];
-        let mut graph = build(&registry, &specs).expect("should build").into_graph();
-
-        assert!(graph.execution_plan().is_none());
-
-        let made = plan(&graph, &registry).expect("should plan");
-        graph.set_execution_plan(made);
-
-        assert!(graph.execution_plan().is_some());
-    }
-
-    #[test]
-    fn a_crossing_beside_another_consumer_heads_a_region_of_its_own() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-        let mut host = testing::spec(StageKind::Sink, "host", "test/host-stdout");
-        host.inputs = vec![testing::positional("wide")];
-
-        let (graph, plan) = placed_graph_and_plan_of(&[source("input"), wide, sink("gpu", "wide"), host]);
-
-        let wide_id = node_named(&graph, "wide");
-        let unload_id = node_named(&graph, "unload(wide)");
-        let wide_region = plan.node(wide_id).region();
-        let unload = plan.node(unload_id);
-        let unload_region = unload.region();
-
-        assert_ne!(unload_region, wide_region);
-        assert_eq!(plan.region(unload_region).head(), unload_id);
-        assert_eq!(unload.width(), 4);
-        assert_eq!(plan.region(wide_region).exits(), &[wide_id]);
-    }
-
-    #[test]
-    fn a_crossing_that_is_its_producers_only_consumer_joins_its_region() {
-        let mut wide = temporal("wide", "input", 0);
-        wide.workers = Some(4);
-        let mut host = testing::spec(StageKind::Sink, "host", "test/host-stdout");
-        host.inputs = vec![testing::positional("wide")];
-
-        let (graph, plan) = placed_graph_and_plan_of(&[source("input"), wide, host]);
-
-        let wide_id = node_named(&graph, "wide");
-        let unload_id = node_named(&graph, "unload(wide)");
-        assert_eq!(plan.node(unload_id).region(), plan.node(wide_id).region());
-    }
-
-    #[test]
-    fn planning_a_host_stage_before_transfers_are_placed_is_an_error() {
-        let mut host = testing::spec(StageKind::Sink, "host", "test/host-stdout");
-        host.inputs = vec![testing::positional("input")];
-
-        let diagnostics = plan_error(&[source("input"), host]);
-
-        let reported = diagnostics.iter().next().expect("a diagnostic");
-        assert_eq!(reported.code(), DiagnosticCode::TransfersNotPlaced);
-        assert_eq!(reported.severity(), Severity::Error);
-        assert!(reported.message().contains("host"));
-    }
-
-    #[test]
-    fn a_graph_of_device_stages_plans_before_transfers_are_placed() {
-        let plan = plan_of(&[source("input"), temporal("blur", "input", 0), sink("out", "blur")]);
-
-        assert_eq!(plan.regions().len(), 1);
-    }
 }

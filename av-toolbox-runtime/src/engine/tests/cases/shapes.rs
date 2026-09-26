@@ -59,12 +59,13 @@ fn a_widened_source_is_rejected() {
 }
 
 #[test]
-fn a_region_with_more_than_one_exit_is_rejected() {
-    // `filter1` and `filter2` chain off the source at width one, so they join its region. Each
-    // is then read by its own widened filter, forcing both to be exits of that one region, which
-    // this engine does not know how to give one aggregate each.
+fn a_shape_that_would_give_a_region_two_exits_delivers_each_frame_twice_in_total() {
+    let property = "a_shape_that_would_give_a_region_two_exits_delivers_each_frame_twice_in_total";
+    clear_recorded();
+
+    let chunks: Vec<u64> = (0..4).collect();
     let specs = vec![
-        source_spec("input", &[], 0),
+        source_spec("input", &chunks, 0),
         filter_spec("filter1", "input", None),
         filter_spec("filter2", "filter1", None),
         filter_spec("filter3", "filter1", Some(4)),
@@ -72,26 +73,15 @@ fn a_region_with_more_than_one_exit_is_rejected() {
         sink_spec("sink3", "filter3"),
         sink_spec("sink4", "filter4"),
     ];
-    let (graph, solved) = planned_graph(&specs);
+    let engine = build_engine(&specs, Settings::default());
 
-    let result = Engine::build_with(
-        &graph,
-        &solved,
-        Settings::default(),
-        |region, worker| instantiate(&graph, region, worker),
-        testing_context,
-    );
+    let report = run_with_watchdog(engine, property);
 
-    let Err(diagnostics) = result else {
-        panic!("a region with two exits should have been refused");
-    };
-    // "exits" rather than just `has_errors()`, which would also pass if the build failed for
-    // any unrelated reason.
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message().contains("exits"))
-    );
+    let mut indices = recorded_indices();
+    indices.sort_unstable();
+
+    assert_eq!(indices, vec![0, 0, 1, 1, 2, 2, 3, 3]);
+    assert_eq!(report.frames, 8);
 }
 
 /// A source, a widened branch off it, and a two input join reading both directly.

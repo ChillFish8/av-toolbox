@@ -550,21 +550,31 @@ mod tests {
     fn every_exit_feeds_the_aggregate_bounded() {
         let specs = fixtures::two_exit_pipeline();
         let graph = fixtures::planned(&specs);
-        let region = wide_region(&graph);
+        let plan = graph.execution_plan().expect("graph is planned");
         let diagram = Diagram::of(&graph);
-        let aggregate = Endpoint::Aggregate(region.id().index());
 
-        assert_eq!(region.exits().len(), 2);
+        let wide_regions: Vec<&Region> = plan
+            .regions()
+            .iter()
+            .filter(|region| region.width() > 1)
+            .collect();
+        assert_eq!(wide_regions.len(), 3);
 
-        for exit in region.exits() {
-            let from = Endpoint::Box(*exit);
-            let found = diagram
-                .links
-                .iter()
-                .find(|link| link.from == from && link.to == aggregate);
+        for region in wide_regions {
+            let aggregate = Endpoint::Aggregate(region.id().index());
 
-            let link = found.expect("the exit feeds the aggregate");
-            assert_eq!(link.bounded, Some(true));
+            assert_eq!(region.exits().len(), 1);
+
+            for exit in region.exits() {
+                let from = Endpoint::Box(*exit);
+                let found = diagram
+                    .links
+                    .iter()
+                    .find(|link| link.from == from && link.to == aggregate);
+
+                let link = found.expect("the exit feeds the aggregate");
+                assert_eq!(link.bounded, Some(true));
+            }
         }
     }
 
@@ -597,20 +607,20 @@ mod tests {
 
     #[test]
     fn a_link_inside_one_region_has_no_bounding() {
-        let specs = fixtures::two_exit_pipeline();
+        let specs = fixtures::middle_exit_pipeline();
         let graph = fixtures::planned(&specs);
         let diagram = Diagram::of(&graph);
-        let wide = fixtures::node_named(&graph, "wide");
-        let left = fixtures::node_named(&graph, "left");
+        let first = fixtures::node_named(&graph, "first");
+        let blurred = fixtures::node_named(&graph, "blur");
 
-        let from = Endpoint::Box(wide);
-        let to = Endpoint::Box(left);
+        let from = Endpoint::Box(first);
+        let to = Endpoint::Box(blurred);
         let found = diagram
             .links
             .iter()
             .find(|link| link.from == from && link.to == to);
 
-        let link = found.expect("wide feeds left directly");
+        let link = found.expect("first feeds blur directly");
         assert_eq!(link.bounded, None);
     }
 

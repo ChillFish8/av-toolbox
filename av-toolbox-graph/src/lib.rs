@@ -40,6 +40,8 @@ mod spec;
 mod suggest;
 #[cfg(test)]
 mod testing;
+#[cfg(test)]
+mod tests;
 
 pub use self::build::{Built, build};
 pub use self::chroma::settle_mask_planes;
