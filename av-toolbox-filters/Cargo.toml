@@ -12,7 +12,7 @@ schemars = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-av-toolbox-cubek = { path = "../av-toolbox-cubek" }
+av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }
 

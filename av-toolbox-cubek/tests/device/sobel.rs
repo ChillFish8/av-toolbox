@@ -1,8 +1,9 @@
 use av_toolbox_cubek::sobel::{SobelPlanes, sobel};
+use av_toolbox_cubek::testing::reflect;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, reflect, upload_f32};
+use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, upload_f32};
 
 fn reference_sobel(input: &[f32], width: u32, height: u32) -> (Vec<f32>, Vec<f32>) {
     let width = width as i32;

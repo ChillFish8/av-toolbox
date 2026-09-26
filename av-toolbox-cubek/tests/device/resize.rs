@@ -1,8 +1,9 @@
 use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, ResizePlanes, Taps, apply, bilinear, taps, upload};
+use av_toolbox_cubek::testing::reference_resize;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::support::{Sizing, backend, empty, plane, read_u8, reference_resize, upload_u8};
+use crate::support::{Sizing, backend, empty, plane, read_u8, upload_u8};
 
 struct Resize {
     input: Vec<u8>,

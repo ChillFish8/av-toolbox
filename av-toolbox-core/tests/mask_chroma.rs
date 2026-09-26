@@ -17,7 +17,8 @@ use av_toolbox_core::{
     StageInstance,
     StageKind,
 };
-use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, Taps, bilinear, taps};
+use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, bilinear, taps};
+use av_toolbox_cubek::testing::reference_resize;
 use av_toolbox_gpu::{
     Backend,
     BuildContext,
@@ -334,57 +335,6 @@ fn read_plane<R: Runtime>(build: &BuildContext<R>, plane: &av_toolbox_gpu::Plane
     bytes[..samples].to_vec()
 }
 
-/// Mirrors [reflect](av_toolbox_cubek::reflect) on the CPU.
-fn reflect(index: i32, length: i32) -> i32 {
-    if length <= 1 {
-        return 0;
-    }
-
-    let period = 2 * length - 2;
-    let folded = index.abs() % period;
-    if folded >= length { period - folded } else { folded }
-}
-
-/// Applies `across` then `down` on the CPU, rounding to U8 at the end.
-fn reference_resize(input: &[u8], across: &Taps, down: &Taps) -> Vec<u8> {
-    let out_width = across.starts.len() as u32;
-    let out_height = down.starts.len() as u32;
-
-    let mut rows = vec![0.0f32; (out_width * HEIGHT) as usize];
-    for row in 0..HEIGHT {
-        for column in 0..out_width {
-            let mut total = 0.0f32;
-            for step in 0..across.count {
-                let tap = across.starts[column as usize] + step as i32;
-                let source = reflect(tap, WIDTH as i32) as u32;
-                let weight = across.weights[(column * across.count + step) as usize];
-                let sample = input[(row * WIDTH + source) as usize];
-                total += f32::from(sample) * weight;
-            }
-
-            rows[(row * out_width + column) as usize] = total;
-        }
-    }
-
-    let mut output = Vec::with_capacity((out_width * out_height) as usize);
-    for row in 0..out_height {
-        for column in 0..out_width {
-            let mut total = 0.0f32;
-            for step in 0..down.count {
-                let tap = down.starts[row as usize] + step as i32;
-                let source = reflect(tap, HEIGHT as i32) as u32;
-                let weight = down.weights[(row * down.count + step) as usize];
-                total += rows[(source * out_width + column) as usize] * weight;
-            }
-
-            let rounded = total.round().clamp(0.0, 255.0) as u8;
-            output.push(rounded);
-        }
-    }
-
-    output
-}
-
 /// The 4:2:0 chroma plane of [pattern], with each chroma sample `offset_x` and `offset_y` luma
 /// samples past the first it covers.
 fn reference_chroma(offset_x: f32, offset_y: f32) -> Vec<u8> {
@@ -392,7 +342,7 @@ fn reference_chroma(offset_x: f32, offset_y: f32) -> Vec<u8> {
     let across = taps(CHROMA_WIDTH, 2.0, offset_x, bilinear, BILINEAR_SUPPORT);
     let down = taps(CHROMA_HEIGHT, 2.0, offset_y, bilinear, BILINEAR_SUPPORT);
 
-    reference_resize(&input, &across, &down)
+    reference_resize(&input, WIDTH, HEIGHT, &across, &down)
 }
 
 fn largest_difference(found: &[u8], expected: &[u8]) -> u8 {

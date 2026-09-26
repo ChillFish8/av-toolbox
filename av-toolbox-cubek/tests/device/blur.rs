@@ -1,8 +1,9 @@
 use av_toolbox_cubek::blur::{BlurPlanes, Gaussian, gaussian_weights};
+use av_toolbox_cubek::testing::reference_blur;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, reference_blur, upload_f32};
+use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, upload_f32};
 
 /// Blurs `input` on the device with `sigma` and the given radius.
 struct Blur {

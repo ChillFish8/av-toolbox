@@ -8,7 +8,8 @@ use av_toolbox_core::{
     StageKind,
     StreamType,
 };
-use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, Taps, bilinear, taps};
+use av_toolbox_cubek::resize::{BILINEAR_SUPPORT, bilinear, taps};
+use av_toolbox_cubek::testing::reference_resize;
 use av_toolbox_gpu::{
     Backend,
     BuildContext,
@@ -285,58 +286,6 @@ fn planes_of(format: &FrameFormat, fill: impl Fn(usize, usize) -> u8) -> Vec<Vec
             (0..samples).map(|sample| fill(index, sample)).collect()
         })
         .collect()
-}
-
-/// Mirrors [reflect](av_toolbox_cubek::reflect) on the CPU.
-fn reflect(index: i32, length: i32) -> i32 {
-    if length <= 1 {
-        return 0;
-    }
-
-    let period = 2 * length - 2;
-    let folded = index.abs() % period;
-    if folded >= length { period - folded } else { folded }
-}
-
-/// Applies `across` then `down` on the CPU, rounding to U8 at the end, mirroring
-/// [apply](av_toolbox_cubek::resize::apply).
-fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, down: &Taps) -> Vec<u8> {
-    let out_width = across.starts.len() as u32;
-    let out_height = down.starts.len() as u32;
-
-    let mut rows = vec![0.0f32; (out_width * height) as usize];
-    for row in 0..height {
-        for column in 0..out_width {
-            let mut total = 0.0f32;
-            for step in 0..across.count {
-                let tap = across.starts[column as usize] + step as i32;
-                let source = reflect(tap, width as i32) as u32;
-                let weight = across.weights[(column * across.count + step) as usize];
-                let sample = input[(row * width + source) as usize];
-                total += f32::from(sample) * weight;
-            }
-
-            rows[(row * out_width + column) as usize] = total;
-        }
-    }
-
-    let mut output = Vec::with_capacity((out_width * out_height) as usize);
-    for row in 0..out_height {
-        for column in 0..out_width {
-            let mut total = 0.0f32;
-            for step in 0..down.count {
-                let tap = down.starts[row as usize] + step as i32;
-                let source = reflect(tap, height as i32) as u32;
-                let weight = down.weights[(row * down.count + step) as usize];
-                total += rows[(source * out_width + column) as usize] * weight;
-            }
-
-            let rounded = total.round().clamp(0.0, 255.0) as u8;
-            output.push(rounded);
-        }
-    }
-
-    output
 }
 
 /// Downscales a mask's full plane into its chroma plane on the CPU, with bilinear weights placed

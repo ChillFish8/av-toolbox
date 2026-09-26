@@ -241,6 +241,7 @@ dependencies = [
 name = "av-toolbox-cubek"
 version = "0.1.0"
 dependencies = [
+ "av-toolbox-cubek",
  "av-toolbox-gpu",
  "cubecl",
 ]

@@ -14,6 +14,7 @@ jsonschema = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 
 [features]

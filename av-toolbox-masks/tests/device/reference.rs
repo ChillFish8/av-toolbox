@@ -1,4 +1,5 @@
 use av_toolbox_cubek::blur::{gaussian_weights, radius_for};
+use av_toolbox_cubek::testing::{reference_blur, reflect};
 
 pub const BINS: usize = 4096;
 
@@ -6,50 +7,11 @@ pub fn normalise_u8(samples: &[u8]) -> Vec<f32> {
     samples.iter().map(|sample| f32::from(*sample) / 255.0).collect()
 }
 
-pub fn reflect(index: i32, length: i32) -> i32 {
-    if length <= 1 {
-        return 0;
-    }
-
-    let period = 2 * length - 2;
-    let folded = index.abs() % period;
-    if folded >= length { period - folded } else { folded }
-}
-
 /// A separable gaussian blur with reflect-101 borders.
 pub fn blur_with_radius(input: &[f32], width: u32, height: u32, sigma: f32, radius: u32) -> Vec<f32> {
     let weights = gaussian_weights(sigma, radius);
-    let radius = radius as i32;
-    let width = width as i32;
-    let height = height as i32;
 
-    let mut rows = vec![0.0f32; input.len()];
-    for row in 0..height {
-        for column in 0..width {
-            let mut total = 0.0f32;
-            for (tap, weight) in weights.iter().enumerate() {
-                let source = reflect(column + tap as i32 - radius, width);
-                total += input[(row * width + source) as usize] * weight;
-            }
-
-            rows[(row * width + column) as usize] = total;
-        }
-    }
-
-    let mut output = vec![0.0f32; input.len()];
-    for row in 0..height {
-        for column in 0..width {
-            let mut total = 0.0f32;
-            for (tap, weight) in weights.iter().enumerate() {
-                let source = reflect(row + tap as i32 - radius, height);
-                total += rows[(source * width + column) as usize] * weight;
-            }
-
-            output[(row * width + column) as usize] = total;
-        }
-    }
-
-    output
+    reference_blur(input, width, height, &weights)
 }
 
 pub fn blur(input: &[f32], width: u32, height: u32, sigma: f32) -> Vec<f32> {

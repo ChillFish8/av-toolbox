@@ -8,6 +8,7 @@ description = "Shared CubeCL kernels that can be used within av-toolbox video fi
 cubecl = { workspace = true }
 
 [dev-dependencies]
+av-toolbox-cubek = { path = ".", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true }
 
 [features]
@@ -16,3 +17,5 @@ metal = ["cubecl/metal", "av-toolbox-gpu/metal"]
 cuda = ["cubecl/cuda", "av-toolbox-gpu/cuda"]
 rocm = ["cubecl/hip", "av-toolbox-gpu/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+# Exposes CPU references of the kernels for tests in this crate and the crates above it.
+test-support = []

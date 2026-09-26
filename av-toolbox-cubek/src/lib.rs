@@ -18,6 +18,8 @@ mod plane;
 pub mod reduce;
 pub mod resize;
 pub mod sobel;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 
 pub use self::border::reflect;
 pub use self::dispatch::Dispatch;
