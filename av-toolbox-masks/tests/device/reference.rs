@@ -364,35 +364,39 @@ fn level_of(value: f32) -> usize {
     (value * 255.0).round().clamp(0.0, 255.0) as usize
 }
 
-/// CLAHE over an 8x8 grid of tiles.
+/// CLAHE over an 8x8 grid of equal tiles, extending the image with reflect-101 samples until each
+/// side divides by the grid.
 pub fn clahe(input: &[f32], width: u32, height: u32, clip: f32) -> Vec<f32> {
     let tile_width = width.div_ceil(TILES);
     let tile_height = height.div_ceil(TILES);
-    let tiles_across = width.div_ceil(tile_width);
-    let tiles_down = height.div_ceil(tile_height);
-    let limit = ((clip * (tile_width * tile_height) as f32 / 256.0).floor()).max(1.0);
+    let extended_width = tile_width * TILES;
+    let extended_height = tile_height * TILES;
+    let tile_samples = (tile_width * tile_height) as f32;
+    let limit = ((clip * tile_samples / LEVELS as f32).floor()).max(1.0);
 
     let tile_count = (TILES * TILES) as usize;
     let mut histograms = vec![0u32; tile_count * LEVELS];
-    for (index, value) in input.iter().enumerate() {
-        let column = index as u32 % width;
-        let row = index as u32 / width;
-        let tile = ((row / tile_height) * TILES + column / tile_width) as usize;
-        let level = level_of(*value);
-        histograms[tile * LEVELS + level] += 1;
+    for row in 0..extended_height {
+        for column in 0..extended_width {
+            let source_column = reflect(column as i32, width as i32) as u32;
+            let source_row = reflect(row as i32, height as i32) as u32;
+            let value = input[(source_row * width + source_column) as usize];
+            let tile = ((row / tile_height) * TILES + column / tile_width) as usize;
+            let level = level_of(value);
+            histograms[tile * LEVELS + level] += 1;
+        }
     }
 
     let mut tables = vec![0.0f32; tile_count * LEVELS];
     for tile in 0..tile_count {
         let counts = &histograms[tile * LEVELS..(tile + 1) * LEVELS];
-        let total: f32 = counts.iter().map(|count| *count as f32).sum();
         let excess: f32 = counts.iter().map(|count| (*count as f32 - limit).max(0.0)).sum();
-        let share = excess / 256.0;
+        let share = excess / LEVELS as f32;
 
         let mut running = 0.0f32;
         for (level, count) in counts.iter().enumerate() {
             running += (*count as f32).min(limit) + share;
-            tables[tile * LEVELS + level] = if total > 0.0 { running / total } else { 0.0 };
+            tables[tile * LEVELS + level] = running / tile_samples;
         }
     }
 
@@ -410,10 +414,10 @@ pub fn clahe(input: &[f32], width: u32, height: u32, clip: f32) -> Vec<f32> {
 
             let across = (column as f32 + 0.5) / tile_width as f32 - 0.5;
             let down = (row as f32 + 0.5) / tile_height as f32 - 0.5;
-            let left = (across.floor().max(0.0) as u32).min(tiles_across - 1);
-            let top = (down.floor().max(0.0) as u32).min(tiles_down - 1);
-            let right = (left + 1).min(tiles_across - 1);
-            let bottom = (top + 1).min(tiles_down - 1);
+            let left = (across.floor().max(0.0) as u32).min(TILES - 1);
+            let top = (down.floor().max(0.0) as u32).min(TILES - 1);
+            let right = (left + 1).min(TILES - 1);
+            let bottom = (top + 1).min(TILES - 1);
             let blend_x = (across - left as f32).clamp(0.0, 1.0);
             let blend_y = (down - top as f32).clamp(0.0, 1.0);
 

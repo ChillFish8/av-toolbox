@@ -154,3 +154,58 @@ fn recovering_shadows_gives_the_same_mask_when_a_frame_comes_round_again() {
 
     assert_eq!(masks[0], masks[2]);
 }
+
+/// A single column of bright samples over dark ones, with a darker line at the step.
+const STEPPED_COLUMN: [u8; 9] = [200, 200, 200, 100, 30, 30, 30, 30, 30];
+
+fn recovered_with(luma: Vec<u8>, width: u32, height: u32, min_speck: u32) -> (Vec<u8>, Vec<u8>) {
+    let normalised = normalise_u8(&luma);
+    let settings = ShadowSettings {
+        min_speck,
+        ..ShadowSettings::default()
+    };
+    let expected = recover_shadows(&normalised, width, height, &settings);
+
+    let format = grey(width, height);
+    let frames = vec![vec![luma]];
+    let args = json!({ "recover_shadows": true, "min_speck": min_speck });
+    let masks = run(args, format, frames);
+    let found = masks
+        .into_iter()
+        .next()
+        .expect("one frame goes in, so one mask comes out");
+
+    (found, expected)
+}
+
+fn recovered_at(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+    let luma = shadowed_scene(width, height);
+    let min_speck = ShadowSettings::default().min_speck;
+
+    recovered_with(luma, width, height, min_speck)
+}
+
+#[test]
+fn recovering_shadows_matches_the_reference_when_tiles_do_not_divide_the_frame() {
+    let (found, expected) = recovered_at(45, 37);
+
+    assert_masks_close(&found, &expected, 0, 0.005);
+}
+
+/// Tiles one sample across and down give the same tables on any grid, so this only checks that a
+/// tiny frame runs.
+#[test]
+fn recovering_shadows_runs_and_matches_the_reference_on_a_frame_narrower_than_the_grid() {
+    let (found, expected) = recovered_at(3, 5);
+
+    assert_masks_close(&found, &expected, 0, 0.02);
+}
+
+/// `min_speck` is lowered so the short line groups a one sample wide frame gives are kept.
+#[test]
+fn recovering_shadows_matches_the_reference_on_a_frame_one_sample_wide() {
+    let luma = STEPPED_COLUMN.to_vec();
+    let (found, expected) = recovered_with(luma, 1, 9, 2);
+
+    assert_masks_close(&found, &expected, 0, 0.02);
+}
