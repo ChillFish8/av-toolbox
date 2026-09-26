@@ -197,6 +197,34 @@ pub(crate) fn check_output(input: &FrameFormat, window: &Window, stage: &str) ->
     Ok(())
 }
 
+fn source_too_large(stage: &str, field: &str, limit: u32) -> StageError {
+    let message = format!("{stage} needs {field} of at most {limit}, twice the input");
+
+    StageError::msg(message)
+}
+
+/// Refuses a source window more than twice the input's size.
+pub(crate) fn check_source(input: &FrameFormat, window: &Window, stage: &str) -> Result<(), StageError> {
+    let width_limit = input.width.saturating_mul(2);
+    let height_limit = input.height.saturating_mul(2);
+    let sizes = [
+        ("src_width", window.src_width, width_limit),
+        ("src_height", window.src_height, height_limit),
+    ];
+
+    for (field, value, limit) in sizes {
+        let Some(value) = value else {
+            continue;
+        };
+
+        if value > limit as f32 {
+            return Err(source_too_large(stage, field, limit));
+        }
+    }
+
+    Ok(())
+}
+
 /// Whether the resize would hand back exactly what it was given.
 pub(crate) fn is_identity(input: &FrameFormat, window: &Window) -> bool {
     let (across, down) = spans(input, window);
@@ -383,6 +411,26 @@ mod tests {
 
         assert_axis(chroma.across, 2.0, 0.5);
         assert_axis(chroma.down, 2.0, 0.5);
+    }
+
+    #[test]
+    fn a_window_moves_left_sited_chroma() {
+        let input = yuv(16, 16, Subsampling::Yuv420, ChromaLocation::Left);
+        let cropped = Window {
+            width: 8,
+            height: 8,
+            src_left: 2.0,
+            src_top: 2.0,
+            src_width: Some(8.0),
+            src_height: Some(8.0),
+        };
+
+        let found = geometry(&input, &cropped);
+        let chroma = found.chroma.expect("4:2:0 has its own chroma shape");
+
+        assert_eq!((chroma.width, chroma.height), (4, 4));
+        assert_axis(chroma.across, 1.0, 1.0);
+        assert_axis(chroma.down, 1.0, 1.0);
     }
 
     #[test]

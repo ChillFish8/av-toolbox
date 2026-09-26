@@ -455,6 +455,7 @@ mod tests {
             let reach = kernel.support() as i32;
 
             assert_near(kernel.weight(0.0), 1.0);
+
             for distance in 1..=reach {
                 let ahead = kernel.weight(distance as f32);
                 let behind = kernel.weight(-distance as f32);

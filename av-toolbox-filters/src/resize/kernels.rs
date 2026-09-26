@@ -99,8 +99,17 @@ fn three() -> u32 {
     3
 }
 
+/// The most taps `resize/lanczos` accepts.
+const MAX_TAPS: u32 = 32;
+
 fn zero_taps() -> StageError {
     StageError::msg("resize/lanczos needs taps above 0")
+}
+
+fn too_many_taps(taps: u32) -> StageError {
+    let message = format!("resize/lanczos needs taps of at most {MAX_TAPS}, got {taps}");
+
+    StageError::msg(message)
 }
 
 fn cubic_not_finite() -> StageError {
@@ -206,6 +215,10 @@ impl ResizeKernel for Lanczos {
     fn kernel(args: &Self::Args) -> Result<Kernel, StageError> {
         if args.taps == 0 {
             return Err(zero_taps());
+        }
+
+        if args.taps > MAX_TAPS {
+            return Err(too_many_taps(args.taps));
         }
 
         Ok(Kernel::Lanczos { taps: args.taps })
@@ -331,6 +344,27 @@ mod tests {
 
         assert!(error.to_string().contains("resize/lanczos"));
         assert!(error.to_string().contains("taps"));
+    }
+
+    #[test]
+    fn lanczos_refuses_more_than_32_taps() {
+        let value = json!({ "width": 8, "height": 8, "taps": 33 });
+        let args: LanczosArgs = parse(value).expect("parses");
+
+        let error = Lanczos::kernel(&args).expect_err("33 taps is refused");
+
+        assert!(error.to_string().contains("resize/lanczos"));
+        assert!(error.to_string().contains("taps"));
+    }
+
+    #[test]
+    fn lanczos_accepts_32_taps() {
+        let value = json!({ "width": 8, "height": 8, "taps": 32 });
+        let args: LanczosArgs = parse(value).expect("parses");
+
+        let kernel = Lanczos::kernel(&args).expect("32 taps is accepted");
+
+        assert_eq!(kernel, Kernel::Lanczos { taps: 32 });
     }
 
     #[test]
