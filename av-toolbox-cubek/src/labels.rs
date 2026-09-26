@@ -1,6 +1,7 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
+use cubecl::server::ServerError;
 
 use crate::{DevicePlane, Dispatch};
 
@@ -155,24 +156,24 @@ fn clear<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, plane:
     }
 }
 
-fn changed_flag<R: Runtime>(client: &ComputeClient<R>, changed: DevicePlane<'_>) -> u32 {
+fn changed_flag<R: Runtime>(client: &ComputeClient<R>, changed: DevicePlane<'_>) -> Result<u32, ServerError> {
     let handle = changed.handle().clone();
-    let bytes = client
-        .read_one(handle)
-        .expect("the device should hand back the changed flag");
+    let bytes = client.read_one(handle)?;
+    let flag = u32::from_bytes(&bytes)[0];
 
-    u32::from_bytes(&bytes)[0]
+    Ok(flag)
 }
 
 /// Labels every 8-connected component of the set marks with the smallest index inside it.
 ///
 /// Unset pixels are labelled [UNSET]. The passes stop once a batch changes nothing, or at the
-/// plane's width plus height passes, whichever comes first.
+/// plane's width plus height passes, whichever comes first. Fails if the device cannot hand back
+/// the flag that says whether a batch changed anything.
 pub fn label<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: LabelPlanes<'_>,
-) -> Settled {
+) -> Result<Settled, ServerError> {
     let samples = planes.labels.samples();
     let width = planes.labels.width();
     let height = planes.labels.height();
@@ -216,13 +217,13 @@ pub fn label<R: Runtime>(
 
         passes += BATCH;
 
-        let flag = changed_flag(client, planes.changed);
+        let flag = changed_flag(client, planes.changed)?;
         if flag == 0 {
-            return Settled::Converged { passes };
+            return Ok(Settled::Converged { passes });
         }
 
         if passes >= cap {
-            return Settled::Capped { passes };
+            return Ok(Settled::Capped { passes });
         }
     }
 }

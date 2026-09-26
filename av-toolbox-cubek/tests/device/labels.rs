@@ -45,7 +45,8 @@ impl BuildTask for Label {
             labels: labels_plane,
             changed: changed_plane,
         };
-        let settled = label(client, &sizing, label_planes);
+        let settled =
+            label(client, &sizing, label_planes).expect("the device should hand back the changed flag");
 
         let labels_plane = plane(&labels, self.width, self.height);
         let counted_plane = plane(&counted, self.width, self.height);
