@@ -2,6 +2,7 @@
 
 mod blur;
 mod deband;
+mod dehalo;
 mod depth;
 mod histogram;
 mod labels;

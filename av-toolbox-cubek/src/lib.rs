@@ -4,6 +4,7 @@
 //!
 //! - [blur] for separable gaussian blurs.
 //! - [deband] for smoothing banding the way libplacebo does.
+//! - [dehalo] for the fused per-pixel steps of the dehalo filters.
 //! - [depth] for changing a plane's bit depth, with dithering.
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
@@ -18,6 +19,7 @@
 pub mod blur;
 mod border;
 pub mod deband;
+pub mod dehalo;
 pub mod depth;
 mod dispatch;
 pub mod histogram;
