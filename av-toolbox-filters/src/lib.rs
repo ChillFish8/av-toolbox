@@ -15,6 +15,14 @@ mod deband;
 mod planes;
 mod resample;
 mod resize;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the stages that choose planes with it are not registered yet"
+    )
+)]
+mod selection;
 mod sizing;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
