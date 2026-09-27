@@ -8,6 +8,7 @@
 //! - `resample/chroma` changes a YUV clip's chroma subsampling and siting.
 //! - `planes/extract` pulls one plane, or the chroma pair, out of a clip.
 //! - `planes/merge` builds a clip by picking each plane from one of several clips.
+//! - `warp/awarpsharp` sharpens by pulling samples toward nearby edges, the way aWarpSharp2 does.
 
 mod bits;
 mod blend;
@@ -15,15 +16,9 @@ mod deband;
 mod planes;
 mod resample;
 mod resize;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the stages that choose planes with it are not registered yet"
-    )
-)]
 mod selection;
 mod sizing;
+mod warp;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
@@ -45,6 +40,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<Chroma>()?;
     registry.register_filter::<planes::Extract>()?;
     registry.register_filter::<planes::Merge>()?;
+    registry.register_filter::<warp::Awarpsharp>()?;
 
     Ok(())
 }
@@ -79,5 +75,6 @@ mod tests {
         assert!(registered("resample/chroma"));
         assert!(registered("planes/extract"));
         assert!(registered("planes/merge"));
+        assert!(registered("warp/awarpsharp"));
     }
 }

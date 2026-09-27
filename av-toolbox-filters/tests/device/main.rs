@@ -6,3 +6,4 @@ mod planes;
 mod resample;
 mod resize;
 mod support;
+mod warp;

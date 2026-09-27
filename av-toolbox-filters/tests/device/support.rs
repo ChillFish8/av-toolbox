@@ -8,6 +8,7 @@ use av_toolbox_core::{
     StageKind,
     StreamType,
 };
+use av_toolbox_cubek::depth::Element;
 use av_toolbox_gpu::{
     Backend,
     BuildContext,
@@ -575,5 +576,22 @@ pub(crate) fn merge_frames(args: serde_json::Value, inputs: &[DeviceOutput]) -> 
     DeviceOutput {
         format: output,
         planes,
+    }
+}
+
+pub(crate) fn to_bytes(values: &[u16], element: Element) -> Vec<u8> {
+    match element {
+        Element::U8 => values.iter().map(|value| *value as u8).collect(),
+        Element::U16 => values.iter().flat_map(|value| value.to_le_bytes()).collect(),
+    }
+}
+
+pub(crate) fn from_bytes(bytes: &[u8], element: Element) -> Vec<u16> {
+    match element {
+        Element::U8 => bytes.iter().map(|value| u16::from(*value)).collect(),
+        Element::U16 => {
+            let (pairs, _) = bytes.as_chunks::<2>();
+            pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
+        },
     }
 }

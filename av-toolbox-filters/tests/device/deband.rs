@@ -4,7 +4,7 @@ use av_toolbox_cubek::testing::reference_deband;
 use av_toolbox_gpu::{ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 use serde_json::json;
 
-use crate::support::{frame, luma_is_shared, passes_through, run_once_at};
+use crate::support::{frame, from_bytes, luma_is_shared, passes_through, run_once_at, to_bytes};
 
 fn yuv420(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
     let layout = FrameLayout::Yuv {
@@ -30,23 +30,6 @@ fn ramps(format: &FrameFormat, peak: u32) -> Vec<Vec<u16>> {
                 .collect()
         })
         .collect()
-}
-
-fn to_bytes(values: &[u16], element: Element) -> Vec<u8> {
-    match element {
-        Element::U8 => values.iter().map(|value| *value as u8).collect(),
-        Element::U16 => values.iter().flat_map(|value| value.to_le_bytes()).collect(),
-    }
-}
-
-fn from_bytes(bytes: &[u8], element: Element) -> Vec<u16> {
-    match element {
-        Element::U8 => bytes.iter().map(|value| u16::from(*value)).collect(),
-        Element::U16 => {
-            let (pairs, _) = bytes.as_chunks::<2>();
-            pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
-        },
-    }
 }
 
 fn assert_mostly_within_one(actual: &[u16], expected: &[u16], label: &str) {
