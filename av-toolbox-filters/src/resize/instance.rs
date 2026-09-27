@@ -1,11 +1,9 @@
 use av_toolbox_core::{Filter, Inputs, StageError, StageInstance};
+use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Samples, Weights, apply, taps, upload};
-use av_toolbox_cubek::{DevicePlane, Dispatch};
 use av_toolbox_gpu::{
     Channel,
     ComputeClient,
-    CubeCount,
-    CubeDim,
     Frame,
     FrameContext,
     FrameFormat,
@@ -15,19 +13,7 @@ use av_toolbox_gpu::{
 };
 
 use super::geometry::{Geometry, PlaneShape};
-
-/// Sizes launches from the frame context a stage is handed.
-struct Sizing<'a>(&'a FrameContext);
-
-impl Dispatch for Sizing<'_> {
-    fn cube_count(&self, samples: usize) -> CubeCount {
-        self.0.cube_count(samples)
-    }
-
-    fn cube_dim(&self) -> CubeDim {
-        self.0.cube_dim()
-    }
-}
+use crate::sizing::Sizing;
 
 /// One plane's weight tables on the device.
 struct Tables {

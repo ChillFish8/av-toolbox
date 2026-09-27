@@ -93,6 +93,7 @@ struct FilterOnce {
     input: FrameFormat,
     output: FrameFormat,
     planes: Vec<Vec<u8>>,
+    index: u64,
 }
 
 impl BuildTask for FilterOnce {
@@ -102,7 +103,7 @@ impl BuildTask for FilterOnce {
         let mut context = build.frame_context();
         let host = HostPool::new();
 
-        let meta = FrameMeta::at(0);
+        let meta = FrameMeta::at(self.index);
         let mut frame = host.alloc_frame(&self.input, meta);
         for (index, channel) in self.input.channels().iter().enumerate() {
             let plane = frame
@@ -151,6 +152,18 @@ pub(crate) fn run_once(
     args: serde_json::Value,
     planes: &[Vec<u8>],
 ) -> Vec<Vec<u8>> {
+    run_once_at(stage, input, output, args, planes, 0)
+}
+
+/// Runs `stage` on one frame at `index` in the stream, and reads every output plane back as bytes.
+pub(crate) fn run_once_at(
+    stage: &str,
+    input: FrameFormat,
+    output: FrameFormat,
+    args: serde_json::Value,
+    planes: &[Vec<u8>],
+    index: u64,
+) -> Vec<Vec<u8>> {
     let backend = backend();
     let filter = built_filter(&backend, stage, input, output, args);
 
@@ -159,6 +172,7 @@ pub(crate) fn run_once(
         input,
         output,
         planes: planes.to_vec(),
+        index,
     })
 }
 

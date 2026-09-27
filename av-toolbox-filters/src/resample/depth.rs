@@ -44,7 +44,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::Sizing;
+use crate::sizing::Sizing;
 
 const STAGE: &str = "resample/depth";
 

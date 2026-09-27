@@ -1,6 +1,7 @@
 //! Filters that change the frames of a stream
 //!
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
+//! - `deband/placebo` smooths banding with libplacebo's algorithm, then adds grain.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
@@ -13,6 +14,7 @@ mod deband;
 mod planes;
 mod resample;
 mod resize;
+mod sizing;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
@@ -22,6 +24,7 @@ use self::resize::{Bicubic, Bilinear, Lanczos, Point, Resize, Spline16, Spline36
 /// Registers every filter this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<blend::Masked>()?;
+    registry.register_filter::<deband::Placebo>()?;
     registry.register_filter::<Resize<Point>>()?;
     registry.register_filter::<Resize<Bilinear>>()?;
     registry.register_filter::<Resize<Bicubic>>()?;
@@ -55,6 +58,7 @@ mod tests {
     #[test]
     fn every_filter_is_registered() {
         assert!(registered("blend/masked"));
+        assert!(registered("deband/placebo"));
         assert!(registered("resize/point"));
         assert!(registered("resize/bilinear"));
         assert!(registered("resize/bicubic"));

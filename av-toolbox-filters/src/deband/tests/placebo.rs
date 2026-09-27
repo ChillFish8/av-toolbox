@@ -1,15 +1,22 @@
+use av_toolbox_core::FilterDefinition;
 use av_toolbox_gpu::{
+    Capabilities,
     Channel,
     ColourInfo,
     ColourRange,
     Depth as BitDepth,
     FrameFormat,
     FrameLayout,
+    MaskFormat,
+    Offered,
     SampleFormat,
+    StreamFormat,
     Subsampling,
+    default_accelerators,
 };
 use serde_json::json;
 
+use crate::deband::Placebo;
 use crate::deband::placebo::{PerPlane, PlaceboArgs, neutral, plane_settings};
 
 fn args(value: serde_json::Value) -> PlaceboArgs {
@@ -223,4 +230,80 @@ fn only_the_planes_with_nothing_to_do_are_skipped() {
     let skipped: Vec<bool> = settings.iter().map(|plane| plane.skipped).collect();
 
     assert_eq!(skipped, vec![true, false, false]);
+}
+
+fn capabilities() -> Capabilities {
+    let accelerator = default_accelerators()[0];
+
+    Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .build()
+}
+
+fn produced(
+    input: FrameFormat,
+    value: serde_json::Value,
+) -> Result<StreamFormat, av_toolbox_core::StageError> {
+    let capabilities = capabilities();
+    let arguments = args(value);
+    let chosen = [Some(StreamFormat::Frames(input))];
+    let outputs = Placebo::produces(&capabilities, &arguments, &chosen)?;
+    let sample = outputs.samples.preferences()[0];
+
+    Ok(outputs.template.with_sample(sample))
+}
+
+#[test]
+fn the_output_format_is_the_input_format() {
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let chroma = FrameLayout::Chroma {
+        subsampling: Subsampling::Yuv420,
+    };
+    let inputs = [
+        yuv420(),
+        format(FrameLayout::Rgb, ten_bit, ColourRange::Full),
+        format(FrameLayout::Grey, SampleFormat::U8, ColourRange::Limited),
+        format(chroma, ten_bit, ColourRange::Limited),
+    ];
+
+    for input in inputs {
+        let output = produced(input, json!({})).expect("valid");
+
+        assert_eq!(output, StreamFormat::Frames(input));
+    }
+}
+
+#[test]
+fn produces_refuses_bad_arguments() {
+    let input = yuv420();
+    let refused = produced(input, json!({ "threshold": [1.0] }));
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn floats_are_left_out_and_masks_refused() {
+    let capabilities = capabilities();
+    let arguments = args(json!({}));
+    let inputs = [Offered::Unknown];
+    let input = yuv420();
+    let float = StreamFormat::Frames(FrameFormat {
+        sample: SampleFormat::F32,
+        ..input
+    });
+    let mask = StreamFormat::Mask(MaskFormat {
+        width: 16,
+        height: 8,
+        sample: SampleFormat::U8,
+        chroma: None,
+    });
+
+    let accepted =
+        Placebo::accepts_input(&capabilities, &arguments, 0, float, &inputs).expect("frames are readable");
+    let refused = Placebo::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
+
+    assert!(accepted.is_empty());
+    assert!(refused.is_err());
 }
