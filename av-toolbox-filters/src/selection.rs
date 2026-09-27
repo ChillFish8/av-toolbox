@@ -6,10 +6,6 @@ use crate::planes::ChannelName;
 /// Which planes a stage works on when `args.planes` is not given.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) enum PlaneDefault {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no registered stage defaults to the first plane yet")
-    )]
     First,
     Every,
 }

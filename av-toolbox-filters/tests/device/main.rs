@@ -2,6 +2,7 @@
 
 mod blend;
 mod deband;
+mod dehalo;
 mod planes;
 mod resample;
 mod resize;
