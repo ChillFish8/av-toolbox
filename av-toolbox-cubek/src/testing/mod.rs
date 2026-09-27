@@ -1,6 +1,6 @@
 mod neighbourhood;
 
-pub use self::neighbourhood::{reference_extreme, reference_smooth};
+pub use self::neighbourhood::{reference_extreme, reference_median, reference_prewitt, reference_smooth};
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 use crate::resize::Taps;

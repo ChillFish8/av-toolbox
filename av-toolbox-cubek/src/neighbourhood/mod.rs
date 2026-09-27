@@ -1,3 +1,5 @@
+mod median;
+mod prewitt;
 #[cfg(test)]
 mod tests;
 
@@ -5,6 +7,8 @@ mod tests;
 // by name.
 use cubecl::prelude::*;
 
+pub use self::median::median;
+pub use self::prewitt::prewitt;
 use crate::{DevicePlane, Dispatch, reflect};
 
 /// The plane one neighbourhood operation reads and the plane it writes, both f32 and one size.

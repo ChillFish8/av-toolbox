@@ -79,3 +79,57 @@ pub fn reference_smooth(input: &[f32], width: u32, height: u32, smooth: Smooth) 
 
     output
 }
+
+/// Takes the median of each sample's window on the CPU, mirroring [median](crate::neighbourhood::median).
+pub fn reference_median(input: &[f32], width: u32, height: u32, radius: u32) -> Vec<f32> {
+    let reach = radius as i32;
+    let mut output = Vec::with_capacity(input.len());
+
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let window_size = ((2 * radius + 1) * (2 * radius + 1)) as usize;
+            let mut window = Vec::with_capacity(window_size);
+
+            for offset_y in -reach..=reach {
+                for offset_x in -reach..=reach {
+                    let value = read_reflected(input, width, height, x + offset_x, y + offset_y);
+                    window.push(value);
+                }
+            }
+
+            window.sort_by(f32::total_cmp);
+            let middle = window.len() / 2;
+            output.push(window[middle]);
+        }
+    }
+
+    output
+}
+
+/// havsfunc's `AvsPrewitt` on the CPU, mirroring [prewitt](crate::neighbourhood::prewitt).
+pub fn reference_prewitt(input: &[f32], width: u32, height: u32, peak: f32) -> Vec<f32> {
+    let mut output = Vec::with_capacity(input.len());
+
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let top_left = read_reflected(input, width, height, x - 1, y - 1);
+            let top = read_reflected(input, width, height, x, y - 1);
+            let top_right = read_reflected(input, width, height, x + 1, y - 1);
+            let left = read_reflected(input, width, height, x - 1, y);
+            let right = read_reflected(input, width, height, x + 1, y);
+            let bottom_left = read_reflected(input, width, height, x - 1, y + 1);
+            let bottom = read_reflected(input, width, height, x, y + 1);
+            let bottom_right = read_reflected(input, width, height, x + 1, y + 1);
+
+            let diagonal = (top_left + top + left - right - bottom - bottom_right).abs();
+            let vertical = (top_left + top + top_right - bottom_left - bottom - bottom_right).abs();
+            let horizontal = (top_left - top_right + left - right + bottom_left - bottom_right).abs();
+            let anti_diagonal = (left - top - top_right - right + bottom_left + bottom).abs();
+
+            let strongest = diagonal.max(vertical).max(horizontal).max(anti_diagonal);
+            output.push(strongest.min(peak));
+        }
+    }
+
+    output
+}

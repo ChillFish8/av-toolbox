@@ -1,5 +1,14 @@
-use av_toolbox_cubek::neighbourhood::{Extreme, NeighbourPlanes, Shape, Smooth, extreme, smooth};
-use av_toolbox_cubek::testing::{reference_extreme, reference_smooth};
+use av_toolbox_cubek::neighbourhood::{
+    Extreme,
+    NeighbourPlanes,
+    Shape,
+    Smooth,
+    extreme,
+    median,
+    prewitt,
+    smooth,
+};
+use av_toolbox_cubek::testing::{reference_extreme, reference_median, reference_prewitt, reference_smooth};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -10,6 +19,8 @@ use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, uplo
 pub enum Operation {
     Extreme(Extreme, Shape),
     Smooth(Smooth),
+    Median(u32),
+    Prewitt(f32),
 }
 
 struct Neighbours {
@@ -40,6 +51,8 @@ impl BuildTask for Neighbours {
         match self.operation {
             Operation::Extreme(which, shape) => extreme(client, &sizing, planes, which, shape),
             Operation::Smooth(which) => smooth(client, &sizing, planes, which),
+            Operation::Median(radius) => median(client, &sizing, planes, radius),
+            Operation::Prewitt(peak) => prewitt(client, &sizing, planes, peak),
         }
 
         read_f32(client, &output)
@@ -98,4 +111,30 @@ fn both_blurs_match_the_reference() {
 
         assert_close(&actual, &expected, 1e-3);
     }
+}
+
+#[test]
+fn every_median_radius_matches_the_reference() {
+    for radius in 1..=3 {
+        for (width, height) in [(29, 17), (2, 9)] {
+            let input = busy(width, height);
+            let operation = Operation::Median(radius);
+
+            let actual = on_device(&input, width, height, operation);
+            let expected = reference_median(&input, width, height, radius);
+
+            assert_eq!(actual, expected, "radius {radius} {width}x{height}");
+        }
+    }
+}
+
+#[test]
+fn prewitt_matches_the_reference() {
+    let input = busy(37, 23);
+    let operation = Operation::Prewitt(255.0);
+
+    let actual = on_device(&input, 37, 23, operation);
+    let expected = reference_prewitt(&input, 37, 23, 255.0);
+
+    assert_eq!(actual, expected);
 }
