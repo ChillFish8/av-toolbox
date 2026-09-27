@@ -107,13 +107,17 @@ fn matches_reference(input: FrameFormat, element: Element, peak: u32, index: u64
 fn eight_and_ten_bit_clips_match_the_reference() {
     let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
 
-    matches_reference(yuv420(64, 32, SampleFormat::U8), Element::U8, 255, 0);
-    matches_reference(yuv420(64, 32, ten_bit), Element::U16, 1023, 7);
+    let eight_bit_input = yuv420(64, 32, SampleFormat::U8);
+    matches_reference(eight_bit_input, Element::U8, 255, 0);
+
+    let ten_bit_input = yuv420(64, 32, ten_bit);
+    matches_reference(ten_bit_input, Element::U16, 1023, 7);
 }
 
 #[test]
 fn an_odd_sized_clip_matches_the_reference() {
-    matches_reference(yuv420(33, 17, SampleFormat::U8), Element::U8, 255, 3);
+    let input = yuv420(33, 17, SampleFormat::U8);
+    matches_reference(input, Element::U8, 255, 3);
 }
 
 #[test]
@@ -129,8 +133,12 @@ fn the_frame_index_moves_the_grain() {
         .collect();
     let args = json!({ "grain": 20.0 });
 
-    let first = run_once_at("deband/placebo", input, input, args.clone(), &planes, 4);
-    let again = run_once_at("deband/placebo", input, input, args.clone(), &planes, 4);
+    let first_args = args.clone();
+    let first = run_once_at("deband/placebo", input, input, first_args, &planes, 4);
+
+    let again_args = args.clone();
+    let again = run_once_at("deband/placebo", input, input, again_args, &planes, 4);
+
     let next = run_once_at("deband/placebo", input, input, args, &planes, 5);
 
     assert_eq!(first, again);

@@ -112,8 +112,7 @@ fn an_array_of_the_wrong_length_is_refused() {
     let message = refusal(value, &input);
 
     assert!(message.contains("threshold"), "{message}");
-    assert!(message.contains('2'), "{message}");
-    assert!(message.contains('3'), "{message}");
+    assert!(message.contains("got 2 for 3 planes"), "{message}");
 }
 
 #[test]
@@ -168,6 +167,51 @@ fn too_many_iterations_and_a_bad_radius_are_refused() {
 }
 
 #[test]
+fn a_non_finite_threshold_is_refused() {
+    let input = yuv420();
+    let args = PlaceboArgs {
+        iterations: 1,
+        threshold: PerPlane::Every(f32::NAN),
+        radius: 16.0,
+        grain: PerPlane::Every(4.0),
+        seed: 0,
+    };
+    let error = plane_settings(&args, &input).expect_err("should be refused");
+
+    assert!(error.to_string().contains("threshold"), "{error}");
+}
+
+#[test]
+fn a_non_finite_grain_element_is_refused() {
+    let input = yuv420();
+    let args = PlaceboArgs {
+        iterations: 1,
+        threshold: PerPlane::Every(3.0),
+        radius: 16.0,
+        grain: PerPlane::Each(vec![4.0, f32::INFINITY, 4.0]),
+        seed: 0,
+    };
+    let error = plane_settings(&args, &input).expect_err("should be refused");
+
+    assert!(error.to_string().contains("grain"), "{error}");
+}
+
+#[test]
+fn a_non_finite_radius_is_refused() {
+    let input = yuv420();
+    let args = PlaceboArgs {
+        iterations: 1,
+        threshold: PerPlane::Every(3.0),
+        radius: f32::INFINITY,
+        grain: PerPlane::Every(4.0),
+        seed: 0,
+    };
+    let error = plane_settings(&args, &input).expect_err("should be refused");
+
+    assert!(error.to_string().contains("radius"), "{error}");
+}
+
+#[test]
 fn sixteen_iterations_are_accepted() {
     let input = yuv420();
     let parsed = args(json!({ "iterations": 16 }));
@@ -214,7 +258,8 @@ fn a_plane_is_skipped_only_when_it_would_not_change() {
     ];
 
     for (value, skipped) in cases {
-        let parsed = args(value.clone());
+        let cloned_value = value.clone();
+        let parsed = args(cloned_value);
         let settings = plane_settings(&parsed, &input).expect("valid");
 
         assert!(settings.iter().all(|plane| plane.skipped == skipped), "{value}");

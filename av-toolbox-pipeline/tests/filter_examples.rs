@@ -141,3 +141,44 @@ fn the_planes_example_writes_444() {
         assert_eq!(frame.luma, expected_luma, "luma should pass through untouched");
     }
 }
+
+/// The mean of each row of a plane `SIZE` samples wide.
+fn row_means(plane: &[u8]) -> Vec<f64> {
+    plane
+        .chunks(SIZE)
+        .map(|row| {
+            let total: u32 = row.iter().map(|sample| u32::from(*sample)).sum();
+            let total_as_f64 = f64::from(total);
+            let row_width = SIZE as f64;
+            total_as_f64 / row_width
+        })
+        .collect()
+}
+
+#[test]
+fn the_deband_example_keeps_the_ramp_and_moves_its_grain() {
+    let decoded = run_example("deband.toml", &[]);
+    let expected_luma = gradient_luma();
+    let expected_means = row_means(&expected_luma);
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for frame in &decoded.frames {
+        let luma = &frame.luma;
+        let means = row_means(luma);
+        for (found, expected) in means.iter().zip(&expected_means) {
+            assert!(
+                (found - expected).abs() <= 1.0,
+                "a row mean moved from {expected} to {found}"
+            );
+        }
+
+        assert!(frame.u_plane.iter().all(|sample| *sample == FLAT_U));
+        assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
+    }
+
+    assert_ne!(
+        decoded.frames[0].luma, decoded.frames[1].luma,
+        "the grain should move between frames"
+    );
+}

@@ -52,7 +52,8 @@ pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -
 /// [apply](crate::resize::apply).
 pub fn reference_resize(input: &[u8], width: u32, height: u32, across: &Taps, down: &Taps) -> Vec<u8> {
     let wide: Vec<u16> = input.iter().map(|sample| u16::from(*sample)).collect();
-    let resized = reference_resize_wide(&wide, width, height, across, down, u16::from(u8::MAX));
+    let largest = u16::from(u8::MAX);
+    let resized = reference_resize_wide(&wide, width, height, across, down, largest);
 
     resized.iter().map(|sample| *sample as u8).collect()
 }
@@ -139,8 +140,10 @@ fn nearest(
 ) -> f32 {
     let x = (column as f32 + 0.5 + offset_x).floor();
     let y = (row as f32 + 0.5 + offset_y).floor();
-    let clamped_x = x.clamp(0.0, (width - 1) as f32) as u32;
-    let clamped_y = y.clamp(0.0, (height - 1) as f32) as u32;
+    let cast_x = x.clamp(0.0, (width - 1) as f32) as u32;
+    let cast_y = y.clamp(0.0, (height - 1) as f32) as u32;
+    let clamped_x = u32::min(cast_x, width - 1);
+    let clamped_y = u32::min(cast_y, height - 1);
 
     f32::from(input[(clamped_y * width + clamped_x) as usize])
 }
@@ -194,7 +197,8 @@ pub fn reference_deband(
             }
 
             let scaled = (result * params.peak + 0.5).floor();
-            output.push(scaled.clamp(0.0, params.peak) as u16);
+            let clamped = scaled.clamp(0.0, params.peak);
+            output.push(clamped as u16);
         }
     }
 

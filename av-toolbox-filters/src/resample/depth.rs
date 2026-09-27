@@ -44,6 +44,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::bits::bits_of;
 use crate::sizing::Sizing;
 
 const STAGE: &str = "resample/depth";
@@ -115,13 +116,6 @@ fn target_sample(depth: u8) -> Result<SampleFormat, StageError> {
     let depth = BitDepth::new(depth).map_err(|_| bad_depth(depth))?;
 
     Ok(SampleFormat::U16 { depth })
-}
-
-fn bits_of(sample: SampleFormat) -> u32 {
-    match sample {
-        SampleFormat::U16 { depth } => u32::from(depth.bits()),
-        _ => 8,
-    }
 }
 
 /// The thresholds a conversion rounds through.

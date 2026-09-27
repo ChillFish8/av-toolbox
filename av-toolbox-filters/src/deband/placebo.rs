@@ -40,6 +40,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::bits::bits_of;
 use crate::sizing::Sizing;
 
 const STAGE: &str = "deband/placebo";
@@ -146,14 +147,6 @@ fn per_plane(value: &PerPlane, name: &str, planes: usize) -> Result<Vec<f32>, St
     }
 
     Ok(values)
-}
-
-/// The bits one sample of `sample` holds.
-pub(crate) fn bits_of(sample: SampleFormat) -> u32 {
-    match sample {
-        SampleFormat::U16 { depth } => u32::from(depth.bits()),
-        _ => 8,
-    }
 }
 
 /// The code value grain fades toward on `channel`, as libplacebo's renderer sets it.

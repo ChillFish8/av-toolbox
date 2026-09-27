@@ -12,6 +12,7 @@ pub fn advance(state: &mut [u32; 3]) {
     }
 
     mix(state);
+
     for lane in state.iter_mut() {
         *lane ^= *lane >> 16;
     }
@@ -95,8 +96,10 @@ fn nearest<E: Int>(
     let last_row = f32::cast_from(height - 1);
     let clamped_x_position = f32::clamp(x, 0.0, last_column);
     let clamped_y_position = f32::clamp(y, 0.0, last_row);
-    let clamped_x = u32::cast_from(clamped_x_position);
-    let clamped_y = u32::cast_from(clamped_y_position);
+    let cast_x = u32::cast_from(clamped_x_position);
+    let cast_y = u32::cast_from(clamped_y_position);
+    let clamped_x = u32::min(cast_x, width - 1);
+    let clamped_y = u32::min(cast_y, height - 1);
     let index = clamped_y * width + clamped_x;
 
     f32::cast_from(input[index as usize])
@@ -212,7 +215,7 @@ fn launch<E: Int, R: Runtime>(
     let draws = params.draws();
 
     // Safety: the input and output hold `width * height` samples of `E`, and every read is clamped
-    // inside the plane.
+    // inside the plane, including when an offset goes non-finite.
     unsafe {
         deband_plane::launch_unchecked::<E, R>(
             client,
@@ -292,7 +295,8 @@ mod tests {
     #[test]
     fn a_flat_plane_stays_flat_without_grain() {
         let flat = vec![120u16; 32 * 16];
-        let debanded = reference_deband(&flat, 32, 16, &params(4, 3.0, 0.0), 9);
+        let no_grain = params(4, 3.0, 0.0);
+        let debanded = reference_deband(&flat, 32, 16, &no_grain, 9);
 
         assert_eq!(debanded, flat);
     }
@@ -300,7 +304,8 @@ mod tests {
     #[test]
     fn no_iterations_and_no_grain_changes_nothing() {
         let values: Vec<u16> = (0..32 * 16).map(|index| (index * 37 % 256) as u16).collect();
-        let debanded = reference_deband(&values, 32, 16, &params(0, 3.0, 0.0), 9);
+        let no_iterations = params(0, 3.0, 0.0);
+        let debanded = reference_deband(&values, 32, 16, &no_iterations, 9);
 
         assert_eq!(debanded, values);
     }
@@ -308,7 +313,8 @@ mod tests {
     #[test]
     fn grain_changes_a_mid_grey_plane() {
         let flat = vec![128u16; 32 * 16];
-        let grained = reference_deband(&flat, 32, 16, &params(1, 3.0, 20.0), 9);
+        let with_grain = params(1, 3.0, 20.0);
+        let grained = reference_deband(&flat, 32, 16, &with_grain, 9);
 
         assert_ne!(grained, flat);
     }

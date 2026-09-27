@@ -9,6 +9,7 @@
 //! - `planes/extract` pulls one plane, or the chroma pair, out of a clip.
 //! - `planes/merge` builds a clip by picking each plane from one of several clips.
 
+mod bits;
 mod blend;
 mod deband;
 mod planes;
