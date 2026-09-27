@@ -5,6 +5,7 @@ mod deband;
 mod depth;
 mod histogram;
 mod labels;
+mod neighbourhood;
 mod reduce;
 mod resize;
 mod sobel;

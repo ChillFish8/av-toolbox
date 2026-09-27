@@ -10,6 +10,7 @@
 //! - [sobel] for image gradients.
 //! - [values] for moving integer planes into f32 code values and back.
 //! - [labels] for connected components.
+//! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians and Prewitt.
 //! - [resize] for separable resizing through per axis weight tables.
 //! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
 
@@ -20,6 +21,7 @@ pub mod depth;
 mod dispatch;
 pub mod histogram;
 pub mod labels;
+pub mod neighbourhood;
 mod plane;
 pub mod reduce;
 pub mod resize;
