@@ -7,6 +7,7 @@ mod depth;
 mod histogram;
 mod labels;
 mod neighbourhood;
+mod padding;
 mod reduce;
 mod resize;
 mod rgvs;

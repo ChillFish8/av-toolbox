@@ -1,5 +1,6 @@
 mod dehalo;
 mod neighbourhood;
+mod padding;
 mod resize;
 mod rgvs;
 
@@ -11,6 +12,7 @@ pub use self::neighbourhood::{
     reference_prewitt,
     reference_smooth,
 };
+pub use self::padding::{reference_crop, reference_pad};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};
 pub use self::rgvs::{reference_remove_grain, reference_repair};
 use crate::deband::{DebandParams, advance, unit};
