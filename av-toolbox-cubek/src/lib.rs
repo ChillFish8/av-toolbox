@@ -8,6 +8,7 @@
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
 //! - [sobel] for image gradients.
+//! - [values] for moving integer planes into f32 code values and back.
 //! - [labels] for connected components.
 //! - [resize] for separable resizing through per axis weight tables.
 //! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
@@ -25,6 +26,7 @@ pub mod resize;
 pub mod sobel;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod values;
 pub mod warp;
 
 pub use self::border::reflect;
