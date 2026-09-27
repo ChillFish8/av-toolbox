@@ -1,4 +1,5 @@
 mod median;
+mod min_blur;
 mod prewitt;
 #[cfg(test)]
 mod tests;
@@ -8,6 +9,7 @@ mod tests;
 use cubecl::prelude::*;
 
 pub use self::median::median;
+pub use self::min_blur::{MinBlurPlanes, median_of_three_sample, min_blur};
 pub use self::prewitt::prewitt;
 use crate::{DevicePlane, Dispatch, reflect};
 

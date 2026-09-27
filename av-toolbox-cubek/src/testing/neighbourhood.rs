@@ -1,5 +1,5 @@
 use super::reflect;
-use crate::neighbourhood::{Extreme, Shape, Smooth};
+use crate::neighbourhood::{Extreme, Shape, Smooth, median_of_three_sample};
 
 /// The value at `column`, `row`, read through reflection.
 pub(super) fn read_reflected(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
@@ -101,6 +101,32 @@ pub fn reference_median(input: &[f32], width: u32, height: u32, radius: u32) -> 
             let middle = window.len() / 2;
             output.push(window[middle]);
         }
+    }
+
+    output
+}
+
+/// Runs MinBlur on the CPU, mirroring [min_blur](crate::neighbourhood::min_blur).
+pub fn reference_min_blur(input: &[f32], width: u32, height: u32, radius: u32) -> Vec<f32> {
+    let blurred = match radius {
+        1 => reference_smooth(input, width, height, Smooth::Binomial),
+        2 => {
+            let binomial = reference_smooth(input, width, height, Smooth::Binomial);
+            reference_smooth(&binomial, width, height, Smooth::Box)
+        },
+        _ => {
+            let binomial = reference_smooth(input, width, height, Smooth::Binomial);
+            let boxed_once = reference_smooth(&binomial, width, height, Smooth::Box);
+            reference_smooth(&boxed_once, width, height, Smooth::Box)
+        },
+    };
+    let median_plane = reference_median(input, width, height, radius);
+
+    let mut output = Vec::with_capacity(input.len());
+    for index in 0..input.len() {
+        let picked = median_of_three_sample(input[index], blurred[index], median_plane[index]);
+
+        output.push(picked);
     }
 
     output
