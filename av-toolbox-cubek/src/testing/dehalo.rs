@@ -1,16 +1,24 @@
 use super::{
+    reference_crop,
     reference_extreme,
     reference_median,
+    reference_min_blur,
+    reference_narrow,
+    reference_pad,
     reference_prewitt,
     reference_repair,
     reference_resize_float,
     reference_smooth,
+    reference_warp_sharp,
 };
+use crate::dehalo::PADDING;
 use crate::dehalo::alpha::{AlphaParams, alpha_sizes, halo_mask_sample, strength_sample};
 use crate::dehalo::fine::{FineParams, contrast_sample, outside_sample};
+use crate::dehalo::yahr::YahrParams;
 use crate::neighbourhood::{Expansion, Extreme, Shape, Smooth, expansion_passes};
 use crate::resize::{Kernel, centred_taps};
 use crate::rgvs::RepairMode;
+use crate::warp::WarpParams;
 
 const MITCHELL: Kernel = Kernel::Bicubic {
     b: 1.0 / 3.0,
@@ -160,4 +168,49 @@ pub fn reference_fine_dehalo(input: &[f32], width: u32, height: u32, params: &Fi
         .collect();
 
     reference_merge_masked(input, &dehaloed, &outside, peak)
+}
+
+/// Zips two planes and subtracts, sample by sample.
+fn subtract(first: &[f32], second: &[f32]) -> Vec<f32> {
+    first
+        .iter()
+        .zip(second)
+        .map(|(value, other)| value - other)
+        .collect()
+}
+
+/// Runs [reference_warp_sharp] on a plane grown by [PADDING] on every side, on the CPU.
+///
+/// The plane is rounded to `u16` before the warp and back to `f32` after, mirroring how
+/// aWarpSharp2's own mask and warp work in integer samples.
+pub fn reference_padded_warp(input: &[f32], width: u32, height: u32, params: &WarpParams) -> Vec<f32> {
+    let padded = reference_pad(input, width, height, PADDING);
+    let padded_width = width + 2 * PADDING;
+    let padded_height = height + 2 * PADDING;
+    let peak = params.peak() as f32;
+
+    let narrowed = reference_narrow(&padded, peak);
+    let warped = reference_warp_sharp(&narrowed, padded_width, padded_height, params);
+    let widened: Vec<f32> = warped.iter().map(|value| f32::from(*value)).collect();
+
+    reference_crop(&widened, padded_width, padded_height, PADDING)
+}
+
+/// The whole of havsfunc's YAHR on one f32 plane on the CPU.
+pub fn reference_yahr(input: &[f32], width: u32, height: u32, params: &YahrParams) -> Vec<f32> {
+    let min_blurred = reference_min_blur(input, width, height, 2);
+    let blurred = reference_smooth(&min_blurred, width, height, Smooth::Binomial);
+    let detail = subtract(input, &blurred);
+
+    let warp_params = params.warp_params();
+    let warped = reference_padded_warp(input, width, height, &warp_params);
+
+    let warped_min_blurred = reference_min_blur(&warped, width, height, 2);
+    let warped_blurred = reference_smooth(&warped_min_blurred, width, height, Smooth::Binomial);
+    let warped_detail = subtract(&warped, &warped_blurred);
+
+    let limited = reference_repair(&detail, &warped_detail, width, height, RepairMode::Thirteen);
+    let change = subtract(&detail, &limited);
+
+    subtract(input, &change)
 }

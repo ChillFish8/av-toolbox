@@ -4,7 +4,13 @@ mod padding;
 mod resize;
 mod rgvs;
 
-pub use self::dehalo::{reference_dehalo_alpha, reference_fine_dehalo, reference_merge_masked};
+pub use self::dehalo::{
+    reference_dehalo_alpha,
+    reference_fine_dehalo,
+    reference_merge_masked,
+    reference_padded_warp,
+    reference_yahr,
+};
 pub use self::neighbourhood::{
     reference_extreme,
     reference_median,

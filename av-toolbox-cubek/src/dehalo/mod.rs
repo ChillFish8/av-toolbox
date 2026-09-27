@@ -2,12 +2,16 @@ pub mod alpha;
 pub mod fine;
 #[cfg(test)]
 mod tests;
+pub mod yahr;
 
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
 
 use crate::{DevicePlane, Dispatch};
+
+/// The amount the dehalo filters pad a plane by before warping it, as havsfunc does.
+pub const PADDING: u32 = 6;
 
 /// The planes one masked merge reads and writes, all f32 and one size.
 #[derive(Debug, Clone, Copy)]
@@ -54,5 +58,41 @@ pub fn merge_masked<R: Runtime>(
     // Safety: every plane holds `samples` f32 values.
     unsafe {
         merge_masked_kernel::launch_unchecked::<R>(client, cubes, unit, clip, filtered, mask, output, peak);
+    }
+}
+
+/// The planes one difference reads and writes, all f32 and one size.
+#[derive(Debug, Clone, Copy)]
+pub struct DifferencePlanes<'a> {
+    pub first: DevicePlane<'a>,
+    pub second: DevicePlane<'a>,
+    pub output: DevicePlane<'a>,
+}
+
+#[cube(launch_unchecked)]
+fn difference_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    output[ABSOLUTE_POS] = first[ABSOLUTE_POS] - second[ABSOLUTE_POS];
+}
+
+/// Writes `first - second` at each sample, which may be negative.
+pub fn difference<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: DifferencePlanes<'_>,
+) {
+    let samples = planes.output.samples();
+    let first = planes.first.array::<R>();
+    let second = planes.second.array::<R>();
+    let output = planes.output.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        difference_kernel::launch_unchecked::<R>(client, cubes, unit, first, second, output);
     }
 }
