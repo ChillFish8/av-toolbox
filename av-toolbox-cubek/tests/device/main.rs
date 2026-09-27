@@ -9,3 +9,4 @@ mod reduce;
 mod resize;
 mod sobel;
 mod support;
+mod warp;

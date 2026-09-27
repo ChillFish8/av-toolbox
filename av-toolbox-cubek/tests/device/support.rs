@@ -1,3 +1,4 @@
+use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::{DevicePlane, Dispatch};
 use av_toolbox_gpu::{Backend, Device, FrameContext};
 use cubecl::prelude::*;
@@ -66,6 +67,23 @@ pub fn plane(handle: &Handle, width: u32, height: u32) -> DevicePlane<'_> {
     // Safety: every caller in these tests sizes `handle` for `width * height` elements of the type
     // the kernel reads it as.
     unsafe { DevicePlane::new(handle, width, height) }
+}
+
+pub fn to_bytes(values: &[u16], element: Element) -> Vec<u8> {
+    match element {
+        Element::U8 => values.iter().map(|value| *value as u8).collect(),
+        Element::U16 => values.iter().flat_map(|value| value.to_le_bytes()).collect(),
+    }
+}
+
+pub fn from_bytes(bytes: &[u8], element: Element) -> Vec<u16> {
+    match element {
+        Element::U8 => bytes.iter().map(|value| u16::from(*value)).collect(),
+        Element::U16 => {
+            let (pairs, _) = bytes.as_chunks::<2>();
+            pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
+        },
+    }
 }
 
 pub fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {

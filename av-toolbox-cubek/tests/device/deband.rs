@@ -4,7 +4,7 @@ use av_toolbox_cubek::testing::reference_deband;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::support::{Sizing, backend, empty, plane, read_u8, upload_u8};
+use crate::support::{Sizing, backend, empty, from_bytes, plane, read_u8, to_bytes, upload_u8};
 
 struct Deband {
     input: Vec<u16>,
@@ -36,23 +36,6 @@ impl BuildTask for Deband {
 
         let read = read_u8(client, &output);
         from_bytes(&read, self.params.element)
-    }
-}
-
-fn to_bytes(values: &[u16], element: Element) -> Vec<u8> {
-    match element {
-        Element::U8 => values.iter().map(|value| *value as u8).collect(),
-        Element::U16 => values.iter().flat_map(|value| value.to_le_bytes()).collect(),
-    }
-}
-
-fn from_bytes(bytes: &[u8], element: Element) -> Vec<u16> {
-    match element {
-        Element::U8 => bytes.iter().map(|value| u16::from(*value)).collect(),
-        Element::U16 => {
-            let (pairs, _) = bytes.as_chunks::<2>();
-            pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
-        },
     }
 }
 
