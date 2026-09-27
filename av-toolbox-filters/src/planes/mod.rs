@@ -1,4 +1,5 @@
 mod extract;
+mod merge;
 #[cfg(test)]
 mod tests;
 
@@ -7,11 +8,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 pub(crate) use self::extract::Extract;
+pub(crate) use self::merge::Merge;
 
 /// One channel, as a stage argument names it.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-#[expect(dead_code, reason = "no stage in this crate takes a ChannelName argument yet")]
 pub(crate) enum ChannelName {
     Y,
     U,
@@ -22,7 +23,6 @@ pub(crate) enum ChannelName {
 }
 
 impl ChannelName {
-    #[expect(dead_code, reason = "no stage in this crate takes a ChannelName argument yet")]
     pub(crate) const fn channel(self) -> Channel {
         match self {
             Self::Y => Channel::Y,

@@ -6,6 +6,7 @@
 //! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
 //! - `resample/chroma` changes a YUV clip's chroma subsampling and siting.
 //! - `planes/extract` pulls one plane, or the chroma pair, out of a clip.
+//! - `planes/merge` builds a clip by picking each plane from one of several clips.
 
 mod blend;
 mod planes;
@@ -30,6 +31,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<Depth>()?;
     registry.register_filter::<Chroma>()?;
     registry.register_filter::<planes::Extract>()?;
+    registry.register_filter::<planes::Merge>()?;
 
     Ok(())
 }
@@ -62,5 +64,6 @@ mod tests {
         assert!(registered("resample/depth"));
         assert!(registered("resample/chroma"));
         assert!(registered("planes/extract"));
+        assert!(registered("planes/merge"));
     }
 }

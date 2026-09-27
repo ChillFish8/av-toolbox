@@ -26,6 +26,7 @@ use av_toolbox_gpu::{
     SampleFormat,
     StreamFormat,
     StreamItem,
+    StreamTemplate,
 };
 use cubecl::prelude::Runtime;
 
@@ -394,4 +395,171 @@ pub(crate) fn every_plane_is_shared(
         input,
         output,
     })
+}
+
+/// A clip read back from the device, as its format and every plane's bytes.
+pub(crate) struct DeviceOutput {
+    pub(crate) format: FrameFormat,
+    pub(crate) planes: Vec<Vec<u8>>,
+}
+
+/// Builds `stage` against one positional input per entry of `inputs`, working out its output
+/// format the way a pipeline would, by asking the stage what it produces.
+fn built_multi_filter(
+    backend: &Backend,
+    stage: &str,
+    inputs: &[FrameFormat],
+    args: serde_json::Value,
+) -> (Box<dyn Filter>, FrameFormat) {
+    let mut registry = PipelineRegistry::new();
+    av_toolbox_filters::register(&mut registry).expect("the filters register");
+
+    let arguments: Vec<InputArgument> = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let handle = StageHandle::new(index as u64 + 1);
+            InputArgument::positional(handle, StreamType::Frames)
+        })
+        .collect();
+
+    let prepared = registry
+        .prepare(StageKind::Filter, stage, &args, &arguments)
+        .expect("should prepare");
+    let PreparedStage::Filter(prepared) = prepared else {
+        panic!("expected a filter");
+    };
+
+    let chosen: Vec<Option<StreamFormat>> = inputs
+        .iter()
+        .map(|format| Some(StreamFormat::Frames(*format)))
+        .collect();
+
+    let produced = prepared
+        .produces(backend.capabilities(), &chosen)
+        .expect("should produce a format");
+    let StreamTemplate::Frames(output) = produced.template else {
+        panic!("expected a frame template");
+    };
+
+    let resolved = ResolvedFormats::new(chosen, Some(StreamFormat::Frames(output)));
+    let filter = prepared
+        .build(backend, &resolved)
+        .expect("should build")
+        .into_device()
+        .expect("a device filter");
+
+    (filter, output)
+}
+
+/// Runs one frame through a filter with several inputs, and reads every output plane back.
+struct MultiFilterOnce {
+    filter: Box<dyn Filter>,
+    inputs: Vec<FrameFormat>,
+    input_planes: Vec<Vec<Vec<u8>>>,
+    output: FrameFormat,
+}
+
+impl BuildTask for MultiFilterOnce {
+    type Output = Vec<Vec<u8>>;
+
+    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+        let mut context = build.frame_context();
+        let host = HostPool::new();
+
+        let mut slots: Vec<Option<StreamItem>> = Vec::with_capacity(self.inputs.len());
+        for (input_index, input_format) in self.inputs.iter().enumerate() {
+            let meta = FrameMeta::at(0);
+            let mut frame = host.alloc_frame(input_format, meta);
+            for (channel_index, channel) in input_format.channels().iter().enumerate() {
+                let plane = frame
+                    .plane_mut(*channel)
+                    .expect("the format carries this channel");
+                plane.copy_from_slice(&self.input_planes[input_index][channel_index]);
+            }
+
+            let frozen = frame.freeze();
+            let item = HostStreamItem::Frame(frozen);
+            let loaded = context.load_host(&item).expect("the item should load");
+            slots.push(Some(loaded));
+        }
+
+        self.filter
+            .start_of_stream(&mut context)
+            .expect("should start the stream");
+
+        let inputs = Inputs::new(slots);
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+
+        assert_eq!(processed.format(), &self.output);
+
+        self.output
+            .channels()
+            .iter()
+            .map(|channel| {
+                let plane = processed
+                    .plane(*channel)
+                    .expect("the output carries this channel");
+                let handle = plane.buffer().handle().clone();
+                let bytes = build
+                    .client()
+                    .read_one(handle)
+                    .expect("the device should hand back the plane");
+                bytes.to_vec()
+            })
+            .collect()
+    }
+}
+
+/// Runs `stage` on one frame built from `input` and `planes`, and reads its output back.
+pub(crate) fn run_filter_on_frame(
+    stage: &str,
+    args: serde_json::Value,
+    input: &FrameFormat,
+    planes: &[Vec<u8>],
+) -> DeviceOutput {
+    let backend = backend();
+    let (filter, output) = built_multi_filter(&backend, stage, std::slice::from_ref(input), args);
+
+    let planes = backend.build(MultiFilterOnce {
+        filter,
+        inputs: vec![*input],
+        input_planes: vec![planes.to_vec()],
+        output,
+    });
+
+    DeviceOutput {
+        format: output,
+        planes,
+    }
+}
+
+/// Runs `stage` on the frame `input` carries, chaining one device output into the next stage.
+pub(crate) fn run_filter_on_output(
+    stage: &str,
+    args: serde_json::Value,
+    input: &DeviceOutput,
+) -> DeviceOutput {
+    run_filter_on_frame(stage, args, &input.format, &input.planes)
+}
+
+/// Runs `planes/merge` on one positional input per entry of `inputs`, and reads its output back.
+pub(crate) fn merge_frames(args: serde_json::Value, inputs: &[DeviceOutput]) -> DeviceOutput {
+    let backend = backend();
+    let formats: Vec<FrameFormat> = inputs.iter().map(|output| output.format).collect();
+    let (filter, output) = built_multi_filter(&backend, "planes/merge", &formats, args);
+
+    let input_planes: Vec<Vec<Vec<u8>>> = inputs.iter().map(|output| output.planes.clone()).collect();
+
+    let planes = backend.build(MultiFilterOnce {
+        filter,
+        inputs: formats,
+        input_planes,
+        output,
+    });
+
+    DeviceOutput {
+        format: output,
+        planes,
+    }
 }
