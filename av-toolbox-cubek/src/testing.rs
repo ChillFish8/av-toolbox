@@ -218,6 +218,8 @@ fn sample_at(input: &[u16], width: i32, column: i32, row: i32) -> i32 {
 }
 
 /// Builds aWarpSharp2's edge mask on the CPU, mirroring [edge_mask](crate::warp::edge_mask).
+///
+/// Every plane is one size. A plane under 3 samples across or down gets an all-zero mask.
 pub fn reference_edge_mask(input: &[u16], width: u32, height: u32, params: &WarpParams) -> Vec<u32> {
     if width < 3 || height < 3 {
         return vec![0; input.len()];

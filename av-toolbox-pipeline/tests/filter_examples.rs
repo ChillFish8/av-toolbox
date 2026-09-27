@@ -182,3 +182,18 @@ fn the_deband_example_keeps_the_ramp_and_moves_its_grain() {
         "the grain should move between frames"
     );
 }
+
+#[test]
+fn the_warp_example_leaves_an_even_ramp_alone() {
+    // An even ramp has the same edge strength everywhere, so the mask is flat and nothing moves.
+    let decoded = run_example("warp.toml", &[]);
+    let expected_luma = gradient_luma();
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for frame in &decoded.frames {
+        assert_eq!(frame.luma, expected_luma);
+        assert!(frame.u_plane.iter().all(|sample| *sample == FLAT_U));
+        assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
+    }
+}

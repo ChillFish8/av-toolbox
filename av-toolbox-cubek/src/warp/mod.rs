@@ -208,6 +208,8 @@ fn warp_kernel<E: Int>(
 }
 
 /// Writes aWarpSharp2's edge mask of `input` into `mask`, which holds u32 values.
+///
+/// Every plane is one size. A plane under 3 samples across or down gets an all-zero mask.
 pub fn edge_mask<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -256,6 +258,8 @@ fn launch_edge_mask<E: Int, R: Runtime>(
 }
 
 /// Moves each sample of `input` along the slope of `mask` into `output`.
+///
+/// Every plane is one size.
 pub fn warp_plane<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,

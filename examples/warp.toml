@@ -1,0 +1,28 @@
+# Reads a y4m clip, thins its lines with aWarpSharp2 on luma, and writes it back.
+#
+# Raise args.depth to thin harder, or give a negative depth to thicken.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "y4m/pipe"
+args.path = "{{ input }}"
+
+[filter.thinned]
+type = "warp/awarpsharp"
+inputs = ["input"]
+args.depth = 8
+args.planes = ["y"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["thinned"]
+args.path = "{{ output }}"

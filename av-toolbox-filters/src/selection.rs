@@ -27,7 +27,7 @@ fn listed_twice(stage: &str, channel: Channel) -> StageError {
 }
 
 fn not_carried(stage: &str, channel: Channel, layout: FrameLayout) -> StageError {
-    let message = format!("{stage} cannot work on {channel} of a {layout} clip");
+    let message = format!("{stage} cannot work on {channel} of a {layout} clip in planes");
 
     StageError::msg(message)
 }
@@ -146,6 +146,9 @@ mod tests {
     fn a_plane_the_layout_does_not_carry_is_refused() {
         let message = refusal(&[ChannelName::R]);
 
-        assert!(message.contains("R") && message.contains(STAGE), "{message}");
+        assert!(
+            message.contains("R") && message.contains(STAGE) && message.contains("planes"),
+            "{message}"
+        );
     }
 }

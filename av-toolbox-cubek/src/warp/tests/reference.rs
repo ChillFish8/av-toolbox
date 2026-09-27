@@ -13,7 +13,6 @@ fn eight_bit(thresh: u32, depth: i32) -> WarpParams {
     }
 }
 
-/// Three rows of `row`.
 fn three_rows(row: &[u16]) -> Vec<u16> {
     row.repeat(3)
 }
@@ -80,6 +79,26 @@ fn the_r6_blur_weighs_the_centre_three_eighths() {
     let blurred = reference_blur_mask(&mask, 13, 1, BlurKind::R6);
 
     assert_eq!(blurred[6], 24);
+}
+
+#[test]
+fn the_r6_end_zone_wins_across_a_narrow_row() {
+    // Position 4 is in both zones. Across a row the end zone wins.
+    let mask = vec![64, 0, 0, 0, 0, 0, 0, 0];
+
+    let blurred = reference_blur_mask(&mask, 8, 1, BlurKind::R6);
+
+    assert_eq!(blurred[4], 12);
+}
+
+#[test]
+fn the_r6_start_zone_wins_down_a_narrow_column() {
+    // Position 4 is in both zones. Down a column the start zone wins.
+    let mask = vec![0, 0, 0, 0, 0, 0, 0, 64];
+
+    let blurred = reference_blur_mask(&mask, 1, 8, BlurKind::R6);
+
+    assert_eq!(blurred[4], 16);
 }
 
 #[test]

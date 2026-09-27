@@ -39,6 +39,7 @@ impl BuildTask for WarpSharp {
             scratch: scratch_plane,
             output: output_plane,
         };
+
         warp_sharp(client, &sizing, planes, &self.params);
 
         let read = read_u8(client, &output);
@@ -120,16 +121,39 @@ fn small_planes_clamp_every_read() {
     }
 }
 
+/// A hard step, 0 in the left half and 65535 in the right half.
+fn stepped(width: u32, height: u32) -> Vec<u16> {
+    (0..width * height)
+        .map(|index| {
+            let column = index % width;
+
+            if column < width / 2 { 0 } else { u16::MAX }
+        })
+        .collect()
+}
+
 #[test]
 fn sixteen_bit_extremes_match_the_reference() {
+    let input = stepped(40, 24);
+    let mut moved_something = false;
+
     for depth in [-128, 127] {
         let chosen = WarpParams {
             thresh: 255,
             ..params(Element::U16, 16, BlurKind::R6, depth)
         };
 
-        matches_reference(40, 24, chosen);
+        let actual = on_device(&input, 40, 24, chosen);
+        let expected = reference_warp_sharp(&input, 40, 24, &chosen);
+
+        assert_eq!(actual, expected, "40x24 {chosen:?}");
+
+        if actual != input {
+            moved_something = true;
+        }
     }
+
+    assert!(moved_something, "neither depth moved a sample off the input");
 }
 
 #[test]
@@ -143,8 +167,9 @@ fn a_zero_threshold_leaves_all_but_the_last_row_alone() {
     let warped = on_device(&input, 40, 24, chosen);
     let expected = reference_warp_sharp(&input, 40, 24, &chosen);
 
-    let last_row_start = 40 * 23;
     assert_eq!(warped, expected);
+
+    let last_row_start = 40 * 23;
     assert_eq!(warped[..last_row_start], input[..last_row_start]);
 }
 

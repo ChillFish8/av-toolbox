@@ -40,23 +40,16 @@ fn as_bytes(values: &[Vec<u16>], element: Element) -> Vec<Vec<u8>> {
 
 /// Runs `warp/awarpsharp` on `input` and checks each plane against the reference, or against the
 /// input where the plane is not selected.
-fn matches_reference(
-    input: FrameFormat,
-    element: Element,
-    bits: u32,
-    args: serde_json::Value,
-    expected: WarpParams,
-    selected: &[bool],
-) {
-    let peak = (1u32 << bits) - 1;
+fn matches_reference(input: FrameFormat, args: serde_json::Value, expected: WarpParams, selected: &[bool]) {
+    let peak = expected.peak() as u32;
     let values = patterned(&input, peak);
-    let planes = as_bytes(&values, element);
+    let planes = as_bytes(&values, expected.element);
 
     let warped = run_once("warp/awarpsharp", input, input, args, &planes);
 
     for (plane, channel) in input.channels().iter().enumerate() {
         let (width, height) = input.channel_dimensions(*channel).expect("carried");
-        let actual = from_bytes(&warped[plane], element);
+        let actual = from_bytes(&warped[plane], expected.element);
         let label = channel.to_string();
 
         if selected[plane] {
@@ -88,15 +81,8 @@ fn eight_and_ten_bit_clips_match_the_reference() {
     let ten_bit_params = default_params(Element::U16, 10);
     let every = [true, true, true];
 
-    matches_reference(
-        eight_bit_input,
-        Element::U8,
-        8,
-        json!({}),
-        eight_bit_params,
-        &every,
-    );
-    matches_reference(ten_bit_input, Element::U16, 10, json!({}), ten_bit_params, &every);
+    matches_reference(eight_bit_input, json!({}), eight_bit_params, &every);
+    matches_reference(ten_bit_input, json!({}), ten_bit_params, &every);
 }
 
 #[test]
@@ -108,7 +94,7 @@ fn the_r2_blur_runs_three_passes_by_default() {
         ..default_params(Element::U8, 8)
     };
 
-    matches_reference(input, Element::U8, 8, json!({ "type": "r2" }), expected, &[true]);
+    matches_reference(input, json!({ "type": "r2" }), expected, &[true]);
 }
 
 #[test]
@@ -117,7 +103,7 @@ fn only_the_named_rgb_plane_changes() {
     let expected = default_params(Element::U8, 8);
     let args = json!({ "planes": ["g"] });
 
-    matches_reference(input, Element::U8, 8, args, expected, &[false, true, false]);
+    matches_reference(input, args, expected, &[false, true, false]);
 }
 
 #[test]
