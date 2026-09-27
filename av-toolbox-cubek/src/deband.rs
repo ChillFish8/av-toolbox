@@ -1,4 +1,9 @@
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
+use cubecl::prelude::*;
+
 use crate::depth::Element;
+use crate::{DevicePlane, Dispatch};
 
 /// One step of libplacebo's pcg3d generator, in wrapping arithmetic.
 pub fn advance(state: &mut [u32; 3]) {
@@ -61,6 +66,171 @@ impl DebandParams {
         let grain_draws = u32::from(self.grain > 0.0);
 
         self.iterations + grain_draws
+    }
+}
+
+/// The plane one deband reads and the plane it writes, both the same size.
+#[derive(Debug, Clone, Copy)]
+pub struct DebandPlanes<'a> {
+    pub input: DevicePlane<'a>,
+    pub output: DevicePlane<'a>,
+}
+
+#[cube]
+fn nearest<E: Int>(
+    input: &Array<E>,
+    column: u32,
+    row: u32,
+    offset_x: f32,
+    offset_y: f32,
+    width: u32,
+    height: u32,
+) -> f32 {
+    let column_position = f32::cast_from(column);
+    let row_position = f32::cast_from(row);
+    let x = f32::floor(column_position + 0.5 + offset_x);
+    let y = f32::floor(row_position + 0.5 + offset_y);
+
+    let last_column = f32::cast_from(width - 1);
+    let last_row = f32::cast_from(height - 1);
+    let clamped_x_position = f32::clamp(x, 0.0, last_column);
+    let clamped_y_position = f32::clamp(y, 0.0, last_row);
+    let clamped_x = u32::cast_from(clamped_x_position);
+    let clamped_y = u32::cast_from(clamped_y_position);
+    let index = clamped_y * width + clamped_x;
+
+    f32::cast_from(input[index as usize])
+}
+
+#[cube(launch_unchecked)]
+fn deband_plane<E: Int>(
+    input: &Array<E>,
+    output: &mut Array<E>,
+    width: u32,
+    height: u32,
+    iterations: u32,
+    draws: u32,
+    radius: f32,
+    threshold: f32,
+    grain: f32,
+    neutral: f32,
+    peak: f32,
+    salt: u32,
+) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let column = position % width;
+    let row = position / width;
+
+    let mut lane_x = column;
+    let mut lane_y = row;
+    let mut lane_z = salt;
+    let mut result = f32::cast_from(input[ABSOLUTE_POS]) / peak;
+
+    for draw in 0..draws {
+        lane_x = lane_x * 1664525u32 + 1013904223u32;
+        lane_y = lane_y * 1664525u32 + 1013904223u32;
+        lane_z = lane_z * 1664525u32 + 1013904223u32;
+        lane_x += lane_y * lane_z;
+        lane_y += lane_z * lane_x;
+        lane_z += lane_x * lane_y;
+        lane_x ^= lane_x >> 16u32;
+        lane_y ^= lane_y >> 16u32;
+        lane_z ^= lane_z >> 16u32;
+        lane_x += lane_y * lane_z;
+        lane_y += lane_z * lane_x;
+        lane_z += lane_x * lane_y;
+
+        let first = f32::cast_from(lane_x) * 2.3283064e-10f32;
+        let second = f32::cast_from(lane_y) * 2.3283064e-10f32;
+
+        if draw < iterations {
+            let step = f32::cast_from(draw + 1);
+            let distance = first * step * radius;
+            let angle = second * 6.2831855f32;
+            let offset_x = distance * f32::cos(angle);
+            let offset_y = distance * f32::sin(angle);
+
+            let total = nearest::<E>(input, column, row, offset_x, offset_y, width, height)
+                + nearest::<E>(input, column, row, -offset_x, offset_y, width, height)
+                + nearest::<E>(input, column, row, -offset_x, -offset_y, width, height)
+                + nearest::<E>(input, column, row, offset_x, -offset_y, width, height);
+            let average = total / (4.0 * peak);
+            let bound = threshold / step;
+            let distance_from_average = f32::abs(result - average);
+
+            if distance_from_average <= bound {
+                result = average;
+            }
+        } else {
+            let distance_from_neutral = f32::abs(result - neutral);
+            let strength = f32::min(distance_from_neutral, grain);
+            result += strength * (first - 0.5);
+        }
+    }
+
+    let scaled = f32::floor(result * peak + 0.5);
+    let clamped = f32::clamp(scaled, 0.0, peak);
+    output[ABSOLUTE_POS] = E::cast_from(clamped);
+}
+
+/// Debands `planes.input` into `planes.output`, drawing from a generator seeded with `salt`.
+pub fn deband<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: DebandPlanes<'_>,
+    params: &DebandParams,
+    salt: u32,
+) {
+    match params.element {
+        Element::U8 => launch::<u8, R>(client, dispatch, planes, params, salt),
+        Element::U16 => launch::<u16, R>(client, dispatch, planes, params, salt),
+    }
+}
+
+fn launch<E: Int, R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: DebandPlanes<'_>,
+    params: &DebandParams,
+    salt: u32,
+) {
+    let width = planes.input.width();
+    let height = planes.input.height();
+    let input = planes.input.array::<R>();
+    let output = planes.output.array::<R>();
+    let samples = planes.output.samples();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    let threshold = params.threshold / 1000.0;
+    let grain = params.grain / 1000.0;
+    let neutral = params.neutral / params.peak;
+    let draws = params.draws();
+
+    // Safety: the input and output hold `width * height` samples of `E`, and every read is clamped
+    // inside the plane.
+    unsafe {
+        deband_plane::launch_unchecked::<E, R>(
+            client,
+            cubes,
+            unit,
+            input,
+            output,
+            width,
+            height,
+            params.iterations,
+            draws,
+            params.radius,
+            threshold,
+            grain,
+            neutral,
+            params.peak,
+            salt,
+        );
     }
 }
 
