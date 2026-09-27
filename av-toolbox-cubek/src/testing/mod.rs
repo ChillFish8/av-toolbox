@@ -6,7 +6,7 @@ mod rgvs;
 pub use self::dehalo::{reference_dehalo_alpha, reference_fine_dehalo, reference_merge_masked};
 pub use self::neighbourhood::{reference_extreme, reference_median, reference_prewitt, reference_smooth};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};
-pub use self::rgvs::reference_repair;
+pub use self::rgvs::{reference_remove_grain, reference_repair};
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 use crate::warp::{BlurKind, WarpParams};
