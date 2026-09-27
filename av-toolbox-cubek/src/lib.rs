@@ -10,6 +10,7 @@
 //! - [sobel] for image gradients.
 //! - [labels] for connected components.
 //! - [resize] for separable resizing through per axis weight tables.
+//! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
 
 pub mod blur;
 mod border;
@@ -24,6 +25,7 @@ pub mod resize;
 pub mod sobel;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod warp;
 
 pub use self::border::reflect;
 pub use self::dispatch::Dispatch;
