@@ -1,9 +1,20 @@
-use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Samples, Taps, apply, taps, upload};
-use av_toolbox_cubek::testing::{reference_resize, reference_resize_wide};
+use av_toolbox_cubek::resize::{
+    Kernel,
+    ResizePlanes,
+    Samples,
+    Taps,
+    apply,
+    apply_float,
+    centred_taps,
+    taps,
+    upload,
+};
+use av_toolbox_cubek::testing::{reference_resize, reference_resize_float, reference_resize_wide};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::support::{Sizing, backend, empty, plane, read_u8, upload_u8};
+use crate::neighbourhood::busy;
+use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, read_u8, upload_f32, upload_u8};
 
 const EVERY: [Kernel; 8] = [
     Kernel::Point,
@@ -254,4 +265,66 @@ fn a_single_column_widens() {
     let down = centred(5, 5, &kernel);
 
     check(&input, 1, 5, across, down);
+}
+
+struct ResizeFloat {
+    input: Vec<f32>,
+    width: u32,
+    height: u32,
+    across: Taps,
+    down: Taps,
+}
+
+impl BuildTask for ResizeFloat {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let out_width = self.across.starts.len() as u32;
+        let out_height = self.down.starts.len() as u32;
+        let scratch_bytes = (out_width * self.height) as usize * size_of::<f32>();
+        let output_bytes = (out_width * out_height) as usize * size_of::<f32>();
+
+        let input = upload_f32(client, &self.input);
+        let scratch = empty(client, scratch_bytes);
+        let output = empty(client, output_bytes);
+        let across = upload(client, &self.across);
+        let down = upload(client, &self.down);
+        let input_plane = plane(&input, self.width, self.height);
+        let scratch_plane = plane(&scratch, out_width, self.height);
+        let output_plane = plane(&output, out_width, out_height);
+        let planes = ResizePlanes {
+            input: input_plane,
+            scratch: scratch_plane,
+            output: output_plane,
+        };
+        apply_float(client, &sizing, planes, &across, &down);
+
+        read_f32(client, &output)
+    }
+}
+
+#[test]
+fn apply_float_matches_the_reference_in_f32() {
+    let input = busy(40, 24);
+    let bicubic = Kernel::Bicubic {
+        b: 1.0 / 3.0,
+        c: 1.0 / 3.0,
+    };
+    let across = centred_taps(40, 16, &bicubic);
+    let down = centred_taps(24, 10, &bicubic);
+    let expected = reference_resize_float(&input, 40, 24, &across, &down);
+
+    let task = ResizeFloat {
+        input,
+        width: 40,
+        height: 24,
+        across,
+        down,
+    };
+    let actual = backend().build(task);
+
+    assert_close(&actual, &expected, 1e-3);
 }

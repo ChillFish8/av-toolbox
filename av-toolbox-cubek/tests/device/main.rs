@@ -8,6 +8,7 @@ mod labels;
 mod neighbourhood;
 mod reduce;
 mod resize;
+mod rgvs;
 mod sobel;
 mod support;
 mod values;

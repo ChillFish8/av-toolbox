@@ -12,6 +12,7 @@
 //! - [labels] for connected components.
 //! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians and Prewitt.
 //! - [resize] for separable resizing through per axis weight tables.
+//! - [rgvs] for RemoveGrain's Repair modes.
 //! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
 
 pub mod blur;
@@ -25,6 +26,7 @@ pub mod neighbourhood;
 mod plane;
 pub mod reduce;
 pub mod resize;
+pub mod rgvs;
 pub mod sobel;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;

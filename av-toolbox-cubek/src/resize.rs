@@ -200,6 +200,14 @@ pub fn taps(output_len: u32, scale: f32, offset: f32, kernel: &Kernel) -> Taps {
     }
 }
 
+/// The taps of a centred resize of one axis from `input_len` samples to `output_len`.
+pub fn centred_taps(input_len: u32, output_len: u32, kernel: &Kernel) -> Taps {
+    let scale = input_len as f32 / output_len as f32;
+    let offset = (scale - 1.0) / 2.0;
+
+    taps(output_len, scale, offset, kernel)
+}
+
 /// One axis's taps on the device.
 #[derive(Debug)]
 pub struct Weights {
@@ -404,6 +412,122 @@ fn launch<E: Int, R: Runtime>(
     }
 }
 
+#[cube(launch_unchecked)]
+fn resize_rows_float(
+    input: &Array<f32>,
+    starts: &Array<i32>,
+    weights: &Array<f32>,
+    output: &mut Array<f32>,
+    in_width: u32,
+    out_width: u32,
+    count: u32,
+) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let column = position % out_width;
+    let row = position / out_width;
+    let start = starts[column as usize];
+
+    let mut total = 0.0f32;
+    for step in 0..count {
+        let source = reflect(start + step as i32, in_width as i32);
+        let sample = input[(row * in_width + source as u32) as usize];
+        let weight = weights[(column * count + step) as usize];
+        total += sample * weight;
+    }
+
+    output[ABSOLUTE_POS] = total;
+}
+
+#[cube(launch_unchecked)]
+fn resize_columns_float(
+    input: &Array<f32>,
+    starts: &Array<i32>,
+    weights: &Array<f32>,
+    output: &mut Array<f32>,
+    width: u32,
+    in_height: u32,
+    count: u32,
+) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let column = position % width;
+    let row = position / width;
+    let start = starts[row as usize];
+
+    let mut total = 0.0f32;
+    for step in 0..count {
+        let source = reflect(start + step as i32, in_height as i32);
+        let sample = input[(source as u32 * width + column) as usize];
+        let weight = weights[(row * count + step) as usize];
+        total += sample * weight;
+    }
+
+    output[ABSOLUTE_POS] = total;
+}
+
+/// Resizes an f32 plane through one table per axis, keeping f32 throughout.
+pub fn apply_float<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ResizePlanes<'_>,
+    across: &Weights,
+    down: &Weights,
+) {
+    let in_width = planes.input.width();
+    let in_height = planes.input.height();
+    let out_width = planes.output.width();
+
+    let input = planes.input.array::<R>();
+    let starts = across.starts::<R>();
+    let weights = across.weights::<R>();
+    let rows = planes.scratch.array::<R>();
+    let row_samples = planes.scratch.samples();
+    let cubes = dispatch.cube_count(row_samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the input holds `in_width * in_height` f32 values, the scratch
+    // `out_width * in_height`, the tables `out_width` starts and `out_width * count` weights, and
+    // every tap is folded back inside its row before it is read.
+    unsafe {
+        resize_rows_float::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            input,
+            starts,
+            weights,
+            rows,
+            in_width,
+            out_width,
+            across.count,
+        );
+    }
+
+    let rows = planes.scratch.array::<R>();
+    let starts = down.starts::<R>();
+    let weights = down.weights::<R>();
+    let output = planes.output.array::<R>();
+    let samples = planes.output.samples();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the scratch holds `out_width * in_height` f32 values, the output
+    // `out_width * out_height`, the tables `out_height` starts and `out_height * count` weights, and
+    // every tap is folded back inside its column before it is read.
+    unsafe {
+        resize_columns_float::launch_unchecked::<R>(
+            client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,5 +670,27 @@ mod tests {
         let table = taps(8, 0.5, 0.0, &Kernel::Bilinear);
 
         assert_eq!(nonzero(&table, 3), vec![(1, 0.5), (2, 0.5)]);
+    }
+
+    #[test]
+    fn centred_taps_keep_a_flat_plane_flat() {
+        let bicubic = Kernel::Bicubic {
+            b: 1.0 / 3.0,
+            c: 1.0 / 3.0,
+        };
+        let down = centred_taps(40, 16, &bicubic);
+        let up = centred_taps(16, 40, &bicubic);
+        let unchanged = same_height(3);
+        let flat = vec![100.0f32; 40 * 3];
+
+        let shrunk = crate::testing::reference_resize_float(&flat, 40, 3, &down, &unchanged);
+        let grown = crate::testing::reference_resize_float(&shrunk, 16, 3, &up, &unchanged);
+
+        assert!(grown.iter().all(|value| (value - 100.0).abs() < 1e-3));
+    }
+
+    /// Taps that keep an axis of `length` as it is.
+    fn same_height(length: u32) -> Taps {
+        centred_taps(length, length, &Kernel::Point)
     }
 }
