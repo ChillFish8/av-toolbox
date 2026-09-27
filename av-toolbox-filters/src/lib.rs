@@ -9,6 +9,7 @@
 //! - `planes/merge` builds a clip by picking each plane from one of several clips.
 
 mod blend;
+mod deband;
 mod planes;
 mod resample;
 mod resize;
