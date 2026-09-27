@@ -103,13 +103,15 @@ fn every_extreme_and_shape_matches_the_reference() {
 #[test]
 fn both_blurs_match_the_reference() {
     for which in [Smooth::Binomial, Smooth::Box] {
-        let input = busy(37, 23);
-        let operation = Operation::Smooth(which);
+        for (width, height) in [(37, 23), (1, 5), (2, 5), (5, 1), (5, 2)] {
+            let input = busy(width, height);
+            let operation = Operation::Smooth(which);
 
-        let actual = on_device(&input, 37, 23, operation);
-        let expected = reference_smooth(&input, 37, 23, which);
+            let actual = on_device(&input, width, height, operation);
+            let expected = reference_smooth(&input, width, height, which);
 
-        assert_close(&actual, &expected, 1e-3);
+            assert_close(&actual, &expected, 1e-3);
+        }
     }
 }
 
@@ -130,11 +132,13 @@ fn every_median_radius_matches_the_reference() {
 
 #[test]
 fn prewitt_matches_the_reference() {
-    let input = busy(37, 23);
-    let operation = Operation::Prewitt(255.0);
+    for (width, height) in [(37, 23), (1, 5), (2, 5), (5, 1), (5, 2)] {
+        let input = busy(width, height);
+        let operation = Operation::Prewitt(255.0);
 
-    let actual = on_device(&input, 37, 23, operation);
-    let expected = reference_prewitt(&input, 37, 23, 255.0);
+        let actual = on_device(&input, width, height, operation);
+        let expected = reference_prewitt(&input, width, height, 255.0);
 
-    assert_eq!(actual, expected);
+        assert_eq!(actual, expected, "{width}x{height}");
+    }
 }

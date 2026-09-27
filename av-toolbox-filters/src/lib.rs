@@ -3,6 +3,7 @@
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 //! - `deband/placebo` smooths banding with libplacebo's algorithm, then adds grain.
 //! - `dehalo/alpha` removes halos by pulling pixels toward a halo-free estimate made by resizing.
+//! - `dehalo/fine` runs `dehalo/alpha` only in a band around strong edges.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
@@ -34,6 +35,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<blend::Masked>()?;
     registry.register_filter::<deband::Placebo>()?;
     registry.register_filter::<dehalo::Alpha>()?;
+    registry.register_filter::<dehalo::Fine>()?;
     registry.register_filter::<Resize<Point>>()?;
     registry.register_filter::<Resize<Bilinear>>()?;
     registry.register_filter::<Resize<Bicubic>>()?;
@@ -70,6 +72,7 @@ mod tests {
         assert!(registered("blend/masked"));
         assert!(registered("deband/placebo"));
         assert!(registered("dehalo/alpha"));
+        assert!(registered("dehalo/fine"));
         assert!(registered("resize/point"));
         assert!(registered("resize/bilinear"));
         assert!(registered("resize/bicubic"));

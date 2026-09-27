@@ -41,15 +41,24 @@ impl AlphaParams {
     }
 }
 
+/// The largest width or height `dehalo/alpha` will supersample a plane to.
+pub const MAX_SUPERSAMPLED: u32 = 16384;
+
 /// 16 below 16, otherwise `value` rounded to the nearest multiple of 4.
-pub fn m4(value: f32) -> u32 {
+///
+/// `None` when `value` is not finite, or when rounding it up to a multiple of 4 would overflow `u32`.
+pub fn m4(value: f32) -> Option<u32> {
+    if !value.is_finite() {
+        return None;
+    }
+
     if value < 16.0 {
-        return 16;
+        return Some(16);
     }
 
     let quarters = (value / 4.0).round() as u32;
 
-    quarters * 4
+    quarters.checked_mul(4)
 }
 
 /// The sizes `dehalo/alpha` resizes one plane through.
@@ -61,22 +70,29 @@ pub struct AlphaSizes {
     pub supersampled: Option<(u32, u32)>,
 }
 
-pub fn alpha_sizes(width: u32, height: u32, params: &AlphaParams) -> AlphaSizes {
-    let small_width = m4(width as f32 / params.rx);
-    let small_height = m4(height as f32 / params.ry);
+/// The sizes for one plane of `width` by `height`, or `None` when a size cannot be computed or a
+/// supersampled axis would exceed [MAX_SUPERSAMPLED].
+pub fn alpha_sizes(width: u32, height: u32, params: &AlphaParams) -> Option<AlphaSizes> {
+    let small_width = m4(width as f32 / params.rx)?;
+    let small_height = m4(height as f32 / params.ry)?;
 
     let supersampled = if params.ss <= 1.0 {
         None
     } else {
-        let large_width = m4(width as f32 * params.ss);
-        let large_height = m4(height as f32 * params.ss);
+        let large_width = m4(width as f32 * params.ss)?;
+        let large_height = m4(height as f32 * params.ss)?;
+
+        if large_width > MAX_SUPERSAMPLED || large_height > MAX_SUPERSAMPLED {
+            return None;
+        }
+
         Some((large_width, large_height))
     };
 
-    AlphaSizes {
+    Some(AlphaSizes {
         small: (small_width, small_height),
         supersampled,
-    }
+    })
 }
 
 /// The halo mask's constants at this depth.

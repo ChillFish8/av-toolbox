@@ -40,7 +40,7 @@ fn resized(input: &[f32], from: (u32, u32), to: (u32, u32), kernel: &Kernel) -> 
 
 /// The whole of `dehalo/alpha` on one f32 plane on the CPU.
 pub fn reference_dehalo_alpha(input: &[f32], width: u32, height: u32, params: &AlphaParams) -> Vec<f32> {
-    let sizes = alpha_sizes(width, height, params);
+    let sizes = alpha_sizes(width, height, params).expect("a valid dehalo/alpha size");
     let full = (width, height);
 
     let small = resized(input, full, sizes.small, &MITCHELL);

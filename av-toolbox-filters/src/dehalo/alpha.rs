@@ -14,13 +14,16 @@ use av_toolbox_core::{
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::dehalo::alpha::{
     AlphaParams,
+    AlphaSizes,
     ClampPlanes,
     HaloPlanes,
+    MAX_SUPERSAMPLED,
     StrengthPlanes,
     alpha_sizes,
     apply_strength,
     blend_halo_mask,
     clamp_between,
+    m4,
 };
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::neighbourhood::{Extreme, NeighbourPlanes, Shape, extreme};
@@ -56,11 +59,11 @@ use crate::sizing::Sizing;
 
 const STAGE: &str = "dehalo/alpha";
 
-fn default_radius() -> f32 {
+pub(super) fn default_radius() -> f32 {
     2.0
 }
 
-fn default_strength() -> f32 {
+pub(super) fn default_strength() -> f32 {
     1.0
 }
 
@@ -102,43 +105,43 @@ pub(crate) struct AlphaArgs {
     pub(crate) planes: Option<Vec<ChannelName>>,
 }
 
-fn below_minimum(name: &str, value: f32, minimum: f32) -> StageError {
-    let message = format!("{STAGE} needs a finite {name} of at least {minimum}, got {value}");
+fn below_minimum(stage: &str, name: &str, value: f32, minimum: f32) -> StageError {
+    let message = format!("{stage} needs a finite {name} of at least {minimum}, got {value}");
 
     StageError::msg(message)
 }
 
-fn out_of_range(name: &str, value: f32) -> StageError {
-    let message = format!("{STAGE} needs {name} between 0 and 100, got {value}");
+fn out_of_range(stage: &str, name: &str, value: f32) -> StageError {
+    let message = format!("{stage} needs {name} between 0 and 100, got {value}");
 
     StageError::msg(message)
 }
 
-fn at_least(name: &str, value: f32, minimum: f32) -> Result<(), StageError> {
+pub(super) fn at_least(stage: &str, name: &str, value: f32, minimum: f32) -> Result<(), StageError> {
     if value.is_finite() && value >= minimum {
         return Ok(());
     }
 
-    Err(below_minimum(name, value, minimum))
+    Err(below_minimum(stage, name, value, minimum))
 }
 
-fn percentage(name: &str, value: f32) -> Result<(), StageError> {
+fn percentage(stage: &str, name: &str, value: f32) -> Result<(), StageError> {
     if (0.0..=100.0).contains(&value) {
         return Ok(());
     }
 
-    Err(out_of_range(name, value))
+    Err(out_of_range(stage, name, value))
 }
 
 /// The alpha parameters for `sample`, once the arguments are checked.
 pub(crate) fn alpha_params(args: &AlphaArgs, sample: SampleFormat) -> Result<AlphaParams, StageError> {
-    at_least("rx", args.rx, 1.0)?;
-    at_least("ry", args.ry, 1.0)?;
-    at_least("darkstr", args.darkstr, 0.0)?;
-    at_least("brightstr", args.brightstr, 0.0)?;
-    percentage("lowsens", args.lowsens)?;
-    percentage("highsens", args.highsens)?;
-    at_least("ss", args.ss, 1.0)?;
+    at_least(STAGE, "rx", args.rx, 1.0)?;
+    at_least(STAGE, "ry", args.ry, 1.0)?;
+    at_least(STAGE, "darkstr", args.darkstr, 0.0)?;
+    at_least(STAGE, "brightstr", args.brightstr, 0.0)?;
+    percentage(STAGE, "lowsens", args.lowsens)?;
+    percentage(STAGE, "highsens", args.highsens)?;
+    at_least(STAGE, "ss", args.ss, 1.0)?;
 
     let bits = bits_of(sample);
 
@@ -164,12 +167,12 @@ const SOFT_CUBIC: Kernel = Kernel::Bicubic { b: 1.0, c: 0.0 };
 const LANCZOS: Kernel = Kernel::Lanczos { taps: 3 };
 
 /// One resize's tables, across then down.
-struct Resize {
+struct ResizeTables {
     across: Weights,
     down: Weights,
 }
 
-impl Resize {
+impl ResizeTables {
     fn new<R: Runtime>(client: &ComputeClient<R>, from: (u32, u32), to: (u32, u32), kernel: &Kernel) -> Self {
         let across_taps = centred_taps(from.0, to.0, kernel);
         let down_taps = centred_taps(from.1, to.1, kernel);
@@ -183,36 +186,37 @@ impl Resize {
 /// The supersampled clamp's tables.
 struct Supersampled {
     size: (u32, u32),
-    clip_up: Resize,
-    mask_up: Resize,
-    back_down: Resize,
+    clip_up: ResizeTables,
+    mask_up: ResizeTables,
+    back_down: ResizeTables,
 }
 
 /// Every table `dehalo/alpha` needs for one plane size.
 pub(super) struct AlphaTables {
     small: (u32, u32),
-    down: Resize,
-    up: Resize,
+    down: ResizeTables,
+    up: ResizeTables,
     supersampled: Option<Supersampled>,
 }
 
 impl AlphaTables {
+    /// Builds the tables for one plane of `width` by `height`, from `sizes` already checked by
+    /// [alpha_sizes](av_toolbox_cubek::dehalo::alpha::alpha_sizes).
     pub(super) fn new<R: Runtime>(
         client: &ComputeClient<R>,
         width: u32,
         height: u32,
-        params: &AlphaParams,
+        sizes: &AlphaSizes,
     ) -> Self {
         let full = (width, height);
-        let sizes = alpha_sizes(width, height, params);
-        let down = Resize::new(client, full, sizes.small, &MITCHELL);
-        let up = Resize::new(client, sizes.small, full, &SOFT_CUBIC);
+        let down = ResizeTables::new(client, full, sizes.small, &MITCHELL);
+        let up = ResizeTables::new(client, sizes.small, full, &SOFT_CUBIC);
 
         let supersampled = sizes.supersampled.map(|large| Supersampled {
             size: large,
-            clip_up: Resize::new(client, full, large, &LANCZOS),
-            mask_up: Resize::new(client, full, large, &MITCHELL),
-            back_down: Resize::new(client, large, full, &LANCZOS),
+            clip_up: ResizeTables::new(client, full, large, &LANCZOS),
+            mask_up: ResizeTables::new(client, full, large, &MITCHELL),
+            back_down: ResizeTables::new(client, large, full, &LANCZOS),
         });
 
         Self {
@@ -230,7 +234,7 @@ fn resize_into<R: Runtime>(
     context: &FrameContext,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
-    tables: &Resize,
+    tables: &ResizeTables,
 ) {
     let sizing = Sizing(context);
     let rows = Scratch::new::<f32>(context, output.width(), input.height());
@@ -389,6 +393,66 @@ fn missing_dimensions(channel: Channel) -> StageError {
     StageError::msg(message)
 }
 
+/// `channel`'s `width` by `height` cannot be resized through `params` within [MAX_SUPERSAMPLED].
+fn oversized_plane(
+    stage: &str,
+    channel: Channel,
+    width: u32,
+    height: u32,
+    params: &AlphaParams,
+) -> StageError {
+    let small_width_fits = m4(width as f32 / params.rx).is_some();
+    let small_height_fits = m4(height as f32 / params.ry).is_some();
+
+    if !small_width_fits || !small_height_fits {
+        let message = format!(
+            "{stage} needs rx {} and ry {} to give {channel} a halo-free size within {MAX_SUPERSAMPLED}",
+            params.rx, params.ry,
+        );
+        return StageError::msg(message);
+    }
+
+    let message = format!(
+        "{stage} needs ss {} to keep {channel}'s supersampled size within {MAX_SUPERSAMPLED}",
+        params.ss
+    );
+
+    StageError::msg(message)
+}
+
+/// The sizes for `channel`'s `width` by `height`, once they are known to be usable.
+pub(super) fn checked_alpha_sizes(
+    stage: &str,
+    channel: Channel,
+    width: u32,
+    height: u32,
+    params: &AlphaParams,
+) -> Result<AlphaSizes, StageError> {
+    alpha_sizes(width, height, params).ok_or_else(|| oversized_plane(stage, channel, width, height, params))
+}
+
+/// Every selected plane of `input` can be resized through `params` within [MAX_SUPERSAMPLED].
+fn checked_plane_sizes(
+    stage: &str,
+    input: &FrameFormat,
+    selected: &[bool],
+    params: &AlphaParams,
+) -> Result<(), StageError> {
+    for (plane_index, channel) in input.channels().iter().enumerate() {
+        if !selected[plane_index] {
+            continue;
+        }
+
+        let Some((width, height)) = input.channel_dimensions(*channel) else {
+            return Err(missing_dimensions(*channel));
+        };
+
+        checked_alpha_sizes(stage, *channel, width, height, params)?;
+    }
+
+    Ok(())
+}
+
 /// The input format, once it is known to be frames.
 fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
     let Some(input) = chosen.first().copied().flatten() else {
@@ -455,8 +519,9 @@ impl FilterDefinition for Alpha {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(chosen)?;
-        alpha_params(args, input.sample)?;
-        selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
+        let params = alpha_params(args, input.sample)?;
+        let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
+        checked_plane_sizes(STAGE, &input, &selected, &params)?;
 
         let format = StreamFormat::Frames(input);
 
@@ -492,7 +557,8 @@ impl FilterDefinition for Alpha {
             let Some((width, height)) = input.channel_dimensions(*channel) else {
                 return Err(missing_dimensions(*channel));
             };
-            let plane_tables = AlphaTables::new(&client, width, height, &params);
+            let sizes = checked_alpha_sizes(STAGE, *channel, width, height, &params)?;
+            let plane_tables = AlphaTables::new(&client, width, height, &sizes);
             tables.push(Some(plane_tables));
         }
 

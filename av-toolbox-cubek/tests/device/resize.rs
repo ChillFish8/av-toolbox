@@ -328,3 +328,26 @@ fn apply_float_matches_the_reference_in_f32() {
 
     assert_close(&actual, &expected, 1e-3);
 }
+
+#[test]
+fn apply_float_upscales_and_matches_the_reference_in_f32() {
+    let input = busy(16, 10);
+    let bicubic = Kernel::Bicubic {
+        b: 1.0 / 3.0,
+        c: 1.0 / 3.0,
+    };
+    let across = centred_taps(16, 40, &bicubic);
+    let down = centred_taps(10, 24, &bicubic);
+    let expected = reference_resize_float(&input, 16, 10, &across, &down);
+
+    let task = ResizeFloat {
+        input,
+        width: 16,
+        height: 10,
+        across,
+        down,
+    };
+    let actual = backend().build(task);
+
+    assert_close(&actual, &expected, 1e-3);
+}

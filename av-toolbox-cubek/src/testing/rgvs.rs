@@ -49,7 +49,6 @@ fn repair_one(value: f32, reference: &[f32], width: u32, x: u32, y: u32) -> f32 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rgvs::RepairMode;
 
     #[test]
     fn repair_clamps_the_clip_into_the_reference_neighbourhood() {

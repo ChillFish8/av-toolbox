@@ -151,6 +151,30 @@ fn the_output_format_is_the_input_format() {
 }
 
 #[test]
+fn a_plane_the_layout_lacks_is_refused_through_produces() {
+    let capabilities = capabilities();
+    let parsed = args(json!({ "planes": ["u"] }));
+    let input = format(FrameLayout::Grey, SampleFormat::U8);
+    let chosen = [Some(StreamFormat::Frames(input))];
+
+    let error = Alpha::produces(&capabilities, &parsed, &chosen).expect_err("should be refused");
+
+    assert!(error.to_string().contains("dehalo/alpha"));
+}
+
+#[test]
+fn a_huge_supersampling_factor_is_refused_through_produces() {
+    let capabilities = capabilities();
+    let parsed = args(json!({ "ss": 2000.0 }));
+    let input = yuv420();
+    let chosen = [Some(StreamFormat::Frames(input))];
+
+    let error = Alpha::produces(&capabilities, &parsed, &chosen).expect_err("should be refused");
+
+    assert!(error.to_string().contains("ss"), "{error}");
+}
+
+#[test]
 fn floats_are_left_out_and_masks_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
