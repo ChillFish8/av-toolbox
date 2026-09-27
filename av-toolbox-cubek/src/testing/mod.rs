@@ -3,7 +3,7 @@ mod neighbourhood;
 mod resize;
 mod rgvs;
 
-pub use self::dehalo::{reference_dehalo_alpha, reference_merge_masked};
+pub use self::dehalo::{reference_dehalo_alpha, reference_fine_dehalo, reference_merge_masked};
 pub use self::neighbourhood::{reference_extreme, reference_median, reference_prewitt, reference_smooth};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};
 pub use self::rgvs::reference_repair;

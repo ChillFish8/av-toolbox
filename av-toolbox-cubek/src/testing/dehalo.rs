@@ -1,6 +1,14 @@
-use super::{reference_extreme, reference_repair, reference_resize_float};
+use super::{
+    reference_extreme,
+    reference_median,
+    reference_prewitt,
+    reference_repair,
+    reference_resize_float,
+    reference_smooth,
+};
 use crate::dehalo::alpha::{AlphaParams, alpha_sizes, halo_mask_sample, strength_sample};
-use crate::neighbourhood::{Extreme, Shape};
+use crate::dehalo::fine::{FineParams, contrast_sample, outside_sample};
+use crate::neighbourhood::{Expansion, Extreme, Shape, Smooth, expansion_passes};
 use crate::resize::{Kernel, centred_taps};
 use crate::rgvs::RepairMode;
 
@@ -72,4 +80,84 @@ pub fn reference_dehalo_alpha(input: &[f32], width: u32, height: u32, params: &A
         .zip(&remove)
         .map(|(clip, target)| strength_sample(*clip, *target, params))
         .collect()
+}
+
+/// Runs a chain of maximum or minimum passes on the CPU.
+fn expanded(input: &[f32], width: u32, height: u32, passes: &[Shape], extreme: Extreme) -> Vec<f32> {
+    let mut plane = input.to_vec();
+    for shape in passes {
+        plane = reference_extreme(&plane, width, height, extreme, *shape);
+    }
+
+    plane
+}
+
+/// The whole of `dehalo/fine` on one f32 plane on the CPU.
+pub fn reference_fine_dehalo(input: &[f32], width: u32, height: u32, params: &FineParams) -> Vec<f32> {
+    let peak = params.alpha.peak();
+    let (across, down) = params.radii();
+
+    let mut dehaloed = reference_dehalo_alpha(input, width, height, &params.alpha);
+    if params.contra > 0.0 {
+        let blurred = reference_smooth(&dehaloed, width, height, Smooth::Binomial);
+        let median = reference_median(&blurred, width, height, 2);
+        let first = reference_repair(&blurred, &median, width, height, RepairMode::One);
+        let repaired = reference_repair(&blurred, &first, width, height, RepairMode::One);
+        dehaloed = (0..input.len())
+            .map(|index| {
+                let smoothed = dehaloed[index];
+                let blurred_value = blurred[index];
+                let repaired_value = repaired[index];
+                let clip = input[index];
+
+                contrast_sample(smoothed, blurred_value, repaired_value, clip, params.contra)
+            })
+            .collect();
+    }
+
+    let edges = reference_prewitt(input, width, height, peak);
+    let strong_low = params.alpha.scale(params.thmi);
+    let light_low = params.alpha.scale(params.thlimi);
+    let strong: Vec<f32> = edges
+        .iter()
+        .map(|edge| ((edge - strong_low) / (params.thma - params.thmi) * 255.0).clamp(0.0, peak))
+        .collect();
+    let light: Vec<f32> = edges
+        .iter()
+        .map(|edge| ((edge - light_low) / (params.thlima - params.thlimi) * 255.0).clamp(0.0, peak))
+        .collect();
+
+    let rectangle = expansion_passes(across, down, Expansion::Rectangle);
+    let ellipse = expansion_passes(across, down, Expansion::Ellipse);
+    let large = expanded(&strong, width, height, &rectangle, Extreme::Maximum);
+
+    let grown = expanded(&light, width, height, &ellipse, Extreme::Maximum);
+    let brightened: Vec<f32> = grown.iter().map(|value| (value * 4.0).clamp(0.0, peak)).collect();
+    let thinned = expanded(&brightened, width, height, &ellipse, Extreme::Minimum);
+    let once = reference_smooth(&thinned, width, height, Smooth::Box);
+    let shrink = reference_smooth(&once, width, height, Smooth::Box);
+
+    let band: Vec<f32> = (0..input.len())
+        .map(|index| {
+            let strong_value = strong[index];
+            let large_value = large[index];
+            let shrink_value = shrink[index];
+
+            outside_sample(
+                large_value,
+                strong_value,
+                shrink_value,
+                params.excl,
+                params.edgeproc,
+                peak,
+            )
+        })
+        .collect();
+    let blurred_band = reference_smooth(&band, width, height, Smooth::Box);
+    let outside: Vec<f32> = blurred_band
+        .iter()
+        .map(|value| (value * 2.0).clamp(0.0, peak))
+        .collect();
+
+    reference_merge_masked(input, &dehaloed, &outside, peak)
 }
