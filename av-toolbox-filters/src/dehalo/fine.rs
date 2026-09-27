@@ -63,6 +63,7 @@ use super::alpha::{
     AlphaTables,
     at_least,
     checked_alpha_sizes,
+    checked_plane_sizes,
     default_radius,
     default_strength,
     dehalo_alpha,
@@ -467,27 +468,6 @@ fn missing_dimensions(channel: Channel) -> StageError {
     StageError::msg(message)
 }
 
-/// Every selected plane of `input` can be resized through `params.alpha` within its size limit.
-fn checked_plane_sizes(
-    input: &FrameFormat,
-    selected: &[bool],
-    params: &FineParams,
-) -> Result<(), StageError> {
-    for (plane_index, channel) in input.channels().iter().enumerate() {
-        if !selected[plane_index] {
-            continue;
-        }
-
-        let Some((width, height)) = input.channel_dimensions(*channel) else {
-            return Err(missing_dimensions(*channel));
-        };
-
-        checked_alpha_sizes(STAGE, *channel, width, height, &params.alpha)?;
-    }
-
-    Ok(())
-}
-
 /// The input format, once it is known to be frames.
 fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
     let Some(input) = chosen.first().copied().flatten() else {
@@ -556,7 +536,7 @@ impl FilterDefinition for Fine {
         let input = checked_input(chosen)?;
         let params = fine_params(args, input.sample)?;
         let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
-        checked_plane_sizes(&input, &selected, &params)?;
+        checked_plane_sizes(STAGE, &input, &selected, &params.alpha)?;
 
         let format = StreamFormat::Frames(input);
 

@@ -170,8 +170,12 @@ fn a_huge_supersampling_factor_is_refused_through_produces() {
     let chosen = [Some(StreamFormat::Frames(input))];
 
     let error = Alpha::produces(&capabilities, &parsed, &chosen).expect_err("should be refused");
+    let message = error.to_string();
 
-    assert!(error.to_string().contains("ss"), "{error}");
+    assert!(
+        message.contains("dehalo/alpha") && message.contains("16x8"),
+        "{message}"
+    );
 }
 
 #[test]

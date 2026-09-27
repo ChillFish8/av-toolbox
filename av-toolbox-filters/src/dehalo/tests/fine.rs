@@ -222,6 +222,29 @@ fn a_plane_size_that_overflows_is_refused_through_produces() {
 }
 
 #[test]
+fn a_plane_wider_than_the_supersampled_limit_is_refused_through_produces() {
+    let capabilities = capabilities();
+    let parsed = args(json!({}));
+    let input = FrameFormat {
+        width: 11000,
+        height: 16,
+        layout: FrameLayout::Grey,
+        sample: SampleFormat::U8,
+        colour: ColourInfo::default(),
+        frame_rate: None,
+    };
+    let chosen = [Some(StreamFormat::Frames(input))];
+
+    let error = Fine::produces(&capabilities, &parsed, &chosen).expect_err("should be refused");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("dehalo/fine") && message.contains("11000") && !message.contains("ss"),
+        "{message}"
+    );
+}
+
+#[test]
 fn floats_are_left_out_and_masks_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));

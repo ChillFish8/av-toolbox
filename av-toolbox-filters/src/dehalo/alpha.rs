@@ -200,8 +200,7 @@ pub(super) struct AlphaTables {
 }
 
 impl AlphaTables {
-    /// Builds the tables for one plane of `width` by `height`, from `sizes` already checked by
-    /// [alpha_sizes](av_toolbox_cubek::dehalo::alpha::alpha_sizes).
+    /// Builds the resize tables for one plane of `width` by `height`, sized according to `sizes`.
     pub(super) fn new<R: Runtime>(
         client: &ComputeClient<R>,
         width: u32,
@@ -393,6 +392,23 @@ fn missing_dimensions(channel: Channel) -> StageError {
     StageError::msg(message)
 }
 
+/// `channel`'s `width` by `height` plane is too large for `stage` to resize at all.
+fn oversized_small_plane(stage: &str, channel: Channel, width: u32, height: u32) -> StageError {
+    let message =
+        format!("{stage} cannot work on {channel}'s {width}x{height} plane, it is too large to resize");
+
+    StageError::msg(message)
+}
+
+/// `channel`'s `width` by `height` plane cannot be supersampled by `stage` within [MAX_SUPERSAMPLED].
+fn oversized_supersampled_plane(stage: &str, channel: Channel, width: u32, height: u32) -> StageError {
+    let message = format!(
+        "{stage} cannot supersample {channel}'s {width}x{height} plane within {MAX_SUPERSAMPLED} samples"
+    );
+
+    StageError::msg(message)
+}
+
 /// `channel`'s `width` by `height` cannot be resized through `params` within [MAX_SUPERSAMPLED].
 fn oversized_plane(
     stage: &str,
@@ -405,19 +421,10 @@ fn oversized_plane(
     let small_height_fits = m4(height as f32 / params.ry).is_some();
 
     if !small_width_fits || !small_height_fits {
-        let message = format!(
-            "{stage} needs rx {} and ry {} to give {channel} a halo-free size within {MAX_SUPERSAMPLED}",
-            params.rx, params.ry,
-        );
-        return StageError::msg(message);
+        return oversized_small_plane(stage, channel, width, height);
     }
 
-    let message = format!(
-        "{stage} needs ss {} to keep {channel}'s supersampled size within {MAX_SUPERSAMPLED}",
-        params.ss
-    );
-
-    StageError::msg(message)
+    oversized_supersampled_plane(stage, channel, width, height)
 }
 
 /// The sizes for `channel`'s `width` by `height`, once they are known to be usable.
@@ -432,7 +439,7 @@ pub(super) fn checked_alpha_sizes(
 }
 
 /// Every selected plane of `input` can be resized through `params` within [MAX_SUPERSAMPLED].
-fn checked_plane_sizes(
+pub(super) fn checked_plane_sizes(
     stage: &str,
     input: &FrameFormat,
     selected: &[bool],
