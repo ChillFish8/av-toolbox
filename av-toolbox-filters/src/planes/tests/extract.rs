@@ -1,19 +1,34 @@
-use av_toolbox_core::{Filter, Inputs};
+use av_toolbox_core::{Filter, FilterDefinition, Inputs};
 use av_toolbox_gpu::{
+    Capabilities,
     Channel,
     ChromaLocation,
     ColourInfo,
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    MaskFormat,
+    Offered,
     SampleFormat,
+    StreamFormat,
     StreamItem,
     Subsampling,
+    default_accelerators,
     testing_context,
 };
 
-use crate::planes::PlaneName;
-use crate::planes::extract::{Extractor, extracted};
+use crate::planes::extract::{ExtractArgs, Extractor, extracted};
+use crate::planes::{Extract, PlaneName};
+
+fn capabilities() -> Capabilities {
+    let accelerator = default_accelerators()[0];
+
+    Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .build()
+}
 
 fn yuv420(width: u32, height: u32) -> FrameFormat {
     let colour = ColourInfo {
@@ -119,4 +134,21 @@ fn extracting_shares_the_plane() {
 
     let produced_u = produced.plane(Channel::U).expect("carries U");
     assert!(std::ptr::eq(produced_u.buffer(), original_u.buffer()));
+}
+
+#[test]
+fn a_mask_is_refused() {
+    let capabilities = capabilities();
+    let arguments = ExtractArgs { plane: PlaneName::Y };
+    let inputs = [Offered::Unknown];
+    let mask = StreamFormat::Mask(MaskFormat {
+        width: 16,
+        height: 8,
+        sample: SampleFormat::U8,
+        chroma: None,
+    });
+
+    let refused = Extract::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
+
+    assert!(refused.is_err());
 }

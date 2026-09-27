@@ -1,5 +1,6 @@
-use av_toolbox_core::{Filter, Inputs};
+use av_toolbox_core::{Filter, FilterDefinition, Inputs};
 use av_toolbox_gpu::{
+    Capabilities,
     Channel,
     ChromaLocation,
     ColourInfo,
@@ -7,16 +8,30 @@ use av_toolbox_gpu::{
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    MaskFormat,
+    Offered,
     SampleFormat,
+    StreamFormat,
     StreamItem,
     Subsampling,
+    default_accelerators,
     testing_context,
 };
 use serde_json::json;
 
 use crate::planes::PlaneName;
 use crate::planes::extract::extracted;
-use crate::planes::merge::{MergeArgs, Merger, merged};
+use crate::planes::merge::{Merge, MergeArgs, Merger, merged};
+
+fn capabilities() -> Capabilities {
+    let accelerator = default_accelerators()[0];
+
+    Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .build()
+}
 
 fn yuv(width: u32, height: u32, subsampling: Subsampling) -> FrameFormat {
     FrameFormat {
@@ -219,4 +234,52 @@ fn merging_shares_every_plane() {
 
     let produced_v = produced.plane(Channel::V).expect("carries V");
     assert!(std::ptr::eq(produced_v.buffer(), original_v.buffer()));
+}
+
+#[test]
+fn a_mask_is_refused() {
+    let capabilities = capabilities();
+    let arguments = rejoin();
+    let inputs = [Offered::Unknown, Offered::Unknown];
+    let mask = StreamFormat::Mask(MaskFormat {
+        width: 16,
+        height: 8,
+        sample: SampleFormat::U8,
+        chroma: None,
+    });
+
+    let refused = Merge::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn a_different_proposed_sample_gives_an_empty_set() {
+    let capabilities = capabilities();
+    let arguments = rejoin();
+    let original = yuv(64, 32, Subsampling::Yuv420);
+    let ten_bit = FrameFormat {
+        sample: SampleFormat::U16 { depth: Depth::TEN },
+        ..original
+    };
+    let inputs = [Offered::Proposed(StreamFormat::Frames(ten_bit)), Offered::Unknown];
+    let offered = StreamFormat::Frames(original);
+
+    let accepted =
+        Merge::accepts_input(&capabilities, &arguments, 1, offered, &inputs).expect("frames readable");
+
+    assert!(accepted.is_empty());
+}
+
+#[test]
+fn produces_refuses_an_unbound_slot() {
+    let capabilities = capabilities();
+    let arguments = rejoin();
+    let original = yuv(64, 32, Subsampling::Yuv420);
+    let luma = extracted(&original, PlaneName::Y).expect("carries Y");
+    let chosen = [Some(StreamFormat::Frames(luma)), None];
+
+    let refused = Merge::produces(&capabilities, &arguments, &chosen);
+
+    assert!(refused.is_err());
 }

@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use av_scenechange::Rational32;
-use av_toolbox_gpu::{FrameFormat, FrameLayout, HostFrame, SampleFormat, testing_context};
+use av_toolbox_gpu::{FrameFormat, FrameLayout, HostFrame, SampleFormat, Subsampling, testing_context};
 
 use super::clip::{THREE_SCENES, clip, flat_clip, grey8, grey8_of, yuv420_ten_bit};
 use crate::scene::args::{DetectArgs, Mode, Speed};
@@ -204,4 +204,17 @@ fn rgb_and_float_frames_are_refused() {
 
     assert!(Settings::for_stream(&rgb, &args).is_err());
     assert!(Settings::for_stream(&float, &args).is_err());
+}
+
+#[test]
+fn chroma_planes_are_refused() {
+    let args = natural(Speed::Standard, 0, None);
+    let chroma = FrameFormat {
+        layout: FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        },
+        ..grey8()
+    };
+
+    assert!(Settings::for_stream(&chroma, &args).is_err());
 }

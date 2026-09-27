@@ -157,6 +157,9 @@ fn every_kernel_matches_the_reference_between_subsamplings() {
         (Subsampling::Yuv420, Subsampling::Yuv444),
         (Subsampling::Yuv444, Subsampling::Yuv420),
         (Subsampling::Yuv422, Subsampling::Yuv420),
+        (Subsampling::Yuv420, Subsampling::Yuv422),
+        (Subsampling::Yuv422, Subsampling::Yuv444),
+        (Subsampling::Yuv444, Subsampling::Yuv422),
     ];
 
     for (name, kernel) in kernels {
@@ -215,6 +218,24 @@ fn the_luma_plane_is_shared_not_copied() {
     let args = json!({ "subsampling": "4:4:4" });
 
     let shared = luma_is_shared("resample/chroma", input, output, args);
+
+    assert!(shared);
+}
+
+#[test]
+fn a_vertical_only_siting_change_at_422_relabels_every_plane_instead_of_resampling() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv422,
+    };
+    let input = frame(32, 16, layout, SampleFormat::U8, ChromaLocation::Left);
+    let colour = ColourInfo {
+        chroma_location: ChromaLocation::TopLeft,
+        ..input.colour
+    };
+    let output = FrameFormat { colour, ..input };
+    let args = json!({ "subsampling": "4:2:2", "location": "top_left" });
+
+    let shared = every_plane_is_shared("resample/chroma", input, output, args);
 
     assert!(shared);
 }

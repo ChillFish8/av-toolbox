@@ -96,6 +96,12 @@ pub(super) fn check_layout(format: &FrameFormat) -> Result<(), StageError> {
         ));
     }
 
+    if matches!(format.layout, FrameLayout::Chroma { .. }) {
+        return Err(StageError::msg(
+            "scene/detect reads YUV or Grey frames, not chroma planes",
+        ));
+    }
+
     Ok(())
 }
 

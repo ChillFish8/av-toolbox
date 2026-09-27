@@ -1,4 +1,4 @@
-pub(crate) mod chroma;
+mod chroma;
 mod depth;
 #[cfg(test)]
 mod tests;

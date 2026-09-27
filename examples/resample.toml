@@ -1,0 +1,42 @@
+# Reads a 4:2:0 8-bit y4m clip, works on it at 4:4:4 10-bit, and writes it back at 4:2:0 8-bit.
+#
+# Lowering the depth dithers with blue noise. Set args.dither to "ordered" or "none" to change that.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "y4m/pipe"
+args.path = "{{ input }}"
+
+[filter.full_chroma]
+type = "resample/chroma"
+inputs = ["input"]
+args.subsampling = "4:4:4"
+
+[filter.ten_bit]
+type = "resample/depth"
+inputs = ["full_chroma"]
+args.depth = 10
+
+[filter.half_chroma]
+type = "resample/chroma"
+inputs = ["ten_bit"]
+args.subsampling = "4:2:0"
+
+[filter.eight_bit]
+type = "resample/depth"
+inputs = ["half_chroma"]
+args.depth = 8
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["eight_bit"]
+args.path = "{{ output }}"

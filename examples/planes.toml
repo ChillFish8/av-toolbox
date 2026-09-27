@@ -1,0 +1,55 @@
+# Reads a 4:2:0 y4m clip, upscales its chroma on its own to the luma size, and writes the result as 4:4:4.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[variable.width]
+type = "integer"
+description = "The input clip's width, so the merge lines the chroma back up with the luma"
+default = 1280
+min = 1
+
+[variable.height]
+type = "integer"
+description = "The input clip's height, so the merge lines the chroma back up with the luma"
+default = 720
+min = 1
+
+[source.input]
+type = "y4m/pipe"
+args.path = "{{ input }}"
+
+[filter.luma]
+type = "planes/extract"
+inputs = ["input"]
+args.plane = "y"
+
+[filter.chroma]
+type = "planes/extract"
+inputs = ["input"]
+args.plane = "chroma"
+
+[filter.upscaled_chroma]
+type = "resize/spline36"
+inputs = ["chroma"]
+args.width = "{{ width }}"
+args.height = "{{ height }}"
+
+[filter.merged]
+type = "planes/merge"
+inputs = ["luma", "upscaled_chroma"]
+args.y = { input = 0 }
+args.u = { input = 1 }
+args.v = { input = 1 }
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["merged"]
+args.path = "{{ output }}"

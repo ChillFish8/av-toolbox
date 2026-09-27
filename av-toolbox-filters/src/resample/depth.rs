@@ -70,15 +70,21 @@ pub(crate) struct DepthArgs {
 }
 
 fn not_frames() -> StageError {
-    StageError::msg(format!("{STAGE} converts frames, not masks"))
+    let message = format!("{STAGE} converts frames, not masks");
+
+    StageError::msg(message)
 }
 
 fn missing_input() -> StageError {
-    StageError::msg(format!("{STAGE} needs its input bound"))
+    let message = format!("{STAGE} needs its input bound");
+
+    StageError::msg(message)
 }
 
 fn missing_channel() -> StageError {
-    StageError::msg(format!("{STAGE} was handed a frame missing a channel"))
+    let message = format!("{STAGE} was handed a frame missing a channel");
+
+    StageError::msg(message)
 }
 
 fn bad_depth(depth: u8) -> StageError {

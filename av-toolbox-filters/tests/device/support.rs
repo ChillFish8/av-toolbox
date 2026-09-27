@@ -256,7 +256,7 @@ pub(crate) fn assert_within_one(found: &[u8], expected: &[u8], label: &str) {
     }
 }
 
-/// Runs one frame through `stage` and reports whether the output's Y plane is the input's, rather
+/// Runs one frame through `filter` and reports whether the output's Y plane is the input's, rather
 /// than a fresh allocation.
 struct LumaSharedCheck {
     filter: Box<dyn Filter>,

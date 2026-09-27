@@ -5,6 +5,8 @@ use av_toolbox_gpu::{
     ColourInfo,
     FrameFormat,
     FrameLayout,
+    MaskFormat,
+    Offered,
     SampleFormat,
     StreamFormat,
     Subsampling,
@@ -147,6 +149,67 @@ fn only_yuv_clips_are_accepted() {
     let refused = produced(grey, value);
 
     assert!(refused.is_err());
+}
+
+#[test]
+fn rgb_is_refused() {
+    let rgb = FrameFormat {
+        layout: FrameLayout::Rgb,
+        ..yuv(16, 8, Subsampling::Yuv444, ChromaLocation::Left)
+    };
+    let value = json!({ "subsampling": "4:4:4" });
+
+    let refused = produced(rgb, value);
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn a_chroma_clip_is_refused() {
+    let chroma = FrameFormat {
+        layout: FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        },
+        ..yuv(16, 8, Subsampling::Yuv444, ChromaLocation::Left)
+    };
+    let value = json!({ "subsampling": "4:4:4" });
+
+    let refused = produced(chroma, value);
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn a_mask_is_refused() {
+    let capabilities = capabilities();
+    let arguments: ChromaArgs = serde_json::from_value(json!({ "subsampling": "4:4:4" })).expect("parses");
+    let inputs = [Offered::Unknown];
+    let mask = StreamFormat::Mask(MaskFormat {
+        width: 16,
+        height: 8,
+        sample: SampleFormat::U8,
+        chroma: None,
+    });
+
+    let refused = Chroma::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn floats_give_an_empty_set() {
+    let capabilities = capabilities();
+    let arguments: ChromaArgs = serde_json::from_value(json!({ "subsampling": "4:4:4" })).expect("parses");
+    let inputs = [Offered::Unknown];
+    let float = StreamFormat::Frames(FrameFormat {
+        sample: SampleFormat::F32,
+        ..yuv(16, 8, Subsampling::Yuv444, ChromaLocation::Left)
+    });
+
+    let accepted =
+        Chroma::accepts_input(&capabilities, &arguments, 0, float, &inputs).expect("frames are readable");
+
+    assert!(accepted.is_empty());
 }
 
 #[test]

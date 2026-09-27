@@ -167,7 +167,7 @@ fn missing_channel(channel: Channel, input: usize, layout: FrameLayout) -> Stage
     StageError::msg(message)
 }
 
-/// One entry per output channel: which input and plane fills it, and that plane's dimensions.
+/// One entry per output channel, naming which input and plane fills it, and that plane's dimensions.
 struct Picked {
     source: Source,
     dimensions: (u32, u32),
@@ -279,19 +279,19 @@ fn subsampling_for(luma: (u32, u32), chroma: (u32, u32)) -> Result<Subsampling, 
     }
 }
 
-fn rgb_size_mismatch(r: (u32, u32), g: (u32, u32), b: (u32, u32)) -> StageError {
+fn rgb_size_mismatch(red_size: (u32, u32), green_size: (u32, u32), blue_size: (u32, u32)) -> StageError {
     let message = format!(
         "{STAGE} needs r, g and b the same size, got {}x{}, {}x{} and {}x{}",
-        r.0, r.1, g.0, g.1, b.0, b.1,
+        red_size.0, red_size.1, green_size.0, green_size.1, blue_size.0, blue_size.1,
     );
 
     StageError::msg(message)
 }
 
-fn uv_size_mismatch(u: (u32, u32), v: (u32, u32)) -> StageError {
+fn uv_size_mismatch(u_size: (u32, u32), v_size: (u32, u32)) -> StageError {
     let message = format!(
         "{STAGE} needs u and v the same size, got {}x{} and {}x{}",
-        u.0, u.1, v.0, v.1,
+        u_size.0, u_size.1, v_size.0, v_size.1,
     );
 
     StageError::msg(message)
@@ -306,20 +306,20 @@ fn shaped(kind: Kind, dimensions: &[(u32, u32)]) -> Result<(u32, u32, FrameLayou
             Ok((width, height, FrameLayout::Grey))
         },
         Kind::Rgb => {
-            let (r, g, b) = (dimensions[0], dimensions[1], dimensions[2]);
-            if r != g || r != b {
-                return Err(rgb_size_mismatch(r, g, b));
+            let (red_size, green_size, blue_size) = (dimensions[0], dimensions[1], dimensions[2]);
+            if red_size != green_size || red_size != blue_size {
+                return Err(rgb_size_mismatch(red_size, green_size, blue_size));
             }
 
-            Ok((r.0, r.1, FrameLayout::Rgb))
+            Ok((red_size.0, red_size.1, FrameLayout::Rgb))
         },
         Kind::Yuv => {
-            let (luma, u, v) = (dimensions[0], dimensions[1], dimensions[2]);
-            if u != v {
-                return Err(uv_size_mismatch(u, v));
+            let (luma, u_size, v_size) = (dimensions[0], dimensions[1], dimensions[2]);
+            if u_size != v_size {
+                return Err(uv_size_mismatch(u_size, v_size));
             }
 
-            let subsampling = subsampling_for(luma, u)?;
+            let subsampling = subsampling_for(luma, u_size)?;
 
             Ok((luma.0, luma.1, FrameLayout::Yuv { subsampling }))
         },

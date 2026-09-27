@@ -100,8 +100,11 @@ pub(crate) struct ChromaArgs {
     /// The kernel to resample chroma with.
     #[serde(default)]
     pub(crate) kernel: KernelChoice,
+    /// How much the cubic blurs. Only with `bicubic`.
     pub(crate) b: Option<f32>,
+    /// How much the cubic sharpens. Only with `bicubic`.
     pub(crate) c: Option<f32>,
+    /// How many input samples the kernel reaches either side. Only with `lanczos`.
     pub(crate) taps: Option<u32>,
     /// Where the resampled chroma sits, the input's own siting by default.
     pub(crate) location: Option<LocationName>,
@@ -341,8 +344,8 @@ impl FilterDefinition for Chroma {
         };
 
         let axes = chroma_axes(&input, source, target, output.colour.chroma_location);
-        let same_siting = input.colour.chroma_location == output.colour.chroma_location;
-        let same_samples = source == target && (target == Subsampling::Yuv444 || same_siting);
+        let identity_axis = (1.0, 0.0);
+        let same_samples = source == target && axes.across == identity_axis && axes.down == identity_axis;
 
         let client = context.client().clone();
         let across_taps = taps(axes.width, axes.across.0, axes.across.1, &kernel);
