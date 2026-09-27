@@ -3,6 +3,7 @@
 //! Every module launches its kernels over planes the caller already holds on the device:
 //!
 //! - [blur] for separable gaussian blurs.
+//! - [deband] for smoothing banding the way libplacebo does.
 //! - [depth] for changing a plane's bit depth, with dithering.
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
@@ -12,6 +13,7 @@
 
 pub mod blur;
 mod border;
+pub mod deband;
 pub mod depth;
 mod dispatch;
 pub mod histogram;

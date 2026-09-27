@@ -1,3 +1,4 @@
+use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 use crate::resize::Taps;
 
@@ -123,4 +124,79 @@ pub fn reference_depth(
             convert_sample(*value, conversion.multiplier, threshold, conversion.largest)
         })
         .collect()
+}
+
+/// The sample nearest to `offset_x`, `offset_y` from the centre of `column`, `row`, clamped to the
+/// plane.
+fn nearest(
+    input: &[u16],
+    width: u32,
+    height: u32,
+    column: u32,
+    row: u32,
+    offset_x: f32,
+    offset_y: f32,
+) -> f32 {
+    let x = (column as f32 + 0.5 + offset_x).floor();
+    let y = (row as f32 + 0.5 + offset_y).floor();
+    let clamped_x = x.clamp(0.0, (width - 1) as f32) as u32;
+    let clamped_y = y.clamp(0.0, (height - 1) as f32) as u32;
+
+    f32::from(input[(clamped_y * width + clamped_x) as usize])
+}
+
+/// Debands a plane on the CPU, mirroring [deband](crate::deband::deband).
+pub fn reference_deband(
+    input: &[u16],
+    width: u32,
+    height: u32,
+    params: &DebandParams,
+    salt: u32,
+) -> Vec<u16> {
+    let threshold = params.threshold / 1000.0;
+    let grain = params.grain / 1000.0;
+    let neutral = params.neutral / params.peak;
+    let draws = params.draws();
+
+    let mut output = Vec::with_capacity(input.len());
+    for row in 0..height {
+        for column in 0..width {
+            let centre = f32::from(input[(row * width + column) as usize]);
+            let mut state = [column, row, salt];
+            let mut result = centre / params.peak;
+
+            for draw in 0..draws {
+                advance(&mut state);
+                let first = unit(state[0]);
+                let second = unit(state[1]);
+
+                if draw < params.iterations {
+                    let step = (draw + 1) as f32;
+                    let distance = first * step * params.radius;
+                    let angle = second * std::f32::consts::TAU;
+                    let offset_x = distance * angle.cos();
+                    let offset_y = distance * angle.sin();
+
+                    let total = nearest(input, width, height, column, row, offset_x, offset_y)
+                        + nearest(input, width, height, column, row, -offset_x, offset_y)
+                        + nearest(input, width, height, column, row, -offset_x, -offset_y)
+                        + nearest(input, width, height, column, row, offset_x, -offset_y);
+                    let average = total / (4.0 * params.peak);
+                    let bound = threshold / step;
+
+                    if (result - average).abs() <= bound {
+                        result = average;
+                    }
+                } else {
+                    let strength = (result - neutral).abs().min(grain);
+                    result += strength * (first - 0.5);
+                }
+            }
+
+            let scaled = (result * params.peak + 0.5).floor();
+            output.push(scaled.clamp(0.0, params.peak) as u16);
+        }
+    }
+
+    output
 }
