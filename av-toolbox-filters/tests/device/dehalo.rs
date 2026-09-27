@@ -1,7 +1,13 @@
 use av_toolbox_cubek::dehalo::alpha::AlphaParams;
 use av_toolbox_cubek::dehalo::fine::FineParams;
+use av_toolbox_cubek::dehalo::yahr::YahrParams;
 use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::testing::{reference_dehalo_alpha, reference_fine_dehalo, reference_narrow};
+use av_toolbox_cubek::testing::{
+    reference_dehalo_alpha,
+    reference_fine_dehalo,
+    reference_narrow,
+    reference_yahr,
+};
 use av_toolbox_gpu::{Channel, ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 use serde_json::json;
 
@@ -303,4 +309,119 @@ fn fine_leaves_a_flat_frame_unchanged() {
     let actual = from_bytes(&dehaloed[0], Element::U16);
 
     assert!(actual.iter().all(|sample| *sample == peak));
+}
+
+fn yahr(bits: u32) -> YahrParams {
+    let element = if bits == 8 { Element::U8 } else { Element::U16 };
+
+    YahrParams {
+        blur: 2,
+        depth: 32,
+        element,
+        bits,
+    }
+}
+
+/// Runs `dehalo/yahr` and checks each plane against the reference or against its input.
+fn matches_yahr_reference(
+    input: FrameFormat,
+    args: serde_json::Value,
+    expected: YahrParams,
+    selected: &[bool],
+) {
+    let peak = (1u32 << expected.bits) - 1;
+    let element = expected.element;
+    let values = haloed(&input, peak);
+    let planes: Vec<Vec<u8>> = values.iter().map(|plane| to_bytes(plane, element)).collect();
+
+    let cleaned = run_once("dehalo/yahr", input, input, args, &planes);
+
+    for (plane, channel) in input.channels().iter().enumerate() {
+        let (width, height) = input.channel_dimensions(*channel).expect("carried");
+        let actual = from_bytes(&cleaned[plane], element);
+        let label = channel.to_string();
+
+        if !selected[plane] {
+            assert_eq!(actual, values[plane], "{label} should be untouched");
+            continue;
+        }
+
+        let widened: Vec<f32> = values[plane].iter().map(|value| f32::from(*value)).collect();
+        let reference = reference_yahr(&widened, width, height, &expected);
+        let rounded = reference_narrow(&reference, peak as f32);
+        assert_within_one(&actual, &rounded, &label);
+    }
+}
+
+#[test]
+fn yahr_luma_is_cleaned_by_default_at_8_and_10_bits() {
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+    let eight_bit_input = yuv420(64, 48, SampleFormat::U8);
+    let ten_bit_input = yuv420(64, 48, ten_bit);
+    let args = json!({});
+    let selected = [true, false, false];
+
+    matches_yahr_reference(eight_bit_input, args.clone(), yahr(8), &selected);
+    matches_yahr_reference(ten_bit_input, args, yahr(10), &selected);
+}
+
+#[test]
+fn yahr_sixteen_bit_matches_the_reference() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
+    let args = json!({});
+    let selected = [true];
+
+    matches_yahr_reference(input, args, yahr(16), &selected);
+}
+
+#[test]
+fn yahr_custom_blur_and_negative_depth_match() {
+    let input = frame(64, 48, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let args = json!({ "blur": 0, "depth": -20 });
+    let selected = [true];
+    let expected = YahrParams {
+        blur: 0,
+        depth: -20,
+        ..yahr(8)
+    };
+
+    matches_yahr_reference(input, args, expected, &selected);
+}
+
+#[test]
+fn yahr_a_tiny_plane_matches_the_reference() {
+    let input = frame(2, 5, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let args = json!({});
+    let selected = [true];
+
+    matches_yahr_reference(input, args, yahr(8), &selected);
+}
+
+#[test]
+fn yahr_a_flat_frame_is_unchanged() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
+    let peak: u16 = 65535;
+    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
+    let values: Vec<u16> = vec![peak; samples];
+    let planes = vec![to_bytes(&values, Element::U16)];
+    let args = json!({});
+
+    let cleaned = run_once("dehalo/yahr", input, input, args, &planes);
+    let actual = from_bytes(&cleaned[0], Element::U16);
+
+    assert!(actual.iter().all(|sample| *sample == peak));
+}
+
+#[test]
+fn yahr_unselected_chroma_is_shared() {
+    let input = yuv420(64, 48, SampleFormat::U8);
+    let args = json!({ "planes": ["u", "v"] });
+
+    assert!(luma_is_shared("dehalo/yahr", input, input, args));
 }
