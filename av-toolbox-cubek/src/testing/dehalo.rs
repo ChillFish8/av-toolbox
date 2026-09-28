@@ -173,7 +173,7 @@ pub fn reference_fine_dehalo(input: &[f32], width: u32, height: u32, params: &Fi
 }
 
 /// Zips two planes and subtracts, sample by sample.
-fn subtract(first: &[f32], second: &[f32]) -> Vec<f32> {
+pub(super) fn subtract(first: &[f32], second: &[f32]) -> Vec<f32> {
     first
         .iter()
         .zip(second)

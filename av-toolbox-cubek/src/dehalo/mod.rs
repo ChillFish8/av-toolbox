@@ -1,4 +1,5 @@
 pub mod alpha;
+pub mod dering;
 pub mod edge_clean;
 pub mod fine;
 #[cfg(test)]
