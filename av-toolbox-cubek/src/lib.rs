@@ -16,6 +16,7 @@
 //! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians, Prewitt, MinBlur, inflate and deflate.
 //! - [padding] for growing a plane by repeating its edges, and cropping it back.
 //! - [resize] for separable resizing through per axis weight tables.
+//! - [retinex] for the recursive Gaussian and the multi-scale retinex.
 //! - [rgvs] for RGVS's Repair and RemoveGrain modes.
 //! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
 
@@ -34,6 +35,7 @@ pub mod padding;
 mod plane;
 pub mod reduce;
 pub mod resize;
+pub mod retinex;
 pub mod rgvs;
 pub mod sobel;
 #[cfg(any(test, feature = "test-support"))]

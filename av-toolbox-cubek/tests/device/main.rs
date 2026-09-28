@@ -12,6 +12,7 @@ mod neighbourhood;
 mod padding;
 mod reduce;
 mod resize;
+mod retinex;
 mod rgvs;
 mod sobel;
 mod support;
