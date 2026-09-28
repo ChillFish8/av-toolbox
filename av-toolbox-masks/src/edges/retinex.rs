@@ -366,12 +366,7 @@ impl MaskDefinition for Retinex {
 
         let blur = blur_radius(args.sigma).map(|radius| Gaussian::with_radius(&client, args.sigma, radius));
         let binarize_threshold = binarize_threshold(args.brz, peak);
-        let settings = RetinexSettings {
-            sigmas: args.sigmas,
-            lower: args.lower_thr,
-            upper: args.upper_thr,
-            scale: peak,
-        };
+        let settings = RetinexSettings::new(args.sigmas, args.lower_thr, args.upper_thr, peak);
 
         Ok(Box::new(RetinexMask {
             client,

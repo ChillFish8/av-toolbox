@@ -4,42 +4,75 @@ use cubecl::prelude::*;
 
 use crate::{DevicePlane, Dispatch};
 
-/// The Young and van Vliet direct-form recursive Gaussian feedback of `sigma`, as
-/// `(gain, f1, f2, f3)`, computed in f64.
-///
-/// `f1`, `f2` and `f3` are the direct form's `b1 / b0`, `b2 / b0` and `b3 / b0`.
-pub(crate) fn direct_form_coefficients(sigma: f32) -> (f64, f64, f64, f64) {
-    let sigma = f64::from(sigma);
-    let q = if sigma < 2.5 {
-        3.97156 - 4.14554 * (1.0 - 0.26891 * sigma).sqrt()
-    } else {
-        0.98711 * sigma - 0.96330
-    };
+/// The real base pole of the recursive Gaussian, optimised for a sigma of 2.
+const REAL_POLE: f64 = 1.86543;
 
-    let b0 = 1.57825 + 2.44413 * q + 1.4281 * q.powi(2) + 0.422205 * q.powi(3);
-    let b1 = 2.44413 * q + 2.85619 * q.powi(2) + 1.26661 * q.powi(3);
-    let b2 = -(1.4281 * q.powi(2) + 1.26661 * q.powi(3));
-    let b3 = 0.422205 * q.powi(3);
-    let gain = 1.0 - (b1 + b2 + b3) / b0;
+/// The complex base pole of the recursive Gaussian as `(real, imaginary)`, optimised for a sigma
+/// of 2. Its conjugate is the third pole.
+const PAIR_POLE: (f64, f64) = (1.41650, 1.00829);
 
-    (gain, b1 / b0, b2 / b0, b3 / b0)
+/// How many samples past a line's edge the filter's response takes to die away at `sigma`.
+pub(crate) fn settling_length(sigma: f64) -> usize {
+    let reach = (40.0 * sigma).ceil();
+
+    reach as usize + 50
 }
 
-/// The real root, between 0 and 1, of `z^3 - f1 z^2 - f2 z - f3`, found by bisection.
+/// The complex base pole scaled by `q`, `d^(1/q)`, as `(modulus, argument)`.
+fn scaled_pair_pole(q: f64) -> (f64, f64) {
+    let (real, imaginary) = PAIR_POLE;
+    let modulus = real.hypot(imaginary);
+    let argument = imaginary.atan2(real);
+
+    (modulus.powf(1.0 / q), argument / q)
+}
+
+/// The variance of the forward and backward filter whose base poles are scaled by `q`.
 ///
-/// The residual is negative at 0 and equal to the gain at 1, so the root lies between them for
-/// any sigma of at least 0.5.
-fn real_root(f1: f64, f2: f64, f3: f64) -> f64 {
-    let residual = |z: f64| z.powi(3) - f1 * z.powi(2) - f2 * z - f3;
+/// Each scaled pole `z` adds `2 z / (z - 1)²`, and the complex pair adds twice the real part of
+/// its pole's term.
+fn variance(q: f64) -> f64 {
+    let real_pole = REAL_POLE.powf(1.0 / q);
+    let real_term = 2.0 * real_pole / (real_pole - 1.0).powi(2);
 
-    let mut low = 0.0;
-    let mut high = 1.0;
+    let (modulus, argument) = scaled_pair_pole(q);
+    let pole_real = modulus * argument.cos();
+    let pole_imaginary = modulus * argument.sin();
+    let shifted_real = pole_real - 1.0;
+    let squared_real = shifted_real * shifted_real - pole_imaginary * pole_imaginary;
+    let squared_imaginary = 2.0 * shifted_real * pole_imaginary;
+    let squared_norm = squared_real * squared_real + squared_imaginary * squared_imaginary;
+    let pair_term = 2.0 * (pole_real * squared_real + pole_imaginary * squared_imaginary) / squared_norm;
 
-    for _ in 0..100 {
+    real_term + 2.0 * pair_term
+}
+
+/// The scale `q` whose scaled poles give a variance of `sigma²`, found by bisection.
+///
+/// The variance grows with `q`, so the upper bound doubles until it brackets `sigma²`.
+pub(crate) fn solve_q(sigma: f64) -> f64 {
+    let target = sigma * sigma;
+    let mut low = 0.35;
+    let mut high = 2.0;
+
+    debug_assert!(
+        variance(low) < target,
+        "sigma {sigma} is below the smallest the poles can reach"
+    );
+
+    while variance(high) < target {
+        high *= 2.0;
+    }
+
+    for _ in 0..200 {
         let midpoint = 0.5 * (low + high);
-        let value = residual(midpoint);
+        let found = variance(midpoint);
 
-        if value < 0.0 {
+        if (found - target).abs() <= 1e-12 * target {
+            return midpoint;
+        }
+
+        if found < target {
             low = midpoint;
         } else {
             high = midpoint;
@@ -49,15 +82,67 @@ fn real_root(f1: f64, f2: f64, f3: f64) -> f64 {
     0.5 * (low + high)
 }
 
-/// Factors direct-form feedback `f1`, `f2`, `f3` into a real pole and a complex conjugate pair,
-/// as `(pole, pair_a, pair_b)`, so that `f1 = pair_a + pole`, `f2 = pair_b - pole * pair_a` and
-/// `f3 = -pole * pair_b`.
-pub(crate) fn factor(f1: f64, f2: f64, f3: f64) -> (f64, f64, f64) {
-    let pole = real_root(f1, f2, f3);
-    let pair_a = f1 - pole;
-    let pair_b = f2 + pole * pair_a;
+/// The feedback of the recursive Gaussian of `sigma` as `(p, a, b)`, computed in f64.
+///
+/// `p` is the first-order section's pole, and `a` and `b` are the second-order section's weights
+/// on its last two outputs.
+pub(crate) fn sections(sigma: f64) -> (f64, f64, f64) {
+    let q = solve_q(sigma);
+    let pole = REAL_POLE.powf(-1.0 / q);
+
+    let (modulus, argument) = scaled_pair_pole(q);
+    let pair_modulus = 1.0 / modulus;
+    let pair_argument = -argument;
+    let pair_a = 2.0 * pair_modulus * pair_argument.cos();
+    let pair_b = -(pair_modulus * pair_modulus);
 
     (pole, pair_a, pair_b)
+}
+
+/// The backward pass's starting state per unit of forward state deviation, for the feedback
+/// `pole`, `pair_a` and `pair_b`, computed in f64.
+///
+/// Each column is the response to one unit deviation of the forward state `(h, y1, y1 - y2)`,
+/// run on for `length` samples of zero input and then back through the backward sections from
+/// their far end. The rows use the same `(h, y1, y1 - y2)` order.
+fn edge_matrix(pole: f64, pair_a: f64, pair_b: f64, length: usize) -> [[f64; 3]; 3] {
+    let real_gain = 1.0 - pole;
+    let pair_gain = 1.0 - pair_a - pair_b;
+    let deviations = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let mut matrix = [[0.0; 3]; 3];
+    let mut continuation = vec![0.0f64; length];
+
+    for (column, deviation) in deviations.iter().enumerate() {
+        let [mut first, mut last, mut difference] = *deviation;
+
+        // The continuation's input is 0, so the first-order section only decays.
+        for value in continuation.iter_mut() {
+            first -= real_gain * first;
+            let step = pair_gain * (first - last) - pair_b * difference;
+
+            last += step;
+            difference = step;
+            *value = last;
+        }
+
+        let mut backward_first = 0.0;
+        let mut backward_last = 0.0;
+        let mut backward_difference = 0.0;
+
+        for value in continuation.iter().rev() {
+            backward_first += real_gain * (value - backward_first);
+            let step = pair_gain * (backward_first - backward_last) - pair_b * backward_difference;
+
+            backward_last += step;
+            backward_difference = step;
+        }
+
+        matrix[0][column] = backward_first;
+        matrix[1][column] = backward_last;
+        matrix[2][column] = backward_difference;
+    }
+
+    matrix
 }
 
 /// The coefficients of a recursive Gaussian, factored into a first-order section and a
@@ -66,18 +151,22 @@ pub(crate) fn factor(f1: f64, f2: f64, f3: f64) -> (f64, f64, f64) {
 pub struct RecursiveGaussian {
     /// The first-order section's input weight.
     pub real_gain: f32,
-    /// The first-order section's feedback weight, its recursion's `y = real_gain * x + real_pole * y1`.
+    /// The first-order section's pole.
     pub real_pole: f32,
     /// The second-order section's input weight.
     pub pair_gain: f32,
-    /// The second-order section's feedback weights `[a, b]`, its recursion's
-    /// `y = pair_gain * x + a * y1 + b * y2`.
+    /// The second-order section's weights `[a, b]` on its last two outputs.
     pub pair: [f32; 2],
+    /// The backward pass's starting state per unit of forward state deviation.
+    ///
+    /// Rows and columns are ordered as the first-order output `h`, the second-order last output
+    /// `y1`, and the second-order difference `y1 - y2`.
+    pub edge: [[f32; 3]; 3],
 }
 
 impl RecursiveGaussian {
-    /// Factors the Young and van Vliet recursive Gaussian of `sigma` into a first-order and a
-    /// second-order section, computed in f64 and stored as f32.
+    /// The van Vliet, Young and Verbeek recursive Gaussian of `sigma`, computed in f64 and stored
+    /// as f32.
     ///
     /// Each gain is taken from its section's rounded pole or pair, so each section sums to 1 in
     /// f32. `sigma` must be finite and at least 0.5.
@@ -87,19 +176,23 @@ impl RecursiveGaussian {
             "sigma must be finite and at least 0.5, got {sigma}"
         );
 
-        let (_, f1, f2, f3) = direct_form_coefficients(sigma);
-        let (pole, pair_a, pair_b) = factor(f1, f2, f3);
+        let sigma = f64::from(sigma);
+        let (pole, pair_a, pair_b) = sections(sigma);
+        let length = settling_length(sigma);
+        let matrix = edge_matrix(pole, pair_a, pair_b, length);
 
         let real_pole = pole as f32;
         let pair = [pair_a as f32, pair_b as f32];
         let real_gain = 1.0 - f64::from(real_pole);
         let pair_gain = 1.0 - f64::from(pair[0]) - f64::from(pair[1]);
+        let edge = matrix.map(|row| row.map(|value| value as f32));
 
         Self {
             real_gain: real_gain as f32,
             real_pole,
             pair_gain: pair_gain as f32,
             pair,
+            edge,
         }
     }
 }
@@ -111,6 +204,19 @@ pub struct RecursivePlanes<'a> {
     pub output: DevicePlane<'a>,
 }
 
+/// One row of the edge matrix applied to the forward state's deviation from the line's edge.
+#[cube]
+fn edge_offset(
+    weight_first: f32,
+    weight_last: f32,
+    weight_difference: f32,
+    deviation_first: f32,
+    deviation_last: f32,
+    deviation_difference: f32,
+) -> f32 {
+    weight_first * deviation_first + weight_last * deviation_last + weight_difference * deviation_difference
+}
+
 #[cube(launch_unchecked)]
 fn recursive_rows(
     input: &Array<f32>,
@@ -118,10 +224,17 @@ fn recursive_rows(
     width: u32,
     height: u32,
     real_gain: f32,
-    real_pole: f32,
     pair_gain: f32,
-    pair_a: f32,
     pair_b: f32,
+    edge_00: f32,
+    edge_01: f32,
+    edge_02: f32,
+    edge_10: f32,
+    edge_11: f32,
+    edge_12: f32,
+    edge_20: f32,
+    edge_21: f32,
+    edge_22: f32,
 ) {
     let row = ABSOLUTE_POS as u32;
     if row >= height {
@@ -129,60 +242,83 @@ fn recursive_rows(
     }
 
     let base = row * width;
+    let start = input[base as usize];
+    let edge = input[(base + width - 1) as usize];
 
     // First-order section, forward. Writes into `output`.
-    let mut forward_first_previous = input[base as usize];
+    let mut forward_first = start;
     for column in 0..width {
         let index = base + column;
         let value = input[index as usize];
-        let filtered = real_gain * value + real_pole * forward_first_previous;
 
-        output[index as usize] = filtered;
-        forward_first_previous = filtered;
+        forward_first += real_gain * (value - forward_first);
+        output[index as usize] = forward_first;
     }
 
     // Second-order section, forward. Reads and overwrites `output` in place.
-    let forward_seed = output[base as usize];
-    let mut forward_second_previous_1 = forward_seed;
-    let mut forward_second_previous_2 = forward_seed;
+    let mut forward_last = start;
+    let mut forward_difference = 0.0f32;
     for column in 0..width {
         let index = base + column;
         let value = output[index as usize];
-        let filtered =
-            pair_gain * value + pair_a * forward_second_previous_1 + pair_b * forward_second_previous_2;
+        let step = pair_gain * (value - forward_last) - pair_b * forward_difference;
 
-        output[index as usize] = filtered;
-        forward_second_previous_2 = forward_second_previous_1;
-        forward_second_previous_1 = filtered;
+        forward_last += step;
+        forward_difference = step;
+        output[index as usize] = forward_last;
     }
 
+    // The backward pass starts where a row carried on by copies of `edge` would leave it.
+    let deviation_first = forward_first - edge;
+    let deviation_last = forward_last - edge;
+    let offset_first = edge_offset(
+        edge_00,
+        edge_01,
+        edge_02,
+        deviation_first,
+        deviation_last,
+        forward_difference,
+    );
+    let offset_last = edge_offset(
+        edge_10,
+        edge_11,
+        edge_12,
+        deviation_first,
+        deviation_last,
+        forward_difference,
+    );
+    let seed_difference = edge_offset(
+        edge_20,
+        edge_21,
+        edge_22,
+        deviation_first,
+        deviation_last,
+        forward_difference,
+    );
+
     // First-order section, backward, walking from the end.
-    let backward_seed = output[(base + width - 1) as usize];
-    let mut backward_first_previous = backward_seed;
+    let mut backward_first = edge + offset_first;
     for step in 0..width {
         let column = width - 1 - step;
         let index = base + column;
         let value = output[index as usize];
-        let filtered = real_gain * value + real_pole * backward_first_previous;
 
-        output[index as usize] = filtered;
-        backward_first_previous = filtered;
+        backward_first += real_gain * (value - backward_first);
+        output[index as usize] = backward_first;
     }
 
     // Second-order section, backward, walking from the end.
-    let backward_second_seed = output[(base + width - 1) as usize];
-    let mut backward_second_previous_1 = backward_second_seed;
-    let mut backward_second_previous_2 = backward_second_seed;
+    let mut backward_last = edge + offset_last;
+    let mut backward_difference = seed_difference;
     for step in 0..width {
         let column = width - 1 - step;
         let index = base + column;
         let value = output[index as usize];
-        let filtered =
-            pair_gain * value + pair_a * backward_second_previous_1 + pair_b * backward_second_previous_2;
+        let update = pair_gain * (value - backward_last) - pair_b * backward_difference;
 
-        output[index as usize] = filtered;
-        backward_second_previous_2 = backward_second_previous_1;
-        backward_second_previous_1 = filtered;
+        backward_last += update;
+        backward_difference = update;
+        output[index as usize] = backward_last;
     }
 }
 
@@ -192,69 +328,101 @@ fn recursive_columns(
     width: u32,
     height: u32,
     real_gain: f32,
-    real_pole: f32,
     pair_gain: f32,
-    pair_a: f32,
     pair_b: f32,
+    edge_00: f32,
+    edge_01: f32,
+    edge_02: f32,
+    edge_10: f32,
+    edge_11: f32,
+    edge_12: f32,
+    edge_20: f32,
+    edge_21: f32,
+    edge_22: f32,
 ) {
     let column = ABSOLUTE_POS as u32;
     if column >= width {
         terminate!();
     }
 
+    // The forward pass overwrites the column, so both ends are read first.
+    let start = output[column as usize];
+    let edge = output[((height - 1) * width + column) as usize];
+
     // First-order section, forward.
-    let mut forward_first_previous = output[column as usize];
+    let mut forward_first = start;
     for row in 0..height {
         let index = row * width + column;
         let value = output[index as usize];
-        let filtered = real_gain * value + real_pole * forward_first_previous;
 
-        output[index as usize] = filtered;
-        forward_first_previous = filtered;
+        forward_first += real_gain * (value - forward_first);
+        output[index as usize] = forward_first;
     }
 
     // Second-order section, forward.
-    let forward_seed = output[column as usize];
-    let mut forward_second_previous_1 = forward_seed;
-    let mut forward_second_previous_2 = forward_seed;
+    let mut forward_last = start;
+    let mut forward_difference = 0.0f32;
     for row in 0..height {
         let index = row * width + column;
         let value = output[index as usize];
-        let filtered =
-            pair_gain * value + pair_a * forward_second_previous_1 + pair_b * forward_second_previous_2;
+        let step = pair_gain * (value - forward_last) - pair_b * forward_difference;
 
-        output[index as usize] = filtered;
-        forward_second_previous_2 = forward_second_previous_1;
-        forward_second_previous_1 = filtered;
+        forward_last += step;
+        forward_difference = step;
+        output[index as usize] = forward_last;
     }
 
+    // The backward pass starts where a column carried on by copies of `edge` would leave it.
+    let deviation_first = forward_first - edge;
+    let deviation_last = forward_last - edge;
+    let offset_first = edge_offset(
+        edge_00,
+        edge_01,
+        edge_02,
+        deviation_first,
+        deviation_last,
+        forward_difference,
+    );
+    let offset_last = edge_offset(
+        edge_10,
+        edge_11,
+        edge_12,
+        deviation_first,
+        deviation_last,
+        forward_difference,
+    );
+    let seed_difference = edge_offset(
+        edge_20,
+        edge_21,
+        edge_22,
+        deviation_first,
+        deviation_last,
+        forward_difference,
+    );
+
     // First-order section, backward, walking from the end.
-    let backward_seed = output[((height - 1) * width + column) as usize];
-    let mut backward_first_previous = backward_seed;
+    let mut backward_first = edge + offset_first;
     for step in 0..height {
         let row = height - 1 - step;
         let index = row * width + column;
         let value = output[index as usize];
-        let filtered = real_gain * value + real_pole * backward_first_previous;
 
-        output[index as usize] = filtered;
-        backward_first_previous = filtered;
+        backward_first += real_gain * (value - backward_first);
+        output[index as usize] = backward_first;
     }
 
     // Second-order section, backward, walking from the end.
-    let backward_second_seed = output[((height - 1) * width + column) as usize];
-    let mut backward_second_previous_1 = backward_second_seed;
-    let mut backward_second_previous_2 = backward_second_seed;
+    let mut backward_last = edge + offset_last;
+    let mut backward_difference = seed_difference;
     for step in 0..height {
         let row = height - 1 - step;
         let index = row * width + column;
         let value = output[index as usize];
-        let filtered =
-            pair_gain * value + pair_a * backward_second_previous_1 + pair_b * backward_second_previous_2;
+        let update = pair_gain * (value - backward_last) - pair_b * backward_difference;
 
-        output[index as usize] = filtered;
-        backward_second_previous_2 = backward_second_previous_1;
-        backward_second_previous_1 = filtered;
+        backward_last += update;
+        backward_difference = update;
+        output[index as usize] = backward_last;
     }
 }
 
@@ -262,7 +430,9 @@ fn recursive_columns(
 /// forward and backward over the result.
 ///
 /// Each pass runs the first-order section then the second-order section forward, then the same
-/// two sections backward over that result.
+/// two sections backward over that result. The backward pass starts from the state that a line
+/// extended by copies of its last sample would reach, found from the forward pass's end state
+/// through the filter's edge matrix.
 pub fn recursive_gaussian<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -275,6 +445,7 @@ pub fn recursive_gaussian<R: Runtime>(
     let output = planes.output.array::<R>();
     let cubes = dispatch.cube_count(height as usize);
     let unit = dispatch.cube_dim();
+    let [first_row, last_row, difference_row] = filter.edge;
 
     // Safety: both planes hold `width * height` f32 values, and each thread walks only its own row.
     unsafe {
@@ -287,10 +458,17 @@ pub fn recursive_gaussian<R: Runtime>(
             width,
             height,
             filter.real_gain,
-            filter.real_pole,
             filter.pair_gain,
-            filter.pair[0],
             filter.pair[1],
+            first_row[0],
+            first_row[1],
+            first_row[2],
+            last_row[0],
+            last_row[1],
+            last_row[2],
+            difference_row[0],
+            difference_row[1],
+            difference_row[2],
         );
     }
 
@@ -309,10 +487,17 @@ pub fn recursive_gaussian<R: Runtime>(
             width,
             height,
             filter.real_gain,
-            filter.real_pole,
             filter.pair_gain,
-            filter.pair[0],
             filter.pair[1],
+            first_row[0],
+            first_row[1],
+            first_row[2],
+            last_row[0],
+            last_row[1],
+            last_row[2],
+            difference_row[0],
+            difference_row[1],
+            difference_row[2],
         );
     }
 }

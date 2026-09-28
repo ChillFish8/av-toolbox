@@ -10,14 +10,40 @@ use crate::{DevicePlane, Dispatch};
 /// The multi-scale retinex's settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetinexSettings {
-    /// The deviations the input is blurred at.
-    pub sigmas: Vec<f32>,
+    sigmas: Vec<f32>,
+    filters: Vec<RecursiveGaussian>,
     /// The fraction of samples clipped from the dark end of the response, not a percent.
     pub lower: f32,
     /// The fraction of samples clipped from the bright end of the response, not a percent.
     pub upper: f32,
     /// The value the stretched response is scaled up to.
     pub scale: f32,
+}
+
+impl RetinexSettings {
+    /// Settings that blur at each of `sigmas`, building each sigma's recursive Gaussian once.
+    ///
+    /// `lower` and `upper` are the fractions of samples clipped from each end of the response, and
+    /// `scale` is the value the stretched response is scaled up to.
+    pub fn new(sigmas: Vec<f32>, lower: f32, upper: f32, scale: f32) -> Self {
+        let filters = sigmas
+            .iter()
+            .map(|sigma| RecursiveGaussian::new(*sigma))
+            .collect();
+
+        Self {
+            sigmas,
+            filters,
+            lower,
+            upper,
+            scale,
+        }
+    }
+
+    /// The deviations the input is blurred at.
+    pub fn sigmas(&self) -> &[f32] {
+        &self.sigmas
+    }
 }
 
 /// Every plane the retinex works through. Plane-sized planes are f32 and the input's size.
@@ -112,7 +138,7 @@ fn stretch(msr: &Array<f32>, low: &Array<f32>, high: &Array<f32>, output: &mut A
 
 /// Runs the multi-scale retinex of `planes.input` into `planes.output`.
 ///
-/// The input is normalised by its own extremes, then blurred at each of `settings.sigmas` and
+/// The input is normalised by its own extremes, then blurred at each of the settings' sigmas and
 /// combined into a log response. The response is stretched between its `settings.lower` and
 /// `settings.upper` percentiles and scaled by `settings.scale`. A flat input or crossed
 /// percentiles give 0 everywhere.
@@ -154,13 +180,12 @@ pub fn retinex<R: Runtime>(
         fill::launch_unchecked::<R>(client, cubes, unit, msr, 0.0);
     }
 
-    for sigma in &settings.sigmas {
-        let filter = RecursiveGaussian::new(*sigma);
+    for filter in &settings.filters {
         let gaussian_planes = RecursivePlanes {
             input: planes.normalised,
             output: planes.blurred,
         };
-        recursive_gaussian(client, dispatch, gaussian_planes, filter);
+        recursive_gaussian(client, dispatch, gaussian_planes, *filter);
 
         let normalised = planes.normalised.array::<R>();
         let blurred = planes.blurred.array::<R>();

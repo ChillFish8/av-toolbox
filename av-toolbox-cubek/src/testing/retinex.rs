@@ -1,50 +1,82 @@
 use crate::histogram::BINS;
-use crate::retinex::{RecursiveGaussian, RetinexSettings, direct_form_coefficients};
+use crate::retinex::{RecursiveGaussian, RetinexSettings, sections, settling_length};
 
-/// Runs the direct-form recursive Gaussian along one line in f64, forward then backward, in place.
-fn direct_form_forward_backward(values: &mut [f64], gain: f64, feedback: [f64; 3]) {
-    let first = values[0];
-    let mut previous = [first, first, first];
-    let mut forward = vec![0.0f64; values.len()];
+/// Runs the recursive Gaussian's sections along `values` in f64, first-order then second-order,
+/// walking backward when `backward` is set, in place.
+///
+/// Each section starts its history at its first input sample in the walking direction.
+fn cascade_pass(values: &mut [f64], feedback: (f64, f64, f64), backward: bool) {
+    let (pole, pair_a, pair_b) = feedback;
+    let real_gain = 1.0 - pole;
+    let pair_gain = 1.0 - pair_a - pair_b;
 
-    for (index, value) in values.iter().enumerate() {
-        let filtered =
-            gain * value + feedback[0] * previous[0] + feedback[1] * previous[1] + feedback[2] * previous[2];
-
-        forward[index] = filtered;
-        previous = [filtered, previous[0], previous[1]];
+    if backward {
+        values.reverse();
     }
 
-    let last = forward[forward.len() - 1];
-    let mut previous = [last, last, last];
+    let mut first = values[0];
+    for value in values.iter_mut() {
+        first = real_gain * *value + pole * first;
+        *value = first;
+    }
 
-    for index in (0..forward.len()).rev() {
-        let filtered = gain * forward[index]
-            + feedback[0] * previous[0]
-            + feedback[1] * previous[1]
-            + feedback[2] * previous[2];
+    let mut last = values[0];
+    let mut before_last = values[0];
+    for value in values.iter_mut() {
+        let filtered = pair_gain * *value + pair_a * last + pair_b * before_last;
 
-        values[index] = filtered;
-        previous = [filtered, previous[0], previous[1]];
+        before_last = last;
+        last = filtered;
+        *value = filtered;
+    }
+
+    if backward {
+        values.reverse();
     }
 }
 
-/// Runs the direct-form recursive Gaussian of `sigma` in f64, mirroring
-/// [recursive_gaussian](crate::retinex::recursive_gaussian).
+/// Runs the recursive Gaussian forward then backward along `line` in f64, in place, as if the
+/// line carried on `padding` copies of its edge samples past each end.
+fn padded_forward_backward(
+    line: &mut [f64],
+    padded: &mut Vec<f64>,
+    feedback: (f64, f64, f64),
+    padding: usize,
+) {
+    let first = line[0];
+    let last = line[line.len() - 1];
+
+    padded.clear();
+    padded.resize(padding, first);
+    padded.extend_from_slice(line);
+    padded.resize(padded.len() + padding, last);
+
+    cascade_pass(padded, feedback, false);
+    cascade_pass(padded, feedback, true);
+
+    let kept = &padded[padding..padding + line.len()];
+    line.copy_from_slice(kept);
+}
+
+/// Runs the recursive Gaussian of `sigma` in f64 as if the plane were extended by repeating its
+/// edge samples.
 ///
 /// Each row runs forward then backward, then each column runs forward then backward over the
-/// result.
+/// result. Each line is extended on both ends by enough copies of its edge samples for the
+/// filter's response to die away before it reaches the line.
 pub fn reference_recursive_gaussian(input: &[f32], width: u32, height: u32, sigma: f32) -> Vec<f32> {
-    let (gain, f1, f2, f3) = direct_form_coefficients(sigma);
-    let feedback = [f1, f2, f3];
+    let sigma = f64::from(sigma);
+    let feedback = sections(sigma);
+    let padding = settling_length(sigma);
 
     let mut output: Vec<f64> = input.iter().map(|value| f64::from(*value)).collect();
+    let mut padded = Vec::new();
 
     for row in 0..height {
         let start = (row * width) as usize;
         let end = start + width as usize;
 
-        direct_form_forward_backward(&mut output[start..end], gain, feedback);
+        padded_forward_backward(&mut output[start..end], &mut padded, feedback, padding);
     }
 
     let mut column_values = vec![0.0f64; height as usize];
@@ -53,7 +85,7 @@ pub fn reference_recursive_gaussian(input: &[f32], width: u32, height: u32, sigm
             column_values[row as usize] = output[(row * width + column) as usize];
         }
 
-        direct_form_forward_backward(&mut column_values, gain, feedback);
+        padded_forward_backward(&mut column_values, &mut padded, feedback, padding);
 
         for row in 0..height {
             output[(row * width + column) as usize] = column_values[row as usize];
@@ -63,61 +95,70 @@ pub fn reference_recursive_gaussian(input: &[f32], width: u32, height: u32, sigm
     output.iter().map(|value| *value as f32).collect()
 }
 
+/// The backward pass's starting state `(h, y1, y1 - y2)` for a line whose last input is `edge`
+/// and whose forward pass ended in the state `forward`, in the kernel's operation order.
+fn backward_seed(filter: &RecursiveGaussian, forward: [f32; 3], edge: f32) -> [f32; 3] {
+    let deviation_first = forward[0] - edge;
+    let deviation_last = forward[1] - edge;
+    let deviation_difference = forward[2];
+    let matrix = filter.edge;
+
+    let offset_first =
+        matrix[0][0] * deviation_first + matrix[0][1] * deviation_last + matrix[0][2] * deviation_difference;
+    let offset_last =
+        matrix[1][0] * deviation_first + matrix[1][1] * deviation_last + matrix[1][2] * deviation_difference;
+    let difference =
+        matrix[2][0] * deviation_first + matrix[2][1] * deviation_last + matrix[2][2] * deviation_difference;
+
+    [edge + offset_first, edge + offset_last, difference]
+}
+
 /// Runs the cascade sections forward then backward along one line in f32, in place, mirroring the
 /// kernel's per-row and per-column passes.
+///
+/// Each section updates its last output by a small step, and the backward pass starts from
+/// [backward_seed].
 fn cascade_forward_backward(values: &mut [f32], filter: RecursiveGaussian) {
-    let mut forward_first_previous = values[0];
-    let mut first_stage = vec![0.0f32; values.len()];
+    let start = values[0];
+    let edge = values[values.len() - 1];
 
-    for (index, value) in values.iter().enumerate() {
-        let filtered = filter.real_gain * value + filter.real_pole * forward_first_previous;
-
-        first_stage[index] = filtered;
-        forward_first_previous = filtered;
+    let mut first = start;
+    for value in values.iter_mut() {
+        first += filter.real_gain * (*value - first);
+        *value = first;
     }
 
-    let forward_seed = first_stage[0];
-    let mut forward_second_previous_1 = forward_seed;
-    let mut forward_second_previous_2 = forward_seed;
-    let mut forward = vec![0.0f32; values.len()];
+    let mut last = start;
+    let mut difference = 0.0f32;
+    for value in values.iter_mut() {
+        let step = filter.pair_gain * (*value - last) - filter.pair[1] * difference;
 
-    for (index, value) in first_stage.iter().enumerate() {
-        let filtered = filter.pair_gain * value
-            + filter.pair[0] * forward_second_previous_1
-            + filter.pair[1] * forward_second_previous_2;
-
-        forward[index] = filtered;
-        forward_second_previous_2 = forward_second_previous_1;
-        forward_second_previous_1 = filtered;
+        last += step;
+        difference = step;
+        *value = last;
     }
 
-    let backward_seed = forward[forward.len() - 1];
-    let mut backward_first_previous = backward_seed;
-    let mut backward_first_stage = vec![0.0f32; values.len()];
+    let forward = [first, last, difference];
+    let [seed_first, seed_last, seed_difference] = backward_seed(&filter, forward, edge);
 
-    for index in (0..forward.len()).rev() {
-        let filtered = filter.real_gain * forward[index] + filter.real_pole * backward_first_previous;
-
-        backward_first_stage[index] = filtered;
-        backward_first_previous = filtered;
+    let mut first = seed_first;
+    for value in values.iter_mut().rev() {
+        first += filter.real_gain * (*value - first);
+        *value = first;
     }
 
-    let backward_second_seed = backward_first_stage[backward_first_stage.len() - 1];
-    let mut backward_second_previous_1 = backward_second_seed;
-    let mut backward_second_previous_2 = backward_second_seed;
+    let mut last = seed_last;
+    let mut difference = seed_difference;
+    for value in values.iter_mut().rev() {
+        let step = filter.pair_gain * (*value - last) - filter.pair[1] * difference;
 
-    for index in (0..values.len()).rev() {
-        let filtered = filter.pair_gain * backward_first_stage[index]
-            + filter.pair[0] * backward_second_previous_1
-            + filter.pair[1] * backward_second_previous_2;
-
-        values[index] = filtered;
-        backward_second_previous_2 = backward_second_previous_1;
-        backward_second_previous_1 = filtered;
+        last += step;
+        difference = step;
+        *value = last;
     }
 }
 
-/// Runs the device's cascade-form recursive Gaussian on the CPU in f32, mirroring
+/// Runs the device's recursive Gaussian on the CPU in f32, mirroring
 /// [recursive_gaussian](crate::retinex::recursive_gaussian) exactly, section by section and pass
 /// by pass.
 pub fn reference_recursive_gaussian_cascade(
@@ -233,7 +274,7 @@ pub fn reference_retinex(input: &[f32], width: u32, height: u32, settings: &Reti
         })
         .collect();
 
-    let finished = reference_log_response(&normalised, width, height, &settings.sigmas);
+    let finished = reference_log_response(&normalised, width, height, settings.sigmas());
 
     let lower_percentile = settings.lower * 100.0;
     let upper_percentile = (1.0 - settings.upper) * 100.0;

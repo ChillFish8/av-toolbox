@@ -241,7 +241,33 @@ fn add_capped_matches_the_reference_and_clamps_to_the_peak() {
     let height = 23;
     let peak = BUSY_RANGE;
     let first = busy(width, height);
-    let second = busy(width, height);
+    let mut second = busy(width, height);
+    second.reverse();
+
+    let differing = first
+        .iter()
+        .zip(&second)
+        .filter(|(first_value, second_value)| first_value != second_value)
+        .count();
+    let clamped = first
+        .iter()
+        .zip(&second)
+        .filter(|(first_value, second_value)| *first_value + *second_value > peak)
+        .count();
+    let samples = first.len();
+
+    assert!(
+        differing * 2 >= samples,
+        "only {differing} of {samples} samples differ"
+    );
+    assert!(
+        clamped * 10 >= samples,
+        "only {clamped} of {samples} samples reach the clamp"
+    );
+    assert!(
+        clamped * 10 <= samples * 9,
+        "{clamped} of {samples} samples reach the clamp"
+    );
 
     let actual = on_device_add_capped(&first, &second, width, height, peak);
     let expected = reference_add_capped(&first, &second, peak);

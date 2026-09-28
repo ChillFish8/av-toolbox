@@ -1,5 +1,5 @@
 use av_toolbox_cubek::retinex::{RecursiveGaussian, RecursivePlanes, recursive_gaussian};
-use av_toolbox_cubek::testing::reference_recursive_gaussian;
+use av_toolbox_cubek::testing::{reference_recursive_gaussian, reference_recursive_gaussian_cascade};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -80,6 +80,30 @@ fn step_plane(width: u32, height: u32, along_width: bool) -> Vec<f32> {
     plane
 }
 
+/// A plane that steps from 0 to 1 `sigma` samples before the far end of its width
+/// (`along_width`) or its height.
+fn edge_step_plane(width: u32, height: u32, along_width: bool, sigma: f32) -> Vec<f32> {
+    let offset = sigma as u32;
+    let mut plane = vec![0.0f32; (width * height) as usize];
+
+    for row in 0..height {
+        for column in 0..width {
+            let index = (row * width + column) as usize;
+            let past_step = if along_width {
+                column + offset >= width
+            } else {
+                row + offset >= height
+            };
+
+            if past_step {
+                plane[index] = 1.0;
+            }
+        }
+    }
+
+    plane
+}
+
 #[test]
 fn the_recursive_gaussian_matches_the_reference() {
     let sizes = [(37, 23), (1, 5), (5, 1), (2, 2), (1, 1)];
@@ -149,4 +173,39 @@ fn a_wide_flat_plane_matches_the_reference_closely() {
     let expected = reference_recursive_gaussian(&input, width, height, sigma);
 
     assert_close(&actual, &expected, 1e-5);
+}
+
+#[test]
+fn the_edges_act_as_replicated_on_the_device() {
+    let sigmas = [50.0, 350.0];
+
+    for sigma in sigmas {
+        let filter = RecursiveGaussian::new(sigma);
+
+        let wide = edge_step_plane(1920, 2, true, sigma);
+        let actual_wide = on_device(&wide, 1920, 2, filter);
+        let expected_wide = reference_recursive_gaussian(&wide, 1920, 2, sigma);
+
+        assert_close(&actual_wide, &expected_wide, 2e-4);
+
+        let tall = edge_step_plane(2, 1080, false, sigma);
+        let actual_tall = on_device(&tall, 2, 1080, filter);
+        let expected_tall = reference_recursive_gaussian(&tall, 2, 1080, sigma);
+
+        assert_close(&actual_tall, &expected_tall, 2e-4);
+    }
+}
+
+#[test]
+fn a_step_at_the_widest_sigma_matches_the_reference() {
+    let sigma = 1024.0;
+    let filter = RecursiveGaussian::new(sigma);
+    let input = edge_step_plane(1920, 2, true, sigma);
+
+    let actual = on_device(&input, 1920, 2, filter);
+    let mirror = reference_recursive_gaussian_cascade(&input, 1920, 2, filter);
+    let expected = reference_recursive_gaussian(&input, 1920, 2, sigma);
+
+    assert_close(&actual, &mirror, 1e-5);
+    assert_close(&mirror, &expected, 4e-3);
 }

@@ -91,12 +91,8 @@ impl Default for RetinexArgs {
 /// are found, and a join of Prewitt over the response with Kirsch over the luma gives the final
 /// magnitude, cut at `peak` and optionally binarized.
 fn reference_retinex_mask(luma: &[f32], width: u32, height: u32, args: &RetinexArgs, peak: f32) -> Vec<u8> {
-    let settings = RetinexSettings {
-        sigmas: args.sigmas.clone(),
-        lower: args.lower_thr,
-        upper: args.upper_thr,
-        scale: peak,
-    };
+    let sigmas = args.sigmas.clone();
+    let settings = RetinexSettings::new(sigmas, args.lower_thr, args.upper_thr, peak);
     let retinex_response = reference_retinex(luma, width, height, &settings);
 
     let lines_source = if args.sigma > 0.0 {

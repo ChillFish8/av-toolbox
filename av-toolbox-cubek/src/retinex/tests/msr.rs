@@ -6,12 +6,7 @@ fn a_flat_plane_gives_zero() {
     let width = 6;
     let height = 4;
     let input = vec![100.0f32; (width * height) as usize];
-    let settings = RetinexSettings {
-        sigmas: vec![1.0, 3.0],
-        lower: 0.01,
-        upper: 0.01,
-        scale: 255.0,
-    };
+    let settings = RetinexSettings::new(vec![1.0, 3.0], 0.01, 0.01, 255.0);
 
     let output = reference_retinex(&input, width, height, &settings);
 
@@ -30,12 +25,7 @@ fn the_output_spans_zero_to_scale() {
     let input: Vec<f32> = (0..samples)
         .map(|index| index as f32 * scale / (samples - 1) as f32)
         .collect();
-    let settings = RetinexSettings {
-        sigmas: vec![1.0, 3.0],
-        lower: 0.01,
-        upper: 0.01,
-        scale,
-    };
+    let settings = RetinexSettings::new(vec![1.0, 3.0], 0.01, 0.01, scale);
 
     let output = reference_retinex(&input, width, height, &settings);
 
@@ -55,12 +45,7 @@ fn crossed_percentiles_give_zero() {
     let height = 7;
     let samples = (width * height) as usize;
     let input: Vec<f32> = (0..samples).map(|index| index as f32).collect();
-    let settings = RetinexSettings {
-        sigmas: vec![2.0],
-        lower: 0.6,
-        upper: 0.6,
-        scale: 255.0,
-    };
+    let settings = RetinexSettings::new(vec![2.0], 0.6, 0.6, 255.0);
 
     let output = reference_retinex(&input, width, height, &settings);
 
@@ -96,16 +81,16 @@ fn reference_log_response_of_a_flat_plane_is_zero_and_finite() {
     }
 }
 
-/// An isolated bright sample against a dark field pushes `intensity / gaussian` into the tens of
-/// thousands at a sigma this wide, which overflows f32 across 8 sigmas when the response
-/// multiplies a factor per sigma instead of summing its log.
+/// An isolated bright sample against a dark field pushes `intensity / gaussian` into the millions
+/// at a sigma this wide, which overflows f32 across 8 sigmas when the response multiplies a factor
+/// per sigma instead of summing its log.
 #[test]
 fn reference_log_response_of_wide_sigmas_on_an_isolated_sample_stays_finite() {
     let width = 512;
     let height = 512;
     let mut normalised = vec![0.0f32; (width * height) as usize];
     normalised[(width * height / 2) as usize] = 1.0;
-    let sigmas = vec![100_000.0; 8];
+    let sigmas = vec![1024.0; 8];
 
     let response = reference_log_response(&normalised, width, height, &sigmas);
 

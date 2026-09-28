@@ -95,12 +95,7 @@ fn on_device(input: &[f32], width: u32, height: u32, settings: &RetinexSettings)
 }
 
 fn default_settings(scale: f32) -> RetinexSettings {
-    RetinexSettings {
-        sigmas: vec![50.0, 200.0, 350.0],
-        lower: 0.001,
-        upper: 0.005,
-        scale,
-    }
+    RetinexSettings::new(vec![50.0, 200.0, 350.0], 0.001, 0.005, scale)
 }
 
 /// A scene with a smooth dark half and a smooth bright half.
@@ -177,7 +172,7 @@ fn a_flat_plane_gives_zero_on_the_device() {
     let height = 4;
     let input = vec![100.0f32; (width * height) as usize];
     let settings = default_settings(255.0);
-    let count = settings.sigmas.len() as f32;
+    let count = settings.sigmas().len() as f32;
 
     let found = on_device(&input, width, height, &settings);
 
@@ -201,12 +196,7 @@ fn crossed_percentiles_give_zero_on_the_device() {
     let height = 7;
     let samples = (width * height) as usize;
     let input: Vec<f32> = (0..samples).map(|index| index as f32).collect();
-    let settings = RetinexSettings {
-        sigmas: vec![2.0],
-        lower: 0.6,
-        upper: 0.6,
-        scale: 255.0,
-    };
+    let settings = RetinexSettings::new(vec![2.0], 0.6, 0.6, 255.0);
 
     let found = on_device(&input, width, height, &settings);
 
@@ -225,12 +215,7 @@ fn wide_sigmas_on_an_isolated_sample_stay_finite_on_the_device() {
     let height = 512;
     let mut input = vec![0.0f32; (width * height) as usize];
     input[(width * height / 2) as usize] = 1.0;
-    let settings = RetinexSettings {
-        sigmas: vec![100_000.0; 8],
-        lower: 0.001,
-        upper: 0.005,
-        scale: 255.0,
-    };
+    let settings = RetinexSettings::new(vec![100_000.0; 8], 0.001, 0.005, 255.0);
 
     let found = on_device(&input, width, height, &settings);
 
