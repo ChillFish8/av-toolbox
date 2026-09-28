@@ -29,7 +29,13 @@ pub use self::neighbourhood::{
 };
 pub use self::padding::{reference_crop, reference_pad};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};
-pub use self::retinex::{reference_recursive_gaussian, reference_recursive_gaussian_cascade};
+pub use self::retinex::{
+    reference_log_response,
+    reference_percentile,
+    reference_recursive_gaussian,
+    reference_recursive_gaussian_cascade,
+    reference_retinex,
+};
 pub use self::rgvs::{reference_remove_grain, reference_repair};
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
