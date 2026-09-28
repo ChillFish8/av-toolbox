@@ -8,6 +8,7 @@
 //! - [depth] for changing a plane's bit depth, with dithering.
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
+//! - [hysteresis] for keeping the connected regions of a mask that hold a seed.
 //! - [sobel] for image gradients.
 //! - [values] for moving integer planes into f32 code values and back.
 //! - [labels] for connected components.
@@ -24,6 +25,7 @@ pub mod dehalo;
 pub mod depth;
 mod dispatch;
 pub mod histogram;
+pub mod hysteresis;
 pub mod labels;
 pub mod neighbourhood;
 pub mod padding;

@@ -1,4 +1,5 @@
 mod dehalo;
+mod hysteresis;
 mod neighbourhood;
 mod padding;
 mod resize;
@@ -12,6 +13,7 @@ pub use self::dehalo::{
     reference_padded_warp,
     reference_yahr,
 };
+pub use self::hysteresis::reference_hysteresis;
 pub use self::neighbourhood::{
     reference_extreme,
     reference_median,

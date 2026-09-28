@@ -5,6 +5,7 @@ mod deband;
 mod dehalo;
 mod depth;
 mod histogram;
+mod hysteresis;
 mod labels;
 mod neighbourhood;
 mod padding;
