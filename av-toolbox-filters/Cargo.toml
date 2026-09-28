@@ -11,6 +11,7 @@ av-toolbox-gpu = { workspace = true }
 cubecl = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }

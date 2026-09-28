@@ -7,6 +7,7 @@
 //! - `dehalo/fine` runs `dehalo/alpha` only in a band around strong edges.
 //! - `dehalo/yahr` removes halos by limiting a clip's detail to the detail of its warp-sharpened
 //!   self, the way havsfunc's YAHR does.
+//! - `dering/hq` smooths ringing inside a mask of the area around edges.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
@@ -17,8 +18,10 @@
 
 mod bits;
 mod blend;
+mod checks;
 mod deband;
 mod dehalo;
+mod dering;
 mod planes;
 mod planewise;
 mod resample;
@@ -41,6 +44,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<dehalo::EdgeClean>()?;
     registry.register_filter::<dehalo::Fine>()?;
     registry.register_filter::<dehalo::Yahr>()?;
+    registry.register_filter::<dering::Hq>()?;
     registry.register_filter::<Resize<Point>>()?;
     registry.register_filter::<Resize<Bilinear>>()?;
     registry.register_filter::<Resize<Bicubic>>()?;
@@ -80,6 +84,7 @@ mod tests {
         assert!(registered("dehalo/edge_clean"));
         assert!(registered("dehalo/fine"));
         assert!(registered("dehalo/yahr"));
+        assert!(registered("dering/hq"));
         assert!(registered("resize/point"));
         assert!(registered("resize/bilinear"));
         assert!(registered("resize/bicubic"));
