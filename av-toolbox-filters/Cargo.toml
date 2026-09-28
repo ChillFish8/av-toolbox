@@ -2,6 +2,7 @@
 name = "av-toolbox-filters"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 description = "Filters that change the frames of av-toolbox pipelines."
 
 [dependencies]

@@ -2,6 +2,7 @@
 name = "av-toolbox-cubek"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 description = "Shared CubeCL kernels that can be used within av-toolbox video filters."
 
 [dependencies]

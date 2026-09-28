@@ -2,6 +2,7 @@
 name = "av-toolbox-runtime"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 description = "The av-toolbox filter graph runtime."
 
 [dependencies]

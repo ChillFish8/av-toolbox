@@ -115,3 +115,8 @@ av-toolbox list-stages
 av-toolbox list-stages y4m/pipe
 av-toolbox list-devices
 ```
+
+## Licence
+
+Licensed under the European Union Public Licence v1.2 only (EUPL-1.2). Later versions of the EUPL do not apply.
+See [LICENSE](LICENSE).

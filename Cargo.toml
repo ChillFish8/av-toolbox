@@ -15,6 +15,9 @@ members = [
     "av-toolbox-transforms",
 ]
 
+[workspace.package]
+license = "EUPL-1.2"
+
 [profile.test-release]
 inherits = "release"
 debug-assertions = true

@@ -2,6 +2,7 @@
 name = "av-toolbox-core"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 av-toolbox-cubek = { path = "../av-toolbox-cubek" }
