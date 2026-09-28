@@ -6,6 +6,7 @@ mod rgvs;
 
 pub use self::dehalo::{
     reference_dehalo_alpha,
+    reference_edge_clean,
     reference_fine_dehalo,
     reference_merge_masked,
     reference_padded_warp,

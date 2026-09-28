@@ -6,6 +6,7 @@ use super::{
     reference_narrow,
     reference_pad,
     reference_prewitt,
+    reference_remove_grain,
     reference_repair,
     reference_resize_float,
     reference_smooth,
@@ -13,11 +14,12 @@ use super::{
 };
 use crate::dehalo::PADDING;
 use crate::dehalo::alpha::{AlphaParams, alpha_sizes, halo_mask_sample, strength_sample};
+use crate::dehalo::edge_clean::{EdgeCleanParams, levels_sample, threshold_sample};
 use crate::dehalo::fine::{FineParams, contrast_sample, outside_sample};
 use crate::dehalo::yahr::YahrParams;
 use crate::neighbourhood::{Expansion, Extreme, Shape, Smooth, expansion_passes};
 use crate::resize::{Kernel, centred_taps};
-use crate::rgvs::RepairMode;
+use crate::rgvs::{RemoveGrainMode, RepairMode};
 use crate::warp::WarpParams;
 
 const MITCHELL: Kernel = Kernel::Bicubic {
@@ -213,4 +215,57 @@ pub fn reference_yahr(input: &[f32], width: u32, height: u32, params: &YahrParam
     let change = subtract(&detail, &limited);
 
     subtract(input, &change)
+}
+
+/// The whole of havsfunc's EdgeCleaner on one f32 plane on the CPU.
+pub fn reference_edge_clean(input: &[f32], width: u32, height: u32, params: &EdgeCleanParams) -> Vec<f32> {
+    let peak = params.peak();
+    let warp_params = params.warp_params();
+    let warped = reference_padded_warp(input, width, height, &warp_params);
+    let main = if params.rep {
+        reference_repair(&warped, input, width, height, params.rmode)
+    } else {
+        warped
+    };
+
+    let edges = reference_prewitt(input, width, height, peak);
+    let low = params.scale(4.0);
+    let high = params.scale(32.0);
+    let thresholded: Vec<f32> = edges
+        .iter()
+        .map(|edge| threshold_sample(*edge, low, high, peak, true))
+        .collect();
+    let mask = reference_smooth(&thresholded, width, height, Smooth::Box);
+    let mut result = reference_merge_masked(input, &main, &mask, peak);
+
+    if params.hot {
+        result = reference_repair(&result, input, width, height, RepairMode::Two);
+    }
+
+    if params.smode {
+        let smoothed = reference_remove_grain(input, width, height, RemoveGrainMode::Seventeen);
+        let neutral = params.scale(128.0);
+        let diff: Vec<f32> = input
+            .iter()
+            .zip(&smoothed)
+            .map(|(value, other)| value - other + neutral)
+            .collect();
+        let levels_low = params.scale(40.0);
+        let levels_span = params.scale(128.0);
+        let exponent = 1.0 / 0.35;
+        let brightened: Vec<f32> = diff
+            .iter()
+            .map(|value| levels_sample(*value, levels_low, levels_span, exponent, peak))
+            .collect();
+        let cleaned = reference_remove_grain(&brightened, width, height, RemoveGrainMode::Seven);
+        let particle_edges = reference_prewitt(&cleaned, width, height, peak);
+        let particle_high = params.scale(16.0);
+        let particles: Vec<f32> = particle_edges
+            .iter()
+            .map(|edge| threshold_sample(*edge, low, particle_high, peak, false))
+            .collect();
+        result = reference_merge_masked(&result, input, &particles, peak);
+    }
+
+    result
 }
