@@ -197,3 +197,18 @@ fn the_warp_example_leaves_an_even_ramp_alone() {
         assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
     }
 }
+
+#[test]
+fn the_dehalo_example_leaves_an_even_ramp_alone() {
+    // An even ramp's edges are far below every mask threshold, so neither stage changes it.
+    let decoded = run_example("dehalo.toml", &[]);
+    let expected_luma = gradient_luma();
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for frame in &decoded.frames {
+        assert_eq!(frame.luma, expected_luma);
+        assert!(frame.u_plane.iter().all(|sample| *sample == FLAT_U));
+        assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
+    }
+}

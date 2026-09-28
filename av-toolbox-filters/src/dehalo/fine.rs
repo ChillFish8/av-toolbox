@@ -61,7 +61,6 @@ use serde::Deserialize;
 
 use super::alpha::{
     AlphaTables,
-    at_least,
     checked_alpha_sizes,
     checked_plane_sizes,
     default_radius,
@@ -69,6 +68,7 @@ use super::alpha::{
     dehalo_alpha,
 };
 use crate::bits::bits_of;
+use crate::checks::{at_least, between_f32};
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
 use crate::scratch::Scratch;
@@ -149,16 +149,6 @@ fn crossed_thresholds(low_name: &str, low: f32, high_name: &str, high: f32) -> R
     Err(StageError::msg(message))
 }
 
-fn threshold(name: &str, value: f32) -> Result<(), StageError> {
-    if (0.0..=255.0).contains(&value) {
-        return Ok(());
-    }
-
-    let message = format!("{STAGE} needs {name} between 0 and 255, got {value}");
-
-    Err(StageError::msg(message))
-}
-
 /// The fine parameters for `sample`, once the arguments are checked.
 pub(crate) fn fine_params(args: &FineArgs, sample: SampleFormat) -> Result<FineParams, StageError> {
     at_least(STAGE, "rx", args.rx, 1.0)?;
@@ -169,10 +159,10 @@ pub(crate) fn fine_params(args: &FineArgs, sample: SampleFormat) -> Result<FineP
     at_least(STAGE, "contra", args.contra, 0.0)?;
     at_least(STAGE, "edgeproc", args.edgeproc, 0.0)?;
 
-    threshold("thmi", args.thmi)?;
-    threshold("thma", args.thma)?;
-    threshold("thlimi", args.thlimi)?;
-    threshold("thlima", args.thlima)?;
+    between_f32(STAGE, "thmi", args.thmi, 0.0, 255.0)?;
+    between_f32(STAGE, "thma", args.thma, 0.0, 255.0)?;
+    between_f32(STAGE, "thlimi", args.thlimi, 0.0, 255.0)?;
+    between_f32(STAGE, "thlima", args.thlima, 0.0, 255.0)?;
     crossed_thresholds("thmi", args.thmi, "thma", args.thma)?;
     crossed_thresholds("thlimi", args.thlimi, "thlima", args.thlima)?;
 

@@ -39,6 +39,7 @@ use serde::Deserialize;
 
 use super::padded_warp::padded_warp;
 use crate::bits::bits_of;
+use crate::checks::between_u32;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
 use crate::scratch::Scratch;
@@ -76,12 +77,6 @@ pub(crate) struct YahrArgs {
     pub(crate) planes: Option<Vec<ChannelName>>,
 }
 
-fn bad_blur(blur: u32) -> StageError {
-    let message = format!("{STAGE} needs blur between 0 and {MAX_BLUR}, got {blur}");
-
-    StageError::msg(message)
-}
-
 fn bad_depth(depth: i32) -> StageError {
     let message = format!("{STAGE} needs depth between {MIN_DEPTH} and {MAX_DEPTH}, got {depth}");
 
@@ -90,9 +85,7 @@ fn bad_depth(depth: i32) -> StageError {
 
 /// The YAHR parameters for `sample`, once the arguments are checked.
 pub(crate) fn yahr_params(args: &YahrArgs, sample: SampleFormat) -> Result<YahrParams, StageError> {
-    if args.blur > MAX_BLUR {
-        return Err(bad_blur(args.blur));
-    }
+    between_u32(STAGE, "blur", args.blur, 0, MAX_BLUR)?;
 
     if !(MIN_DEPTH..=MAX_DEPTH).contains(&args.depth) {
         return Err(bad_depth(args.depth));

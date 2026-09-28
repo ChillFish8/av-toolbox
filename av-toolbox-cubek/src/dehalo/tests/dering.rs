@@ -2,7 +2,7 @@ use crate::dehalo::dering::{DeringParams, contra_limit_sample, limit_sample, rin
 use crate::rgvs::RepairMode;
 use crate::testing::reference_hq_dering;
 
-fn defaults(bits: u32) -> DeringParams {
+fn test_params(bits: u32) -> DeringParams {
     DeringParams {
         mrad: 1,
         msmooth: 1,
@@ -106,7 +106,7 @@ fn a_flat_plane_comes_back_flat() {
                         minp,
                         incedge,
                         drrep,
-                        ..defaults(8)
+                        ..test_params(8)
                     };
 
                     let output = reference_hq_dering(&flat, 64, 32, &params);
@@ -168,9 +168,9 @@ fn a_ringing_edge_is_smoothed_near_the_edge_only() {
         mrad: 2,
         msmooth: 1,
         incedge: true,
-        // 20 sits above the far ripple's own Prewitt response (9, see the report's fix section for
-        // the working) and far below the step edge's, so it zeroes the far ripple out of the mask
-        // without touching the real edge.
+        // The horizontal Prewitt response is 3|c(x-1) - c(x+1)|, which is 0 inside the far ripple
+        // and 9 at its edge. 20 sits above that 9 and far below the step edge's own response, so it
+        // zeroes the far ripple out of the mask without touching the real edge.
         mthr: 20.0,
         minp: 1,
         nrmode: 1,

@@ -82,6 +82,26 @@ fn contra_sharpen(input: &[f32], smoothed: &[f32], width: u32, height: u32, shar
         .collect()
 }
 
+/// The ring mask havsfunc's `HQDeringmod` merges with, computed on the CPU.
+pub fn reference_ring_mask(input: &[f32], width: u32, height: u32, params: &DeringParams) -> Vec<f32> {
+    let peak = params.peak();
+    let edges = reference_prewitt(input, width, height, peak);
+    let floor = params.scale(params.mthr);
+    let pm: Vec<f32> = edges
+        .iter()
+        .map(|edge| threshold_sample(*edge, floor, f32::MAX, peak, false))
+        .collect();
+    let pm_median = reference_median(&pm, width, height, 1);
+    let fmask = reference_hysteresis(&pm_median, &pm, width, height, peak);
+
+    let outer = outer_mask(&fmask, width, height, params.mrad, params.msmooth);
+    let inner = inner_mask(&fmask, width, height, params.minp);
+
+    (0..input.len())
+        .map(|index| ring_mask_sample(outer[index], inner[index], params.incedge, peak))
+        .collect()
+}
+
 /// The whole of havsfunc's HQDeringmod on one f32 plane on the CPU.
 pub fn reference_hq_dering(input: &[f32], width: u32, height: u32, params: &DeringParams) -> Vec<f32> {
     let peak = params.peak();
@@ -102,20 +122,7 @@ pub fn reference_hq_dering(input: &[f32], width: u32, height: u32, params: &Deri
         .map(|index| limit_sample(input[index], repaired[index], thr, darkthr, params.elast))
         .collect();
 
-    let edges = reference_prewitt(input, width, height, peak);
-    let floor = params.scale(params.mthr);
-    let pm: Vec<f32> = edges
-        .iter()
-        .map(|edge| threshold_sample(*edge, floor, f32::MAX, peak, false))
-        .collect();
-    let pm_median = reference_median(&pm, width, height, 1);
-    let fmask = reference_hysteresis(&pm_median, &pm, width, height, peak);
-
-    let outer = outer_mask(&fmask, width, height, params.mrad, params.msmooth);
-    let inner = inner_mask(&fmask, width, height, params.minp);
-    let ringmask: Vec<f32> = (0..input.len())
-        .map(|index| ring_mask_sample(outer[index], inner[index], params.incedge, peak))
-        .collect();
+    let ringmask = reference_ring_mask(input, width, height, params);
 
     reference_merge_masked(input, &limited, &ringmask, peak)
 }

@@ -124,14 +124,13 @@ pub(crate) struct HqArgs {
     /// Which combination of inflate and square minimum passes shrinks the ring mask's inner edge.
     #[serde(default = "default_minp")]
     pub(crate) minp: u32,
-    /// The MinBlur radius the smoothing pass runs. 2 when the frame is wider than 1024 or taller
-    /// than 576, otherwise 1, when not given.
+    /// The MinBlur radius the smoothing pass runs, picked from the frame size when not given.
     #[serde(default)]
     pub(crate) nrmode: Option<u32>,
     /// How many contrasharpening passes run. 0 skips contrasharpening.
     #[serde(default = "default_sharp")]
     pub(crate) sharp: u32,
-    /// The RemoveGrain Repair mode the smoothed plane is repaired against the clip with. 0 skips it.
+    /// The Repair mode the smoothed plane is repaired against the clip with. 0 skips it.
     #[serde(default = "default_drrep")]
     pub(crate) drrep: u32,
     /// How far a darkening sample may move before it is limited back toward the plane.
@@ -167,16 +166,16 @@ fn checked_drrep(drrep: u32) -> Result<Option<RepairMode>, StageError> {
     Ok(Some(mode))
 }
 
-/// `nrmode`'s default for a frame of `width` by `height`, as havsfunc picks it from the whole
-/// frame rather than from any one plane.
+/// `nrmode`'s default for a frame of `width` by `height`.
 fn default_nrmode(width: u32, height: u32) -> u32 {
     if width > 1024 || height > 576 { 2 } else { 1 }
 }
 
 /// The HQDeringmod parameters for `input`, once the arguments are checked.
 ///
-/// It takes the whole frame format, because `nrmode`'s default depends on the frame size rather
-/// than the size of the plane it ends up running on.
+/// It takes the whole frame format because `nrmode`'s default, when not given, depends on the
+/// frame size rather than the plane it ends up running on: 2 when the frame is wider than 1024 or
+/// taller than 576, otherwise 1.
 pub(crate) fn dering_params(args: &HqArgs, input: &FrameFormat) -> Result<DeringParams, StageError> {
     between_u32(STAGE, "mrad", args.mrad, 0, 16)?;
     between_u32(STAGE, "msmooth", args.msmooth, 0, 16)?;
@@ -217,7 +216,7 @@ pub(crate) fn dering_params(args: &HqArgs, input: &FrameFormat) -> Result<Dering
     })
 }
 
-/// One step of a chain that grows or softens a mask, run through [ping_pong].
+/// One pass of a chain run through [ping_pong].
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum Step {
     Maximum,
@@ -265,6 +264,7 @@ fn ping_pong<R: Runtime>(
             Step::Inflate => spread(client, &sizing, planes, Spread::Inflate),
             Step::Box => smooth(client, &sizing, planes, Smooth::Box),
         }
+
         source = target;
     }
 }
@@ -372,7 +372,9 @@ fn contra_sharpen<R: Runtime>(
 }
 
 fn unreadable_labels(error: ServerError) -> StageError {
-    StageError::with_source("dering/hq could not read back its ring mask labels", error)
+    let message = format!("{STAGE} could not read back its ring mask labels");
+
+    StageError::with_source(message, error)
 }
 
 /// The seed-and-keep hysteresis pass that joins the ring mask's edges, `pm_median` seeding
@@ -410,7 +412,7 @@ fn ring_edges<R: Runtime>(
     let settled = hysteresis(client, &sizing, hysteresis_planes, peak).map_err(unreadable_labels)?;
 
     if let Settled::Capped { passes } = settled {
-        tracing::warn!("dering/hq stopped joining ring edges after {passes} passes, so some may be split");
+        tracing::warn!("{STAGE} stopped joining ring edges after {passes} passes, so some may be split");
     }
 
     Ok(())
@@ -458,24 +460,22 @@ fn hq_dering<R: Runtime>(
         None => min_blurred_plane,
     };
 
-    let repaired_scratch = if params.drrep.is_some() {
-        Some(Scratch::new::<f32>(context, width, height))
-    } else {
-        None
-    };
-    let repaired_plane = match (&repaired_scratch, params.drrep) {
-        (Some(scratch), Some(mode)) => {
+    let repaired_scratch = params
+        .drrep
+        .map(|mode| (Scratch::new::<f32>(context, width, height), mode));
+    let repaired_plane = match &repaired_scratch {
+        Some((scratch, mode)) => {
             let target = scratch.plane();
             let repair_planes = RepairPlanes {
                 clip: input,
                 reference: smoothed_plane,
                 output: target,
             };
-            repair(client, &sizing, repair_planes, mode);
+            repair(client, &sizing, repair_planes, *mode);
 
             target
         },
-        _ => smoothed_plane,
+        None => smoothed_plane,
     };
 
     let limited = Scratch::new::<f32>(context, width, height);

@@ -14,7 +14,7 @@ pub use self::dehalo::{
     reference_padded_warp,
     reference_yahr,
 };
-pub use self::dering::reference_hq_dering;
+pub use self::dering::{reference_hq_dering, reference_ring_mask};
 pub use self::hysteresis::reference_hysteresis;
 pub use self::neighbourhood::{
     reference_extreme,

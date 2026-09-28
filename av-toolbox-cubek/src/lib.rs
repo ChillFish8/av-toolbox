@@ -12,7 +12,7 @@
 //! - [sobel] for image gradients.
 //! - [values] for moving integer planes into f32 code values and back.
 //! - [labels] for connected components.
-//! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians, Prewitt and MinBlur.
+//! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians, Prewitt, MinBlur, inflate and deflate.
 //! - [padding] for growing a plane by repeating its edges, and cropping it back.
 //! - [resize] for separable resizing through per axis weight tables.
 //! - [rgvs] for RGVS's Repair and RemoveGrain modes.

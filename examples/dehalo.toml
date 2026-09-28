@@ -1,0 +1,31 @@
+# Reads a y4m clip, removes halos around its edges and the ringing beside them on luma, and writes it back.
+#
+# dehalo/fine only touches a band around strong edges. dering/hq then smooths ringing in a mask built around the
+# edges it finds.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "y4m/pipe"
+args.path = "{{ input }}"
+
+[filter.dehaloed]
+type = "dehalo/fine"
+inputs = ["input"]
+
+[filter.derung]
+type = "dering/hq"
+inputs = ["dehaloed"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["derung"]
+args.path = "{{ output }}"

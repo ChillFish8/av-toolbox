@@ -1,17 +1,7 @@
-use av_toolbox_cubek::dehalo::dering::{DeringParams, ring_mask_sample};
-use av_toolbox_cubek::dehalo::edge_clean::threshold_sample;
+use av_toolbox_cubek::dehalo::dering::DeringParams;
 use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::neighbourhood::{Extreme, Shape, Spread};
 use av_toolbox_cubek::rgvs::RepairMode;
-use av_toolbox_cubek::testing::{
-    reference_extreme,
-    reference_hq_dering,
-    reference_hysteresis,
-    reference_median,
-    reference_narrow,
-    reference_prewitt,
-    reference_spread,
-};
+use av_toolbox_cubek::testing::{reference_hq_dering, reference_narrow, reference_ring_mask};
 use av_toolbox_gpu::{Channel, ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 use serde_json::json;
 
@@ -122,6 +112,34 @@ fn matches_dering_reference(
     }
 }
 
+/// The fewest luma samples the reference must change on [ringing]'s 64x48 fixture with the default
+/// `dering/hq` parameters, so a no-op reference could not pass. The fixture actually changes 88 of
+/// its 3072 samples, so this leaves a wide margin.
+const MINIMUM_CHANGED_SAMPLES: usize = 50;
+
+/// Asserts that [reference_hq_dering] changes a real number of luma samples on `input`, rather than
+/// leaving it untouched.
+fn assert_a_real_number_of_samples_changed(input: FrameFormat, params: &DeringParams) {
+    let peak = (1u32 << params.bits) - 1;
+    let values = ringing(&input, peak);
+    let (width, height) = input.channel_dimensions(Channel::Y).expect("a listed channel");
+    let widened: Vec<f32> = values[0].iter().map(|value| f32::from(*value)).collect();
+
+    let reference = reference_hq_dering(&widened, width, height, params);
+    let rounded = reference_narrow(&reference, peak as f32);
+    let changed = rounded
+        .iter()
+        .zip(&values[0])
+        .filter(|(after, before)| **after != **before)
+        .count();
+
+    assert!(
+        changed >= MINIMUM_CHANGED_SAMPLES,
+        "only {changed} of {} samples changed",
+        width * height
+    );
+}
+
 #[test]
 fn defaults_match_the_reference_at_8_and_10_bits() {
     let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
@@ -132,6 +150,7 @@ fn defaults_match_the_reference_at_8_and_10_bits() {
 
     matches_dering_reference(eight_bit_input, args.clone(), dering(8), &selected);
     matches_dering_reference(ten_bit_input, args, dering(10), &selected);
+    assert_a_real_number_of_samples_changed(eight_bit_input, &dering(8));
 }
 
 #[test]
@@ -268,54 +287,6 @@ fn unselected_chroma_is_shared() {
     assert!(luma_is_shared("dering/hq", input, input, args));
 }
 
-/// The ring mask havsfunc's `HQDeringmod` merges with, computed on the CPU the way
-/// [reference_hq_dering] builds it internally.
-fn ring_mask_values(input: &[f32], width: u32, height: u32, params: &DeringParams) -> Vec<f32> {
-    let peak = params.peak();
-    let edges = reference_prewitt(input, width, height, peak);
-    let floor = params.scale(params.mthr);
-    let pm: Vec<f32> = edges
-        .iter()
-        .map(|edge| threshold_sample(*edge, floor, f32::MAX, peak, false))
-        .collect();
-    let pm_median = reference_median(&pm, width, height, 1);
-    let fmask = reference_hysteresis(&pm_median, &pm, width, height, peak);
-
-    let mut outer = fmask.clone();
-    for _ in 0..params.mrad {
-        outer = reference_extreme(&outer, width, height, Extreme::Maximum, Shape::Square);
-    }
-    for _ in 0..params.msmooth {
-        outer = reference_spread(&outer, width, height, Spread::Inflate);
-    }
-
-    let inner = match params.minp {
-        0 => fmask.clone(),
-        1 => {
-            let inflated = reference_spread(&fmask, width, height, Spread::Inflate);
-
-            reference_extreme(&inflated, width, height, Extreme::Minimum, Shape::Square)
-        },
-        2 => reference_extreme(&fmask, width, height, Extreme::Minimum, Shape::Square),
-        3 => {
-            let inflated = reference_spread(&fmask, width, height, Spread::Inflate);
-            let once = reference_extreme(&inflated, width, height, Extreme::Minimum, Shape::Square);
-
-            reference_extreme(&once, width, height, Extreme::Minimum, Shape::Square)
-        },
-        4 => {
-            let once = reference_extreme(&fmask, width, height, Extreme::Minimum, Shape::Square);
-
-            reference_extreme(&once, width, height, Extreme::Minimum, Shape::Square)
-        },
-        _ => unreachable!("minp is bounded to 0..=4 by dering_params"),
-    };
-
-    (0..input.len())
-        .map(|index| ring_mask_sample(outer[index], inner[index], params.incedge, peak))
-        .collect()
-}
-
 #[test]
 fn the_default_ring_mask_neither_stays_zero_nor_fires_everywhere() {
     let width = 64;
@@ -332,7 +303,7 @@ fn the_default_ring_mask_neither_stays_zero_nor_fires_everywhere() {
     let widened: Vec<f32> = values[0].iter().map(|value| f32::from(*value)).collect();
     let params = dering(8);
 
-    let ring_mask = ring_mask_values(&widened, width, height, &params);
+    let ring_mask = reference_ring_mask(&widened, width, height, &params);
 
     assert!(
         ring_mask.iter().any(|value| *value > 0.0),

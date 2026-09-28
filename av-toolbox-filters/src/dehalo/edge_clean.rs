@@ -47,6 +47,7 @@ use serde::Deserialize;
 
 use super::padded_warp::padded_warp;
 use crate::bits::bits_of;
+use crate::checks::between_u32;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
 use crate::scratch::Scratch;
@@ -93,12 +94,6 @@ pub(crate) struct EdgeCleanArgs {
     pub(crate) planes: Option<Vec<ChannelName>>,
 }
 
-fn bad_strength(strength: u32) -> StageError {
-    let message = format!("{STAGE} needs strength between 0 and {MAX_STRENGTH}, got {strength}");
-
-    StageError::msg(message)
-}
-
 fn bad_rmode(rmode: u32) -> StageError {
     let message = format!("{STAGE} does not support rmode {rmode}");
 
@@ -110,9 +105,7 @@ pub(crate) fn edge_clean_params(
     args: &EdgeCleanArgs,
     sample: SampleFormat,
 ) -> Result<EdgeCleanParams, StageError> {
-    if args.strength > MAX_STRENGTH {
-        return Err(bad_strength(args.strength));
-    }
+    between_u32(STAGE, "strength", args.strength, 0, MAX_STRENGTH)?;
 
     let Some(rmode) = RepairMode::from_number(args.rmode) else {
         return Err(bad_rmode(args.rmode));

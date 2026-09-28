@@ -76,9 +76,11 @@ fn run(seeds_from: Vec<f32>, region: Vec<f32>, width: u32, height: u32, peak: f3
 const SCENE_WIDTH: u32 = 40;
 const SCENE_HEIGHT: u32 = 24;
 
-/// A region with a border touching every edge, a long snaking path through the interior, and
-/// several small blobs from a thresholded busy plane. Only the border and the snake carry a seed.
-fn scene() -> (Vec<f32>, Vec<f32>) {
+/// A region with a border touching every edge, a long snaking path through the interior joined
+/// into one piece by a connector at every turn, several small blobs from a thresholded busy plane,
+/// and one hand-placed component that never touches a seed. The border and the snake carry a seed,
+/// the blobs and the hand-placed component do not.
+fn scene() -> (Vec<f32>, Vec<f32>, usize, usize) {
     let samples = (SCENE_WIDTH * SCENE_HEIGHT) as usize;
     let mut region = vec![0.0f32; samples];
     let mut seeds_from = vec![0.0f32; samples];
@@ -97,6 +99,7 @@ fn scene() -> (Vec<f32>, Vec<f32>) {
         region[column as usize] = 1.0;
         region[((SCENE_HEIGHT - 1) * SCENE_WIDTH + column) as usize] = 1.0;
     }
+
     for row in 0..SCENE_HEIGHT {
         region[(row * SCENE_WIDTH) as usize] = 1.0;
         region[(row * SCENE_WIDTH + SCENE_WIDTH - 1) as usize] = 1.0;
@@ -106,6 +109,7 @@ fn scene() -> (Vec<f32>, Vec<f32>) {
     let mut column = 2i32;
     let mut row = 2i32;
     let mut direction = 1i32;
+    let mut far_end = (2 * SCENE_WIDTH + 2) as usize;
     while row < SCENE_HEIGHT as i32 - 2 {
         let index = (row * SCENE_WIDTH as i32 + column) as usize;
         region[index] = 1.0;
@@ -113,42 +117,47 @@ fn scene() -> (Vec<f32>, Vec<f32>) {
         let at_right = direction == 1 && column >= 12;
         let at_left = direction == -1 && column <= 2;
         if at_right || at_left {
+            let connector_index = ((row + 1) * SCENE_WIDTH as i32 + column) as usize;
+            region[connector_index] = 1.0;
+            far_end = connector_index;
+
             row += 2;
             direction = -direction;
         } else {
             column += direction;
         }
     }
+
     seeds_from[(2 * SCENE_WIDTH + 2) as usize] = 1.0;
 
-    (seeds_from, region)
+    let dropped_component = (10 * SCENE_WIDTH + 37) as usize;
+    let dropped_seed = (10 * SCENE_WIDTH + 38) as usize;
+    region[dropped_component] = 1.0;
+    seeds_from[dropped_seed] = 1.0;
+
+    (seeds_from, region, far_end, dropped_component)
 }
 
 #[test]
 fn hysteresis_matches_the_reference() {
     let peak = 255.0;
-    let (seeds_from, region) = scene();
+    let (seeds_from, region, far_end, dropped_component) = scene();
+    let seeds_from_input = seeds_from.clone();
+    let region_input = region.clone();
 
-    let hysteresised = run(
-        seeds_from.clone(),
-        region.clone(),
-        SCENE_WIDTH,
-        SCENE_HEIGHT,
-        peak,
-    );
+    let hysteresised = run(seeds_from_input, region_input, SCENE_WIDTH, SCENE_HEIGHT, peak);
 
     let expected = reference_hysteresis(&seeds_from, &region, SCENE_WIDTH, SCENE_HEIGHT, peak);
     assert_eq!(hysteresised.output, expected);
     assert!(matches!(hysteresised.settled, Settled::Converged { .. }));
 
     let kept = expected.iter().filter(|value| **value == peak).count();
-    let dropped = region
-        .iter()
-        .zip(&expected)
-        .filter(|(region_value, output_value)| **region_value > 0.0 && **output_value == 0.0)
-        .count();
     assert!(kept > 0, "no component was kept");
-    assert!(dropped > 0, "no component was dropped");
+    assert_eq!(expected[far_end], peak, "the far end of the snake should be kept");
+    assert_eq!(
+        expected[dropped_component], 0.0,
+        "the hand-placed component should be dropped"
+    );
 }
 
 #[test]
@@ -156,8 +165,10 @@ fn hysteresis_matches_the_reference_on_a_1x7_plane() {
     let peak = 255.0;
     let region = vec![1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0];
     let seeds_from = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let seeds_from_input = seeds_from.clone();
+    let region_input = region.clone();
 
-    let hysteresised = run(seeds_from.clone(), region.clone(), 1, 7, peak);
+    let hysteresised = run(seeds_from_input, region_input, 1, 7, peak);
 
     let expected = reference_hysteresis(&seeds_from, &region, 1, 7, peak);
     assert_eq!(hysteresised.output, expected);
@@ -168,8 +179,10 @@ fn hysteresis_matches_the_reference_on_a_2x2_plane() {
     let peak = 255.0;
     let region = vec![1.0, 1.0, 1.0, 1.0];
     let seeds_from = vec![0.0, 0.0, 0.0, 1.0];
+    let seeds_from_input = seeds_from.clone();
+    let region_input = region.clone();
 
-    let hysteresised = run(seeds_from.clone(), region.clone(), 2, 2, peak);
+    let hysteresised = run(seeds_from_input, region_input, 2, 2, peak);
 
     let expected = reference_hysteresis(&seeds_from, &region, 2, 2, peak);
     assert_eq!(hysteresised.output, expected);

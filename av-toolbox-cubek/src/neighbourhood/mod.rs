@@ -59,7 +59,7 @@ pub enum Smooth {
     Box,
 }
 
-/// Moves a sample toward the mean of its 8 neighbours, as havsfunc's `mt_inflate`/`mt_deflate` do.
+/// Moves a sample toward the mean of its 8 neighbours, as havsfunc's `std.Inflate`/`std.Deflate` do.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Spread {
     /// Replaces the sample with the mean when the mean is larger.
@@ -276,7 +276,8 @@ pub fn smooth<R: Runtime>(
     }
 }
 
-/// Moves each sample toward the mean of its 8 neighbours, when that mean overshoots the sample.
+/// Moves each sample to the mean of its 8 neighbours when the mean is larger for inflate, or
+/// smaller for deflate.
 pub fn spread<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,

@@ -126,12 +126,18 @@ fn nrmode_defaults_from_the_frame_size() {
     let parsed = args(json!({}));
     let large = yuv420(1280, 720);
     let small = yuv420(1024, 576);
+    let wide_only = yuv420(1025, 576);
+    let tall_only = yuv420(1024, 577);
 
     let large_params = dering_params(&parsed, &large).expect("valid");
     let small_params = dering_params(&parsed, &small).expect("valid");
+    let wide_only_params = dering_params(&parsed, &wide_only).expect("valid");
+    let tall_only_params = dering_params(&parsed, &tall_only).expect("valid");
 
     assert_eq!(large_params.nrmode, 2);
     assert_eq!(small_params.nrmode, 1);
+    assert_eq!(wide_only_params.nrmode, 2);
+    assert_eq!(tall_only_params.nrmode, 2);
 }
 
 #[test]
@@ -368,6 +374,9 @@ fn a_plane_the_layout_lacks_is_refused_through_produces() {
     let chosen = [Some(StreamFormat::Frames(input))];
 
     let error = Hq::produces(&capabilities, &parsed, &chosen).expect_err("should be refused");
+    let message = error.to_string();
 
-    assert!(error.to_string().contains("dering/hq"));
+    assert!(message.contains("dering/hq"));
+    assert!(message.contains("planes"));
+    assert!(message.contains('U'));
 }

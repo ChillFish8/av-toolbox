@@ -51,6 +51,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::bits::bits_of;
+use crate::checks::{at_least, between_f32};
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
 use crate::scratch::Scratch;
@@ -105,42 +106,14 @@ pub(crate) struct AlphaArgs {
     pub(crate) planes: Option<Vec<ChannelName>>,
 }
 
-fn below_minimum(stage: &str, name: &str, value: f32, minimum: f32) -> StageError {
-    let message = format!("{stage} needs a finite {name} of at least {minimum}, got {value}");
-
-    StageError::msg(message)
-}
-
-fn out_of_range(stage: &str, name: &str, value: f32) -> StageError {
-    let message = format!("{stage} needs {name} between 0 and 100, got {value}");
-
-    StageError::msg(message)
-}
-
-pub(super) fn at_least(stage: &str, name: &str, value: f32, minimum: f32) -> Result<(), StageError> {
-    if value.is_finite() && value >= minimum {
-        return Ok(());
-    }
-
-    Err(below_minimum(stage, name, value, minimum))
-}
-
-fn percentage(stage: &str, name: &str, value: f32) -> Result<(), StageError> {
-    if (0.0..=100.0).contains(&value) {
-        return Ok(());
-    }
-
-    Err(out_of_range(stage, name, value))
-}
-
 /// The alpha parameters for `sample`, once the arguments are checked.
 pub(crate) fn alpha_params(args: &AlphaArgs, sample: SampleFormat) -> Result<AlphaParams, StageError> {
     at_least(STAGE, "rx", args.rx, 1.0)?;
     at_least(STAGE, "ry", args.ry, 1.0)?;
     at_least(STAGE, "darkstr", args.darkstr, 0.0)?;
     at_least(STAGE, "brightstr", args.brightstr, 0.0)?;
-    percentage(STAGE, "lowsens", args.lowsens)?;
-    percentage(STAGE, "highsens", args.highsens)?;
+    between_f32(STAGE, "lowsens", args.lowsens, 0.0, 100.0)?;
+    between_f32(STAGE, "highsens", args.highsens, 0.0, 100.0)?;
     at_least(STAGE, "ss", args.ss, 1.0)?;
 
     let bits = bits_of(sample);
