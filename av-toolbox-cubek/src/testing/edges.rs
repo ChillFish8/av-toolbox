@@ -56,7 +56,7 @@ fn sobel_magnitude(input: &[f32], width: u32, height: u32, x: i32, y: i32) -> f3
     (gx * gx + gy * gy).sqrt()
 }
 
-/// Kirsch's compass magnitude, the largest `8 * run - 3 * ring` over the 8 runs of 3 that walk the ring.
+/// Kirsch's compass magnitude, the largest `|8 * run - 3 * ring|` over the 8 runs of 3 that walk the ring.
 fn kirsch_magnitude(input: &[f32], width: u32, height: u32, x: i32, y: i32) -> f32 {
     let neighbours = ring(input, width, height, x, y);
     let total: f32 = neighbours.iter().sum();

@@ -29,9 +29,13 @@ impl Operator {
 /// How an edge magnitude is scaled and cut, in the plane's own code values.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct EdgeLimits {
+    /// Scales the magnitude before it is cut.
     pub multi: f32,
+    /// A magnitude below this becomes 0.
     pub low: f32,
+    /// A magnitude above this becomes `peak`.
     pub high: f32,
+    /// The ceiling every value is clamped to.
     pub peak: f32,
 }
 

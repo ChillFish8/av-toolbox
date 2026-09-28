@@ -116,9 +116,8 @@ fn every_operator_matches_the_reference_with_open_limits() {
     }
 }
 
-/// A controller ruling on the task 2 review scoped the 10% branch-share assertions to 37x23, since the
-/// other sizes hold too few samples to reach every branch. The device-versus-reference comparison still
-/// runs at every size the brief lists.
+/// Checks the branch shares at 37x23 only, as smaller planes hold too few samples. The
+/// device-versus-reference comparison still runs at every size.
 #[test]
 fn the_percentile_limits_cut_fill_and_pass_a_real_share_each() {
     let sizes = [(37, 23), (1, 5), (5, 1), (2, 2)];

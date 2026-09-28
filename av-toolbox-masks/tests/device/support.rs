@@ -8,6 +8,7 @@ use av_toolbox_core::{
     StageKind,
     StreamType,
 };
+use av_toolbox_cubek::DevicePlane;
 use av_toolbox_gpu::{
     Backend,
     BuildContext,
@@ -30,7 +31,8 @@ use av_toolbox_gpu::{
     StreamItem,
     Subsampling,
 };
-use cubecl::prelude::Runtime;
+use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
+use cubecl::server::Handle;
 use serde_json::Value;
 
 pub fn backend() -> Backend {
@@ -259,4 +261,30 @@ pub fn assert_masks_close(actual: &[u8], expected: &[u8], levels: u8, outliers: 
 /// Little-endian bytes of `samples`, as a U16 plane stores them.
 pub fn wide_bytes(samples: &[u16]) -> Vec<u8> {
     samples.iter().flat_map(|sample| sample.to_le_bytes()).collect()
+}
+
+pub fn upload_f32<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Handle {
+    let bytes = f32::as_bytes(values);
+
+    client.create_from_slice(bytes)
+}
+
+pub fn empty<R: Runtime>(client: &ComputeClient<R>, bytes: usize) -> Handle {
+    client.empty(bytes)
+}
+
+pub fn read_u8<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u8> {
+    let owned = handle.clone();
+    let bytes = client
+        .read_one(owned)
+        .expect("the device should hand back the buffer");
+
+    bytes.to_vec()
+}
+
+/// A plane over `handle`, which the caller made large enough.
+pub fn plane(handle: &Handle, width: u32, height: u32) -> DevicePlane<'_> {
+    // Safety: every caller in these tests sizes `handle` for `width * height` elements of the type
+    // the kernel reads it as.
+    unsafe { DevicePlane::new(handle, width, height) }
 }

@@ -255,7 +255,7 @@ impl<R: Runtime> Mask for AdaptiveMask<R> {
 
         let luma = Scratch::new::<f32>(context, width, height);
         let luma_plane = luma.plane();
-        load_luma(&self.client, &sizing, &frame, &self.luma, luma_plane)?;
+        load_luma(&self.client, &sizing, NAME, &frame, &self.luma, luma_plane)?;
 
         let meta = frame.meta().clone();
         let format = self.luma.mask_format();

@@ -27,13 +27,11 @@ use av_toolbox_gpu::{
     ResolvedFormats,
     StreamFormat,
 };
-// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
-// by name.
-use cubecl::prelude::*;
+use cubecl::prelude::{ComputeClient, Runtime};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::luma::{Luma, accepts_luma, load_luma, produces_luma_mask, store_mask};
+use crate::luma::{Luma, accepts_luma, load_luma_code_values, produces_luma_mask, store_mask};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
 /// What sets one `edges/*` stage apart from another.
@@ -129,14 +127,14 @@ impl EdgeArgs {
 
     /// The limits `edges/*` runs with, thresholds rounded to the nearest code value at `peak`.
     fn limits(&self, peak: f32) -> EdgeLimits {
-        let low = (self.lthr * peak).round() / peak;
-        let high = (self.hthr * peak).round() / peak;
+        let low = (self.lthr * peak).round();
+        let high = (self.hthr * peak).round();
 
         EdgeLimits {
             multi: self.multi,
             low,
             high,
-            peak: 1.0,
+            peak,
         }
     }
 }
@@ -244,7 +242,7 @@ impl<R: Runtime> Mask for EdgesMask<R> {
 
         let luma_scratch = Scratch::new::<f32>(context, width, height);
         let luma_plane = luma_scratch.plane();
-        load_luma(&self.client, &sizing, &frame, &self.luma, luma_plane)?;
+        load_luma_code_values(&self.client, &sizing, &self.stage, &frame, &self.luma, luma_plane)?;
 
         let edge_scratch = Scratch::new::<f32>(context, width, height);
         let edge_plane = edge_scratch.plane();
@@ -258,7 +256,8 @@ impl<R: Runtime> Mask for EdgesMask<R> {
         let format = self.luma.mask_format();
         let output = context.alloc_mask(&format, meta);
         let output_plane = mask_plane(&output);
-        store_mask(&self.client, &sizing, edge_plane, output_plane);
+        let peak = self.luma.peak();
+        store_mask(&self.client, &sizing, edge_plane, output_plane, peak);
 
         Ok(output)
     }
@@ -414,7 +413,7 @@ mod tests {
         let at_255 = tenth.limits(255.0);
         let at_1023 = tenth.limits(1023.0);
 
-        assert_eq!(at_255.low, 26.0 / 255.0);
-        assert_eq!(at_1023.low, 102.0 / 1023.0);
+        assert_eq!(at_255.low, 26.0);
+        assert_eq!(at_1023.low, 102.0);
     }
 }

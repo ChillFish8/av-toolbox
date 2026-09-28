@@ -293,6 +293,7 @@ dependencies = [
  "av-toolbox-core",
  "av-toolbox-cubek",
  "av-toolbox-gpu",
+ "av-toolbox-masks",
  "cubecl",
  "schemars",
  "serde",

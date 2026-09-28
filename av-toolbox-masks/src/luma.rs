@@ -142,21 +142,23 @@ fn normalise<E: Int>(input: &Array<E>, output: &mut Array<f32>, scale: f32) {
     output[ABSOLUTE_POS] = f32::cast_from(input[ABSOLUTE_POS]) * scale;
 }
 
-fn no_luma() -> StageError {
-    StageError::msg("a line mask was handed a frame without luma")
+fn no_luma(stage: &str) -> StageError {
+    let message = format!("{stage} was handed a frame without luma");
+
+    StageError::msg(message)
 }
 
-/// Writes the frame's luma into `output` as f32 between 0 and 1.
-pub(crate) fn load_luma<R: Runtime>(
+fn load_luma_scaled<R: Runtime>(
     client: &ComputeClient<R>,
     sizing: &Sizing<'_>,
+    stage: &str,
     frame: &Frame,
     luma: &Luma,
     output: DevicePlane<'_>,
+    scale: f32,
 ) -> Result<(), StageError> {
-    let plane = frame.plane(Channel::Y).ok_or_else(no_luma)?;
+    let plane = frame.plane(Channel::Y).ok_or_else(|| no_luma(stage))?;
 
-    let scale = 1.0 / luma.largest;
     let written = output.array::<R>();
     let samples = luma.samples();
     let cubes = sizing.0.cube_count(samples);
@@ -177,24 +179,51 @@ pub(crate) fn load_luma<R: Runtime>(
     Ok(())
 }
 
+/// Writes the frame's luma into `output` as f32 between 0 and 1.
+pub(crate) fn load_luma<R: Runtime>(
+    client: &ComputeClient<R>,
+    sizing: &Sizing<'_>,
+    stage: &str,
+    frame: &Frame,
+    luma: &Luma,
+    output: DevicePlane<'_>,
+) -> Result<(), StageError> {
+    let scale = 1.0 / luma.largest;
+
+    load_luma_scaled(client, sizing, stage, frame, luma, output, scale)
+}
+
+/// Writes the frame's luma into `output` as f32 code values, unscaled.
+pub(crate) fn load_luma_code_values<R: Runtime>(
+    client: &ComputeClient<R>,
+    sizing: &Sizing<'_>,
+    stage: &str,
+    frame: &Frame,
+    luma: &Luma,
+    output: DevicePlane<'_>,
+) -> Result<(), StageError> {
+    load_luma_scaled(client, sizing, stage, frame, luma, output, 1.0)
+}
+
 #[cube(launch_unchecked)]
-fn store_mask_kernel(input: &Array<f32>, output: &mut Array<u8>) {
+fn store_mask_kernel(input: &Array<f32>, output: &mut Array<u8>, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
 
-    let clamped = f32::clamp(input[ABSOLUTE_POS], 0.0, 1.0);
-    let scaled = f32::round(clamped * 255.0);
+    let clamped = f32::clamp(input[ABSOLUTE_POS], 0.0, peak);
+    let scaled = f32::round(clamped * 255.0 / peak);
 
     output[ABSOLUTE_POS] = u8::cast_from(scaled);
 }
 
-/// Writes `round(clamp(v, 0, 1) * 255)` from `input` into `output` as u8.
+/// Writes `round(clamp(v, 0, peak) * 255 / peak)` from `input` into `output` as u8.
 pub(crate) fn store_mask<R: Runtime>(
     client: &ComputeClient<R>,
     sizing: &Sizing<'_>,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
+    peak: f32,
 ) {
     let samples = output.samples();
     let read = input.array::<R>();
@@ -204,7 +233,7 @@ pub(crate) fn store_mask<R: Runtime>(
 
     // Safety: `input` holds `samples` f32 values and `output` holds `samples` u8 values.
     unsafe {
-        store_mask_kernel::launch_unchecked::<R>(client, cubes, shape, read, written);
+        store_mask_kernel::launch_unchecked::<R>(client, cubes, shape, read, written, peak);
     }
 }
 

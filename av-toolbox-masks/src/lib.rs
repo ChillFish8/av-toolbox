@@ -18,6 +18,8 @@ mod lines;
 mod luma;
 mod mask;
 mod sizing;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
