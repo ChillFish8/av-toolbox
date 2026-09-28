@@ -16,6 +16,7 @@ fn in_shape(shape: Shape, offset_x: i32, offset_y: i32) -> bool {
         Shape::Plus => offset_x == 0 || offset_y == 0,
         Shape::Horizontal => offset_y == 0,
         Shape::Vertical => offset_x == 0,
+        Shape::Corners => offset_x != 0 && offset_y != 0,
     }
 }
 

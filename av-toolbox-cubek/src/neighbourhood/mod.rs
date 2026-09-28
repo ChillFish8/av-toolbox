@@ -37,6 +37,8 @@ pub enum Shape {
     Horizontal,
     /// Top and bottom.
     Vertical,
+    /// Top left, top right, bottom left and bottom right.
+    Corners,
 }
 
 impl Shape {
@@ -46,6 +48,7 @@ impl Shape {
             Self::Plus => 1,
             Self::Horizontal => 2,
             Self::Vertical => 3,
+            Self::Corners => 4,
         }
     }
 }
@@ -118,8 +121,9 @@ fn in_shape(shape: u32, offset_x: i32, offset_y: i32) -> bool {
     let plus = shape == 1u32 && (offset_x == 0 || offset_y == 0);
     let horizontal = shape == 2u32 && offset_y == 0;
     let vertical = shape == 3u32 && offset_x == 0;
+    let corners = shape == 4u32 && offset_x != 0 && offset_y != 0;
 
-    square || plus || horizontal || vertical
+    square || plus || horizontal || vertical || corners
 }
 
 #[cube(launch_unchecked)]

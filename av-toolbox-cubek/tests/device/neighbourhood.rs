@@ -136,7 +136,13 @@ pub fn busy(width: u32, height: u32) -> Vec<f32> {
 
 #[test]
 fn every_extreme_and_shape_matches_the_reference() {
-    let shapes = [Shape::Square, Shape::Plus, Shape::Horizontal, Shape::Vertical];
+    let shapes = [
+        Shape::Square,
+        Shape::Plus,
+        Shape::Horizontal,
+        Shape::Vertical,
+        Shape::Corners,
+    ];
 
     for which in [Extreme::Maximum, Extreme::Minimum] {
         for shape in shapes {
