@@ -18,6 +18,7 @@ pub use self::neighbourhood::{
     reference_min_blur,
     reference_prewitt,
     reference_smooth,
+    reference_spread,
 };
 pub use self::padding::{reference_crop, reference_pad};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};

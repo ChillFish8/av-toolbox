@@ -59,6 +59,15 @@ pub enum Smooth {
     Box,
 }
 
+/// Moves a sample toward the mean of its 8 neighbours, as havsfunc's `mt_inflate`/`mt_deflate` do.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Spread {
+    /// Replaces the sample with the mean when the mean is larger.
+    Inflate,
+    /// Replaces the sample with the mean when the mean is smaller.
+    Deflate,
+}
+
 /// How a run of maximum or minimum passes grows a region, as havsfunc's `mt_expand_multi` does.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Expansion {
@@ -187,6 +196,38 @@ fn smooth_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height
     output[ABSOLUTE_POS] = total / divisor;
 }
 
+#[cube(launch_unchecked)]
+fn spread_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, inflate: u32) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let x = (position % width) as i32;
+    let y = (position / width) as i32;
+    let centre = input[ABSOLUTE_POS];
+    let mut total = 0.0f32;
+
+    for step_y in 0..3u32 {
+        for step_x in 0..3u32 {
+            let offset_x = step_x as i32 - 1;
+            let offset_y = step_y as i32 - 1;
+
+            if offset_x != 0 || offset_y != 0 {
+                total += read(input, width, height, x + offset_x, y + offset_y);
+            }
+        }
+    }
+
+    let mean = total / 8.0f32;
+    let mut picked = f32::max(mean, centre);
+    if inflate == 0u32 {
+        picked = f32::min(mean, centre);
+    }
+
+    output[ABSOLUTE_POS] = picked;
+}
+
 /// Writes the largest or smallest value among each sample and its neighbours in `shape`.
 pub fn extreme<R: Runtime>(
     client: &ComputeClient<R>,
@@ -232,5 +273,27 @@ pub fn smooth<R: Runtime>(
     // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
     unsafe {
         smooth_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, binomial);
+    }
+}
+
+/// Moves each sample toward the mean of its 8 neighbours, when that mean overshoots the sample.
+pub fn spread<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: NeighbourPlanes<'_>,
+    spread: Spread,
+) {
+    let width = planes.input.width();
+    let height = planes.input.height();
+    let samples = planes.output.samples();
+    let inflate = u32::from(spread == Spread::Inflate);
+    let input = planes.input.array::<R>();
+    let output = planes.output.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
+    unsafe {
+        spread_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, inflate);
     }
 }

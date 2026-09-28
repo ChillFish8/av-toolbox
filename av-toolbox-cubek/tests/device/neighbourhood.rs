@@ -4,11 +4,13 @@ use av_toolbox_cubek::neighbourhood::{
     NeighbourPlanes,
     Shape,
     Smooth,
+    Spread,
     extreme,
     median,
     min_blur,
     prewitt,
     smooth,
+    spread,
 };
 use av_toolbox_cubek::testing::{
     reference_extreme,
@@ -16,6 +18,7 @@ use av_toolbox_cubek::testing::{
     reference_min_blur,
     reference_prewitt,
     reference_smooth,
+    reference_spread,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -30,6 +33,7 @@ pub enum Operation {
     Median(u32),
     Prewitt(f32),
     MinBlur(u32),
+    Spread(Spread),
 }
 
 struct Neighbours {
@@ -94,6 +98,13 @@ impl BuildTask for Neighbours {
                     output: output_plane,
                 };
                 min_blur(client, &sizing, planes, radius);
+            },
+            Operation::Spread(which) => {
+                let planes = NeighbourPlanes {
+                    input: input_plane,
+                    output: output_plane,
+                };
+                spread(client, &sizing, planes, which);
             },
         }
 
@@ -272,4 +283,49 @@ fn every_min_blur_radius_matches_the_reference() {
     assert!(source_share >= 0.05, "source branch was only {source_share}");
     assert!(blurred_share >= 0.05, "blurred branch was only {blurred_share}");
     assert!(median_share >= 0.05, "median branch was only {median_share}");
+}
+
+/// How many samples of `expected` differ from `input` by more than `tolerance`, out of the total.
+fn changed_share(input: &[f32], expected: &[f32], tolerance: f32) -> f32 {
+    let changed = input
+        .iter()
+        .zip(expected.iter())
+        .filter(|(before, after)| (*before - *after).abs() > tolerance)
+        .count();
+
+    changed as f32 / input.len() as f32
+}
+
+#[test]
+fn both_spreads_match_the_reference() {
+    for which in [Spread::Inflate, Spread::Deflate] {
+        for (width, height) in [(37, 23), (1, 5), (2, 2)] {
+            let input = busy(width, height);
+            let operation = Operation::Spread(which);
+
+            let actual = on_device(&input, width, height, operation);
+            let expected = reference_spread(&input, width, height, which);
+
+            assert_close(&actual, &expected, 1e-3);
+        }
+    }
+
+    let width = 37;
+    let height = 23;
+    let input = busy(width, height);
+
+    for which in [Spread::Inflate, Spread::Deflate] {
+        let expected = reference_spread(&input, width, height, which);
+        let changed_fraction = changed_share(&input, &expected, 1e-6);
+        let unchanged_fraction = 1.0 - changed_fraction;
+
+        assert!(
+            changed_fraction >= 0.1,
+            "{which:?} changed only {changed_fraction}"
+        );
+        assert!(
+            unchanged_fraction >= 0.1,
+            "{which:?} left only {unchanged_fraction} alone"
+        );
+    }
 }

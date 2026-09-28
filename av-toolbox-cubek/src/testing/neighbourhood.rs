@@ -1,5 +1,5 @@
 use super::reflect;
-use crate::neighbourhood::{Extreme, Shape, Smooth, median_of_three_sample};
+use crate::neighbourhood::{Extreme, Shape, Smooth, Spread, median_of_three_sample};
 
 /// The value at `column`, `row`, read through reflection.
 pub(super) fn read_reflected(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
@@ -74,6 +74,39 @@ pub fn reference_smooth(input: &[f32], width: u32, height: u32, smooth: Smooth) 
             };
 
             output.push(total / divisor);
+        }
+    }
+
+    output
+}
+
+/// Moves each sample toward its 8 neighbours' mean on the CPU, mirroring
+/// [spread](crate::neighbourhood::spread).
+pub fn reference_spread(input: &[f32], width: u32, height: u32, spread: Spread) -> Vec<f32> {
+    let mut output = Vec::with_capacity(input.len());
+
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let centre = read_reflected(input, width, height, x, y);
+            let mut total = 0.0f32;
+
+            for offset_y in -1..=1 {
+                for offset_x in -1..=1 {
+                    if offset_x == 0 && offset_y == 0 {
+                        continue;
+                    }
+
+                    total += read_reflected(input, width, height, x + offset_x, y + offset_y);
+                }
+            }
+
+            let mean = total / 8.0;
+            let picked = match spread {
+                Spread::Inflate => centre.max(mean),
+                Spread::Deflate => centre.min(mean),
+            };
+
+            output.push(picked);
         }
     }
 
