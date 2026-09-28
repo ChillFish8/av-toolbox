@@ -31,10 +31,9 @@ fn spiked_plane() -> Vec<f32> {
 fn min_blur_dampens_a_lone_spike_more_at_larger_radii() {
     let plane = spiked_plane();
 
-    // At every radius the 5x5 and 7x7 medians would land on the background too, but the median the
-    // 3x3 window at radius 1 already sees is 10, since the spike is a single outlier surrounded by
-    // background. Each radius's blur chain still carries a share of the spike into the centre, so
-    // the pick always takes the blur, which comes closer to 10 as more blur passes run over it.
+    // Every radius's median already lands on the background, since a lone spike is always the odd
+    // one out in its window. The pick therefore always takes the blur, which comes closer to the
+    // background as more blur passes run over it.
     let radius_1 = reference_min_blur(&plane, 9, 9, 1);
     let radius_2 = reference_min_blur(&plane, 9, 9, 2);
     let radius_3 = reference_min_blur(&plane, 9, 9, 3);
@@ -49,8 +48,11 @@ fn min_blur_dampens_a_lone_spike_more_at_larger_radii() {
     // (57.5 + 4*33.75 + 4*21.875) / 9 = 280 / 9 ≈ 31.111.
     assert!((radius_2[40] - 31.111_11).abs() < 1e-3, "got {}", radius_2[40]);
 
-    // Radius 3 runs a second Box pass over the radius 2 blur, spreading the spike further and
-    // landing at 3995 / 162 ≈ 24.660.
+    // Radius 3 runs a second Box pass over the radius 2 blur. That window now sees the centre's own
+    // radius 2 value (280 / 9), its 4 edge neighbours' (155 / 6, boxing the Binomial window around
+    // each) and its 4 corner neighbours' (21.875, unchanged since boxing their own Binomial value
+    // only pulls in more background):
+    // (280 / 9 + 4 * 155 / 6 + 4 * 21.875) / 9 = 15980 / 648 = 3995 / 162 ≈ 24.660.
     assert!((radius_3[40] - 24.660_49).abs() < 1e-3, "got {}", radius_3[40]);
 
     // Each extra pass halves roughly how far the centre sits above the background, but a lone spike

@@ -47,7 +47,6 @@ use crate::sizing::Sizing;
 
 const STAGE: &str = "dehalo/yahr";
 
-/// The largest `blur`.
 const MAX_BLUR: u32 = 100;
 
 const MIN_DEPTH: i32 = -128;
@@ -148,7 +147,7 @@ fn min_blur_then_smooth<R: Runtime>(
     blurred
 }
 
-/// Runs havsfunc's YAHR on one f32 plane, cleaning the edges a warp leaves behind.
+/// Runs havsfunc's YAHR on one f32 plane, limiting its detail to the detail of its warped self.
 fn yahr<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
@@ -230,7 +229,8 @@ fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageEr
     Ok(*format)
 }
 
-/// Cleans up the edges a warp leaves behind, the way havsfunc's `YAHR` does.
+/// Removes halos by limiting a clip's detail to the detail of its warp-sharpened self, the way
+/// havsfunc's `YAHR` does.
 pub(crate) struct Yahr;
 
 impl StageDefinition for Yahr {

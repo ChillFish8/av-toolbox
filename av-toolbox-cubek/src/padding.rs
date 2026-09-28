@@ -63,6 +63,11 @@ pub fn pad<R: Runtime>(
     let input_width = input.width();
     let input_height = input.height();
     let output_width = output.width();
+    let output_height = output.height();
+
+    debug_assert!(output_width == input_width + 2 * amount);
+    debug_assert!(output_height == input_height + 2 * amount);
+
     let samples = output.samples();
     let input_array = input.array::<R>();
     let output_array = output.array::<R>();
@@ -94,7 +99,13 @@ pub fn crop<R: Runtime>(
     amount: u32,
 ) {
     let input_width = input.width();
+    let input_height = input.height();
     let output_width = output.width();
+    let output_height = output.height();
+
+    debug_assert!(input_width == output_width + 2 * amount);
+    debug_assert!(input_height == output_height + 2 * amount);
+
     let samples = output.samples();
     let input_array = input.array::<R>();
     let output_array = output.array::<R>();

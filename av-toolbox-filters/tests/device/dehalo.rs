@@ -1,9 +1,12 @@
 use av_toolbox_cubek::dehalo::alpha::AlphaParams;
+use av_toolbox_cubek::dehalo::edge_clean::EdgeCleanParams;
 use av_toolbox_cubek::dehalo::fine::FineParams;
 use av_toolbox_cubek::dehalo::yahr::YahrParams;
 use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::rgvs::RepairMode;
 use av_toolbox_cubek::testing::{
     reference_dehalo_alpha,
+    reference_edge_clean,
     reference_fine_dehalo,
     reference_narrow,
     reference_yahr,
@@ -401,6 +404,15 @@ fn yahr_a_tiny_plane_matches_the_reference() {
 }
 
 #[test]
+fn yahr_a_one_wide_plane_matches_the_reference() {
+    let input = frame(1, 6, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let args = json!({});
+    let selected = [true];
+
+    matches_yahr_reference(input, args, yahr(8), &selected);
+}
+
+#[test]
 fn yahr_a_flat_frame_is_unchanged() {
     let sixteen_bit = SampleFormat::U16 {
         depth: Depth::SIXTEEN,
@@ -424,4 +436,209 @@ fn yahr_unselected_chroma_is_shared() {
     let args = json!({ "planes": ["u", "v"] });
 
     assert!(luma_is_shared("dehalo/yahr", input, input, args));
+}
+
+fn edge_clean(bits: u32) -> EdgeCleanParams {
+    let element = if bits == 8 { Element::U8 } else { Element::U16 };
+
+    EdgeCleanParams {
+        strength: 10,
+        rep: true,
+        rmode: RepairMode::Seventeen,
+        smode: false,
+        hot: false,
+        element,
+        bits,
+    }
+}
+
+/// Runs `dehalo/edge_clean` and checks each plane against the reference or against its input.
+fn matches_edge_clean_reference(
+    input: FrameFormat,
+    args: serde_json::Value,
+    expected: EdgeCleanParams,
+    selected: &[bool],
+) {
+    let peak = (1u32 << expected.bits) - 1;
+    let element = expected.element;
+    let values = haloed(&input, peak);
+    let planes: Vec<Vec<u8>> = values.iter().map(|plane| to_bytes(plane, element)).collect();
+
+    let cleaned = run_once("dehalo/edge_clean", input, input, args, &planes);
+
+    for (plane, channel) in input.channels().iter().enumerate() {
+        let (width, height) = input.channel_dimensions(*channel).expect("carried");
+        let actual = from_bytes(&cleaned[plane], element);
+        let label = channel.to_string();
+
+        if !selected[plane] {
+            assert_eq!(actual, values[plane], "{label} should be untouched");
+            continue;
+        }
+
+        let widened: Vec<f32> = values[plane].iter().map(|value| f32::from(*value)).collect();
+        let reference = reference_edge_clean(&widened, width, height, &expected);
+        let rounded = reference_narrow(&reference, peak as f32);
+        assert_within_one(&actual, &rounded, &label);
+    }
+}
+
+#[test]
+fn edge_clean_luma_is_cleaned_by_default_at_8_and_10_bits() {
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+    let eight_bit_input = yuv420(64, 48, SampleFormat::U8);
+    let ten_bit_input = yuv420(64, 48, ten_bit);
+    let args = json!({});
+    let selected = [true, false, false];
+
+    matches_edge_clean_reference(eight_bit_input, args.clone(), edge_clean(8), &selected);
+    matches_edge_clean_reference(ten_bit_input, args, edge_clean(10), &selected);
+}
+
+/// `smode` and `hot` really move the result, so a comparison run with them on cannot pass by
+/// accident against one that never took either path.
+fn assert_smode_and_hot_change_the_result(input: &FrameFormat, expected: &EdgeCleanParams) {
+    let peak = (1u32 << expected.bits) - 1;
+    let (width, height) = input.channel_dimensions(Channel::Y).expect("a listed channel");
+    let values = haloed(input, peak);
+    let widened: Vec<f32> = values[0].iter().map(|value| f32::from(*value)).collect();
+
+    let with_flags = reference_edge_clean(&widened, width, height, expected);
+    let bare = EdgeCleanParams {
+        smode: false,
+        hot: false,
+        ..*expected
+    };
+    let without_flags = reference_edge_clean(&widened, width, height, &bare);
+
+    assert_ne!(with_flags, without_flags, "smode and hot made no difference");
+}
+
+#[test]
+fn edge_clean_smode_and_hot_match_at_8_and_16_bits() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let eight_bit_input = frame(64, 48, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let sixteen_bit_input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
+    let args = json!({ "smode": true, "hot": true });
+    let selected = [true];
+    let expected_eight = EdgeCleanParams {
+        smode: true,
+        hot: true,
+        ..edge_clean(8)
+    };
+    let expected_sixteen = EdgeCleanParams {
+        smode: true,
+        hot: true,
+        ..edge_clean(16)
+    };
+
+    assert_smode_and_hot_change_the_result(&eight_bit_input, &expected_eight);
+    assert_smode_and_hot_change_the_result(&sixteen_bit_input, &expected_sixteen);
+
+    matches_edge_clean_reference(eight_bit_input, args.clone(), expected_eight, &selected);
+    matches_edge_clean_reference(sixteen_bit_input, args, expected_sixteen, &selected);
+}
+
+#[test]
+fn edge_clean_hot_alone_writes_straight_into_the_output() {
+    let input = frame(64, 48, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let args = json!({ "hot": true });
+    let selected = [true];
+    let expected = EdgeCleanParams {
+        hot: true,
+        ..edge_clean(8)
+    };
+
+    matches_edge_clean_reference(input, args, expected, &selected);
+}
+
+#[test]
+fn edge_clean_a_tiny_plane_with_smode_and_hot_matches_the_reference() {
+    let input = frame(1, 6, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let args = json!({ "smode": true, "hot": true });
+    let selected = [true];
+    let expected = EdgeCleanParams {
+        smode: true,
+        hot: true,
+        ..edge_clean(8)
+    };
+
+    matches_edge_clean_reference(input, args, expected, &selected);
+}
+
+#[test]
+fn edge_clean_without_rep_matches_the_reference() {
+    let input = frame(64, 48, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let args = json!({ "rep": false });
+    let selected = [true];
+    let expected = EdgeCleanParams {
+        rep: false,
+        ..edge_clean(8)
+    };
+
+    matches_edge_clean_reference(input, args, expected, &selected);
+}
+
+#[test]
+fn edge_clean_every_supported_repair_mode_matches() {
+    let cases = [
+        (1, RepairMode::One),
+        (2, RepairMode::Two),
+        (13, RepairMode::Thirteen),
+        (24, RepairMode::TwentyFour),
+    ];
+
+    for (number, mode) in cases {
+        let input = frame(64, 48, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+        let args = json!({ "rmode": number });
+        let selected = [true];
+        let expected = EdgeCleanParams {
+            rmode: mode,
+            ..edge_clean(8)
+        };
+
+        matches_edge_clean_reference(input, args, expected, &selected);
+    }
+}
+
+#[test]
+fn edge_clean_high_strength_with_smode_matches() {
+    let input = frame(64, 48, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let args = json!({ "strength": 250, "smode": true });
+    let selected = [true];
+    let expected = EdgeCleanParams {
+        strength: 250,
+        smode: true,
+        ..edge_clean(8)
+    };
+
+    matches_edge_clean_reference(input, args, expected, &selected);
+}
+
+#[test]
+fn edge_clean_a_flat_frame_is_unchanged() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
+    let peak: u16 = 65535;
+    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
+    let values: Vec<u16> = vec![peak; samples];
+    let planes = vec![to_bytes(&values, Element::U16)];
+    let args = json!({});
+
+    let cleaned = run_once("dehalo/edge_clean", input, input, args, &planes);
+    let actual = from_bytes(&cleaned[0], Element::U16);
+
+    assert!(actual.iter().all(|sample| *sample == peak));
+}
+
+#[test]
+fn edge_clean_unselected_chroma_is_shared() {
+    let input = yuv420(64, 48, SampleFormat::U8);
+    let args = json!({ "planes": ["u", "v"] });
+
+    assert!(luma_is_shared("dehalo/edge_clean", input, input, args));
 }

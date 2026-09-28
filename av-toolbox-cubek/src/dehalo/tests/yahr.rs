@@ -1,16 +1,8 @@
 use super::alpha::haloed_step;
-use crate::dehalo::PADDING;
 use crate::dehalo::yahr::YahrParams;
 use crate::depth::Element;
-use crate::testing::{
-    reference_crop,
-    reference_narrow,
-    reference_pad,
-    reference_padded_warp,
-    reference_warp_sharp,
-    reference_yahr,
-};
-use crate::warp::{BlurKind, WarpParams};
+use crate::testing::reference_yahr;
+use crate::warp::BlurKind;
 
 fn defaults(bits: u32) -> YahrParams {
     YahrParams {
@@ -136,34 +128,4 @@ fn a_wide_saturated_step_passes_through_nearly_unchanged() {
             assert!(moved <= 2.0, "row {row} column {column}: moved {moved}");
         }
     }
-}
-
-#[test]
-fn the_padded_warp_matches_warping_a_padded_plane() {
-    let width = 20;
-    let height = 12;
-    let input: Vec<f32> = (0..width * height)
-        .map(|index| ((index * 37 + 11) % 256) as f32)
-        .collect();
-    let params = WarpParams {
-        element: Element::U8,
-        bits: 8,
-        thresh: 128,
-        blur: BlurKind::R6,
-        passes: 2,
-        depth: 32,
-    };
-
-    let actual = reference_padded_warp(&input, width, height, &params);
-
-    let padded = reference_pad(&input, width, height, PADDING);
-    let padded_width = width + 2 * PADDING;
-    let padded_height = height + 2 * PADDING;
-    let peak = params.peak() as f32;
-    let narrowed = reference_narrow(&padded, peak);
-    let warped = reference_warp_sharp(&narrowed, padded_width, padded_height, &params);
-    let widened: Vec<f32> = warped.iter().map(|value| f32::from(*value)).collect();
-    let expected = reference_crop(&widened, padded_width, padded_height, PADDING);
-
-    assert_eq!(actual, expected);
 }

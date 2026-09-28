@@ -108,17 +108,20 @@ pub fn reference_median(input: &[f32], width: u32, height: u32, radius: u32) -> 
 
 /// Runs MinBlur on the CPU, mirroring [min_blur](crate::neighbourhood::min_blur).
 pub fn reference_min_blur(input: &[f32], width: u32, height: u32, radius: u32) -> Vec<f32> {
+    debug_assert!((1..=3).contains(&radius));
+
     let blurred = match radius {
         1 => reference_smooth(input, width, height, Smooth::Binomial),
         2 => {
             let binomial = reference_smooth(input, width, height, Smooth::Binomial);
             reference_smooth(&binomial, width, height, Smooth::Box)
         },
-        _ => {
+        3 => {
             let binomial = reference_smooth(input, width, height, Smooth::Binomial);
             let boxed_once = reference_smooth(&binomial, width, height, Smooth::Box);
             reference_smooth(&boxed_once, width, height, Smooth::Box)
         },
+        _ => unreachable!("radius is 1, 2 or 3"),
     };
     let median_plane = reference_median(input, width, height, radius);
 

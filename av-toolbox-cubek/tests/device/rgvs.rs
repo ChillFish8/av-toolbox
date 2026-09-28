@@ -77,6 +77,15 @@ impl BuildTask for RemoveGrain {
     }
 }
 
+/// A plane drawn from a small repeated set of values, so RemoveGrain mode 7's tied window costs are
+/// really exercised rather than always broken by distinct neighbours.
+fn repeated(width: u32, height: u32) -> Vec<f32> {
+    busy(width, height)
+        .iter()
+        .map(|value| (*value as u32 % 6) as f32 * 50.0)
+        .collect()
+}
+
 /// The share of inner samples where `actual` differs from `clip`, so a test can check a mode's
 /// clamps are really reached rather than passing on an accidental no-op.
 fn changed_share(actual: &[f32], clip: &[f32], width: u32, height: u32) -> f64 {
@@ -142,7 +151,7 @@ fn remove_grain_matches_the_reference() {
 
     for mode in modes {
         for (width, height) in [(37, 23), (2, 2), (1, 6)] {
-            let input = busy(width, height);
+            let input = repeated(width, height);
             let task = RemoveGrain {
                 input: input.clone(),
                 width,
@@ -154,6 +163,15 @@ fn remove_grain_matches_the_reference() {
             let expected = reference_remove_grain(&input, width, height, mode);
 
             assert_eq!(actual, expected, "{mode:?} {width}x{height}");
+
+            if (width, height) == (37, 23) {
+                let share = changed_share(&expected, &input, width, height);
+
+                assert!(
+                    share >= 0.05,
+                    "{mode:?} only changed {share} of the inner samples"
+                );
+            }
         }
     }
 }

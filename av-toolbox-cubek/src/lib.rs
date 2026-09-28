@@ -11,10 +11,10 @@
 //! - [sobel] for image gradients.
 //! - [values] for moving integer planes into f32 code values and back.
 //! - [labels] for connected components.
-//! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians and Prewitt.
+//! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians, Prewitt and MinBlur.
 //! - [padding] for growing a plane by repeating its edges, and cropping it back.
 //! - [resize] for separable resizing through per axis weight tables.
-//! - [rgvs] for RemoveGrain's Repair modes.
+//! - [rgvs] for RGVS's Repair and RemoveGrain modes.
 //! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
 
 pub mod blur;

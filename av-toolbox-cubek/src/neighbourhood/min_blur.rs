@@ -58,14 +58,16 @@ fn pick_kernel(input: &Array<f32>, blurred: &Array<f32>, median: &Array<f32>, ou
 /// Runs havsfunc's MinBlur, picking the median of each sample, its blur and its median.
 ///
 /// `radius` is 1, 2 or 3. The blur chain runs into `blurred`, using `scratch` as the plane between
-/// its passes: Binomial alone for radius 1, Binomial then Box for radius 2, and Binomial then Box
-/// twice for radius 3. The median runs over the same radius, into `median`.
+/// its passes. It runs Binomial alone for radius 1, Binomial then Box for radius 2, and Binomial
+/// then Box twice for radius 3. The median runs over the same radius, into `median`.
 pub fn min_blur<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: MinBlurPlanes<'_>,
     radius: u32,
 ) {
+    debug_assert!((1..=3).contains(&radius));
+
     match radius {
         1 => {
             let blur_planes = NeighbourPlanes {
@@ -87,7 +89,7 @@ pub fn min_blur<R: Runtime>(
             };
             smooth(client, dispatch, box_planes, Smooth::Box);
         },
-        _ => {
+        3 => {
             let binomial_planes = NeighbourPlanes {
                 input: planes.input,
                 output: planes.blurred,
@@ -106,6 +108,7 @@ pub fn min_blur<R: Runtime>(
             };
             smooth(client, dispatch, second_box_planes, Smooth::Box);
         },
+        _ => unreachable!("radius is 1, 2 or 3"),
     }
 
     let median_planes = NeighbourPlanes {

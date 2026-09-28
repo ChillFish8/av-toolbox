@@ -13,6 +13,7 @@ pub struct YahrParams {
     pub blur: u32,
     /// How far samples move toward edges. A negative depth moves them away.
     pub depth: i32,
+    /// How the plane's samples are stored.
     pub element: Element,
     /// The bits one sample holds.
     pub bits: u32,

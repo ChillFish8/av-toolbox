@@ -90,21 +90,21 @@ fn ry_follows_rx_unless_given() {
 #[test]
 fn out_of_range_and_crossed_thresholds_are_refused() {
     let cases = [
-        (json!({ "rx": 0.5 }), "rx"),
-        (json!({ "ry": 0.5 }), "ry"),
-        (json!({ "thmi": 130.0 }), "thmi"),
-        (json!({ "thlimi": 100.0 }), "thlimi"),
-        (json!({ "thma": 256.0 }), "thma"),
-        (json!({ "contra": -1.0 }), "contra"),
-        (json!({ "edgeproc": -0.5 }), "edgeproc"),
-        (json!({ "darkstr": -1.0 }), "darkstr"),
+        (json!({ "rx": 0.5 }), "rx", "0.5"),
+        (json!({ "ry": 0.5 }), "ry", "0.5"),
+        (json!({ "thmi": 130.0 }), "thmi", "130"),
+        (json!({ "thlimi": 100.0 }), "thlimi", "100"),
+        (json!({ "thma": 256.0 }), "thma", "256"),
+        (json!({ "contra": -1.0 }), "contra", "-1"),
+        (json!({ "edgeproc": -0.5 }), "edgeproc", "-0.5"),
+        (json!({ "darkstr": -1.0 }), "darkstr", "-1"),
     ];
 
-    for (value, name) in cases {
+    for (value, name, expected) in cases {
         let message = refusal(value);
 
         assert!(
-            message.contains("dehalo/fine") && message.contains(name),
+            message.contains("dehalo/fine") && message.contains(name) && message.contains(expected),
             "{message}"
         );
     }

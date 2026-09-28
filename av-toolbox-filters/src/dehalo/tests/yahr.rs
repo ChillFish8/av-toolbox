@@ -70,16 +70,16 @@ fn the_defaults_are_havsfuncs() {
 #[test]
 fn out_of_range_arguments_are_refused() {
     let cases = [
-        (json!({ "blur": 101 }), "blur"),
-        (json!({ "depth": 128 }), "depth"),
-        (json!({ "depth": -129 }), "depth"),
+        (json!({ "blur": 101 }), "blur", "101"),
+        (json!({ "depth": 128 }), "depth", "128"),
+        (json!({ "depth": -129 }), "depth", "-129"),
     ];
 
-    for (value, name) in cases {
+    for (value, name, expected) in cases {
         let message = refusal(value);
 
         assert!(
-            message.contains("dehalo/yahr") && message.contains(name),
+            message.contains("dehalo/yahr") && message.contains(name) && message.contains(expected),
             "{message}"
         );
     }

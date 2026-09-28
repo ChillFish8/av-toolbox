@@ -3,8 +3,10 @@
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 //! - `deband/placebo` smooths banding with libplacebo's algorithm, then adds grain.
 //! - `dehalo/alpha` removes halos by pulling pixels toward a halo-free estimate made by resizing.
+//! - `dehalo/edge_clean` warp-sharpens and repairs away from strong edges.
 //! - `dehalo/fine` runs `dehalo/alpha` only in a band around strong edges.
-//! - `dehalo/yahr` cleans warp edges left behind by aWarpSharp2, the way havsfunc's YAHR does.
+//! - `dehalo/yahr` removes halos by limiting a clip's detail to the detail of its warp-sharpened
+//!   self, the way havsfunc's YAHR does.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
@@ -36,6 +38,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<blend::Masked>()?;
     registry.register_filter::<deband::Placebo>()?;
     registry.register_filter::<dehalo::Alpha>()?;
+    registry.register_filter::<dehalo::EdgeClean>()?;
     registry.register_filter::<dehalo::Fine>()?;
     registry.register_filter::<dehalo::Yahr>()?;
     registry.register_filter::<Resize<Point>>()?;
@@ -74,6 +77,7 @@ mod tests {
         assert!(registered("blend/masked"));
         assert!(registered("deband/placebo"));
         assert!(registered("dehalo/alpha"));
+        assert!(registered("dehalo/edge_clean"));
         assert!(registered("dehalo/fine"));
         assert!(registered("dehalo/yahr"));
         assert!(registered("resize/point"));

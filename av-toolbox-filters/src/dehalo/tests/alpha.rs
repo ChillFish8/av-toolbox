@@ -83,20 +83,20 @@ fn the_depth_comes_from_the_sample() {
 #[test]
 fn out_of_range_arguments_are_refused() {
     let cases = [
-        (json!({ "rx": 0.5 }), "rx"),
-        (json!({ "ry": 0.9 }), "ry"),
-        (json!({ "darkstr": -0.1 }), "darkstr"),
-        (json!({ "brightstr": -1.0 }), "brightstr"),
-        (json!({ "lowsens": 101.0 }), "lowsens"),
-        (json!({ "highsens": -1.0 }), "highsens"),
-        (json!({ "ss": 0.5 }), "ss"),
+        (json!({ "rx": 0.5 }), "rx", "0.5"),
+        (json!({ "ry": 0.9 }), "ry", "0.9"),
+        (json!({ "darkstr": -0.1 }), "darkstr", "-0.1"),
+        (json!({ "brightstr": -1.0 }), "brightstr", "-1"),
+        (json!({ "lowsens": 101.0 }), "lowsens", "101"),
+        (json!({ "highsens": -1.0 }), "highsens", "-1"),
+        (json!({ "ss": 0.5 }), "ss", "0.5"),
     ];
 
-    for (value, name) in cases {
+    for (value, name, expected) in cases {
         let message = refusal(value);
 
         assert!(
-            message.contains("dehalo/alpha") && message.contains(name),
+            message.contains("dehalo/alpha") && message.contains(name) && message.contains(expected),
             "{message}"
         );
     }
