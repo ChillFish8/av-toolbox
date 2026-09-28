@@ -18,6 +18,7 @@ use av_toolbox_cubek::dehalo::{DifferencePlanes, MergePlanes, merge_masked};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::neighbourhood::{NeighbourPlanes, Smooth, prewitt, smooth};
 use av_toolbox_cubek::rgvs::{
+    GrainBorder,
     RemoveGrainMode,
     RemoveGrainPlanes,
     RepairMode,
@@ -146,7 +147,13 @@ fn smode_clean<R: Runtime>(
         input,
         output: smoothed_plane,
     };
-    remove_grain(client, &sizing, smooth_planes, RemoveGrainMode::Seventeen);
+    remove_grain(
+        client,
+        &sizing,
+        smooth_planes,
+        RemoveGrainMode::Seventeen,
+        GrainBorder::Copy,
+    );
 
     let diff = Scratch::new::<f32>(context, width, height);
     let diff_plane = diff.plane();
@@ -183,7 +190,13 @@ fn smode_clean<R: Runtime>(
         input: brightened_plane,
         output: cleaned_plane,
     };
-    remove_grain(client, &sizing, clean_planes, RemoveGrainMode::Seven);
+    remove_grain(
+        client,
+        &sizing,
+        clean_planes,
+        RemoveGrainMode::Seven,
+        GrainBorder::Copy,
+    );
 
     let particle_edges = Scratch::new::<f32>(context, width, height);
     let particle_edges_plane = particle_edges.plane();

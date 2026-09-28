@@ -19,7 +19,7 @@ use crate::dehalo::fine::{FineParams, contrast_sample, outside_sample};
 use crate::dehalo::yahr::YahrParams;
 use crate::neighbourhood::{Expansion, Extreme, Shape, Smooth, expansion_passes};
 use crate::resize::{Kernel, centred_taps};
-use crate::rgvs::{RemoveGrainMode, RepairMode};
+use crate::rgvs::{GrainBorder, RemoveGrainMode, RepairMode};
 use crate::warp::WarpParams;
 
 const MITCHELL: Kernel = Kernel::Bicubic {
@@ -243,7 +243,13 @@ pub fn reference_edge_clean(input: &[f32], width: u32, height: u32, params: &Edg
     }
 
     if params.smode {
-        let smoothed = reference_remove_grain(input, width, height, RemoveGrainMode::Seventeen);
+        let smoothed = reference_remove_grain(
+            input,
+            width,
+            height,
+            RemoveGrainMode::Seventeen,
+            GrainBorder::Copy,
+        );
         let neutral = params.scale(128.0);
         let diff: Vec<f32> = input
             .iter()
@@ -257,7 +263,13 @@ pub fn reference_edge_clean(input: &[f32], width: u32, height: u32, params: &Edg
             .iter()
             .map(|value| levels_sample(*value, levels_low, levels_span, exponent, peak))
             .collect();
-        let cleaned = reference_remove_grain(&brightened, width, height, RemoveGrainMode::Seven);
+        let cleaned = reference_remove_grain(
+            &brightened,
+            width,
+            height,
+            RemoveGrainMode::Seven,
+            GrainBorder::Copy,
+        );
         let particle_edges = reference_prewitt(&cleaned, width, height, peak);
         let particle_high = params.scale(16.0);
         let particles: Vec<f32> = particle_edges

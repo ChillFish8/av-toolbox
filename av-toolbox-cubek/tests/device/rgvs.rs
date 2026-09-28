@@ -1,4 +1,5 @@
 use av_toolbox_cubek::rgvs::{
+    GrainBorder,
     RemoveGrainMode,
     RemoveGrainPlanes,
     RepairMode,
@@ -52,6 +53,7 @@ struct RemoveGrain {
     width: u32,
     height: u32,
     mode: RemoveGrainMode,
+    border: GrainBorder,
 }
 
 impl BuildTask for RemoveGrain {
@@ -71,18 +73,33 @@ impl BuildTask for RemoveGrain {
             input: input_plane,
             output: output_plane,
         };
-        remove_grain(client, &sizing, planes, self.mode);
+        remove_grain(client, &sizing, planes, self.mode, self.border);
 
         read_f32(client, &output)
     }
 }
 
-/// A plane drawn from a small repeated set of values, so RemoveGrain mode 7's tied window costs are
-/// really exercised rather than always broken by distinct neighbours.
+/// A plane split into a flat left half and a busy right half drawn from a small repeated set of
+/// values.
+///
+/// The flat half ties the centre for RemoveGrain's averaging modes, and the busy half exercises
+/// every mode's clamps, and mode 7's tied window costs, rather than always breaking a tie on
+/// distinct neighbours.
 fn repeated(width: u32, height: u32) -> Vec<f32> {
+    let flat_width = width / 2;
+
     busy(width, height)
         .iter()
-        .map(|value| (*value as u32 % 6) as f32 * 50.0)
+        .enumerate()
+        .map(|(index, value)| {
+            let x = index as u32 % width;
+
+            if x < flat_width {
+                100.0
+            } else {
+                (*value as u32 % 6) as f32 * 50.0
+            }
+        })
         .collect()
 }
 
@@ -146,31 +163,40 @@ fn repair_matches_the_reference() {
 }
 
 #[test]
-fn remove_grain_matches_the_reference() {
-    let modes = [RemoveGrainMode::Seven, RemoveGrainMode::Seventeen];
+fn every_remove_grain_mode_and_border_matches_the_reference() {
+    let modes = [
+        RemoveGrainMode::Seven,
+        RemoveGrainMode::Eleven,
+        RemoveGrainMode::Seventeen,
+        RemoveGrainMode::TwentyTwo,
+    ];
+    let borders = [GrainBorder::Copy, GrainBorder::Reflect];
 
     for mode in modes {
-        for (width, height) in [(37, 23), (2, 2), (1, 6)] {
-            let input = repeated(width, height);
-            let task = RemoveGrain {
-                input: input.clone(),
-                width,
-                height,
-                mode,
-            };
+        for border in borders {
+            for (width, height) in [(37, 23), (1, 5), (5, 1), (2, 2)] {
+                let input = repeated(width, height);
+                let task = RemoveGrain {
+                    input: input.clone(),
+                    width,
+                    height,
+                    mode,
+                    border,
+                };
 
-            let actual = backend().build(task);
-            let expected = reference_remove_grain(&input, width, height, mode);
+                let actual = backend().build(task);
+                let expected = reference_remove_grain(&input, width, height, mode, border);
 
-            assert_eq!(actual, expected, "{mode:?} {width}x{height}");
+                assert_eq!(actual, expected, "{mode:?} {border:?} {width}x{height}");
 
-            if (width, height) == (37, 23) {
-                let share = changed_share(&expected, &input, width, height);
+                if (width, height) == (37, 23) {
+                    let share = changed_share(&expected, &input, width, height);
 
-                assert!(
-                    share >= 0.05,
-                    "{mode:?} only changed {share} of the inner samples"
-                );
+                    assert!(
+                        (0.10..=0.90).contains(&share),
+                        "{mode:?} {border:?} changed {share} of the inner samples"
+                    );
+                }
             }
         }
     }

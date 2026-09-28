@@ -2,7 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
-use crate::{DevicePlane, Dispatch};
+use crate::{DevicePlane, Dispatch, reflect};
 
 /// Which RemoveGrain Repair mode runs.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -52,15 +52,52 @@ pub enum RemoveGrainMode {
     /// Clamps the centre to whichever pair bound costs least to reach, weighted by the pair's
     /// spread.
     Seven,
+    /// Averages the 3x3 window with a binomial weighting of 4 for the centre, 2 for each edge and
+    /// 1 for each corner.
+    Eleven,
     /// Clamps the centre between the plane's pair bounds.
     Seventeen,
+    /// Clamps the centre between the least and greatest of the pair averages.
+    TwentyTwo,
 }
 
 impl RemoveGrainMode {
+    /// The RemoveGrain mode with this number, or `None` if it is unsupported.
+    pub fn from_number(mode: u32) -> Option<Self> {
+        match mode {
+            7 => Some(Self::Seven),
+            11 => Some(Self::Eleven),
+            17 => Some(Self::Seventeen),
+            22 => Some(Self::TwentyTwo),
+            _ => None,
+        }
+    }
+
     fn number(self) -> u32 {
         match self {
             Self::Seven => 7,
+            Self::Eleven => 11,
             Self::Seventeen => 17,
+            Self::TwentyTwo => 22,
+        }
+    }
+}
+
+/// Which samples RemoveGrain reads at the first and last row and column of the plane.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum GrainBorder {
+    /// Keeps the first and last row and column unchanged, as rgvs does.
+    Copy,
+    /// Filters the first and last row and column too, reading past the edge through
+    /// [reflect](crate::reflect).
+    Reflect,
+}
+
+impl GrainBorder {
+    fn code(self) -> u32 {
+        match self {
+            Self::Copy => 0,
+            Self::Reflect => 1,
         }
     }
 }
@@ -86,6 +123,16 @@ fn window_value(values: &Array<f32>, width: u32, x: u32, y: u32, slot: u32) -> f
     let row = y + slot / 3 - 1;
     let column = x + slot % 3 - 1;
     let index = row * width + column;
+
+    values[index as usize]
+}
+
+/// The value in `slot` of the 3x3 window at `x`, `y`, reading past the edge through `reflect`.
+#[cube]
+fn reflected_window_value(values: &Array<f32>, width: u32, height: u32, x: u32, y: u32, slot: u32) -> f32 {
+    let row = reflect((y + slot / 3) as i32 - 1, height as i32);
+    let column = reflect((x + slot % 3) as i32 - 1, width as i32);
+    let index = row as u32 * width + column as u32;
 
     values[index as usize]
 }
@@ -239,7 +286,14 @@ fn repair_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn remove_grain_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, mode: u32) {
+fn remove_grain_kernel(
+    input: &Array<f32>,
+    output: &mut Array<f32>,
+    width: u32,
+    height: u32,
+    mode: u32,
+    border: u32,
+) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -248,18 +302,19 @@ fn remove_grain_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, 
     let x = position % width;
     let y = position / width;
     let centre = input[ABSOLUTE_POS];
+    let at_border = x == 0 || y == 0 || x + 1 == width || y + 1 == height;
 
-    if x == 0 || y == 0 || x + 1 == width || y + 1 == height {
+    if at_border && border == 0u32 {
         output[ABSOLUTE_POS] = centre;
     } else {
-        let top_left = window_value(input, width, x, y, 0u32);
-        let top = window_value(input, width, x, y, 1u32);
-        let top_right = window_value(input, width, x, y, 2u32);
-        let left = window_value(input, width, x, y, 3u32);
-        let right = window_value(input, width, x, y, 5u32);
-        let bottom_left = window_value(input, width, x, y, 6u32);
-        let bottom = window_value(input, width, x, y, 7u32);
-        let bottom_right = window_value(input, width, x, y, 8u32);
+        let top_left = reflected_window_value(input, width, height, x, y, 0u32);
+        let top = reflected_window_value(input, width, height, x, y, 1u32);
+        let top_right = reflected_window_value(input, width, height, x, y, 2u32);
+        let left = reflected_window_value(input, width, height, x, y, 3u32);
+        let right = reflected_window_value(input, width, height, x, y, 5u32);
+        let bottom_left = reflected_window_value(input, width, height, x, y, 6u32);
+        let bottom = reflected_window_value(input, width, height, x, y, 7u32);
+        let bottom_right = reflected_window_value(input, width, height, x, y, 8u32);
 
         let mi_one = f32::min(top_left, bottom_right);
         let ma_one = f32::max(top_left, bottom_right);
@@ -270,7 +325,27 @@ fn remove_grain_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, 
         let mi_four = f32::min(left, right);
         let ma_four = f32::max(left, right);
 
-        if mode == 17u32 {
+        if mode == 11u32 {
+            let sum_edges = top + left + right + bottom;
+            let sum_corners = top_left + top_right + bottom_left + bottom_right;
+
+            output[ABSOLUTE_POS] = (4.0 * centre + 2.0 * sum_edges + sum_corners) / 16.0;
+        } else if mode == 22u32 {
+            let average_one = (top_left + bottom_right) / 2.0;
+            let average_two = (top + bottom) / 2.0;
+            let average_three = (top_right + bottom_left) / 2.0;
+            let average_four = (left + right) / 2.0;
+
+            let low_one_two = f32::min(average_one, average_two);
+            let low_three_four = f32::min(average_three, average_four);
+            let low = f32::min(low_one_two, low_three_four);
+
+            let high_one_two = f32::max(average_one, average_two);
+            let high_three_four = f32::max(average_three, average_four);
+            let high = f32::max(high_one_two, high_three_four);
+
+            output[ABSOLUTE_POS] = f32::clamp(centre, low, high);
+        } else if mode == 17u32 {
             let lower_pairs_one_two = f32::max(mi_one, mi_two);
             let lower_pairs_three_four = f32::max(mi_three, mi_four);
             let lower_bound = f32::max(lower_pairs_one_two, lower_pairs_three_four);
@@ -358,12 +433,16 @@ pub fn repair<R: Runtime>(
 
 /// Runs RemoveGrain's `mode` on `planes.input` into `planes.output`.
 ///
-/// The first and last row and column of the plane are copied unchanged, as RemoveGrain does.
+/// With [GrainBorder::Copy](crate::rgvs::GrainBorder::Copy), the first and last row and column of
+/// the plane are copied unchanged, as rgvs does. With
+/// [GrainBorder::Reflect](crate::rgvs::GrainBorder::Reflect), they are filtered too, reading past
+/// the edge through [reflect](crate::reflect).
 pub fn remove_grain<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: RemoveGrainPlanes<'_>,
     mode: RemoveGrainMode,
+    border: GrainBorder,
 ) {
     let width = planes.input.width();
     let height = planes.input.height();
@@ -373,7 +452,8 @@ pub fn remove_grain<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: both planes hold `samples` f32 values, and only inner samples read neighbours.
+    // Safety: both planes hold `samples` f32 values, and with `GrainBorder::Copy` only inner
+    // samples read neighbours. `GrainBorder::Reflect` reads every neighbour through `reflect`.
     unsafe {
         remove_grain_kernel::launch_unchecked::<R>(
             client,
@@ -384,6 +464,7 @@ pub fn remove_grain<R: Runtime>(
             width,
             height,
             mode.number(),
+            border.code(),
         );
     }
 }
