@@ -3,6 +3,7 @@
 mod adaptive;
 mod canny;
 mod combine;
+mod edges;
 mod reference;
 mod support;
 mod xdog;

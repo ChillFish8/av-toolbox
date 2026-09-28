@@ -126,6 +126,11 @@ impl Luma {
             chroma: None,
         }
     }
+
+    /// The largest code value, 255 or the U16 depth's largest.
+    pub(crate) const fn peak(&self) -> f32 {
+        self.largest
+    }
 }
 
 #[cube(launch_unchecked)]
@@ -170,6 +175,37 @@ pub(crate) fn load_luma<R: Runtime>(
     }
 
     Ok(())
+}
+
+#[cube(launch_unchecked)]
+fn store_mask_kernel(input: &Array<f32>, output: &mut Array<u8>) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let clamped = f32::clamp(input[ABSOLUTE_POS], 0.0, 1.0);
+    let scaled = f32::round(clamped * 255.0);
+
+    output[ABSOLUTE_POS] = u8::cast_from(scaled);
+}
+
+/// Writes `round(clamp(v, 0, 1) * 255)` from `input` into `output` as u8.
+pub(crate) fn store_mask<R: Runtime>(
+    client: &ComputeClient<R>,
+    sizing: &Sizing<'_>,
+    input: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+) {
+    let samples = output.samples();
+    let read = input.array::<R>();
+    let written = output.array::<R>();
+    let cubes = sizing.0.cube_count(samples);
+    let shape = sizing.0.cube_dim();
+
+    // Safety: `input` holds `samples` f32 values and `output` holds `samples` u8 values.
+    unsafe {
+        store_mask_kernel::launch_unchecked::<R>(client, cubes, shape, read, written);
+    }
 }
 
 #[cfg(test)]
