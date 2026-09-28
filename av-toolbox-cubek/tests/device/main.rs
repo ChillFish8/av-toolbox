@@ -4,6 +4,7 @@ mod blur;
 mod deband;
 mod dehalo;
 mod depth;
+mod edges;
 mod histogram;
 mod hysteresis;
 mod labels;
