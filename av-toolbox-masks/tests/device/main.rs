@@ -5,5 +5,6 @@ mod canny;
 mod combine;
 mod edges;
 mod reference;
+mod retinex;
 mod support;
 mod xdog;

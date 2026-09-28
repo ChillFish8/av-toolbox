@@ -39,6 +39,18 @@ pub struct EdgeLimits {
     pub peak: f32,
 }
 
+impl EdgeLimits {
+    /// Limits that scale and cut nothing, up to `peak`.
+    pub const fn open(peak: f32) -> Self {
+        Self {
+            multi: 1.0,
+            low: 0.0,
+            high: peak,
+            peak,
+        }
+    }
+}
+
 #[cube]
 fn tap(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f32 {
     let x = reflect(column, width as i32);

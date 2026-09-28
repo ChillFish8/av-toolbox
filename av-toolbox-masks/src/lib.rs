@@ -4,6 +4,7 @@
 //!
 //! - `edges/kirsch` finds edges by the strongest of 8 compass kernels.
 //! - `edges/prewitt` finds edges by the Prewitt gradient's magnitude.
+//! - `edges/retinex` finds edges in a retinex-lit copy of the luma, which brings out lines in dark areas.
 //! - `edges/sobel` finds edges by the Sobel gradient's magnitude.
 //! - `lines/adaptive` finds dark strokes against their neighbourhood, and can
 //!   even out lighting first to find them in deep shadow.
@@ -27,6 +28,7 @@ use av_toolbox_core::{PipelineRegistry, RegistryError};
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_mask::<edges::Edges<edges::Kirsch>>()?;
     registry.register_mask::<edges::Edges<edges::Prewitt>>()?;
+    registry.register_mask::<edges::Retinex>()?;
     registry.register_mask::<edges::Edges<edges::Sobel>>()?;
     registry.register_mask::<lines::Adaptive>()?;
     registry.register_mask::<lines::Canny>()?;
@@ -57,6 +59,7 @@ mod tests {
     fn every_mask_is_registered() {
         assert!(registered("edges/kirsch"));
         assert!(registered("edges/prewitt"));
+        assert!(registered("edges/retinex"));
         assert!(registered("edges/sobel"));
         assert!(registered("lines/adaptive"));
         assert!(registered("lines/canny"));

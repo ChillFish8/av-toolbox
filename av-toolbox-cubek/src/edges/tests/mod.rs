@@ -12,6 +12,13 @@ fn open() -> EdgeLimits {
 }
 
 #[test]
+fn open_leaves_every_magnitude_alone() {
+    let limits = EdgeLimits::open(1000.0);
+
+    assert_eq!(limits, open());
+}
+
+#[test]
 fn a_vertical_step_gives_each_operator_its_magnitude() {
     let plane = [0.0, 0.0, 9.0, 0.0, 0.0, 9.0, 0.0, 0.0, 9.0];
     let limits = open();

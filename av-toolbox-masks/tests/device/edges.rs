@@ -118,10 +118,11 @@ fn each_operator_matches_the_reference_on_a_square() {
     }
 }
 
-/// A fixture built from three boundaries, in 8-bit code values: a jump of 6 (Sobel magnitude 24),
-/// well below `lthr`; a jump of 20 (magnitude 80), clearly between `lthr` and `hthr`; and a jump
-/// of 56 (magnitude 224), well above `hthr` and clear of `peak`. Each boundary marks 2 of the 20
-/// columns, so each covers 10% of the plane over its 10 rows.
+/// A fixture built from three boundaries, in 8-bit code values. A jump of 6 gives a Sobel
+/// magnitude of 24, well below `lthr`. A jump of 20 gives a magnitude of 80, clearly between
+/// `lthr` and `hthr`. A jump of 56 gives a magnitude of 224, well above `hthr` and clear of
+/// `peak`. Each boundary marks 2 of the 20 columns, so each covers 10% of the plane over its 10
+/// rows.
 fn threshold_fixture(width: u32, height: u32) -> Vec<u8> {
     horizontal_steps(width, height, &[(5, 40), (5, 46), (5, 66), (5, 122)])
 }
@@ -318,27 +319,29 @@ fn a_flat_frame_has_no_edges() {
     }
 }
 
+/// The fixed width and height `kirsch_tie_fixture` builds.
+const KIRSCH_TIE_SIZE: usize = 5;
+
 /// Neighbours of one target pixel arranged so its Kirsch magnitude is exactly `15 * (bright - dim)`
 /// in 8-bit code values: `top_left`, `top` and `top_right` at `bright`, every other pixel at `dim`.
 /// Kirsch's integer inputs keep this exact in f32, so it lands precisely on a rounded threshold.
-fn kirsch_tie_fixture(width: u32, bright: u8, dim: u8) -> Vec<u8> {
-    let width = width as usize;
-    let mut luma = vec![dim; width * 5];
-    luma[width + 1] = bright;
-    luma[width + 2] = bright;
-    luma[width + 3] = bright;
+fn kirsch_tie_fixture(bright: u8, dim: u8) -> Vec<u8> {
+    let mut luma = vec![dim; KIRSCH_TIE_SIZE * KIRSCH_TIE_SIZE];
+    luma[KIRSCH_TIE_SIZE + 1] = bright;
+    luma[KIRSCH_TIE_SIZE + 2] = bright;
+    luma[KIRSCH_TIE_SIZE + 3] = bright;
 
     luma
 }
 
 const KIRSCH_TIE_MAGNITUDE: f32 = 90.0;
-const KIRSCH_TIE_INDEX: usize = 12;
+const KIRSCH_TIE_INDEX: usize = 2 * KIRSCH_TIE_SIZE + 2;
 
 #[test]
 fn a_kirsch_tie_at_lthr_is_kept() {
-    let width = 5;
-    let height = 5;
-    let luma = kirsch_tie_fixture(width, 156, 150);
+    let width = KIRSCH_TIE_SIZE as u32;
+    let height = KIRSCH_TIE_SIZE as u32;
+    let luma = kirsch_tie_fixture(156, 150);
     let lthr = KIRSCH_TIE_MAGNITUDE / 255.0;
 
     let format = grey(width, height);
@@ -354,9 +357,9 @@ fn a_kirsch_tie_at_lthr_is_kept() {
 
 #[test]
 fn a_kirsch_tie_at_hthr_is_kept() {
-    let width = 5;
-    let height = 5;
-    let luma = kirsch_tie_fixture(width, 134, 128);
+    let width = KIRSCH_TIE_SIZE as u32;
+    let height = KIRSCH_TIE_SIZE as u32;
+    let luma = kirsch_tie_fixture(134, 128);
     let hthr = KIRSCH_TIE_MAGNITUDE / 255.0;
 
     let format = grey(width, height);
@@ -414,4 +417,32 @@ fn store_mask_clamps_below_zero_to_0() {
     let output = backend.build(task);
 
     assert_eq!(output, vec![0]);
+}
+
+/// A vertical step of 100 codes gives Prewitt a magnitude of `3 * 100 = 300`, kept and unsaturated
+/// by the defaults, and stored as `round(300 * 255 / 1023) = round(74.78) = 75`.
+#[test]
+fn a_ten_bit_kept_magnitude_stores_scaled_to_255() {
+    let width = 10;
+    let height = 4;
+    let luma: Vec<u16> = horizontal_steps(width, height, &[(5u32, 400u16), (5, 500)]);
+
+    let format = ten_bit_grey(width, height);
+    let wide_plane = wide_bytes(&luma);
+    let frames = vec![vec![wide_plane]];
+    let masks = run("prewitt", json!({}), format, frames);
+
+    for row in 0..height {
+        let before_step_index = (row * width + 4) as usize;
+        let after_step_index = (row * width + 5) as usize;
+
+        assert_eq!(
+            masks[0][before_step_index], 75,
+            "row {row} did not scale to 75 before the step"
+        );
+        assert_eq!(
+            masks[0][after_step_index], 75,
+            "row {row} did not scale to 75 after the step"
+        );
+    }
 }
