@@ -48,7 +48,7 @@ fn store(values: &[f32], peak: f32) -> Vec<u8> {
         .collect()
 }
 
-/// The radius `sigma` blurs the retinex response at, `ceil(6 * sigma + 1) / 2`.
+/// The blur radius for `sigma`, `ceil(6 * sigma + 1) / 2`, as vs-jetpack rounds it.
 fn retinex_blur_radius(sigma: f32) -> u32 {
     let reach = (6.0 * sigma + 1.0).ceil();
 

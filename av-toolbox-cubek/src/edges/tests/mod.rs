@@ -1,5 +1,5 @@
 use crate::edges::{EdgeLimits, Operator};
-use crate::testing::{reference_binarize, reference_edges};
+use crate::testing::{reference_add_capped, reference_binarize, reference_edges};
 
 /// Limits that leave every magnitude alone.
 fn open() -> EdgeLimits {
@@ -141,4 +141,14 @@ fn binarize_splits_at_the_threshold() {
     let binarized = reference_binarize(&input, 0.5, 1.0);
 
     assert_eq!(binarized, vec![0.0, 1.0, 0.0, 1.0]);
+}
+
+#[test]
+fn add_capped_sums_and_clamps_to_the_peak() {
+    let first = [0.0, 100.0, 200.0, 250.0];
+    let second = [0.0, 50.0, 100.0, 100.0];
+
+    let summed = reference_add_capped(&first, &second, 255.0);
+
+    assert_eq!(summed, vec![0.0, 150.0, 255.0, 255.0]);
 }

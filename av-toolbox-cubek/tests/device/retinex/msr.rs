@@ -8,7 +8,8 @@ use cubecl::prelude::Runtime;
 use crate::neighbourhood::busy;
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
-/// What `on_device` reads back: the stretched output and the log response before stretching.
+/// What `on_device` reads back. `output` is the stretched result and `msr` is the log response
+/// before stretching.
 struct RetinexOutput {
     output: Vec<f32>,
     msr: Vec<f32>,
@@ -186,7 +187,7 @@ fn a_flat_plane_gives_zero_on_the_device() {
     }
 
     // A flat input normalises to 0, whose blur is also 0, so `accumulate` takes its `g <= 0`
-    // branch throughout and the log response settles at `ln(1) / count`, which is 0.
+    // branch throughout and adds `ln(1)` each time, so the log response settles at 0.
     let expected_response = 1.0f32.ln() / count;
     for value in found.msr {
         assert!(value.is_finite(), "{value}");
@@ -212,5 +213,57 @@ fn crossed_percentiles_give_zero_on_the_device() {
     for value in found.output {
         assert!(value.is_finite(), "{value}");
         assert_eq!(value, 0.0);
+    }
+}
+
+/// An isolated bright sample against a dark field pushes `intensity / gaussian` into the tens of
+/// thousands at a sigma this wide, which overflows f32 across 8 sigmas when the response
+/// multiplies a factor per sigma instead of summing its log.
+#[test]
+fn wide_sigmas_on_an_isolated_sample_stay_finite_on_the_device() {
+    let width = 512;
+    let height = 512;
+    let mut input = vec![0.0f32; (width * height) as usize];
+    input[(width * height / 2) as usize] = 1.0;
+    let settings = RetinexSettings {
+        sigmas: vec![100_000.0; 8],
+        lower: 0.001,
+        upper: 0.005,
+        scale: 255.0,
+    };
+
+    let found = on_device(&input, width, height, &settings);
+
+    for value in &found.msr {
+        assert!(value.is_finite(), "{value}");
+    }
+    assert!(found.msr.iter().any(|value| *value != 0.0));
+    for value in &found.output {
+        assert!(value.is_finite(), "{value}");
+    }
+}
+
+#[test]
+fn a_large_smooth_scene_matches_the_reference_loosely() {
+    let width = 1024;
+    let height = 1024;
+    let scale = 255.0;
+    let loose_tolerance = 2e-2 * scale;
+    let settings = default_settings(scale);
+    let input = smooth_scene(width, height);
+
+    let found = on_device(&input, width, height, &settings);
+    let expected = reference_retinex(&input, width, height, &settings);
+
+    for value in &found.msr {
+        assert!(value.is_finite(), "{value}");
+    }
+    for (value, reference) in found.output.iter().zip(expected.iter()) {
+        assert!(value.is_finite(), "{value}");
+        let error = (value - reference).abs();
+        assert!(
+            error <= loose_tolerance,
+            "error {error} exceeded {loose_tolerance}"
+        );
     }
 }

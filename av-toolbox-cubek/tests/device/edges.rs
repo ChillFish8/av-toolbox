@@ -1,6 +1,6 @@
-use av_toolbox_cubek::edges::{EdgeLimits, Operator, binarize, edges};
+use av_toolbox_cubek::edges::{EdgeLimits, Operator, add_capped, binarize, edges};
 use av_toolbox_cubek::neighbourhood::NeighbourPlanes;
-use av_toolbox_cubek::testing::{reference_binarize, reference_edges};
+use av_toolbox_cubek::testing::{reference_add_capped, reference_binarize, reference_edges};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -59,6 +59,55 @@ fn on_device(input: &[f32], width: u32, height: u32, operation: Operation) -> Ve
         width,
         height,
         operation,
+    };
+
+    backend().build(task)
+}
+
+struct AddCapped {
+    first: Vec<f32>,
+    second: Vec<f32>,
+    width: u32,
+    height: u32,
+    peak: f32,
+}
+
+impl BuildTask for AddCapped {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let bytes = self.first.len() * size_of::<f32>();
+
+        let first = upload_f32(client, &self.first);
+        let second = upload_f32(client, &self.second);
+        let output = empty(client, bytes);
+        let first_plane = plane(&first, self.width, self.height);
+        let second_plane = plane(&second, self.width, self.height);
+        let output_plane = plane(&output, self.width, self.height);
+
+        add_capped(
+            client,
+            &sizing,
+            first_plane,
+            second_plane,
+            output_plane,
+            self.peak,
+        );
+
+        read_f32(client, &output)
+    }
+}
+
+fn on_device_add_capped(first: &[f32], second: &[f32], width: u32, height: u32, peak: f32) -> Vec<f32> {
+    let task = AddCapped {
+        first: first.to_vec(),
+        second: second.to_vec(),
+        width,
+        height,
+        peak,
     };
 
     backend().build(task)
@@ -184,4 +233,19 @@ fn binarize_matches_the_reference_at_the_median() {
     let expected = reference_binarize(&input, median, 255.0);
 
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn add_capped_matches_the_reference_and_clamps_to_the_peak() {
+    let width = 37;
+    let height = 23;
+    let peak = BUSY_RANGE;
+    let first = busy(width, height);
+    let second = busy(width, height);
+
+    let actual = on_device_add_capped(&first, &second, width, height, peak);
+    let expected = reference_add_capped(&first, &second, peak);
+
+    assert_eq!(actual, expected);
+    assert!(actual.iter().all(|value| *value <= peak));
 }

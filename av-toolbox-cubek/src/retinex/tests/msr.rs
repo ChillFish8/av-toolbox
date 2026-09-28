@@ -95,3 +95,22 @@ fn reference_log_response_of_a_flat_plane_is_zero_and_finite() {
         assert_eq!(value, 0.0);
     }
 }
+
+/// An isolated bright sample against a dark field pushes `intensity / gaussian` into the tens of
+/// thousands at a sigma this wide, which overflows f32 across 8 sigmas when the response
+/// multiplies a factor per sigma instead of summing its log.
+#[test]
+fn reference_log_response_of_wide_sigmas_on_an_isolated_sample_stays_finite() {
+    let width = 512;
+    let height = 512;
+    let mut normalised = vec![0.0f32; (width * height) as usize];
+    normalised[(width * height / 2) as usize] = 1.0;
+    let sigmas = vec![100_000.0; 8];
+
+    let response = reference_log_response(&normalised, width, height, &sigmas);
+
+    for value in &response {
+        assert!(value.is_finite(), "{value}");
+    }
+    assert!(response.iter().any(|value| *value != 0.0));
+}

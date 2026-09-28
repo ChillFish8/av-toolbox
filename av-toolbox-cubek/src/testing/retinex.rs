@@ -187,14 +187,15 @@ pub fn reference_percentile(values: &[f32], percentile: f32) -> f32 {
     high
 }
 
-/// The multi-scale log response of a normalised plane on the CPU, mirroring the retinex's `fill`,
-/// `accumulate` and `finish` kernels.
+/// The multi-scale log response of a normalised plane on the CPU.
 ///
-/// The response starts at 1, gathers a factor from each of `sigmas` and finishes as its log
-/// divided by the sigma count. A sigma whose blur reaches 0 at a sample contributes a factor of 1
-/// there rather than dividing by 0.
+/// Each of `sigmas` blurs the plane and contributes a factor at every sample, and the response is
+/// the mean of that factor's log across `sigmas`. A sigma whose blur reaches 0 at a sample
+/// contributes a factor of 1 there rather than dividing by 0. Summing the logs, rather than
+/// multiplying the factors and taking one final log, keeps a wide sigma's huge factor from
+/// overflowing f32 before the mean is taken.
 pub fn reference_log_response(normalised: &[f32], width: u32, height: u32, sigmas: &[f32]) -> Vec<f32> {
-    let mut msr = vec![1.0f32; normalised.len()];
+    let mut msr = vec![0.0f32; normalised.len()];
     for sigma in sigmas {
         let blurred = reference_recursive_gaussian(normalised, width, height, *sigma);
 
@@ -207,12 +208,12 @@ pub fn reference_log_response(normalised: &[f32], width: u32, height: u32, sigma
                 1.0
             };
 
-            msr[index] *= factor;
+            msr[index] += factor.ln();
         }
     }
 
     let count = sigmas.len() as f32;
-    msr.iter().map(|value| value.ln() / count).collect()
+    msr.iter().map(|value| value / count).collect()
 }
 
 /// Runs the multi-scale retinex on the CPU, mirroring [retinex](crate::retinex::retinex) in the

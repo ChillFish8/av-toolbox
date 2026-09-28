@@ -6,7 +6,7 @@ mod tests;
 use cubecl::prelude::*;
 
 use crate::neighbourhood::NeighbourPlanes;
-use crate::{Dispatch, reflect};
+use crate::{DevicePlane, Dispatch, reflect};
 
 /// Which edge operator computes a magnitude.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -231,6 +231,16 @@ fn binarize_kernel(input: &Array<f32>, output: &mut Array<f32>, threshold: f32, 
     output[ABSOLUTE_POS] = binarized;
 }
 
+#[cube(launch_unchecked)]
+fn add_capped_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>, peak: f32) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let combined = first[ABSOLUTE_POS] + second[ABSOLUTE_POS];
+    output[ABSOLUTE_POS] = f32::min(combined, peak);
+}
+
 /// Writes the edge strength of each sample, cut and filled by the limits.
 pub fn edges<R: Runtime>(
     client: &ComputeClient<R>,
@@ -284,5 +294,35 @@ pub fn binarize<R: Runtime>(
     // Safety: both planes hold `samples` f32 values.
     unsafe {
         binarize_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, threshold, peak);
+    }
+}
+
+/// Writes `min(first + second, peak)`.
+pub fn add_capped<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    first: DevicePlane<'_>,
+    second: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+    peak: f32,
+) {
+    let samples = output.samples();
+    let first_read = first.array::<R>();
+    let second_read = second.array::<R>();
+    let output_write = output.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the first, second and output planes each hold `samples` f32 values.
+    unsafe {
+        add_capped_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            first_read,
+            second_read,
+            output_write,
+            peak,
+        );
     }
 }

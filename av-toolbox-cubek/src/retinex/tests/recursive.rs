@@ -1,8 +1,8 @@
 use crate::retinex::{RecursiveGaussian, direct_form_coefficients, factor};
 use crate::testing::{reference_recursive_gaussian, reference_recursive_gaussian_cascade};
 
-/// The sigmas the factoring is checked across, widening from 0.5 to 350.
-const SIGMAS: [f32; 7] = [0.5, 1.0, 2.5, 5.0, 50.0, 200.0, 350.0];
+/// The sigmas the factoring is checked across, between 0.5 and 1024.
+const SIGMAS: [f32; 8] = [0.5, 1.0, 2.5, 5.0, 50.0, 200.0, 350.0, 1024.0];
 
 #[test]
 fn the_coefficients_below_2_5_follow_the_small_sigma_formula() {

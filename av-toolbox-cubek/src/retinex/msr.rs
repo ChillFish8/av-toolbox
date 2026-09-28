@@ -80,7 +80,7 @@ fn accumulate(normalised: &Array<f32>, blurred: &Array<f32>, msr: &mut Array<f32
         factor = intensity / gaussian + 1.0;
     }
 
-    msr[ABSOLUTE_POS] *= factor;
+    msr[ABSOLUTE_POS] += f32::ln(factor);
 }
 
 #[cube(launch_unchecked)]
@@ -89,7 +89,7 @@ fn finish(msr: &mut Array<f32>, count: f32) {
         terminate!();
     }
 
-    msr[ABSOLUTE_POS] = f32::ln(msr[ABSOLUTE_POS]) / count;
+    msr[ABSOLUTE_POS] = msr[ABSOLUTE_POS] / count;
 }
 
 #[cube(launch_unchecked)]
@@ -151,7 +151,7 @@ pub fn retinex<R: Runtime>(
 
     // Safety: the msr plane holds `samples` f32 values.
     unsafe {
-        fill::launch_unchecked::<R>(client, cubes, unit, msr, 1.0);
+        fill::launch_unchecked::<R>(client, cubes, unit, msr, 0.0);
     }
 
     for sigma in &settings.sigmas {

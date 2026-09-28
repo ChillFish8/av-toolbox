@@ -123,3 +123,12 @@ pub fn reference_binarize(input: &[f32], threshold: f32, peak: f32) -> Vec<f32> 
         .map(|value| if *value < threshold { 0.0 } else { peak })
         .collect()
 }
+
+/// Writes `min(first + second, peak)` on the CPU, mirroring [add_capped](crate::edges::add_capped).
+pub fn reference_add_capped(first: &[f32], second: &[f32], peak: f32) -> Vec<f32> {
+    first
+        .iter()
+        .zip(second)
+        .map(|(first_value, second_value)| (first_value + second_value).min(peak))
+        .collect()
+}

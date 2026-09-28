@@ -64,9 +64,14 @@ pub(crate) fn factor(f1: f64, f2: f64, f3: f64) -> (f64, f64, f64) {
 /// second-order section.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct RecursiveGaussian {
+    /// The first-order section's input weight.
     pub real_gain: f32,
+    /// The first-order section's feedback weight, its recursion's `y = real_gain * x + real_pole * y1`.
     pub real_pole: f32,
+    /// The second-order section's input weight.
     pub pair_gain: f32,
+    /// The second-order section's feedback weights `[a, b]`, its recursion's
+    /// `y = pair_gain * x + a * y1 + b * y2`.
     pub pair: [f32; 2],
 }
 

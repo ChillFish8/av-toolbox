@@ -11,9 +11,8 @@ use av_toolbox_core::{
     StageInstance,
     StreamType,
 };
-use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::blur::{BlurPlanes, Gaussian};
-use av_toolbox_cubek::edges::{EdgeLimits, Operator, binarize, edges};
+use av_toolbox_cubek::edges::{EdgeLimits, Operator, add_capped, binarize, edges};
 use av_toolbox_cubek::histogram::BINS;
 use av_toolbox_cubek::neighbourhood::{Extreme, NeighbourPlanes, Shape, extreme};
 use av_toolbox_cubek::reduce::scratch_len;
@@ -30,9 +29,7 @@ use av_toolbox_gpu::{
     ResolvedFormats,
     StreamFormat,
 };
-// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
-// by name.
-use cubecl::prelude::*;
+use cubecl::prelude::{ComputeClient, Runtime};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -131,7 +128,7 @@ impl RetinexArgs {
     }
 }
 
-/// The radius `sigma` blurs the retinex response at, vsJetPack's own rounding.
+/// The blur radius for `sigma`, `ceil(6 * sigma + 1) / 2`, as vs-jetpack rounds it.
 fn retinex_blur_radius(sigma: f32) -> u32 {
     let reach = (6.0 * sigma + 1.0).ceil();
 
@@ -154,45 +151,6 @@ fn binarize_threshold(brz: f32, peak: f32) -> Option<f32> {
     }
 
     Some((brz * peak).round())
-}
-
-#[cube(launch_unchecked)]
-fn join_lines_and_kirsch(lines: &Array<f32>, kirsch: &Array<f32>, output: &mut Array<f32>, peak: f32) {
-    if ABSOLUTE_POS >= output.len() {
-        terminate!();
-    }
-
-    let combined = lines[ABSOLUTE_POS] + kirsch[ABSOLUTE_POS];
-    output[ABSOLUTE_POS] = f32::min(combined, peak);
-}
-
-fn join<R: Runtime>(
-    client: &ComputeClient<R>,
-    sizing: &Sizing<'_>,
-    lines: DevicePlane<'_>,
-    kirsch: DevicePlane<'_>,
-    output: DevicePlane<'_>,
-    peak: f32,
-) {
-    let samples = output.samples();
-    let lines_read = lines.array::<R>();
-    let kirsch_read = kirsch.array::<R>();
-    let output_write = output.array::<R>();
-    let cubes = sizing.0.cube_count(samples);
-    let shape = sizing.0.cube_dim();
-
-    // Safety: the lines, kirsch and output planes each hold `samples` f32 values.
-    unsafe {
-        join_lines_and_kirsch::launch_unchecked::<R>(
-            client,
-            cubes,
-            shape,
-            lines_read,
-            kirsch_read,
-            output_write,
-            peak,
-        );
-    }
 }
 
 fn no_frame() -> StageError {
@@ -252,7 +210,8 @@ impl<R: Runtime> Mask for RetinexMask<R> {
         retinex(&self.client, &sizing, retinex_planes, &self.settings);
 
         let ret_plane = ret_scratch.plane();
-        let blurred_ret_scratch = self.blur.as_ref().map(|gaussian| {
+        let mut blurred_ret_scratch = None;
+        if let Some(gaussian) = self.blur.as_ref() {
             let temporary_scratch = Scratch::new::<f32>(context, width, height);
             let output_scratch = Scratch::new::<f32>(context, width, height);
             let blur_planes = BlurPlanes {
@@ -262,8 +221,8 @@ impl<R: Runtime> Mask for RetinexMask<R> {
             };
             gaussian.apply(&self.client, &sizing, blur_planes);
 
-            output_scratch
-        });
+            blurred_ret_scratch = Some(output_scratch);
+        }
         let lines_source_plane = match &blurred_ret_scratch {
             Some(scratch) => scratch.plane(),
             None => ret_plane,
@@ -310,7 +269,7 @@ impl<R: Runtime> Mask for RetinexMask<R> {
         );
 
         let joined_scratch = Scratch::new::<f32>(context, width, height);
-        join(
+        add_capped(
             &self.client,
             &sizing,
             lines_scratch.plane(),
@@ -319,7 +278,8 @@ impl<R: Runtime> Mask for RetinexMask<R> {
             peak,
         );
 
-        let binarized_scratch = self.binarize_threshold.map(|threshold| {
+        let mut binarized_scratch = None;
+        if let Some(threshold) = self.binarize_threshold {
             let output_scratch = Scratch::new::<f32>(context, width, height);
             let binarize_planes = NeighbourPlanes {
                 input: joined_scratch.plane(),
@@ -327,8 +287,8 @@ impl<R: Runtime> Mask for RetinexMask<R> {
             };
             binarize(&self.client, &sizing, binarize_planes, threshold, peak);
 
-            output_scratch
-        });
+            binarized_scratch = Some(output_scratch);
+        }
         let final_plane = match &binarized_scratch {
             Some(scratch) => scratch.plane(),
             None => joined_scratch.plane(),
