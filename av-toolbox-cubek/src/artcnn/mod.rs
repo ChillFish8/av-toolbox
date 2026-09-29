@@ -6,7 +6,7 @@ mod weights;
 #[cfg(test)]
 mod tests;
 
-pub use self::body::{Activation, epilogue};
+pub use self::body::{Activation, ArtcnnError, BodyPath, epilogue};
 pub use self::ends::{Region, first_layer, last_layer};
-pub use self::network::{Network, Precision};
+pub use self::network::{Maps, Network, Precision, run_region};
 pub use self::weights::{Layer, Model, Weights, WeightsError, layer_shapes};

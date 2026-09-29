@@ -1,9 +1,41 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than by name.
 use cubecl::prelude::*;
 use cubecl::server::Handle;
+use cubecl::zspace::{Shape, Strides};
+use cubek_convolution::components::ConvSetupError;
+use cubek_convolution::{AcceleratedTileKind, ConvAlgorithm, ConvolutionArgs, ConvolutionInputs, Strategy};
+use cubek_matmul::definition::{MatmulElems, MatmulGlobalElems, MatmulSetupError};
+use cubek_matmul::launch::Strategy as MatmulStrategy;
+use cubek_std::InputBinding;
 
+use super::network::map_bytes;
 use crate::Dispatch;
-use crate::artcnn::{Network, Precision};
+use crate::artcnn::{Network, Precision, Region};
+
+/// How the body's `F -> F` convolutions run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyPath {
+    /// `cubek-convolution` on cooperative-matrix tiles.
+    Convolution,
+    /// An im2col copy of the maps, then a `cubek-matmul` unit matmul.
+    Im2col,
+}
+
+/// Why a forward pass could not run.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ArtcnnError {
+    #[error("the convolution path could not launch: {0}")]
+    Convolution(String),
+
+    #[error("the im2col path's matmul could not launch: {0}")]
+    Matmul(String),
+
+    #[error("the im2col path needs a columns buffer, but none was given")]
+    MissingColumns,
+
+    #[error("the device failed while running the network: {0}")]
+    Device(String),
+}
 
 /// What the epilogue applies after adding the bias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,4 +139,236 @@ pub fn epilogue<R: Runtime>(
             ),
         }
     }
+}
+
+#[cube(launch_unchecked)]
+fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32, width: u32, channels: u32) {
+    if ABSOLUTE_POS >= columns.len() {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let row_length = channels * 9;
+    let pixel = position / row_length;
+    let within_row = position % row_length;
+    let tap = within_row / channels;
+    let channel = within_row % channels;
+    let source_column = (pixel % width) as i32 + (tap % 3) as i32 - 1;
+    let source_row = (pixel / width) as i32 + (tap / 3) as i32 - 1;
+    let inside =
+        source_column >= 0 && source_row >= 0 && source_column < width as i32 && source_row < height as i32;
+    let mut value = F::new(0.0f32);
+
+    if inside {
+        let index = (source_row as u32 * width + source_column as u32) * channels + channel;
+        value = input[index as usize];
+    }
+
+    columns[ABSOLUTE_POS] = value;
+}
+
+/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights, into `output` without
+/// the bias.
+///
+/// The [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) path stages the maps in `columns`, which holds
+/// nine times as many values as a map.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the launch"
+)]
+pub(crate) fn convolve<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    path: BodyPath,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    columns: Option<&Handle>,
+    region: Region,
+) -> Result<(), ArtcnnError> {
+    let buffers = network.layer(layer);
+    let features = network.features();
+    assert!(
+        buffers.in_channels == features && buffers.out_channels == features,
+        "layer {layer} does not map the features to themselves"
+    );
+
+    let bytes = map_bytes(network, region);
+    assert!(
+        input.size_in_used() >= bytes,
+        "the input is smaller than the region's maps"
+    );
+    assert!(
+        output.size_in_used() >= bytes,
+        "the output is smaller than the region's maps"
+    );
+
+    match path {
+        BodyPath::Convolution => match network.precision() {
+            Precision::F16 => {
+                convolve_directly::<R, half::f16>(client, network, layer, input, output, region)
+            },
+            Precision::F32 => convolve_directly::<R, f32>(client, network, layer, input, output, region),
+        },
+        BodyPath::Im2col => {
+            let columns = columns.ok_or(ArtcnnError::MissingColumns)?;
+            assert!(
+                columns.size_in_used() >= bytes * 9,
+                "the columns are smaller than nine of the region's maps"
+            );
+
+            match network.precision() {
+                Precision::F16 => convolve_by_columns::<R, half::f16>(
+                    client, dispatch, network, layer, input, output, columns, region,
+                ),
+                Precision::F32 => convolve_by_columns::<R, f32>(
+                    client, dispatch, network, layer, input, output, columns, region,
+                ),
+            }
+        },
+    }
+}
+
+fn tensor<R: Runtime>(handle: &Handle, shape: &[usize], strides: &[usize]) -> TensorBinding<R> {
+    let shape_value = Shape::from(shape.to_vec());
+    let strides_value = Strides::from(strides.to_vec());
+
+    // Safety: every caller passes a handle holding the shape's elements at these strides.
+    unsafe { TensorBinding::from_raw_parts(handle.clone(), strides_value, shape_value) }
+}
+
+fn contiguous(shape: &[usize]) -> Vec<usize> {
+    let mut strides = vec![1; shape.len()];
+
+    for index in (0..shape.len().saturating_sub(1)).rev() {
+        strides[index] = strides[index + 1] * shape[index + 1];
+    }
+
+    strides
+}
+
+fn convolution_failed(error: ConvSetupError) -> ArtcnnError {
+    ArtcnnError::Convolution(format!("{error:?}"))
+}
+
+fn matmul_failed(error: MatmulSetupError) -> ArtcnnError {
+    ArtcnnError::Matmul(format!("{error:?}"))
+}
+
+fn convolve_directly<R: Runtime, F: Float>(
+    client: &ComputeClient<R>,
+    network: &Network,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+) -> Result<(), ArtcnnError> {
+    let buffers = network.layer(layer);
+    let features = network.features() as usize;
+    let height = region.height as usize;
+    let width = region.width as usize;
+    let dtype = F::as_type_native_unchecked().storage_type();
+
+    let map_shape = [1, height, width, features];
+    let weight_shape = [features, 3, 3, features];
+    let map_strides = contiguous(&map_shape);
+    let weight_strides = contiguous(&weight_shape);
+    let input_tensor = tensor::<R>(input, &map_shape, &map_strides);
+    let weight_tensor = tensor::<R>(&buffers.weights, &weight_shape, &weight_strides);
+    let output_tensor = tensor::<R>(output, &map_shape, &map_strides);
+
+    let inputs = ConvolutionInputs::Forward {
+        input: InputBinding::new(input_tensor, dtype),
+        weight: InputBinding::new(weight_tensor, dtype),
+        bias: None,
+        out: output_tensor,
+    };
+    let arguments = ConvolutionArgs::<2> {
+        stride: [1, 1],
+        padding: [1, 1],
+        dilation: [1, 1],
+    };
+    let strategy = Strategy::Inferred {
+        algorithm: ConvAlgorithm::SimpleSyncCyclic,
+        tile_kind: AcceleratedTileKind::Cmma,
+    };
+    let globals = MatmulGlobalElems {
+        lhs: dtype,
+        rhs: dtype,
+        out: dtype,
+    };
+    let dtypes = MatmulElems::from_globals(&globals);
+    let launched = cubek_convolution::launch_ref::<R, 2>(&strategy, client, inputs, arguments, dtypes);
+
+    launched.map_err(convolution_failed)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the launch"
+)]
+fn convolve_by_columns<R: Runtime, F: Float>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    columns: &Handle,
+    region: Region,
+) -> Result<(), ArtcnnError> {
+    let buffers = network.layer(layer);
+    let features = network.features() as usize;
+    let samples = region.samples() as usize;
+    let depth = 9 * features;
+    let channels = network.features();
+    let column_values = samples * depth;
+    assert!(
+        u32::try_from(column_values).is_ok(),
+        "the columns hold more values than the kernel can index"
+    );
+
+    let dtype = F::as_type_native_unchecked().storage_type();
+    let cubes = dispatch.cube_count(column_values);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the input holds the region's samples times `F` values, and the columns nine times that.
+    unsafe {
+        let input_array = ArrayArg::from_raw_parts(input.clone(), samples * features);
+        let columns_array = ArrayArg::from_raw_parts(columns.clone(), column_values);
+        im2col_kernel::launch_unchecked::<F, R>(
+            client,
+            cubes,
+            unit,
+            input_array,
+            columns_array,
+            region.height,
+            region.width,
+            channels,
+        );
+    }
+
+    let lhs_shape = [samples, depth];
+    let lhs_strides = contiguous(&lhs_shape);
+    let rhs_shape = [depth, features];
+    let rhs_strides = [1, depth];
+    let out_shape = [samples, features];
+    let out_strides = contiguous(&out_shape);
+    let lhs_tensor = tensor::<R>(columns, &lhs_shape, &lhs_strides);
+    let rhs_tensor = tensor::<R>(&buffers.weights, &rhs_shape, &rhs_strides);
+    let out_tensor = tensor::<R>(output, &out_shape, &out_strides);
+    let lhs = InputBinding::new(lhs_tensor, dtype);
+    let rhs = InputBinding::new(rhs_tensor, dtype);
+    let globals = MatmulGlobalElems {
+        lhs: dtype,
+        rhs: dtype,
+        out: dtype,
+    };
+    let mut dtypes = MatmulElems::from_globals(&globals);
+    // `DoubleUnit` gives wrong results when the depth of `9 * F` is 8 more than a multiple of 16.
+    let strategy = MatmulStrategy::SimpleUnit(Default::default());
+    let launched = cubek_matmul::launch::launch_ref(&strategy, client, lhs, rhs, out_tensor, &mut dtypes);
+
+    launched.map_err(matmul_failed)
 }

@@ -2,7 +2,9 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use half::f16;
 
-use crate::artcnn::Weights;
+use super::body::convolve;
+use crate::artcnn::{Activation, ArtcnnError, BodyPath, Region, Weights, epilogue, first_layer, last_layer};
+use crate::{DevicePlane, Dispatch};
 
 /// The type feature maps are held in. Accumulation is f32 either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,4 +101,194 @@ fn encode(values: &[f16], precision: Precision) -> Vec<u8> {
             .flat_map(|value| value.to_f32().to_le_bytes())
             .collect(),
     }
+}
+
+/// The device buffers one region's forward pass works in.
+///
+/// The four maps are distinct buffers, each holding at least the region's samples times `F` values of the
+/// precision's type. `columns` holds nine times that, and is needed on
+/// [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) only.
+pub struct Maps<'a> {
+    pub conv0: &'a Handle,
+    pub first: &'a Handle,
+    pub second: &'a Handle,
+    pub third: &'a Handle,
+    pub columns: Option<&'a Handle>,
+}
+
+/// Runs the network over `region` of `input`, divided by `peak`, and writes the doubled `core` into `output`.
+///
+/// The region's edge is padded with zero. Each output sample is clamped to `0..=1`, scaled by `peak` and
+/// rounded.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the pass"
+)]
+pub fn run_region<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    path: BodyPath,
+    input: DevicePlane<'_>,
+    peak: f32,
+    region: Region,
+    core: Region,
+    maps: Maps<'_>,
+    output: DevicePlane<'_>,
+) -> Result<(), ArtcnnError> {
+    let every_map = [maps.conv0, maps.first, maps.second, maps.third];
+    debug_assert!(are_distinct(&every_map), "two of the maps are the same buffer");
+
+    let samples = region.samples();
+    let bytes = map_bytes(network, region);
+    for map in every_map {
+        assert!(
+            map.size_in_used() >= bytes,
+            "a map is smaller than the region's maps"
+        );
+    }
+
+    if path == BodyPath::Im2col {
+        let columns = maps.columns.ok_or(ArtcnnError::MissingColumns)?;
+        assert!(
+            columns.size_in_used() >= bytes * 9,
+            "the columns are smaller than nine of the region's maps"
+        );
+    }
+
+    first_layer(client, dispatch, network, input, peak, region, maps.conv0);
+
+    let spare = [maps.first, maps.second, maps.third];
+    let mut state = maps.conv0;
+    let mut layer = 1;
+
+    for _ in 0..network.blocks() {
+        let [first, second] = two_others(&spare, state);
+
+        convolve(
+            client,
+            dispatch,
+            network,
+            path,
+            layer,
+            state,
+            first,
+            maps.columns,
+            region,
+        )?;
+        epilogue(
+            client,
+            dispatch,
+            network,
+            first,
+            layer,
+            samples,
+            Activation::Silu,
+            None,
+        );
+
+        convolve(
+            client,
+            dispatch,
+            network,
+            path,
+            layer + 1,
+            first,
+            second,
+            maps.columns,
+            region,
+        )?;
+        epilogue(
+            client,
+            dispatch,
+            network,
+            second,
+            layer + 1,
+            samples,
+            Activation::Silu,
+            None,
+        );
+
+        convolve(
+            client,
+            dispatch,
+            network,
+            path,
+            layer + 2,
+            second,
+            first,
+            maps.columns,
+            region,
+        )?;
+        epilogue(
+            client,
+            dispatch,
+            network,
+            first,
+            layer + 2,
+            samples,
+            Activation::None,
+            Some(state),
+        );
+
+        state = first;
+        layer += 3;
+    }
+
+    let [joined, _] = two_others(&spare, state);
+    convolve(
+        client,
+        dispatch,
+        network,
+        path,
+        layer,
+        state,
+        joined,
+        maps.columns,
+        region,
+    )?;
+    epilogue(
+        client,
+        dispatch,
+        network,
+        joined,
+        layer,
+        samples,
+        Activation::None,
+        Some(maps.conv0),
+    );
+
+    last_layer(client, dispatch, network, joined, region, core, peak, output);
+
+    Ok(())
+}
+
+/// The bytes one feature map of `region` takes in the network's precision.
+pub(crate) fn map_bytes(network: &Network, region: Region) -> u64 {
+    let map_count = u64::from(region.samples()) * u64::from(network.features());
+
+    map_count * network.precision().bytes() as u64
+}
+
+/// The first two of `spare` that are not `state`.
+fn two_others<'a>(spare: &[&'a Handle; 3], state: &Handle) -> [&'a Handle; 2] {
+    let others: Vec<&'a Handle> = spare
+        .iter()
+        .copied()
+        .filter(|candidate| !std::ptr::eq(*candidate, state))
+        .collect();
+
+    [others[0], others[1]]
+}
+
+fn are_distinct(handles: &[&Handle]) -> bool {
+    for (index, handle) in handles.iter().enumerate() {
+        let later = &handles[index + 1..];
+
+        if later.iter().any(|other| std::ptr::eq(*other, *handle)) {
+            return false;
+        }
+    }
+
+    true
 }
