@@ -6,7 +6,7 @@ mod tests;
 use cubecl::prelude::*;
 
 use crate::dehalo::{DifferencePlanes, difference};
-use crate::neighbourhood::NeighbourPlanes;
+use crate::neighbourhood::{Extreme, NeighbourPlanes, Shape, Smooth, extreme, smooth};
 use crate::{DevicePlane, Dispatch, reflect};
 
 /// The planes one merge reads and writes, all f32 and one size.
@@ -249,4 +249,212 @@ pub fn vinverse<R: Runtime>(
             limit,
         );
     }
+}
+
+/// The settings of one darken pass, all in the code values of the plane being filtered.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DarkenSettings {
+    /// How strongly a line is deepened, `strength / 128`.
+    pub s: f32,
+    /// The most a sample may grow while looking for its closing, `peak / (protection + 1)`.
+    pub limit: f32,
+    /// The brightest a closing may be.
+    pub cap: f32,
+    /// How far a closing must sit above a sample before the sample counts as a line.
+    pub thr: f32,
+    /// How hard thinning acts, `thinning / 16`. Thinning is off when this is 0.
+    pub t: f32,
+    /// The middle of the sample range, where a difference of 0 sits.
+    pub n: f32,
+    /// The largest sample value.
+    pub peak: f32,
+}
+
+/// The planes one darken pass reads, writes and uses as scratch, all f32 and one size.
+#[derive(Debug, Clone, Copy)]
+pub struct DarkenPlanes<'a> {
+    pub input: DevicePlane<'a>,
+    pub output: DevicePlane<'a>,
+    /// The plane grown by one sample, then reused for the thinned plane.
+    pub maxed: DevicePlane<'a>,
+    /// The grown plane held to `limit` above the input.
+    pub limited: DevicePlane<'a>,
+    pub closed: DevicePlane<'a>,
+    pub diff: DevicePlane<'a>,
+    /// Where the thinning step finds the darkest difference. It may be the plane of `closed`.
+    pub lines: DevicePlane<'a>,
+    /// Where the thinning step blurs `lines` into a weight. It may be the plane of `limited`.
+    pub blurred: DevicePlane<'a>,
+}
+
+/// Holds each sample's expansion to `limit` above the sample.
+#[cube(launch_unchecked)]
+fn limit_kernel(input: &Array<f32>, maxed: &Array<f32>, limited: &mut Array<f32>, limit: f32) {
+    if ABSOLUTE_POS >= limited.len() {
+        terminate!();
+    }
+
+    limited[ABSOLUTE_POS] = f32::min(maxed[ABSOLUTE_POS], input[ABSOLUTE_POS] + limit);
+}
+
+/// Deepens the samples that sit below their closing, and writes how far each one sits below it.
+#[cube(launch_unchecked)]
+fn darken_kernel(
+    input: &Array<f32>,
+    closed: &Array<f32>,
+    sharp: &mut Array<f32>,
+    diff: &mut Array<f32>,
+    cap: f32,
+    thr: f32,
+    s: f32,
+    n: f32,
+    peak: f32,
+) {
+    if ABSOLUTE_POS >= sharp.len() {
+        terminate!();
+    }
+
+    let value = input[ABSOLUTE_POS];
+    let closing = f32::min(closed[ABSOLUTE_POS], cap);
+
+    let mut deepened = value;
+    let mut offset = n;
+    if closing > value + thr {
+        deepened = value + (value - closing) * s;
+        offset = value - closing + n;
+    }
+
+    sharp[ABSOLUTE_POS] = deepened;
+    diff[ABSOLUTE_POS] = f32::max(f32::min(offset, peak), 0.0);
+}
+
+/// Turns the darkest difference around a sample into how much of the sharp result it keeps.
+#[cube(launch_unchecked)]
+fn line_weight_kernel(lines: &mut Array<f32>, n: f32, t: f32, peak: f32) {
+    if ABSOLUTE_POS >= lines.len() {
+        terminate!();
+    }
+
+    let weight = (lines[ABSOLUTE_POS] - n) * t + peak;
+
+    lines[ABSOLUTE_POS] = f32::max(f32::min(weight, peak), 0.0);
+}
+
+/// Pulls the expanded plane in by the depth of each line.
+#[cube(launch_unchecked)]
+fn thin_kernel(maxed: &mut Array<f32>, diff: &Array<f32>, s: f32, n: f32) {
+    if ABSOLUTE_POS >= maxed.len() {
+        terminate!();
+    }
+
+    maxed[ABSOLUTE_POS] = maxed[ABSOLUTE_POS] + (diff[ABSOLUTE_POS] - n) * (s + 1.0);
+}
+
+/// Darkens the thin lines of `input` the way vs-jetpack's fast_line_darken does, writing `output`.
+///
+/// A line is a sample whose closing, the plane grown and shrunk by one sample, sits more than `thr`
+/// above it. Lines are deepened by `s` times how far they sit below their closing. When `t` is above
+/// 0, lines are also thinned, in the areas where the darkest difference around them says a line is
+/// present.
+pub fn darken<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: DarkenPlanes<'_>,
+    settings: &DarkenSettings,
+) {
+    let grow = NeighbourPlanes {
+        input: planes.input,
+        output: planes.maxed,
+    };
+    extreme(client, dispatch, grow, Extreme::Maximum, Shape::Square);
+
+    let samples = planes.output.samples();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+    let input = planes.input.array::<R>();
+    let maxed = planes.maxed.array::<R>();
+    let limited = planes.limited.array::<R>();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        limit_kernel::launch_unchecked::<R>(client, cubes, unit, input, maxed, limited, settings.limit);
+    }
+
+    let shrink = NeighbourPlanes {
+        input: planes.limited,
+        output: planes.closed,
+    };
+    extreme(client, dispatch, shrink, Extreme::Minimum, Shape::Square);
+
+    let cubes = dispatch.cube_count(samples);
+    let input = planes.input.array::<R>();
+    let closed = planes.closed.array::<R>();
+    let sharp = planes.output.array::<R>();
+    let diff = planes.diff.array::<R>();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        darken_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            input,
+            closed,
+            sharp,
+            diff,
+            settings.cap,
+            settings.thr,
+            settings.s,
+            settings.n,
+            settings.peak,
+        );
+    }
+
+    if settings.t <= 0.0 {
+        return;
+    }
+
+    let darkest = NeighbourPlanes {
+        input: planes.diff,
+        output: planes.lines,
+    };
+    extreme(client, dispatch, darkest, Extreme::Minimum, Shape::Square);
+
+    let cubes = dispatch.cube_count(samples);
+    let lines = planes.lines.array::<R>();
+
+    // Safety: the plane holds `samples` f32 values.
+    unsafe {
+        line_weight_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            lines,
+            settings.n,
+            settings.t,
+            settings.peak,
+        );
+    }
+
+    let spread = NeighbourPlanes {
+        input: planes.lines,
+        output: planes.blurred,
+    };
+    smooth(client, dispatch, spread, Smooth::Box);
+
+    let cubes = dispatch.cube_count(samples);
+    let maxed = planes.maxed.array::<R>();
+    let diff = planes.diff.array::<R>();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        thin_kernel::launch_unchecked::<R>(client, cubes, unit, maxed, diff, settings.s, settings.n);
+    }
+
+    let mix = MergePlanes {
+        input: planes.maxed,
+        filtered: planes.output,
+        weight: planes.blurred,
+    };
+    merge(client, dispatch, mix, settings.peak);
 }

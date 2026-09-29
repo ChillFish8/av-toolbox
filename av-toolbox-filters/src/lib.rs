@@ -8,6 +8,7 @@
 //! - `dehalo/yahr` removes halos by limiting a clip's detail to the detail of its warp-sharpened
 //!   self, the way havsfunc's YAHR does.
 //! - `dering/hq` smooths ringing inside a mask of the area around edges.
+//! - `lineart/darken` darkens thin lines, as vs-jetpack's fast_line_darken does.
 //! - `lineart/vinverse` removes residual combing, as vs-jetpack's vinverse does.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
@@ -48,6 +49,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<dehalo::Fine>()?;
     registry.register_filter::<dehalo::Yahr>()?;
     registry.register_filter::<dering::Hq>()?;
+    registry.register_filter::<lineart::Darken>()?;
     registry.register_filter::<lineart::Vinverse>()?;
     registry.register_filter::<Resize<Point>>()?;
     registry.register_filter::<Resize<Bilinear>>()?;
@@ -89,6 +91,7 @@ mod tests {
         assert!(registered("dehalo/fine"));
         assert!(registered("dehalo/yahr"));
         assert!(registered("dering/hq"));
+        assert!(registered("lineart/darken"));
         assert!(registered("lineart/vinverse"));
         assert!(registered("resize/point"));
         assert!(registered("resize/bilinear"));
