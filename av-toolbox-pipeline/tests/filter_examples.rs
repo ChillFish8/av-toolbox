@@ -60,6 +60,102 @@ fn clip_with_luma(luma: &[u8]) -> Vec<u8> {
     bytes
 }
 
+const LINE_FIELD: u8 = 220;
+
+const LINE_LEFT: usize = 30;
+
+/// The line's samples across. It is anti-aliased and off the sample grid, so it has no centre sample.
+const LINE_PROFILE: [u8; 5] = [185, 60, 40, 80, 200];
+
+/// The samples of the profile below this are the line's core.
+const LINE_CORE_BELOW: u8 = 130;
+
+/// How much lighter the samples of the line's core are on odd rows.
+const LINE_COMB: u8 = 24;
+
+/// Halfway between the field and the line's darkest sample, so a sample below it is part of the line.
+const LINE_MIDPOINT: f64 = 130.0;
+
+/// The most of its input row-to-row difference the comb may keep.
+const COMB_KEPT: f64 = 0.25;
+
+/// The columns a measurement of the line covers, with a sample of field either side.
+fn line_columns() -> std::ops::Range<usize> {
+    (LINE_LEFT - 1)..(LINE_LEFT + LINE_PROFILE.len() + 1)
+}
+
+/// The luma of a light field with a faded, anti-aliased vertical line about 3 samples wide. Odd rows lighten
+/// the core of the line, so the line is combed.
+fn combed_faded_line_luma() -> Vec<u8> {
+    (0..SIZE)
+        .flat_map(|row| {
+            let mut samples = vec![LINE_FIELD; SIZE];
+            for (offset, value) in LINE_PROFILE.iter().enumerate() {
+                let is_core = *value < LINE_CORE_BELOW;
+                let comb = if is_core && row % 2 == 1 { LINE_COMB } else { 0 };
+                samples[LINE_LEFT + offset] = value + comb;
+            }
+
+            samples
+        })
+        .collect()
+}
+
+/// The smallest sample in the line's columns.
+fn line_minimum(plane: &[u8]) -> u8 {
+    let columns = line_columns();
+
+    columns_of(plane, columns)
+        .into_iter()
+        .min()
+        .expect("the line has samples")
+}
+
+/// How many samples of a row lie below `LINE_MIDPOINT`, counting the part of a step that crosses it.
+fn row_width_below_midpoint(row: &[u8]) -> f64 {
+    let mut width = 0.0;
+    for pair in row.windows(2) {
+        let first = f64::from(pair[0]);
+        let second = f64::from(pair[1]);
+        let lower = first.min(second);
+        let higher = first.max(second);
+        if higher < LINE_MIDPOINT {
+            width += 1.0;
+        } else if lower < LINE_MIDPOINT {
+            width += (LINE_MIDPOINT - lower) / (higher - lower);
+        }
+    }
+
+    width
+}
+
+/// The mean over every row of the line's width below `LINE_MIDPOINT`, with steps interpolated.
+fn line_width(plane: &[u8]) -> f64 {
+    let columns = line_columns();
+    let total: f64 = plane
+        .chunks(SIZE)
+        .map(|row| row_width_below_midpoint(&row[columns.clone()]))
+        .sum();
+
+    total / SIZE as f64
+}
+
+/// The mean absolute difference between neighbouring rows, over the line's columns.
+fn line_comb(plane: &[u8]) -> f64 {
+    let rows: Vec<&[u8]> = plane.chunks(SIZE).collect();
+    let columns = line_columns();
+    let mut total = 0u32;
+    for pair in rows.windows(2) {
+        for column in columns.clone() {
+            total += u32::from(pair[0][column].abs_diff(pair[1][column]));
+        }
+    }
+
+    let pairs = (SIZE - 1) * columns.len();
+
+    f64::from(total) / pairs as f64
+}
+
 fn decode(stream: &[u8]) -> Decoded {
     let mut decoder = y4m::decode(stream).expect("reads the header");
     let colorspace = decoder.get_colorspace();
@@ -333,5 +429,57 @@ fn the_detail_example_keeps_texture_and_debands_the_rest() {
             .fold(0.0, f64::max);
         println!("largest gradient row mean move: {largest}");
         assert!(largest <= 1.0, "a gradient row mean moved by {largest}");
+    }
+}
+
+#[test]
+fn the_lineart_cleanup_example_darkens_and_thins_a_line() {
+    let luma = combed_faded_line_luma();
+    let clip = clip_with_luma(&luma);
+    let decoded = run_example_on("lineart-cleanup.toml", &[], &clip);
+
+    let input_minimum = line_minimum(&luma);
+    let input_width = line_width(&luma);
+    let input_comb = line_comb(&luma);
+    let far_columns = 0..(LINE_LEFT - 12);
+    let far_input = columns_of(&luma, far_columns.clone());
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+
+    for frame in &decoded.frames {
+        let minimum = line_minimum(&frame.luma);
+        println!("line minimum: {input_minimum} to {minimum}");
+        assert!(
+            minimum < input_minimum,
+            "the line's minimum went from {input_minimum} to {minimum}"
+        );
+
+        let width = line_width(&frame.luma);
+        println!("line width below {LINE_MIDPOINT}: {input_width} to {width}");
+        assert!(
+            width < input_width,
+            "the line's width went from {input_width} to {width}"
+        );
+
+        let comb = line_comb(&frame.luma);
+        println!("line comb: {input_comb} to {comb}");
+        assert!(
+            comb <= input_comb * COMB_KEPT,
+            "the comb went from {input_comb} to {comb}"
+        );
+
+        let far = columns_of(&frame.luma, far_columns.clone());
+        let largest_far_move = far
+            .iter()
+            .zip(&far_input)
+            .map(|(found, expected)| found.abs_diff(*expected))
+            .max()
+            .expect("the region has samples");
+        println!("largest move far from the line: {largest_far_move}");
+        assert!(largest_far_move <= 1, "the field moved by {largest_far_move}");
+
+        assert!(frame.u_plane.iter().all(|sample| sample.abs_diff(FLAT_U) <= 1));
+        assert!(frame.v_plane.iter().all(|sample| sample.abs_diff(FLAT_V) <= 1));
     }
 }
