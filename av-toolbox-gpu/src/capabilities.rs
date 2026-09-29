@@ -95,6 +95,8 @@ struct Usage {
     storable: Vec<ElementType>,
     computable: Vec<ElementType>,
     atomic_add: Vec<ElementType>,
+    /// Pairs of inputs and accumulator, where both inputs have the same type.
+    cooperative_matrix: Vec<(ElementType, ElementType)>,
 }
 
 impl Usage {
@@ -118,12 +120,35 @@ impl Usage {
             }
         }
 
+        let mut cooperative_matrix = Vec::new();
+        for config in &properties.features.matmul.cmma {
+            let inputs = element_of(config.a_type);
+            let other_inputs = element_of(config.b_type);
+            let accumulator = element_of(config.cd_type);
+
+            let (Some(inputs), Some(other_inputs), Some(accumulator)) = (inputs, other_inputs, accumulator)
+            else {
+                continue;
+            };
+
+            let combination = (inputs, accumulator);
+            if inputs == other_inputs && !cooperative_matrix.contains(&combination) {
+                cooperative_matrix.push(combination);
+            }
+        }
+
         Self {
             storable,
             computable,
             atomic_add,
+            cooperative_matrix,
         }
     }
+}
+
+/// The element type a scalar storage type holds, if it is one this table names.
+fn element_of(storage: StorageType) -> Option<ElementType> {
+    ElementType::iter().find(|element| StorageType::Scalar(element.elem()) == storage)
 }
 
 impl Capabilities {
@@ -178,6 +203,12 @@ impl Capabilities {
     pub fn can_atomic_add(&self, element: ElementType) -> bool {
         self.usage.atomic_add.contains(&element)
     }
+
+    /// Whether a cooperative matrix takes `inputs` and accumulates in `accumulator`.
+    pub fn has_cooperative_matrix(&self, inputs: ElementType, accumulator: ElementType) -> bool {
+        let combination = (inputs, accumulator);
+        self.usage.cooperative_matrix.contains(&combination)
+    }
 }
 
 /// Builds a [Capabilities] table by hand, for tests and solvers that need one without a device.
@@ -199,6 +230,14 @@ impl CapabilitiesBuilder {
 
     pub fn atomic_add(mut self, elements: impl IntoIterator<Item = ElementType>) -> Self {
         self.capabilities.usage.atomic_add = elements.into_iter().collect();
+        self
+    }
+
+    pub fn cooperative_matrix(
+        mut self,
+        combinations: impl IntoIterator<Item = (ElementType, ElementType)>,
+    ) -> Self {
+        self.capabilities.usage.cooperative_matrix = combinations.into_iter().collect();
         self
     }
 
@@ -273,10 +312,11 @@ impl RuntimeTask for ReadCapabilities {
 
 #[cfg(test)]
 mod tests {
-    use cubecl::features::{AtomicUsage, Features, TypeUsage};
+    use cubecl::features::{AtomicUsage, Features, MmaConfig, TypeUsage};
     use cubecl::ir::{
         DeviceProperties,
         ElemType,
+        FloatKind,
         HardwareProperties,
         MemoryDeviceProperties,
         StorageType,
@@ -540,5 +580,80 @@ mod tests {
         use crate::testing::TEST_ACCELERATOR;
 
         assert!(capabilities_for(TEST_ACCELERATOR, Device::Discrete { index: 99 }).is_none());
+    }
+
+    fn f16_into_f32() -> MmaConfig {
+        let f16_type = StorageType::Scalar(ElemType::Float(FloatKind::F16));
+        let f32_type = StorageType::Scalar(ElemType::Float(FloatKind::F32));
+
+        MmaConfig {
+            a_type: f16_type,
+            b_type: f16_type,
+            cd_type: f32_type,
+            m: 16,
+            n: 16,
+            k: 16,
+        }
+    }
+
+    #[test]
+    fn a_cooperative_matrix_the_device_lists_is_reported() {
+        let mut properties = properties();
+        let combination = f16_into_f32();
+        properties.features.matmul.cmma.insert(combination);
+
+        let capabilities = Capabilities::from_properties(any_accelerator(), &properties);
+
+        assert!(capabilities.has_cooperative_matrix(ElementType::F16, ElementType::F32));
+        assert!(!capabilities.has_cooperative_matrix(ElementType::F32, ElementType::F32));
+        assert!(!capabilities.has_cooperative_matrix(ElementType::F16, ElementType::F16));
+    }
+
+    #[test]
+    fn a_device_without_cooperative_matrices_reports_none() {
+        let properties = properties();
+
+        let capabilities = Capabilities::from_properties(any_accelerator(), &properties);
+
+        assert!(!capabilities.has_cooperative_matrix(ElementType::F16, ElementType::F32));
+    }
+
+    #[test]
+    fn a_combination_with_mixed_inputs_is_not_reported() {
+        let mut properties = properties();
+        let mut combination = f16_into_f32();
+        combination.b_type = StorageType::Scalar(ElemType::Float(FloatKind::BF16));
+        properties.features.matmul.cmma.insert(combination);
+
+        let capabilities = Capabilities::from_properties(any_accelerator(), &properties);
+
+        assert!(!capabilities.has_cooperative_matrix(ElementType::F16, ElementType::F32));
+        assert!(!capabilities.has_cooperative_matrix(ElementType::BF16, ElementType::F32));
+    }
+
+    #[test]
+    fn the_builder_sets_cooperative_matrices() {
+        let combinations = [(ElementType::F16, ElementType::F32)];
+
+        let capabilities = Capabilities::builder(any_accelerator())
+            .plane_size(32, 32)
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
+            .cooperative_matrix(combinations)
+            .build();
+
+        assert!(capabilities.has_cooperative_matrix(ElementType::F16, ElementType::F32));
+        assert!(!capabilities.has_cooperative_matrix(ElementType::F32, ElementType::F32));
+    }
+
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    #[test]
+    fn this_device_reports_its_cooperative_matrices() {
+        use crate::testing::TEST_ACCELERATOR;
+
+        let capabilities = capabilities_for(TEST_ACCELERATOR, Device::Default).expect("the device opens");
+        let f16_into_f32 = capabilities.has_cooperative_matrix(ElementType::F16, ElementType::F32);
+
+        println!("f16 into f32 cooperative matrix: {f16_into_f32}");
     }
 }
