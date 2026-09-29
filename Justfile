@@ -47,3 +47,7 @@ dependencies-check:
 # Tests the dependency builder and every converter.
 dependencies-test:
     uv run --with pytest --with onnx==1.23.0 --with numpy==2.5.3 pytest --import-mode=importlib tools/dependencies dependencies
+
+# Writes the ArtCNN golden fixture from the cached ONNX model. Run `just dependencies artcnn` first.
+artcnn-golden:
+    uv run --script dependencies/artcnn/golden.py target/dependencies/cache/artcnn av-toolbox-cubek/src/testing/fixtures

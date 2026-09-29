@@ -1,3 +1,4 @@
+mod artcnn;
 mod bilateral;
 mod dehalo;
 mod dering;
@@ -10,6 +11,15 @@ mod resize;
 mod retinex;
 mod rgvs;
 
+pub use self::artcnn::{
+    GOLDEN_R8F64,
+    golden_input,
+    reference_artcnn,
+    reference_conv3x3,
+    reference_depth_to_space,
+    reference_silu,
+    synthetic_weights,
+};
 pub use self::bilateral::{reference_bilateral, reference_range_weight};
 pub use self::dehalo::{
     reference_dehalo_alpha,
