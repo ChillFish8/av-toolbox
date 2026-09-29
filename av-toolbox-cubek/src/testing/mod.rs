@@ -1,3 +1,4 @@
+mod bilateral;
 mod dehalo;
 mod dering;
 mod edges;
@@ -8,6 +9,7 @@ mod resize;
 mod retinex;
 mod rgvs;
 
+pub use self::bilateral::{reference_bilateral, reference_range_weight};
 pub use self::dehalo::{
     reference_dehalo_alpha,
     reference_edge_clean,

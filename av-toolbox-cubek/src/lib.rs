@@ -2,6 +2,7 @@
 //!
 //! Every module launches its kernels over planes the caller already holds on the device:
 //!
+//! - [bilateral] for vszip's truncated bilateral.
 //! - [blur] for separable gaussian blurs.
 //! - [deband] for smoothing banding the way libplacebo does.
 //! - [dehalo] for the fused per-pixel steps of the dehalo filters.
@@ -20,6 +21,7 @@
 //! - [rgvs] for RGVS's Repair and RemoveGrain modes.
 //! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
 
+pub mod bilateral;
 pub mod blur;
 mod border;
 pub mod deband;
