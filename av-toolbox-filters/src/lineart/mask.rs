@@ -101,6 +101,26 @@ pub(crate) fn checked_mask(
     Ok(())
 }
 
+/// The input format, once it is known to be frames.
+pub(crate) fn checked_input(stage: &str, chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
+    let Some(input) = chosen.get(INPUT).copied().flatten() else {
+        return Err(missing_input(stage));
+    };
+
+    let Some(format) = input.as_frames() else {
+        return Err(input_not_frames(stage));
+    };
+
+    Ok(*format)
+}
+
+/// The error for a stage whose input was never bound.
+pub(crate) fn missing_input(stage: &str) -> StageError {
+    let message = format!("{stage} needs its input bound");
+
+    StageError::msg(message)
+}
+
 fn unexpected_input(stage: &str, index: usize) -> StageError {
     let message = format!("{stage} takes only input and mask, but was offered a stream at slot {index}");
 
@@ -387,5 +407,35 @@ mod tests {
         let checked = checked_mask(STAGE, &frame, None);
 
         assert!(checked.is_ok());
+    }
+
+    #[test]
+    fn an_unbound_input_is_refused() {
+        let error = checked_input(STAGE, &[None]).expect_err("nothing is bound");
+        let message = error.to_string();
+
+        assert!(message.contains(STAGE), "{message}");
+        assert!(message.contains("needs its input bound"), "{message}");
+    }
+
+    #[test]
+    fn a_mask_on_the_input_is_refused_by_checked_input() {
+        let chosen = [Some(mask(8, 6, SampleFormat::U8))];
+
+        let error = checked_input(STAGE, &chosen).expect_err("the input takes frames");
+        let message = error.to_string();
+
+        assert!(message.contains(STAGE), "{message}");
+        assert!(message.contains("not a mask"), "{message}");
+    }
+
+    #[test]
+    fn frames_on_the_input_give_their_format() {
+        let frame = frame_format(SampleFormat::U8);
+        let chosen = [Some(StreamFormat::Frames(frame)), None];
+
+        let checked = checked_input(STAGE, &chosen).expect("frames are accepted");
+
+        assert_eq!(checked, frame);
     }
 }

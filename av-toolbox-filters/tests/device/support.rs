@@ -22,12 +22,15 @@ use av_toolbox_gpu::{
     FrameMeta,
     HostPool,
     HostStreamItem,
+    MaskChroma,
+    MaskFormat,
     PlaneBuffer,
     ResolvedFormats,
     SampleFormat,
     StreamFormat,
     StreamItem,
     StreamTemplate,
+    Subsampling,
 };
 use cubecl::prelude::Runtime;
 
@@ -594,4 +597,243 @@ pub(crate) fn from_bytes(bytes: &[u8], element: Element) -> Vec<u16> {
             pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
         },
     }
+}
+
+fn mask_chroma_for(layout: FrameLayout) -> Option<MaskChroma> {
+    let FrameLayout::Yuv { subsampling } = layout else {
+        return None;
+    };
+
+    if subsampling == Subsampling::Yuv444 {
+        return None;
+    }
+
+    Some(MaskChroma {
+        subsampling,
+        location: ChromaLocation::Left,
+    })
+}
+
+pub(crate) fn mask_format(format: &FrameFormat) -> MaskFormat {
+    MaskFormat {
+        width: format.width,
+        height: format.height,
+        sample: SampleFormat::U8,
+        chroma: mask_chroma_for(format.layout),
+    }
+}
+
+/// Builds `stage` with a bound mask, the way a pipeline would.
+pub(crate) fn built_masked(
+    backend: &Backend,
+    stage: &str,
+    format: FrameFormat,
+    args: serde_json::Value,
+) -> Box<dyn Filter> {
+    let mut registry = PipelineRegistry::new();
+    av_toolbox_filters::register(&mut registry).expect("the filters register");
+
+    let input_handle = StageHandle::new(1);
+    let mask_handle = StageHandle::new(2);
+    let arguments = [
+        InputArgument::positional(input_handle, StreamType::Frames),
+        InputArgument::positional(mask_handle, StreamType::Mask),
+    ];
+    let prepared = registry
+        .prepare(StageKind::Filter, stage, &args, &arguments)
+        .expect("should prepare");
+    let PreparedStage::Filter(prepared) = prepared else {
+        panic!("expected a filter");
+    };
+
+    let frames = StreamFormat::Frames(format);
+    let mask = StreamFormat::Mask(mask_format(&format));
+    let formats = ResolvedFormats::new(vec![Some(frames), Some(mask)], Some(frames));
+
+    prepared
+        .build(backend, &formats)
+        .expect("should build")
+        .into_device()
+        .expect("a device filter")
+}
+
+/// Runs one frame and its mask through a filter and reads every output plane back.
+struct MaskedOnce {
+    filter: Box<dyn Filter>,
+    format: FrameFormat,
+    planes: Vec<Vec<u8>>,
+    mask: Vec<u8>,
+    mask_chroma: Vec<u8>,
+}
+
+impl BuildTask for MaskedOnce {
+    type Output = Vec<Vec<u8>>;
+
+    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+        let mut context = build.frame_context();
+        let host = HostPool::new();
+
+        let meta = FrameMeta::at(0);
+        let mut input = host.alloc_frame(&self.format, meta);
+        for (index, channel) in self.format.channels().iter().enumerate() {
+            let plane = input
+                .plane_mut(*channel)
+                .expect("the format carries this channel");
+            plane.copy_from_slice(&self.planes[index]);
+        }
+
+        let mask_meta = FrameMeta::at(0);
+        let layout = mask_format(&self.format);
+        let mut mask = host.alloc_mask(&layout, mask_meta);
+        mask.plane_mut().copy_from_slice(&self.mask);
+        let chroma_plane = mask.chroma_plane_mut().expect("the mask carries a chroma plane");
+        chroma_plane.copy_from_slice(&self.mask_chroma);
+
+        let input_frame = input.freeze();
+        let mask_frame = mask.freeze();
+        let items = [
+            HostStreamItem::Frame(input_frame),
+            HostStreamItem::Mask(mask_frame),
+        ];
+        let slots: Vec<Option<StreamItem>> = items
+            .iter()
+            .map(|item| Some(context.load_host(item).expect("the item should load")))
+            .collect();
+
+        self.filter
+            .start_of_stream(&mut context)
+            .expect("should start the stream");
+
+        let inputs = Inputs::new(slots);
+        let output = self.filter.process(&mut context, inputs).expect("should process");
+
+        assert_eq!(output.format(), &self.format);
+
+        self.format
+            .channels()
+            .iter()
+            .map(|channel| {
+                let plane = output.plane(*channel).expect("the output carries this channel");
+                let handle = plane.buffer().handle().clone();
+                let bytes = build
+                    .client()
+                    .read_one(handle)
+                    .expect("the device should hand back the plane");
+                bytes.to_vec()
+            })
+            .collect()
+    }
+}
+
+/// Runs `stage` on `planes` with a mask of `mask` and `mask_chroma` bytes.
+pub(crate) fn run_masked(
+    stage: &str,
+    format: FrameFormat,
+    args: serde_json::Value,
+    planes: &[Vec<u8>],
+    mask: Vec<u8>,
+    mask_chroma: Vec<u8>,
+) -> Vec<Vec<u8>> {
+    let backend = backend();
+    let filter = built_masked(&backend, stage, format, args);
+
+    backend.build(MaskedOnce {
+        filter,
+        format,
+        planes: planes.to_vec(),
+        mask,
+        mask_chroma,
+    })
+}
+
+/// A mask of `value` over the frame and its chroma plane.
+pub(crate) fn uniform_mask(format: &FrameFormat, value: u8) -> (Vec<u8>, Vec<u8>) {
+    let chroma = mask_format(format)
+        .chroma_dimensions()
+        .expect("a subsampled mask");
+    let full = vec![value; (format.width * format.height) as usize];
+    let small = vec![value; (chroma.0 * chroma.1) as usize];
+
+    (full, small)
+}
+
+/// A mask of 255 over the left half of the frame and 0 over the right, and the same for its chroma
+/// plane.
+pub(crate) fn split_mask(format: &FrameFormat) -> (Vec<u8>, Vec<u8>) {
+    let chroma = mask_format(format)
+        .chroma_dimensions()
+        .expect("a subsampled mask");
+    let half = |width: u32, height: u32| -> Vec<u8> {
+        (0..width * height)
+            .map(|index| if index % width < width / 2 { 255 } else { 0 })
+            .collect()
+    };
+
+    (half(format.width, format.height), half(chroma.0, chroma.1))
+}
+
+/// Runs one frame through a filter and reports, per plane, whether the output shares the input's
+/// buffer.
+struct SharedPlanes {
+    filter: Box<dyn Filter>,
+    format: FrameFormat,
+}
+
+impl BuildTask for SharedPlanes {
+    type Output = Vec<bool>;
+
+    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+        let mut context = build.frame_context();
+        let host = HostPool::new();
+
+        let meta = FrameMeta::at(0);
+        let input = host.alloc_frame(&self.format, meta);
+        let frozen = input.freeze();
+        let item = HostStreamItem::Frame(frozen);
+        let loaded = context.load_host(&item).expect("the item should load");
+
+        let StreamItem::Frame(loaded_frame) = &loaded else {
+            panic!("expected a frame");
+        };
+        let input_buffers: Vec<*const PlaneBuffer> = self
+            .format
+            .channels()
+            .iter()
+            .map(|channel| {
+                let plane = loaded_frame
+                    .plane(*channel)
+                    .expect("the input carries this channel");
+                plane.buffer() as *const PlaneBuffer
+            })
+            .collect();
+
+        let slots: Vec<Option<StreamItem>> = vec![Some(loaded)];
+
+        self.filter
+            .start_of_stream(&mut context)
+            .expect("should start the stream");
+
+        let inputs = Inputs::new(slots);
+        let output = self.filter.process(&mut context, inputs).expect("should process");
+
+        self.format
+            .channels()
+            .iter()
+            .zip(&input_buffers)
+            .map(|(channel, input_buffer)| {
+                let plane = output.plane(*channel).expect("the output carries this channel");
+                let output_buffer: *const PlaneBuffer = plane.buffer();
+
+                std::ptr::eq(*input_buffer, output_buffer)
+            })
+            .collect()
+    }
+}
+
+/// Builds `stage` without a mask and reports which planes it shares with the input.
+pub(crate) fn shared_planes(stage: &str, format: FrameFormat, args: serde_json::Value) -> Vec<bool> {
+    let backend = backend();
+    let filter = built_filter(&backend, stage, format, format, args);
+
+    backend.build(SharedPlanes { filter, format })
 }

@@ -1,2 +1,6 @@
-#[expect(dead_code, reason = "no stage takes the lineart mask input yet")]
 mod mask;
+#[cfg(test)]
+mod tests;
+mod vinverse;
+
+pub(crate) use self::vinverse::Vinverse;

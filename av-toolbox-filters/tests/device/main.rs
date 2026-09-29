@@ -4,6 +4,7 @@ mod blend;
 mod deband;
 mod dehalo;
 mod dering;
+mod lineart;
 mod planes;
 mod resample;
 mod resize;

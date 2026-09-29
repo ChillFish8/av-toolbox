@@ -1,6 +1,6 @@
-use av_toolbox_cubek::lineart::{MergePlanes, merge, vertical_121};
+use av_toolbox_cubek::lineart::{MergePlanes, VinverseParams, VinversePlanes, merge, vertical_121, vinverse};
 use av_toolbox_cubek::neighbourhood::NeighbourPlanes;
-use av_toolbox_cubek::testing::{reference_merge, reference_vertical_121};
+use av_toolbox_cubek::testing::{reference_merge, reference_vertical_121, reference_vinverse};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -12,6 +12,10 @@ const SIZES: [(u32, u32); 4] = [(37, 23), (1, 5), (5, 1), (2, 2)];
 /// The largest difference allowed between the device merge and the reference. It measured 3.05e-5,
 /// one f32 step at these values.
 const MERGE_TOLERANCE: f32 = 1e-4;
+
+/// The largest difference allowed between the device vinverse and the reference. It measured
+/// 1.53e-5, the same order as the merge.
+const VINVERSE_TOLERANCE: f32 = 1e-4;
 
 struct Merge {
     input: Vec<f32>,
@@ -195,4 +199,80 @@ fn vertical_121_matches_the_reference() {
 
         assert_eq!(actual, expected, "{width}x{height}");
     }
+}
+
+struct Vinverse {
+    input: Vec<f32>,
+    width: u32,
+    height: u32,
+    params: VinverseParams,
+}
+
+impl BuildTask for Vinverse {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let bytes = self.input.len() * size_of::<f32>();
+
+        let input = upload_f32(client, &self.input);
+        let output = empty(client, bytes);
+        let blurred = empty(client, bytes);
+        let diff = empty(client, bytes);
+        let diff_blurred = empty(client, bytes);
+        let sbr = empty(client, bytes);
+        let planes = VinversePlanes {
+            input: plane(&input, self.width, self.height),
+            output: plane(&output, self.width, self.height),
+            blurred: plane(&blurred, self.width, self.height),
+            diff: plane(&diff, self.width, self.height),
+            diff_blurred: plane(&diff_blurred, self.width, self.height),
+            sbr: plane(&sbr, self.width, self.height),
+        };
+        vinverse(client, &sizing, planes, &self.params);
+
+        read_f32(client, &output)
+    }
+}
+
+#[test]
+fn vinverse_matches_the_reference() {
+    let limits = [None, Some(9.0)];
+    let mut worst = 0.0f32;
+
+    for (width, height) in SIZES {
+        for amnt in limits {
+            let input: Vec<f32> = busy(width, height)
+                .iter()
+                .map(|value| value * 0.37 + 0.1)
+                .collect();
+            let params = VinverseParams {
+                contra_str: 2.7,
+                scl: 0.25,
+                amnt,
+            };
+            let task = Vinverse {
+                input: input.clone(),
+                width,
+                height,
+                params,
+            };
+
+            let actual = backend().build(task);
+            let expected = reference_vinverse(&input, width, height, 2.7, 0.25, amnt);
+            let difference = largest_difference(&actual, &expected);
+
+            println!("vinverse {width}x{height} amnt {amnt:?}: largest difference {difference}");
+            assert!(
+                difference <= VINVERSE_TOLERANCE,
+                "vinverse {width}x{height} amnt {amnt:?} differs by {difference}",
+            );
+
+            worst = worst.max(difference);
+        }
+    }
+
+    println!("vinverse: largest difference over every size {worst}");
 }
