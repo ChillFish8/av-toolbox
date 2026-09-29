@@ -22,6 +22,8 @@ mod checks;
 mod deband;
 mod dehalo;
 mod dering;
+mod lineart;
+mod padded_warp;
 mod planes;
 mod planewise;
 mod resample;

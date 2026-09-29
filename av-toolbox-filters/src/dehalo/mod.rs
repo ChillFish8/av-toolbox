@@ -1,7 +1,6 @@
 mod alpha;
 mod edge_clean;
 mod fine;
-mod padded_warp;
 #[cfg(test)]
 mod tests;
 mod yahr;

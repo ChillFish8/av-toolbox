@@ -9,6 +9,7 @@ mod edges;
 mod histogram;
 mod hysteresis;
 mod labels;
+mod lineart;
 mod neighbourhood;
 mod padding;
 mod reduce;

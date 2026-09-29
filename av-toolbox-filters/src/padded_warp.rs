@@ -13,7 +13,7 @@ use crate::sizing::Sizing;
 ///
 /// `input` is rounded to whole samples before the warp and widened back to code values after, the
 /// way aWarpSharp2's own mask and warp work in integer samples.
-pub(super) fn padded_warp<R: Runtime>(
+pub(crate) fn padded_warp<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
     input: DevicePlane<'_>,

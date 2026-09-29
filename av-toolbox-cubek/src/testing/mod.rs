@@ -3,6 +3,7 @@ mod dehalo;
 mod dering;
 mod edges;
 mod hysteresis;
+mod lineart;
 mod neighbourhood;
 mod padding;
 mod resize;
@@ -21,6 +22,7 @@ pub use self::dehalo::{
 pub use self::dering::{reference_hq_dering, reference_ring_mask};
 pub use self::edges::{reference_add_capped, reference_binarize, reference_edges};
 pub use self::hysteresis::reference_hysteresis;
+pub use self::lineart::{reference_merge, reference_vertical_121};
 pub use self::neighbourhood::{
     reference_chain,
     reference_extreme,

@@ -11,6 +11,7 @@
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
 //! - [hysteresis] for keeping the connected regions of a mask that hold a seed.
+//! - [lineart] for the per-pixel steps of the lineart filters.
 //! - [sobel] for image gradients.
 //! - [values] for moving integer planes into f32 code values and back.
 //! - [labels] for connected components.
@@ -32,6 +33,7 @@ pub mod edges;
 pub mod histogram;
 pub mod hysteresis;
 pub mod labels;
+pub mod lineart;
 pub mod neighbourhood;
 pub mod padding;
 mod plane;
