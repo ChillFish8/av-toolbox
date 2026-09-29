@@ -8,7 +8,8 @@ use crate::{DevicePlane, Dispatch};
 /// truncated bilateral.
 fn sampling(sigma_s: f32) -> (u32, u32) {
     let scaled = 2.0 * sigma_s + 0.5;
-    let reach = i64::max(scaled.trunc() as i64, 1);
+    let truncated = scaled.trunc() as i64;
+    let reach = i64::max(truncated, 1);
     let step: i64 = if reach < 4 {
         1
     } else if reach < 8 {

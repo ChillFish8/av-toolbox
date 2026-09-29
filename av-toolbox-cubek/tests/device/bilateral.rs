@@ -125,6 +125,7 @@ fn a_flat_plane_stays_flat_on_the_device() {
     let output = on_device(&input, &reference, width, height, settings);
 
     assert!(output.iter().all(|sample| sample.is_finite()));
+
     for sample in output {
         assert!((sample - value).abs() < 1e-4, "{sample} was not {value}");
     }

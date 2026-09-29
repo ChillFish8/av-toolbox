@@ -34,7 +34,14 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::gauss::jetpack_radius;
-use crate::luma::{Luma, accepts_luma, load_luma_code_values, produces_luma_mask, store_mask};
+use crate::luma::{
+    Luma,
+    accepts_luma,
+    binarize_threshold,
+    load_luma_code_values,
+    produces_luma_mask,
+    store_mask,
+};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
 const NAME: &str = "edges/retinex";
@@ -136,15 +143,6 @@ fn blur_radius(sigma: f32) -> Option<u32> {
     }
 
     Some(jetpack_radius(sigma))
-}
-
-/// The code value the join binarizes at, or `None` when `brz` is 0 and binarizing is skipped.
-fn binarize_threshold(brz: f32, peak: f32) -> Option<f32> {
-    if brz <= 0.0 {
-        return None;
-    }
-
-    Some((brz * peak).round())
 }
 
 fn no_frame() -> StageError {

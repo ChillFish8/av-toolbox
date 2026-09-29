@@ -27,6 +27,8 @@ args.grain = [6.0, 0.0, 0.0]
 [mask.detail]
 type = "detail/mask"
 inputs = ["input"]
+# Blurring first keeps shallow banding steps out of the mask.
+args.sigma = 1.0
 
 [filter.blend]
 type = "blend/masked"

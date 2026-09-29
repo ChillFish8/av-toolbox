@@ -14,7 +14,7 @@ use av_toolbox_core::{
 use av_toolbox_cubek::bilateral::{BilateralPlanes, BilateralSettings, bilateral};
 use av_toolbox_cubek::blur::{BlurPlanes, Gaussian};
 use av_toolbox_cubek::edges::{EdgeLimits, Operator, add_capped, binarize, edges};
-use av_toolbox_cubek::neighbourhood::{NeighbourPlanes, Spread};
+use av_toolbox_cubek::neighbourhood::{ChainPlanes, NeighbourPlanes, Spread, Step, chain};
 use av_toolbox_cubek::rgvs::{GrainBorder, RemoveGrainMode, RemoveGrainPlanes, remove_grain};
 use av_toolbox_gpu::{
     BuildContext,
@@ -32,8 +32,16 @@ use cubecl::prelude::{ComputeClient, Runtime};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{excess_over, gaussian_for, spread_chain};
-use crate::luma::{Luma, accepts_luma, load_luma_code_values, produces_luma_mask, store_mask};
+use super::excess_over;
+use crate::gauss::gaussian_for;
+use crate::luma::{
+    Luma,
+    accepts_luma,
+    binarize_threshold,
+    load_luma_code_values,
+    produces_luma_mask,
+    store_mask,
+};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
 const NAME: &str = "detail/neo";
@@ -107,15 +115,6 @@ impl NeoArgs {
     }
 }
 
-/// The code value a `fraction` of `peak` binarizes at, or `None` when `fraction` is 0.
-fn binarize_threshold(fraction: f32, peak: f32) -> Option<f32> {
-    if fraction == 0.0 {
-        return None;
-    }
-
-    Some((fraction * peak).round())
-}
-
 fn no_frame() -> StageError {
     StageError::msg(format!("{NAME} expected a frame in slot 0"))
 }
@@ -182,16 +181,15 @@ impl<R: Runtime> Mask for NeoMasker<R> {
         bilateral(&self.client, &sizing, bilateral_planes, settings);
 
         excess_over(&self.client, &sizing, guided_plane, luma_plane, first_plane);
-        let mut detail_steps = vec![Spread::Deflate];
-        detail_steps.extend([Spread::Inflate; DETAIL_INFLATIONS]);
-        spread_chain(
-            &self.client,
-            &sizing,
-            first_plane,
-            second_plane,
-            third_plane,
-            &detail_steps,
-        );
+        let mut detail_steps = vec![Step::Spread(Spread::Deflate)];
+        detail_steps.extend([Step::Spread(Spread::Inflate); DETAIL_INFLATIONS]);
+        let detail_chain_planes = ChainPlanes {
+            input: first_plane,
+            scratch: second_plane,
+            output: third_plane,
+        };
+        chain(&self.client, &sizing, detail_chain_planes, &detail_steps);
+
         let detail_plane = match self.detail_threshold {
             Some(threshold) => {
                 let binary_planes = NeighbourPlanes {
@@ -217,14 +215,14 @@ impl<R: Runtime> Mask for NeoMasker<R> {
             Operator::Prewitt,
             open_limits,
         );
-        spread_chain(
-            &self.client,
-            &sizing,
-            second_plane,
-            guide_plane,
-            guided_plane,
-            &[Spread::Deflate, Spread::Inflate],
-        );
+        let lines_steps = [Step::Spread(Spread::Deflate), Step::Spread(Spread::Inflate)];
+        let lines_chain_planes = ChainPlanes {
+            input: second_plane,
+            scratch: guide_plane,
+            output: guided_plane,
+        };
+        chain(&self.client, &sizing, lines_chain_planes, &lines_steps);
+
         let lines_plane = match self.lines_threshold {
             Some(threshold) => {
                 let binary_planes = NeighbourPlanes {

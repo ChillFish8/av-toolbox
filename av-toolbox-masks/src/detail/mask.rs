@@ -31,7 +31,8 @@ use cubecl::prelude::{ComputeClient, Runtime};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{gaussian_for, join_maximum, range};
+use super::{join_maximum, range};
+use crate::gauss::gaussian_for;
 use crate::luma::{Luma, accepts_luma, load_luma_code_values, produces_luma_mask, store_mask};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
@@ -50,6 +51,8 @@ pub(crate) struct DetailMaskArgs {
     #[serde(default = "default_radius")]
     radius: u32,
     /// The deviation the luma is blurred at first. Left out, the luma is not blurred.
+    ///
+    /// Blurring first keeps shallow banding steps out of the mask.
     #[serde(default)]
     sigma: Option<f32>,
 }
@@ -123,13 +126,20 @@ impl<R: Runtime> Mask for DetailMasker<R> {
         let luma_plane = luma_scratch.plane();
         load_luma_code_values(&self.client, &sizing, NAME, &frame, &self.luma, luma_plane)?;
 
+        let first_scratch = Scratch::new::<f32>(context, width, height);
+        let second_scratch = Scratch::new::<f32>(context, width, height);
+        let third_scratch = Scratch::new::<f32>(context, width, height);
+        let first_plane = first_scratch.plane();
+        let second_plane = second_scratch.plane();
+        let third_plane = third_scratch.plane();
+
+        // `first_plane` is only the blur's scratch here.
         let mut blurred_scratch = None;
         if let Some(gaussian) = self.blur.as_ref() {
-            let temporary_scratch = Scratch::new::<f32>(context, width, height);
             let output_scratch = Scratch::new::<f32>(context, width, height);
             let blur_planes = BlurPlanes {
                 input: luma_plane,
-                scratch: temporary_scratch.plane(),
+                scratch: first_plane,
                 output: output_scratch.plane(),
             };
             gaussian.apply(&self.client, &sizing, blur_planes);
@@ -141,13 +151,6 @@ impl<R: Runtime> Mask for DetailMasker<R> {
             Some(scratch) => scratch.plane(),
             None => luma_plane,
         };
-
-        let first_scratch = Scratch::new::<f32>(context, width, height);
-        let second_scratch = Scratch::new::<f32>(context, width, height);
-        let third_scratch = Scratch::new::<f32>(context, width, height);
-        let first_plane = first_scratch.plane();
-        let second_plane = second_scratch.plane();
-        let third_plane = third_scratch.plane();
 
         range(
             &self.client,

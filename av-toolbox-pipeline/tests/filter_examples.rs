@@ -226,7 +226,8 @@ fn the_dehalo_example_leaves_an_even_ramp_alone() {
     }
 }
 
-/// The luma of a clip whose left half is a slow gradient and whose right half is a busy texture.
+/// The luma of a clip whose left half is a gradient banded into 8 steps of 4 columns each, and whose
+/// right half is a busy texture.
 fn gradient_and_texture_luma() -> Vec<u8> {
     let half = SIZE / 2;
 
@@ -234,7 +235,7 @@ fn gradient_and_texture_luma() -> Vec<u8> {
         .flat_map(|row| {
             (0..SIZE).map(move |column| {
                 if column < half {
-                    return (100 + column / 16) as u8;
+                    return (100 + column / 4) as u8;
                 }
 
                 ((row * 37 + column * 17 + row * column) % 251) as u8
@@ -265,12 +266,28 @@ fn row_means_over(plane: &[u8], columns: std::ops::Range<usize>) -> Vec<f64> {
         .collect()
 }
 
+/// The indices where `debanded` differs from `input`.
+fn debanded_moves(input: &[u8], debanded: &[u8]) -> Vec<usize> {
+    input
+        .iter()
+        .zip(debanded)
+        .enumerate()
+        .filter(|(_, (before, after))| before != after)
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// The least share of the gradient samples the deband example moves that the detail example must move
+/// the same way.
+const DEBANDED_SHARE: f64 = 0.75;
+
 #[test]
 fn the_detail_example_keeps_texture_and_debands_the_rest() {
     let half = SIZE / 2;
     let luma = gradient_and_texture_luma();
     let clip = clip_with_luma(&luma);
     let decoded = run_example_on("detail.toml", &[], &clip);
+    let deband_only = run_example_on("deband.toml", &[], &clip);
 
     let input_texture = columns_of(&luma, half..SIZE);
     let input_gradient = columns_of(&luma, 0..half);
@@ -278,7 +295,7 @@ fn the_detail_example_keeps_texture_and_debands_the_rest() {
 
     assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
     assert_eq!(decoded.frames.len(), FRAMES as usize);
-    for frame in &decoded.frames {
+    for (frame, debanded_frame) in decoded.frames.iter().zip(&deband_only.frames) {
         let texture = columns_of(&frame.luma, half..SIZE);
         assert_eq!(texture, input_texture, "the texture half changed");
 
@@ -290,6 +307,22 @@ fn the_detail_example_keeps_texture_and_debands_the_rest() {
             .count();
         println!("gradient samples debanded: {changed} of {}", gradient.len());
         assert!(changed > 0, "the gradient half was not debanded");
+
+        let debanded_gradient = columns_of(&debanded_frame.luma, 0..half);
+        let moved = debanded_moves(&input_gradient, &debanded_gradient);
+        let followed = moved
+            .iter()
+            .filter(|index| gradient[**index] == debanded_gradient[**index])
+            .count();
+        let debanded_share = followed as f64 / moved.len() as f64;
+        println!(
+            "gradient samples the deband moves: {}, taken from the deband: {followed}, a share of {debanded_share}",
+            moved.len()
+        );
+        assert!(
+            debanded_share >= DEBANDED_SHARE,
+            "only {debanded_share} of the gradient's debanded samples came through"
+        );
 
         let means = row_means_over(&frame.luma, 0..half);
         let largest = means

@@ -1,3 +1,4 @@
+mod chain;
 mod corners;
 mod median;
 mod min_blur;

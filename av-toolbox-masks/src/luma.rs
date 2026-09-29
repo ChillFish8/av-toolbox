@@ -237,6 +237,16 @@ pub(crate) fn store_mask<R: Runtime>(
     }
 }
 
+/// The code value a `fraction` of `peak` binarizes at, or `None` when `fraction` is 0 and binarizing
+/// is skipped.
+pub(crate) fn binarize_threshold(fraction: f32, peak: f32) -> Option<f32> {
+    if fraction <= 0.0 {
+        return None;
+    }
+
+    Some((fraction * peak).round())
+}
+
 #[cfg(test)]
 mod tests {
     use av_toolbox_gpu::{ColourInfo, Subsampling};

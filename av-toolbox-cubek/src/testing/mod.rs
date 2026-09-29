@@ -22,6 +22,7 @@ pub use self::dering::{reference_hq_dering, reference_ring_mask};
 pub use self::edges::{reference_add_capped, reference_binarize, reference_edges};
 pub use self::hysteresis::reference_hysteresis;
 pub use self::neighbourhood::{
+    reference_chain,
     reference_extreme,
     reference_median,
     reference_min_blur,

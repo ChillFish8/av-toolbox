@@ -1,10 +1,13 @@
 use av_toolbox_cubek::neighbourhood::{
+    ChainPlanes,
     Extreme,
     MinBlurPlanes,
     NeighbourPlanes,
     Shape,
     Smooth,
     Spread,
+    Step,
+    chain,
     extreme,
     median,
     min_blur,
@@ -13,6 +16,7 @@ use av_toolbox_cubek::neighbourhood::{
     spread,
 };
 use av_toolbox_cubek::testing::{
+    reference_chain,
     reference_extreme,
     reference_median,
     reference_min_blur,
@@ -333,5 +337,94 @@ fn both_spreads_match_the_reference() {
             unchanged_fraction >= 0.1,
             "{which:?} left only {unchanged_fraction} alone"
         );
+    }
+}
+
+/// What a device chain wrote to its output, and what its input held afterwards.
+struct ChainRun {
+    output: Vec<f32>,
+    input_after: Vec<f32>,
+}
+
+struct Chained {
+    input: Vec<f32>,
+    width: u32,
+    height: u32,
+    steps: Vec<Step>,
+}
+
+impl BuildTask for Chained {
+    type Output = ChainRun;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let bytes = self.input.len() * size_of::<f32>();
+
+        let input = upload_f32(client, &self.input);
+        let scratch = empty(client, bytes);
+        let output = empty(client, bytes);
+        let planes = ChainPlanes {
+            input: plane(&input, self.width, self.height),
+            scratch: plane(&scratch, self.width, self.height),
+            output: plane(&output, self.width, self.height),
+        };
+        chain(client, &sizing, planes, &self.steps);
+
+        let output_values = read_f32(client, &output);
+        let input_after = read_f32(client, &input);
+
+        ChainRun {
+            output: output_values,
+            input_after,
+        }
+    }
+}
+
+/// The largest difference between two planes at one sample.
+fn largest_error(actual: &[f32], expected: &[f32]) -> f32 {
+    actual
+        .iter()
+        .zip(expected)
+        .map(|(got, want)| (got - want).abs())
+        .fold(0.0, f32::max)
+}
+
+#[test]
+fn odd_and_even_chains_land_in_the_output() {
+    let odd_steps = vec![
+        Step::Extreme(Extreme::Maximum, Shape::Square),
+        Step::Spread(Spread::Inflate),
+        Step::Extreme(Extreme::Minimum, Shape::Plus),
+    ];
+    let even_steps = vec![
+        Step::Spread(Spread::Deflate),
+        Step::Extreme(Extreme::Maximum, Shape::Horizontal),
+        Step::Spread(Spread::Inflate),
+        Step::Extreme(Extreme::Minimum, Shape::Corners),
+    ];
+
+    for steps in [odd_steps, even_steps] {
+        for (width, height) in [(37, 23), (1, 5), (2, 2)] {
+            let input = busy(width, height);
+            let label = format!("{} steps {width}x{height}", steps.len());
+            let expected = reference_chain(&input, width, height, &steps);
+
+            let task = Chained {
+                input: input.clone(),
+                width,
+                height,
+                steps: steps.clone(),
+            };
+            let run = backend().build(task);
+
+            // Every value is a whole multiple of 1/64 below 256, so each spread's sum is exact in
+            // f32. The measured error is 0.
+            let error = largest_error(&run.output, &expected);
+            println!("{label}: largest error {error}");
+            assert_eq!(run.output, expected, "{label}: the output differs");
+            assert_eq!(run.input_after, input, "{label}: the input changed");
+        }
     }
 }

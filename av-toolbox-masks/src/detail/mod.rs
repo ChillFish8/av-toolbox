@@ -3,17 +3,7 @@ mod neo;
 mod range;
 
 use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::blur::Gaussian;
-use av_toolbox_cubek::neighbourhood::{
-    Expansion,
-    Extreme,
-    NeighbourPlanes,
-    Shape,
-    Spread,
-    expansion_passes,
-    extreme,
-    spread,
-};
+use av_toolbox_cubek::neighbourhood::{ChainPlanes, Expansion, Extreme, Step, chain, expansion_passes};
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
@@ -21,83 +11,7 @@ use cubecl::prelude::*;
 pub(crate) use self::mask::DetailMask;
 pub(crate) use self::neo::Neo;
 pub(crate) use self::range::Range;
-use crate::gauss::jetpack_radius;
 use crate::sizing::Sizing;
-
-/// The Gaussian blur vs-jetpack builds for `sigma`.
-fn gaussian_for<R: Runtime>(client: &ComputeClient<R>, sigma: f32) -> Gaussian {
-    let radius = jetpack_radius(sigma);
-
-    Gaussian::with_radius(client, sigma, radius)
-}
-
-/// Runs `passes` of `which` from `input` into `target`, bouncing through `scratch`.
-///
-/// The passes alternate between `scratch` and `target` so a pass never reads and writes the same
-/// buffer, and the last pass always lands in `target`.
-fn expand_chain<R: Runtime>(
-    client: &ComputeClient<R>,
-    sizing: &Sizing<'_>,
-    input: DevicePlane<'_>,
-    scratch: DevicePlane<'_>,
-    target: DevicePlane<'_>,
-    passes: &[Shape],
-    which: Extreme,
-) {
-    let total = passes.len();
-    let mut source = input;
-
-    for (index, shape) in passes.iter().enumerate() {
-        let steps_remaining = total - 1 - index;
-        let destination = if steps_remaining.is_multiple_of(2) {
-            target
-        } else {
-            scratch
-        };
-
-        let planes = NeighbourPlanes {
-            input: source,
-            output: destination,
-        };
-        extreme(client, sizing, planes, which, *shape);
-
-        source = destination;
-    }
-}
-
-/// Runs each of `steps` from `input` into `target`, bouncing through `scratch`.
-///
-/// The steps alternate between `scratch` and `target` so a step never reads and writes the same
-/// buffer, and the last step always lands in `target`. `input`, `scratch` and `target` must be
-/// three different planes.
-fn spread_chain<R: Runtime>(
-    client: &ComputeClient<R>,
-    sizing: &Sizing<'_>,
-    input: DevicePlane<'_>,
-    scratch: DevicePlane<'_>,
-    target: DevicePlane<'_>,
-    steps: &[Spread],
-) {
-    let total = steps.len();
-    let mut source = input;
-
-    for (index, step) in steps.iter().enumerate() {
-        let steps_remaining = total - 1 - index;
-        let destination = if steps_remaining.is_multiple_of(2) {
-            target
-        } else {
-            scratch
-        };
-
-        let planes = NeighbourPlanes {
-            input: source,
-            output: destination,
-        };
-        spread(client, sizing, planes, *step);
-
-        source = destination;
-    }
-}
 
 #[cube(launch_unchecked)]
 fn subtract_kernel(maximum: &Array<f32>, output: &mut Array<f32>) {
@@ -203,8 +117,28 @@ pub(crate) fn range<R: Runtime>(
     debug_assert!(radius >= 1, "range needs a radius of at least 1");
 
     let passes = expansion_passes(radius, radius, Expansion::Ellipse);
+    let maximum_steps: Vec<Step> = passes
+        .iter()
+        .map(|shape| Step::Extreme(Extreme::Maximum, *shape))
+        .collect();
+    let minimum_steps: Vec<Step> = passes
+        .iter()
+        .map(|shape| Step::Extreme(Extreme::Minimum, *shape))
+        .collect();
 
-    expand_chain(client, sizing, input, scratch, maximum, &passes, Extreme::Maximum);
-    expand_chain(client, sizing, input, scratch, output, &passes, Extreme::Minimum);
+    let maximum_planes = ChainPlanes {
+        input,
+        scratch,
+        output: maximum,
+    };
+    chain(client, sizing, maximum_planes, &maximum_steps);
+
+    let minimum_planes = ChainPlanes {
+        input,
+        scratch,
+        output,
+    };
+    chain(client, sizing, minimum_planes, &minimum_steps);
+
     subtract(client, sizing, maximum, output);
 }

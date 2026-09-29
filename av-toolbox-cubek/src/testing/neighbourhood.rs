@@ -1,5 +1,5 @@
 use super::reflect;
-use crate::neighbourhood::{Extreme, Shape, Smooth, Spread, median_of_three_sample};
+use crate::neighbourhood::{Extreme, Shape, Smooth, Spread, Step, median_of_three_sample};
 
 /// The value at `column`, `row`, read through reflection.
 pub(super) fn read_reflected(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
@@ -112,6 +112,20 @@ pub fn reference_spread(input: &[f32], width: u32, height: u32, spread: Spread) 
     }
 
     output
+}
+
+/// Runs each of `steps` in turn on the CPU, mirroring [chain](crate::neighbourhood::chain).
+pub fn reference_chain(input: &[f32], width: u32, height: u32, steps: &[Step]) -> Vec<f32> {
+    let mut plane = input.to_vec();
+
+    for step in steps {
+        plane = match *step {
+            Step::Extreme(extreme, shape) => reference_extreme(&plane, width, height, extreme, shape),
+            Step::Spread(spread) => reference_spread(&plane, width, height, spread),
+        };
+    }
+
+    plane
 }
 
 /// Takes the median of each sample's window on the CPU, mirroring [median](crate::neighbourhood::median).
