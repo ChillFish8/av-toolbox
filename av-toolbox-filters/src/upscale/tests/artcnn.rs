@@ -1,5 +1,5 @@
 use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition, StageError};
-use av_toolbox_cubek::artcnn::{BodyPath, Model, Precision};
+use av_toolbox_cubek::artcnn::{ArtcnnError, BodyPath, Precision};
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -19,7 +19,15 @@ use av_toolbox_models::{Located, Store};
 use serde_json::json;
 
 use crate::upscale::Artcnn;
-use crate::upscale::artcnn::{ArtcnnArgs, ModelName, PrecisionName, allocation_cap, body_path, locate};
+use crate::upscale::artcnn::{
+    ArtcnnArgs,
+    ModelName,
+    PrecisionName,
+    allocation_cap,
+    body_path,
+    failed_both_paths,
+    locate,
+};
 
 const STAGE: &str = "upscale/artcnn";
 
@@ -41,11 +49,25 @@ fn format(width: u32, height: u32, layout: FrameLayout, sample: SampleFormat) ->
 fn capabilities_computing(elements: &[ElementType]) -> Capabilities {
     let accelerator = default_accelerators()[0];
 
+    let elements = elements.iter().copied();
+
     Capabilities::builder(accelerator)
         .plane_size(32, 32)
         .max_units_per_cube(1024)
         .max_cube_count(65535, 65535, 65535)
-        .computable(elements.iter().copied())
+        .computable(elements)
+        .build()
+}
+
+fn capabilities_multiplying(combinations: &[(ElementType, ElementType)]) -> Capabilities {
+    let accelerator = default_accelerators()[0];
+    let combinations = combinations.iter().copied();
+
+    Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .cooperative_matrix(combinations)
         .build()
 }
 
@@ -99,6 +121,31 @@ fn an_unknown_model_is_refused() {
     let message = error.to_string();
 
     assert!(message.contains("r4f32"), "{message}");
+}
+
+#[test]
+fn an_unknown_argument_is_refused() {
+    let value = json!({ "modle": "r8f64" });
+
+    let error = serde_json::from_value::<ArtcnnArgs>(value).expect_err("modle is no argument");
+    let message = error.to_string();
+
+    assert!(message.contains("modle"), "{message}");
+}
+
+#[test]
+fn failing_on_both_paths_names_both_causes() {
+    let convolution = ArtcnnError::Device("sync lost".to_string());
+    let im2col = ArtcnnError::Matmul("no kernel".to_string());
+
+    let error = failed_both_paths(convolution, im2col);
+    let message = error.to_string();
+
+    assert!(message.contains(STAGE), "{message}");
+    assert!(message.contains("convolution"), "{message}");
+    assert!(message.contains("sync lost"), "{message}");
+    assert!(message.contains("im2col"), "{message}");
+    assert!(message.contains("no kernel"), "{message}");
 }
 
 #[test]
@@ -192,14 +239,14 @@ fn f16_without_f16_arithmetic_is_refused_suggesting_f32() {
     let input = format(16, 8, FrameLayout::Grey, SampleFormat::U8);
 
     let error = produced(&capabilities, input, json!({ "precision": "f16" })).expect_err("no f16 arithmetic");
-    let accepted = produced(&capabilities, input, json!({ "precision": "f32" }));
+    let with_f32 = produced(&capabilities, input, json!({ "precision": "f32" }));
 
     let message = error.to_string();
     assert!(message.contains(STAGE), "{message}");
     assert!(message.contains("precision"), "{message}");
     assert!(message.contains("f16"), "{message}");
     assert!(message.contains("\"f32\""), "{message}");
-    assert!(accepted.is_ok());
+    assert!(with_f32.is_ok());
 }
 
 #[test]
@@ -208,10 +255,12 @@ fn a_missing_model_names_the_pull_command() {
     let path = root.path().to_path_buf();
     let store = Store::new(path, "v0.1.0");
 
-    let error = locate(&store, Model::R16F96).expect_err("R16F96 is not installed");
+    let error = locate(&store, ModelName::R16f96).expect_err("R16F96 is not installed");
     let message = error.to_string();
 
     assert!(message.contains(STAGE), "{message}");
+    assert!(message.contains("model"), "{message}");
+    assert!(message.contains("r16f96"), "{message}");
     assert!(message.contains("ArtCNN_R16F96.bin"), "{message}");
     assert!(message.contains("av-toolbox pull artcnn"), "{message}");
 }
@@ -222,7 +271,7 @@ fn the_builtin_model_is_found_without_a_store() {
     let path = root.path().to_path_buf();
     let store = Store::new(path, "v0.1.0");
 
-    let located = locate(&store, Model::R8F64).expect("R8F64 is built in");
+    let located = locate(&store, ModelName::R8f64).expect("R8F64 is built in");
 
     assert!(matches!(located, Located::Builtin(_)));
 }
@@ -232,17 +281,6 @@ fn the_stage_runs_frames_in_parallel() {
     let arguments = args(json!({}));
 
     assert_eq!(Artcnn::parallelism(&arguments), Parallelism::Frame);
-}
-
-fn capabilities_multiplying(combinations: &[(ElementType, ElementType)]) -> Capabilities {
-    let accelerator = default_accelerators()[0];
-
-    Capabilities::builder(accelerator)
-        .plane_size(32, 32)
-        .max_units_per_cube(1024)
-        .max_cube_count(65535, 65535, 65535)
-        .cooperative_matrix(combinations.iter().copied())
-        .build()
 }
 
 #[test]

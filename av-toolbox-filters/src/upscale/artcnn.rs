@@ -104,6 +104,13 @@ impl ModelName {
             Self::R16f96 => Model::R16F96,
         }
     }
+
+    fn argument(self) -> &'static str {
+        match self {
+            Self::R8f64 => "r8f64",
+            Self::R16f96 => "r16f96",
+        }
+    }
 }
 
 impl PrecisionName {
@@ -147,15 +154,17 @@ fn unusable_sample(sample: SampleFormat) -> StageError {
     StageError::msg(message)
 }
 
-fn model_missing(missing: MissingModel) -> StageError {
-    let message = format!("{STAGE} cannot find its model. {missing}");
+fn model_missing(name: ModelName, missing: MissingModel) -> StageError {
+    let argument = name.argument();
+    let message = format!("{STAGE} cannot find the weights for model = \"{argument}\". {missing}");
 
     StageError::msg(message)
 }
 
 fn no_f16_arithmetic() -> StageError {
     let message = format!(
-        "{STAGE} was given precision f16, but this device has no f16 arithmetic. Use precision = \"f32\"",
+        "{STAGE} uses precision f16 by default, which needs f16 arithmetic this device lacks. \
+         Use precision = \"f32\"",
     );
 
     StageError::msg(message)
@@ -194,6 +203,14 @@ fn failed_run(path: BodyPath, error: ArtcnnError) -> StageError {
     StageError::msg(message)
 }
 
+pub(crate) fn failed_both_paths(convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
+    let message = format!(
+        "{STAGE} could not warm up on the convolution path ({convolution}) or on the im2col path ({im2col})",
+    );
+
+    StageError::msg(message)
+}
+
 fn missing_frame() -> StageError {
     let message = format!("{STAGE} expected a frame in slot 0");
 
@@ -206,13 +223,14 @@ fn missing_channel(channel: Channel) -> StageError {
     StageError::msg(message)
 }
 
-/// Finds `model`'s weight file in `store`, or the copy built into the binary.
-pub(crate) fn locate(store: &Store, model: Model) -> Result<Located, StageError> {
+/// Finds `name`'s weight file in `store`, or the copy built into the binary.
+pub(crate) fn locate(store: &Store, name: ModelName) -> Result<Located, StageError> {
+    let model = name.model();
     let found = store.find("artcnn", model.file_name());
 
     match found {
         Ok(located) => Ok(located),
-        Err(missing) => Err(model_missing(missing)),
+        Err(missing) => Err(model_missing(name, missing)),
     }
 }
 
@@ -304,16 +322,18 @@ pub(crate) fn allocation_cap(capabilities: &Capabilities) -> usize {
     usize::try_from(limit).unwrap_or(usize::MAX)
 }
 
-/// Reads, parses and uploads `model`'s weights in `precision`'s type.
+/// Reads, parses and uploads `name`'s weights in `precision`'s type.
 fn load_network<R: Runtime>(
     client: &ComputeClient<R>,
     store: &Store,
-    model: Model,
+    name: ModelName,
     precision: Precision,
 ) -> Result<Network, StageError> {
+    let model = name.model();
     let file = model.file_name();
-    let located = locate(store, model)?;
-    let bytes = match located.read() {
+    let located = locate(store, name)?;
+    let read = located.read();
+    let bytes = match read {
         Ok(bytes) => bytes,
         Err(error) => return Err(unreadable_model(file, error)),
     };
@@ -413,7 +433,7 @@ fn warm_up_on<R: Runtime>(
 
 /// Warms the network up on `path`, giving the path that ran and its tile side.
 ///
-/// When the convolution path cannot launch on this device, it falls back to im2col.
+/// When the convolution path fails to launch or to run on this device, it falls back to im2col.
 fn warmed_path<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
@@ -424,23 +444,23 @@ fn warmed_path<R: Runtime>(
 ) -> Result<(BodyPath, u32), StageError> {
     let warmed = warm_up_on(client, context, network, path, cap, input.width, input.height);
 
-    let reason = match warmed {
+    let convolution_error = match warmed {
         Ok(tile) => return Ok((path, tile)),
-        Err(ArtcnnError::Convolution(reason)) if path == BodyPath::Convolution => reason,
+        Err(error) if path == BodyPath::Convolution => error,
         Err(error) => return Err(failed_warm_up(path, error)),
     };
 
     tracing::warn!(
         stage = STAGE,
-        %reason,
-        "the convolution path could not launch, so the stage falls back to im2col",
+        reason = %convolution_error,
+        "the convolution path could not warm up, so the stage falls back to im2col",
     );
 
     let fallback = BodyPath::Im2col;
     let rewarmed = warm_up_on(client, context, network, fallback, cap, input.width, input.height);
     match rewarmed {
         Ok(tile) => Ok((fallback, tile)),
-        Err(error) => Err(failed_warm_up(fallback, error)),
+        Err(error) => Err(failed_both_paths(convolution_error, error)),
     }
 }
 
@@ -468,6 +488,8 @@ fn chroma_tables<R: Runtime>(client: &ComputeClient<R>, input: &FrameFormat) -> 
 }
 
 /// Doubles a clip's size, running its luma through the ArtCNN network and its chroma through Catrom.
+///
+/// Each worker holds up to about 1 GiB of device scratch.
 pub(crate) struct Artcnn;
 
 impl StageDefinition for Artcnn {
@@ -514,8 +536,7 @@ impl FilterDefinition for Artcnn {
         checked_precision(capabilities, args.precision)?;
 
         let store = Store::from_environment();
-        let model = args.model.model();
-        locate(&store, model)?;
+        locate(&store, args.model)?;
 
         let output = doubled(&input);
         let format = StreamFormat::Frames(output);
@@ -539,8 +560,7 @@ impl FilterDefinition for Artcnn {
 
         let client = context.client().clone();
         let store = Store::from_environment();
-        let model = args.model.model();
-        let network = load_network(&client, &store, model, precision)?;
+        let network = load_network(&client, &store, args.model, precision)?;
 
         let frame_context = context.frame_context();
         let chosen = body_path(capabilities, precision);
