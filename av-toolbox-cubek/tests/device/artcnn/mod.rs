@@ -8,8 +8,9 @@ use cubecl::server::Handle;
 
 use crate::support::{read_f16, read_f32, upload_f16, upload_f32};
 
-/// Waits for the device and fails the test if a kernel did not compile, since reads after a failed launch hand
-/// back stale memory.
+/// Waits for the device and fails the test if a kernel did not compile.
+///
+/// Reads after a failed launch hand back stale memory.
 pub fn synced<R: Runtime>(client: &ComputeClient<R>) {
     let finished = cubecl::future::block_on(client.sync());
     finished.expect("every kernel compiled and ran");

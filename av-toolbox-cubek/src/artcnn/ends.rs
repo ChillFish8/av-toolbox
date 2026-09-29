@@ -152,9 +152,12 @@ pub fn first_layer<R: Runtime>(
     );
 
     let layer = network.layer(0);
-    debug_assert_eq!(layer.in_channels, 1);
-
     let features = network.features();
+    assert!(
+        layer.in_channels == 1 && layer.out_channels == features,
+        "the first layer does not map one channel to the features"
+    );
+
     let plane_width = input.width();
     let units = (region.samples() * features) as usize;
     let output_bytes = (units * network.precision().bytes()) as u64;
@@ -168,8 +171,8 @@ pub fn first_layer<R: Runtime>(
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
-    // Safety: the weights hold `F * 9` values and the bias `F`, the output holds the region times `F`, and every
-    // read of the input is inside the region, which lies inside the plane.
+    // Safety: the weights hold `F * 9` values and the bias `F`, the output holds the region times `F`, and
+    // every read of the input is inside the region, which lies inside the plane.
     unsafe {
         let weights = ArrayArg::from_raw_parts(layer.weights.clone(), weight_count);
         let bias = ArrayArg::from_raw_parts(layer.bias.clone(), features as usize);
@@ -240,9 +243,12 @@ pub fn last_layer<R: Runtime>(
     );
 
     let layer = network.last_layer();
-    debug_assert_eq!(layer.out_channels, 4);
-
     let features = network.features();
+    assert!(
+        layer.in_channels == features && layer.out_channels == 4,
+        "the last layer does not map the features to four channels"
+    );
+
     let output_width = output.width();
     let core_samples = core.samples();
     let units = (core_samples * 4) as usize;
@@ -258,8 +264,9 @@ pub fn last_layer<R: Runtime>(
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
-    // Safety: the weights hold `4 * 9 * F` values and the bias 4, the input holds the region times `F`, every read
-    // stays inside the region, and every write lands in the doubled core, which lies inside the output plane.
+    // Safety: the weights hold `4 * 9 * F` values and the bias 4, the input holds the region times `F`, every
+    // read stays inside the region, and every write lands in the doubled core, which lies inside the output
+    // plane.
     unsafe {
         let input_array = ArrayArg::from_raw_parts(input.clone(), input_count);
         let weights = ArrayArg::from_raw_parts(layer.weights.clone(), weight_count);

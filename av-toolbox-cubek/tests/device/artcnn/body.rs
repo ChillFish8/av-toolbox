@@ -10,8 +10,8 @@ use av_toolbox_cubek::artcnn::{
     run_region,
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
-use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::{ComputeClient, CubePrimitive, Runtime};
+use av_toolbox_gpu::{BuildContext, BuildTask, ElementType};
+use cubecl::prelude::Runtime;
 
 use super::{synced, textured};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -25,25 +25,6 @@ pub(super) const PEAK: f32 = 65535.0;
 /// The code the output is filled with before the pass, which is -1 once divided by the peak.
 pub(super) const UNTOUCHED: f32 = -PEAK;
 
-/// Whether the device has a cooperative matrix taking `precision`'s type and accumulating in f32.
-fn has_cooperative_matrix<R: Runtime>(client: &ComputeClient<R>, precision: Precision) -> bool {
-    let operand_type = match precision {
-        Precision::F16 => half::f16::as_type_native_unchecked(),
-        Precision::F32 => f32::as_type_native_unchecked(),
-    };
-    let accumulator_type = f32::as_type_native_unchecked();
-    let operand = operand_type.storage_type();
-    let accumulator = accumulator_type.storage_type();
-    let properties = client.properties();
-
-    properties
-        .features
-        .matmul
-        .cmma
-        .iter()
-        .any(|config| config.a_type == operand && config.b_type == operand && config.cd_type == accumulator)
-}
-
 struct Supported {
     path: BodyPath,
     precision: Precision,
@@ -53,16 +34,20 @@ impl BuildTask for Supported {
     type Output = bool;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
-        let client = build.client();
+        let capabilities = build.capabilities();
+        let operands = match self.precision {
+            Precision::F16 => ElementType::F16,
+            Precision::F32 => ElementType::F32,
+        };
 
         match self.path {
-            BodyPath::Convolution => has_cooperative_matrix(client, self.precision),
+            BodyPath::Convolution => capabilities.has_cooperative_matrix(operands, ElementType::F32),
             BodyPath::Im2col => true,
         }
     }
 }
 
-fn supports(path: BodyPath, precision: Precision) -> bool {
+pub(super) fn supports(path: BodyPath, precision: Precision) -> bool {
     let task = Supported { path, precision };
 
     backend().build(task)
@@ -102,7 +87,7 @@ impl BuildTask for Forward {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
-        let network = Network::upload(client, &self.weights, self.precision);
+        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
         let region = Region {
             x: 0,
             y: 0,

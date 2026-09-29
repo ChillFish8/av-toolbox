@@ -86,7 +86,7 @@ pub struct Capabilities {
     /// CUDA and ROCm report one fixed value in both. Under wgpu it is a range, and on Intel the
     /// real value varies with a kernel's register use, so the minimum is the safe assumption.
     pub plane_size: (u32, u32),
-    /// The three questions below, answered once when the table was built.
+    /// The four questions below, answered once when the table was built.
     usage: Usage,
 }
 

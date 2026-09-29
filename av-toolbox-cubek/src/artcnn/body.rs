@@ -1,6 +1,6 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than by name.
 use cubecl::prelude::*;
-use cubecl::server::Handle;
+use cubecl::server::{Handle, ServerError};
 use cubecl::zspace::{Shape, Strides};
 use cubek_convolution::components::ConvSetupError;
 use cubek_convolution::{AcceleratedTileKind, ConvAlgorithm, ConvolutionArgs, ConvolutionInputs, Strategy};
@@ -37,6 +37,12 @@ pub enum ArtcnnError {
     Device(String),
 }
 
+impl From<ServerError> for ArtcnnError {
+    fn from(error: ServerError) -> Self {
+        Self::Device(error.to_string())
+    }
+}
+
 /// What the epilogue applies after adding the bias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {
@@ -71,9 +77,11 @@ fn epilogue_kernel<F: Float>(
     values[ABSOLUTE_POS] = F::cast_from(value);
 }
 
-/// Adds `layer`'s bias to the NHWC maps in `values`, then applies `activation`, then adds `residual` if given.
+/// Adds `layer`'s bias to the NHWC maps in `values`, then applies `activation`, then adds `residual` if
+/// given.
 ///
-/// The maps hold `samples` samples of the network's features, and are updated in place.
+/// The maps hold `samples` samples of the network's features, and are updated in place. The layer must map
+/// the features to themselves.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
@@ -90,6 +98,11 @@ pub fn epilogue<R: Runtime>(
 ) {
     let buffers = network.layer(layer);
     let features = network.features();
+    assert!(
+        buffers.in_channels == features && buffers.out_channels == features,
+        "layer {layer} does not map the features to themselves"
+    );
+
     let units = (samples * features) as usize;
     let bytes = (units * network.precision().bytes()) as u64;
     let residual_handle = residual.unwrap_or(values);
@@ -107,8 +120,8 @@ pub fn epilogue<R: Runtime>(
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
-    // Safety: the values and the residual hold `samples * F` values and the bias `F`. Without a residual, the values
-    // are bound in its place and never read through it.
+    // Safety: the values and the residual hold `samples * F` values and the bias `F`. Without a residual, the
+    // values are bound in its place and never read through it.
     unsafe {
         let values_array = ArrayArg::from_raw_parts(values.clone(), units);
         let bias = ArrayArg::from_raw_parts(buffers.bias.clone(), features as usize);
@@ -230,11 +243,16 @@ pub(crate) fn convolve<R: Runtime>(
     }
 }
 
-fn tensor<R: Runtime>(handle: &Handle, shape: &[usize], strides: &[usize]) -> TensorBinding<R> {
+/// Binds `handle` as a tensor of `shape` laid out at `strides`.
+///
+/// # Safety
+///
+/// The handle must hold every element the shape reaches at these strides.
+unsafe fn tensor<R: Runtime>(handle: &Handle, shape: &[usize], strides: &[usize]) -> TensorBinding<R> {
     let shape_value = Shape::from(shape.to_vec());
     let strides_value = Strides::from(strides.to_vec());
 
-    // Safety: every caller passes a handle holding the shape's elements at these strides.
+    // Safety: the caller guarantees the handle holds the shape's elements at these strides.
     unsafe { TensorBinding::from_raw_parts(handle.clone(), strides_value, shape_value) }
 }
 
@@ -248,12 +266,13 @@ fn contiguous(shape: &[usize]) -> Vec<usize> {
     strides
 }
 
+/// Describes a convolution setup failure with `Debug`, since `ConvSetupError` has no `Display`.
 fn convolution_failed(error: ConvSetupError) -> ArtcnnError {
     ArtcnnError::Convolution(format!("{error:?}"))
 }
 
 fn matmul_failed(error: MatmulSetupError) -> ArtcnnError {
-    ArtcnnError::Matmul(format!("{error:?}"))
+    ArtcnnError::Matmul(error.to_string())
 }
 
 fn convolve_directly<R: Runtime, F: Float>(
@@ -274,9 +293,12 @@ fn convolve_directly<R: Runtime, F: Float>(
     let weight_shape = [features, 3, 3, features];
     let map_strides = contiguous(&map_shape);
     let weight_strides = contiguous(&weight_shape);
-    let input_tensor = tensor::<R>(input, &map_shape, &map_strides);
-    let weight_tensor = tensor::<R>(&buffers.weights, &weight_shape, &weight_strides);
-    let output_tensor = tensor::<R>(output, &map_shape, &map_strides);
+    // Safety: the input and output hold the region's `1 x H x W x F` maps contiguously, as `convolve` checks.
+    let input_tensor = unsafe { tensor::<R>(input, &map_shape, &map_strides) };
+    // Safety: the layer maps `F -> F`, so its weights hold `F x 3 x 3 x F` values contiguously.
+    let weight_tensor = unsafe { tensor::<R>(&buffers.weights, &weight_shape, &weight_strides) };
+    // Safety: as for the input.
+    let output_tensor = unsafe { tensor::<R>(output, &map_shape, &map_strides) };
 
     let inputs = ConvolutionInputs::Forward {
         input: InputBinding::new(input_tensor, dtype),
@@ -355,9 +377,12 @@ fn convolve_by_columns<R: Runtime, F: Float>(
     let rhs_strides = [1, depth];
     let out_shape = [samples, features];
     let out_strides = contiguous(&out_shape);
-    let lhs_tensor = tensor::<R>(columns, &lhs_shape, &lhs_strides);
-    let rhs_tensor = tensor::<R>(&buffers.weights, &rhs_shape, &rhs_strides);
-    let out_tensor = tensor::<R>(output, &out_shape, &out_strides);
+    // Safety: the columns hold `samples x 9F` values contiguously, as `convolve` checks.
+    let lhs_tensor = unsafe { tensor::<R>(columns, &lhs_shape, &lhs_strides) };
+    // Safety: the layer maps `F -> F`, so its `F x 9F` weights read at strides `1, 9F` stay inside them.
+    let rhs_tensor = unsafe { tensor::<R>(&buffers.weights, &rhs_shape, &rhs_strides) };
+    // Safety: the output holds `samples x F` values contiguously, as `convolve` checks.
+    let out_tensor = unsafe { tensor::<R>(output, &out_shape, &out_strides) };
     let lhs = InputBinding::new(lhs_tensor, dtype);
     let rhs = InputBinding::new(rhs_tensor, dtype);
     let globals = MatmulGlobalElems {

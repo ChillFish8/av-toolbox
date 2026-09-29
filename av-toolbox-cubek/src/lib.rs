@@ -2,7 +2,7 @@
 //!
 //! Every module launches its kernels over planes the caller already holds on the device:
 //!
-//! - [artcnn] for running ArtCNN luma doublers
+//! - [artcnn] for running ArtCNN luma doublers.
 //! - [bilateral] for vszip's truncated bilateral.
 //! - [blur] for separable gaussian blurs.
 //! - [deband] for smoothing banding the way libplacebo does.

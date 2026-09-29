@@ -85,7 +85,7 @@ impl BuildTask for FirstLayer {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
-        let network = Network::upload(client, &self.weights, self.precision);
+        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
         let map_count = (self.region.samples() * network.features()) as usize;
         let map_bytes = map_count * self.precision.bytes();
 
@@ -170,7 +170,8 @@ fn the_first_layer_matches_the_reference_over_offset_regions() {
             match precision {
                 // Measured 1.59e-7 and 1.52e-7 over the two regions, so the bound leaves over 6x headroom.
                 Precision::F32 => assert!(largest_error <= 1e-6, "{largest_error:e}"),
-                // Measured 0.439 and 0.390 of the bound over the two regions, so the bound leaves over 2x headroom.
+                // Measured 0.439 and 0.390 of the bound over the two regions, so the bound leaves over 2x
+                // headroom.
                 Precision::F16 => assert!(largest_share_of_rounding <= 1.0, "{largest_share_of_rounding}"),
             }
         }
@@ -195,7 +196,7 @@ impl BuildTask for LastLayer {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
-        let network = Network::upload(client, &self.weights, self.precision);
+        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
         let output_samples = (self.output_width * self.output_height) as usize;
         let untouched = vec![UNTOUCHED; output_samples];
 
@@ -307,7 +308,8 @@ fn the_last_layer_shuffles_clamps_and_rounds_the_core() {
         }
 
         println!(
-            "last layer {precision:?}: largest error {largest_error:e} codes, {clamped_samples} clamped samples"
+            "last layer {precision:?}: largest error {largest_error:e} codes, \
+             {clamped_samples} clamped samples"
         );
 
         // Rounding alone gives up to 0.5 codes. Measured 0.493 for f32 and 0.495 for f16, with 87 of the 180
@@ -339,7 +341,7 @@ impl BuildTask for Epilogue {
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
         let precision = self.precision;
-        let network = Network::upload(client, &self.weights, precision);
+        let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
 
         let values = upload_maps(client, &self.values, precision);
         let residual = self
@@ -442,9 +444,30 @@ fn the_epilogue_adds_the_bias_then_silu_then_the_residual() {
         match precision {
             // Measured 2.38e-7, so the bound leaves over 4x headroom.
             Precision::F32 => assert!(largest_error <= 1e-6, "{largest_error:e}"),
-            // Measured 0.486 of the bound, with an error of 1.30e-3, which is half an f16 step, so the bound leaves
-            // 2x headroom.
+            // Measured 0.486 of the bound, with an error of 1.30e-3, which is half an f16 step, so the bound
+            // leaves 2x headroom.
             Precision::F16 => assert!(largest_share_of_rounding <= 1.0, "{largest_share_of_rounding}"),
         }
     }
+}
+
+#[test]
+#[should_panic(expected = "does not map the features to themselves")]
+fn the_epilogue_refuses_a_layer_that_does_not_map_the_features_to_themselves() {
+    let features = 8;
+    let samples = 6;
+    let weights = synthetic_weights(features, 1, 5);
+    let last = weights.layers.len() - 1;
+    let values = signed_values((samples * features) as usize, 21, 1.0);
+    let task = Epilogue {
+        weights,
+        values,
+        residual: None,
+        layer: last,
+        samples,
+        activation: Activation::None,
+        precision: Precision::F32,
+    };
+
+    backend().build(task);
 }

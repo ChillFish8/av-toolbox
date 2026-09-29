@@ -1,14 +1,10 @@
 use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
-use cubecl::server::ServerError;
 
 use crate::artcnn::{ArtcnnError, BodyPath, Maps, Network, Precision, Region, run_region};
 use crate::{DevicePlane, Dispatch};
 
 /// How many bytes of scratch a tile may use.
 pub const TILE_BUDGET: usize = 1 << 30;
-
-/// The side of the square plane [warm_up](crate::artcnn::warm_up) runs.
-const WARM_UP_SIDE: u32 = 8;
 
 /// The scratch buffers one tile needs, in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,25 +27,68 @@ fn bytes_per_sample(features: u32, precision: Precision, path: BodyPath) -> usiz
     map_bytes + column_bytes
 }
 
+/// The bytes one sample of a haloed tile needs in its largest buffer.
+///
+/// That is the columns on the im2col path, and one map otherwise.
+fn largest_buffer_bytes_per_sample(features: u32, precision: Precision, path: BodyPath) -> usize {
+    let map_bytes = features as usize * precision.bytes();
+
+    match path {
+        BodyPath::Convolution => map_bytes,
+        BodyPath::Im2col => 9 * map_bytes,
+    }
+}
+
 /// The largest tile centre side whose haloed square fits `budget` bytes of scratch.
 ///
-/// A tile is never smaller than 1, even when the budget is too small for it.
-pub fn tile_side(features: u32, halo: u32, precision: Precision, path: BodyPath, budget: usize) -> u32 {
+/// `max_allocation` is the device's largest single buffer, which the haloed square's largest buffer must also
+/// fit. A tile is never smaller than 1, even when the budget is too small for it.
+pub fn tile_side(
+    features: u32,
+    halo: u32,
+    precision: Precision,
+    path: BodyPath,
+    budget: usize,
+    max_allocation: usize,
+) -> u32 {
     let per_sample = bytes_per_sample(features, precision, path);
-    let samples = budget / per_sample;
+    let largest_per_sample = largest_buffer_bytes_per_sample(features, precision, path);
+    let budget_samples = budget / per_sample;
+    let allocation_samples = max_allocation / largest_per_sample;
+    let samples = budget_samples.min(allocation_samples);
     let haloed = samples.isqrt() as u32;
     let centre = haloed.saturating_sub(2 * halo);
 
     centre.max(1)
 }
 
-/// The scratch a haloed tile of `tile + 2 * halo` on a side needs.
-pub fn scratch_sizes(network: &Network, path: BodyPath, tile: u32) -> ScratchSizes {
-    let haloed = (tile + 2 * network.halo()) as usize;
-    let samples = haloed * haloed;
-    let value_bytes = network.precision().bytes();
-    let features = network.features() as usize;
-    let map_bytes = samples * features * value_bytes;
+/// The scratch the largest region of a `width` by `height` frame needs, split into tiles of `tile`.
+///
+/// A region is at most `tile + 2 * halo` on a side, and never larger than the frame.
+pub fn scratch_sizes(network: &Network, path: BodyPath, tile: u32, width: u32, height: u32) -> ScratchSizes {
+    let features = network.features();
+    let halo = network.halo();
+    let precision = network.precision();
+
+    haloed_scratch(features, halo, precision, path, tile, width, height)
+}
+
+/// The same as [scratch_sizes](crate::artcnn::scratch_sizes), from the network's width, halo and precision.
+pub(crate) fn haloed_scratch(
+    features: u32,
+    halo: u32,
+    precision: Precision,
+    path: BodyPath,
+    tile: u32,
+    width: u32,
+    height: u32,
+) -> ScratchSizes {
+    let haloed = tile + 2 * halo;
+    let region_width = haloed.min(width) as usize;
+    let region_height = haloed.min(height) as usize;
+    let samples = region_width * region_height;
+    let value_bytes = precision.bytes();
+    let map_bytes = samples * features as usize * value_bytes;
     let column_bytes = match path {
         BodyPath::Convolution => 0,
         BodyPath::Im2col => map_bytes * 9,
@@ -63,9 +102,11 @@ pub fn scratch_sizes(network: &Network, path: BodyPath, tile: u32) -> ScratchSiz
 
 /// Splits a plane into tiles, giving each tile's region and core.
 ///
-/// The cores are at most `tile` on a side and cover the plane exactly once. Each region is its core widened by
-/// `halo` on every side, clipped to the plane.
+/// The cores are at most `tile` on a side and cover the plane exactly once. Each region is its core widened
+/// by `halo` on every side, clipped to the plane.
 pub fn tiles(width: u32, height: u32, tile: u32, halo: u32) -> Vec<(Region, Region)> {
+    assert!(tile >= 1, "a tile must be at least one sample on a side");
+
     let mut list = Vec::new();
 
     for core_y in (0..height).step_by(tile as usize) {
@@ -96,9 +137,10 @@ pub fn tiles(width: u32, height: u32, tile: u32, halo: u32) -> Vec<(Region, Regi
     list
 }
 
-/// Runs the network over the whole of `input`, divided by `peak`, one tile at a time, into the doubled `output`.
+/// Runs the network over the whole of `input`, divided by `peak`, one tile at a time.
 ///
-/// The maps must be sized by [scratch_sizes](crate::artcnn::scratch_sizes) for the same `tile`.
+/// The result is written into `output`, which must be twice the input on each side. The maps must be sized
+/// by [scratch_sizes](crate::artcnn::scratch_sizes) for the same `tile` and frame.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
@@ -114,9 +156,14 @@ pub fn artcnn<R: Runtime>(
     maps: Maps<'_>,
     output: DevicePlane<'_>,
 ) -> Result<(), ArtcnnError> {
-    assert!(tile >= 1, "a tile must be at least one sample on a side");
+    let width = input.width();
+    let height = input.height();
+    assert!(
+        output.width() == width * 2 && output.height() == height * 2,
+        "the output is not twice the input on each side"
+    );
 
-    let sizes = scratch_sizes(network, path, tile);
+    let sizes = scratch_sizes(network, path, tile, width, height);
     let map_bytes = sizes.map_bytes as u64;
     let every_map = [maps.conv0, maps.first, maps.second, maps.third];
     for map in every_map {
@@ -134,8 +181,6 @@ pub fn artcnn<R: Runtime>(
         );
     }
 
-    let width = input.width();
-    let height = input.height();
     let halo = network.halo();
     let list = tiles(width, height, tile, halo);
 
@@ -156,45 +201,37 @@ pub fn artcnn<R: Runtime>(
     Ok(())
 }
 
-/// Runs the network once over a small plane and waits for the device, so a kernel that fails to compile is an
-/// error before any frame.
+/// Runs one frame of zeros at the stage's size and waits for the device, so every kernel a frame uses is
+/// compiled before the first real frame.
 ///
-/// It allocates its own buffers, since it runs before any frame exists.
+/// The maps must be sized by [scratch_sizes](crate::artcnn::scratch_sizes) for the same `tile` and frame. The
+/// input and output planes are allocated here.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the pass"
+)]
 pub fn warm_up<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     network: &Network,
     path: BodyPath,
+    width: u32,
+    height: u32,
+    tile: u32,
+    maps: Maps<'_>,
 ) -> Result<(), ArtcnnError> {
-    let samples = (WARM_UP_SIDE * WARM_UP_SIDE) as usize;
+    let samples = width as usize * height as usize;
     let zeros = vec![0.0f32; samples];
-    let untouched = vec![0.0f32; samples * 4];
-    let sizes = scratch_sizes(network, path, WARM_UP_SIDE);
+    let output_bytes = samples * 4 * size_of::<f32>();
 
     let input_bytes = f32::as_bytes(&zeros);
-    let output_bytes = f32::as_bytes(&untouched);
     let input = client.create_from_slice(input_bytes);
-    let output = client.create_from_slice(output_bytes);
-    let conv0 = client.empty(sizes.map_bytes);
-    let first = client.empty(sizes.map_bytes);
-    let second = client.empty(sizes.map_bytes);
-    let third = client.empty(sizes.map_bytes);
-    let columns = match path {
-        BodyPath::Convolution => None,
-        BodyPath::Im2col => Some(client.empty(sizes.column_bytes)),
-    };
+    let output = client.empty(output_bytes);
 
-    // Safety: the input holds `WARM_UP_SIDE` squared f32 values, which the kernels read it as.
-    let input_plane = unsafe { DevicePlane::new(&input, WARM_UP_SIDE, WARM_UP_SIDE) };
+    // Safety: the input holds `width * height` f32 values, which the kernels read it as.
+    let input_plane = unsafe { DevicePlane::new(&input, width, height) };
     // Safety: the output holds four times the input's f32 values, one per sample of the doubled plane.
-    let output_plane = unsafe { DevicePlane::new(&output, WARM_UP_SIDE * 2, WARM_UP_SIDE * 2) };
-    let maps = Maps {
-        conv0: &conv0,
-        first: &first,
-        second: &second,
-        third: &third,
-        columns: columns.as_ref(),
-    };
+    let output_plane = unsafe { DevicePlane::new(&output, width * 2, height * 2) };
 
     artcnn(
         client,
@@ -203,16 +240,13 @@ pub fn warm_up<R: Runtime>(
         path,
         input_plane,
         1.0,
-        WARM_UP_SIDE,
+        tile,
         maps,
         output_plane,
     )?;
 
     let finished = cubecl::future::block_on(client.sync());
+    finished?;
 
-    finished.map_err(device_failed)
-}
-
-fn device_failed(error: ServerError) -> ArtcnnError {
-    ArtcnnError::Device(error.to_string())
+    Ok(())
 }

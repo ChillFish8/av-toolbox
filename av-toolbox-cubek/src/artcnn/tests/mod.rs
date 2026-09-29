@@ -1,6 +1,10 @@
+use cubecl::backtrace::BackTrace;
+use cubecl::server::ServerError;
 use half::f16;
 
+use super::tiling::haloed_scratch;
 use crate::artcnn::{
+    ArtcnnError,
     BodyPath,
     Layer,
     Model,
@@ -197,6 +201,11 @@ fn every_refusal_reads_as_a_sentence() {
             expected: [3, 1, 3, 3],
         },
         WeightsError::TrailingBytes { count: 1 },
+        WeightsError::LayerLength {
+            index: 2,
+            found: [35, 2],
+            expected: [36, 2],
+        },
     ];
 
     for error in errors {
@@ -204,6 +213,84 @@ fn every_refusal_reads_as_a_sentence() {
 
         assert!(!message.is_empty() && !message.contains('\u{2014}'), "{message}");
     }
+}
+
+#[test]
+fn weights_of_the_model_pass_validation() {
+    let weights = tiny();
+
+    let checked = weights.validate();
+
+    assert_eq!(checked, Ok(()));
+}
+
+#[test]
+fn weights_missing_a_layer_are_refused() {
+    let mut weights = tiny();
+    weights.layers.pop();
+
+    let error = weights.validate().expect_err("missing layer");
+
+    assert_eq!(
+        error,
+        WeightsError::LayerCount {
+            found: 5,
+            expected: 6
+        }
+    );
+}
+
+#[test]
+fn a_layer_of_another_shape_is_refused() {
+    let mut weights = tiny();
+    weights.layers[1].in_channels = 3;
+
+    let error = weights.validate().expect_err("wrong shape");
+
+    assert_eq!(
+        error,
+        WeightsError::LayerShape {
+            index: 1,
+            found: [2, 3, 3, 3],
+            expected: [2, 2, 3, 3]
+        }
+    );
+}
+
+#[test]
+fn a_layer_missing_a_weight_is_refused() {
+    let mut weights = tiny();
+    weights.layers[2].weights.pop();
+
+    let error = weights.validate().expect_err("short weights");
+
+    // Layer 2 maps 2 channels to 2 over 9 taps, so it needs 2 * 2 * 9 = 36 weights and 2 bias values.
+    assert_eq!(
+        error,
+        WeightsError::LayerLength {
+            index: 2,
+            found: [35, 2],
+            expected: [36, 2]
+        }
+    );
+}
+
+#[test]
+fn a_layer_missing_a_bias_value_is_refused() {
+    let mut weights = tiny();
+    weights.layers[5].bias.pop();
+
+    let error = weights.validate().expect_err("short bias");
+
+    // The last layer maps 2 channels to 4 over 9 taps, so it needs 4 * 2 * 9 = 72 weights and 4 bias values.
+    assert_eq!(
+        error,
+        WeightsError::LayerLength {
+            index: 5,
+            found: [72, 3],
+            expected: [72, 4]
+        }
+    );
 }
 
 #[test]
@@ -251,11 +338,18 @@ fn a_plane_smaller_than_a_tile_is_one_tile_with_no_halo() {
 fn the_tile_side_fits_the_budget() {
     // R8F64 at f16 on the convolution path holds 4 maps of 64 f16 values per sample, 512 bytes.
     // sqrt(2^30 / 512) = 1448 samples a side haloed, so the centre is 1448 - 2 * 27 = 1394.
-    let convolution = tile_side(64, 27, Precision::F16, BodyPath::Convolution, TILE_BUDGET);
+    let convolution = tile_side(
+        64,
+        27,
+        Precision::F16,
+        BodyPath::Convolution,
+        TILE_BUDGET,
+        usize::MAX,
+    );
 
     // At f32 on the im2col path, a sample holds 4 * 64 * 4 + 9 * 64 * 4 = 3328 bytes.
     // sqrt(2^30 / 3328) = 568, so the centre is 568 - 54 = 514.
-    let columns = tile_side(64, 27, Precision::F32, BodyPath::Im2col, TILE_BUDGET);
+    let columns = tile_side(64, 27, Precision::F32, BodyPath::Im2col, TILE_BUDGET, usize::MAX);
 
     assert_eq!(convolution, 1394);
     assert_eq!(columns, 514);
@@ -263,7 +357,84 @@ fn the_tile_side_fits_the_budget() {
 
 #[test]
 fn a_tiny_budget_still_gives_a_tile() {
-    let side = tile_side(96, 51, Precision::F32, BodyPath::Im2col, 1024);
+    let side = tile_side(96, 51, Precision::F32, BodyPath::Im2col, 1024, usize::MAX);
 
     assert_eq!(side, 1);
+}
+
+#[test]
+fn a_small_allocation_limit_shrinks_the_tile() {
+    // At f32 on the im2col path, the columns are the largest buffer, 9 * 64 * 4 = 2304 bytes a sample.
+    // 2^28 / 2304 = 116508 samples, and sqrt(116508) = 341 a side haloed, so the centre is 341 - 54 = 287.
+    let side = tile_side(64, 27, Precision::F32, BodyPath::Im2col, TILE_BUDGET, 1 << 28);
+
+    assert_eq!(side, 287);
+}
+
+#[test]
+fn a_large_allocation_limit_leaves_the_tile_to_the_budget() {
+    // 2^30 / 2304 = 466033 samples, and sqrt(466033) = 682 a side haloed, more than the budget's 568.
+    let side = tile_side(64, 27, Precision::F32, BodyPath::Im2col, TILE_BUDGET, 1 << 30);
+
+    assert_eq!(side, 514);
+}
+
+#[test]
+fn the_allocation_limit_bounds_one_map_on_the_convolution_path() {
+    // At f16 on the convolution path, the largest buffer is one map, 64 * 2 = 128 bytes a sample.
+    // 2^20 / 128 = 8192 samples, and sqrt(8192) = 90 a side haloed, so the centre is 90 - 54 = 36.
+    let side = tile_side(
+        64,
+        27,
+        Precision::F16,
+        BodyPath::Convolution,
+        TILE_BUDGET,
+        1 << 20,
+    );
+
+    assert_eq!(side, 36);
+}
+
+#[test]
+fn a_frame_smaller_than_a_tile_needs_only_its_own_scratch() {
+    let sizes = haloed_scratch(64, 27, Precision::F32, BodyPath::Im2col, 514, 100, 40);
+
+    // A 100x40 frame of 64 f32 maps is 100 * 40 * 64 * 4 = 1,024,000 bytes, and the columns nine times that.
+    assert_eq!(sizes.map_bytes, 1_024_000);
+    assert_eq!(sizes.column_bytes, 9_216_000);
+}
+
+#[test]
+fn a_frame_larger_than_a_tile_needs_the_haloed_tile() {
+    let sizes = haloed_scratch(64, 27, Precision::F16, BodyPath::Convolution, 10, 200, 150);
+
+    // A tile of 10 with a halo of 27 is 64 a side, so 64 * 64 * 64 * 2 = 524,288 bytes a map.
+    assert_eq!(sizes.map_bytes, 524_288);
+    assert_eq!(sizes.column_bytes, 0);
+}
+
+#[test]
+fn a_frame_clips_only_the_side_it_is_short_on() {
+    let sizes = haloed_scratch(8, 3, Precision::F32, BodyPath::Convolution, 10, 12, 100);
+
+    // The haloed tile is 16 a side, clipped to the 12 wide frame, so 12 * 16 * 8 * 4 = 6,144 bytes.
+    assert_eq!(sizes.map_bytes, 6_144);
+}
+
+#[test]
+#[should_panic(expected = "a tile must be at least one sample on a side")]
+fn tiles_refuse_a_tile_of_zero() {
+    tiles(10, 10, 0, 3);
+}
+
+#[test]
+fn a_device_failure_becomes_a_device_error() {
+    let failure = ServerError::Generic {
+        reason: "lost".to_string(),
+        backtrace: BackTrace::capture(),
+    };
+
+    let error = ArtcnnError::from(failure);
+
+    assert!(matches!(error, ArtcnnError::Device(_)), "{error}");
 }

@@ -2,7 +2,9 @@ use half::f16;
 
 use crate::artcnn::{Layer, Weights, layer_shapes};
 
-/// onnxruntime's output for R8F64, with its weights rounded to f16, on [golden_input](crate::testing::golden_input).
+/// onnxruntime's output for R8F64, with its weights rounded to f16.
+///
+/// It was made from [golden_input](crate::testing::golden_input).
 pub const GOLDEN_R8F64: &[u8] = include_bytes!("fixtures/golden_r8f64.f32");
 
 const LCG_MULTIPLIER: u64 = 6364136223846793005;
@@ -132,7 +134,9 @@ fn next_unit(state: &mut u64) -> f64 {
     (*state >> 11) as f64 / (1u64 << 53) as f64
 }
 
-/// Deterministic weights for a network `features` wide with `blocks` blocks, scaled so activations stay near one.
+/// Deterministic weights for a network `features` wide with `blocks` blocks.
+///
+/// They are scaled so activations stay near one.
 pub fn synthetic_weights(features: u32, blocks: u32, seed: u64) -> Weights {
     let mut state = seed.wrapping_mul(LCG_MULTIPLIER).wrapping_add(LCG_INCREMENT);
     let shapes = layer_shapes(features, blocks);

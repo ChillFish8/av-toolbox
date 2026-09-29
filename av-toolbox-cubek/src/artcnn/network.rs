@@ -3,7 +3,17 @@ use cubecl::server::Handle;
 use half::f16;
 
 use super::body::convolve;
-use crate::artcnn::{Activation, ArtcnnError, BodyPath, Region, Weights, epilogue, first_layer, last_layer};
+use crate::artcnn::{
+    Activation,
+    ArtcnnError,
+    BodyPath,
+    Region,
+    Weights,
+    WeightsError,
+    epilogue,
+    first_layer,
+    last_layer,
+};
 use crate::{DevicePlane, Dispatch};
 
 /// The type feature maps are held in. Accumulation is f32 either way.
@@ -39,7 +49,14 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn upload<R: Runtime>(client: &ComputeClient<R>, weights: &Weights, precision: Precision) -> Self {
+    /// Uploads `weights` in `precision`'s type, refusing weights whose layers do not match their model.
+    pub fn upload<R: Runtime>(
+        client: &ComputeClient<R>,
+        weights: &Weights,
+        precision: Precision,
+    ) -> Result<Self, WeightsError> {
+        weights.validate()?;
+
         let mut layers = Vec::new();
 
         for layer in &weights.layers {
@@ -56,12 +73,12 @@ impl Network {
             });
         }
 
-        Self {
+        Ok(Self {
             features: weights.features,
             blocks: weights.blocks,
             precision,
             layers,
-        }
+        })
     }
 
     pub fn features(&self) -> u32 {
@@ -105,9 +122,12 @@ fn encode(values: &[f16], precision: Precision) -> Vec<u8> {
 
 /// The device buffers one region's forward pass works in.
 ///
-/// The four maps are distinct buffers, each holding at least the region's samples times `F` values of the
+/// The four maps must be distinct buffers, each holding at least the region's samples times `F` values of the
 /// precision's type. `columns` holds nine times that, and is needed on
 /// [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) only.
+///
+/// A layer reads one map while writing another, so two maps sharing a buffer give wrong results. Only a
+/// handle passed twice is caught, and only in debug builds.
 pub struct Maps<'a> {
     pub conv0: &'a Handle,
     pub first: &'a Handle,
@@ -119,7 +139,7 @@ pub struct Maps<'a> {
 /// Runs the network over `region` of `input`, divided by `peak`, and writes the doubled `core` into `output`.
 ///
 /// The region's edge is padded with zero. Each output sample is clamped to `0..=1`, scaled by `peak` and
-/// rounded.
+/// rounded. The four maps must be distinct buffers, since a layer reads one while writing another.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"

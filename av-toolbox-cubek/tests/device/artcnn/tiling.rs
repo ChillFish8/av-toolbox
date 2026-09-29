@@ -13,11 +13,13 @@ use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use super::body::{PEAK, UNTOUCHED, largest_error, r8f64, supported_runs};
+use super::body::{PEAK, UNTOUCHED, largest_error, r8f64, supported_runs, supports};
 use super::{synced, textured};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
-/// Runs the network over a plane in `0..=1` one tile at a time, and gives the doubled output divided by the peak.
+/// Runs the network over a plane in `0..=1` one tile at a time.
+///
+/// It gives the doubled output divided by the peak.
 struct Tiled {
     weights: Weights,
     plane: Vec<f32>,
@@ -35,8 +37,8 @@ impl BuildTask for Tiled {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
-        let network = Network::upload(client, &self.weights, self.precision);
-        let sizes = scratch_sizes(&network, self.path, self.tile);
+        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
+        let sizes = scratch_sizes(&network, self.path, self.tile, self.width, self.height);
         let output_samples = (self.width * self.height * 4) as usize;
         let untouched = vec![UNTOUCHED; output_samples];
         let scaled: Vec<f32> = self.plane.iter().map(|value| value * PEAK).collect();
@@ -86,6 +88,9 @@ struct WarmUp {
     weights: Weights,
     path: BodyPath,
     precision: Precision,
+    width: u32,
+    height: u32,
+    tile: u32,
 }
 
 impl BuildTask for WarmUp {
@@ -95,9 +100,87 @@ impl BuildTask for WarmUp {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
-        let network = Network::upload(client, &self.weights, self.precision);
+        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
+        let sizes = scratch_sizes(&network, self.path, self.tile, self.width, self.height);
 
-        warm_up(client, &sizing, &network, self.path)
+        let conv0 = empty(client, sizes.map_bytes);
+        let first = empty(client, sizes.map_bytes);
+        let second = empty(client, sizes.map_bytes);
+        let third = empty(client, sizes.map_bytes);
+        let columns = match self.path {
+            BodyPath::Convolution => None,
+            BodyPath::Im2col => Some(empty(client, sizes.column_bytes)),
+        };
+        let maps = Maps {
+            conv0: &conv0,
+            first: &first,
+            second: &second,
+            third: &third,
+            columns: columns.as_ref(),
+        };
+
+        warm_up(
+            client,
+            &sizing,
+            &network,
+            self.path,
+            self.width,
+            self.height,
+            self.tile,
+            maps,
+        )
+    }
+}
+
+/// Runs the network into an output two samples wider than the doubled input.
+struct WiderOutput {
+    weights: Weights,
+}
+
+impl BuildTask for WiderOutput {
+    type Output = Result<(), ArtcnnError>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let path = BodyPath::Im2col;
+        let network = Network::upload(client, &self.weights, Precision::F32).expect("the weights are valid");
+        let sizes = scratch_sizes(&network, path, 8, 6, 5);
+        let zeros = vec![0.0f32; 30];
+
+        let input = upload_f32(client, &zeros);
+        let output = empty(client, 14 * 10 * size_of::<f32>());
+        let conv0 = empty(client, sizes.map_bytes);
+        let first = empty(client, sizes.map_bytes);
+        let second = empty(client, sizes.map_bytes);
+        let third = empty(client, sizes.map_bytes);
+        let columns = empty(client, sizes.column_bytes);
+
+        let input_plane = plane(&input, 6, 5);
+        let output_plane = plane(&output, 14, 10);
+        let maps = Maps {
+            conv0: &conv0,
+            first: &first,
+            second: &second,
+            third: &third,
+            columns: Some(&columns),
+        };
+
+        let ran = artcnn(
+            client,
+            &sizing,
+            &network,
+            path,
+            input_plane,
+            PEAK,
+            8,
+            maps,
+            output_plane,
+        );
+        synced(client);
+
+        ran
     }
 }
 
@@ -160,24 +243,26 @@ fn a_tiled_run_matches_an_untiled_run_exactly() {
 #[test]
 fn r8f64_tiled_matches_the_reference() {
     let weights = r8f64();
-    let plane = textured(70, 45);
-    let expected = reference_artcnn(&plane, 70, 45, &weights);
+    let plane = textured(60, 40);
+    let expected = reference_artcnn(&plane, 60, 40, &weights);
     let runs = supported_runs();
 
     for (path, precision) in runs {
-        let actual = run_tiled(&weights, &plane, 70, 45, path, precision, 16);
+        // With a halo of 27, the tiles at 12 and 36 across have unclipped right and left halos, and those
+        // at 0 and 36 down have unclipped bottom and top halos.
+        let actual = run_tiled(&weights, &plane, 60, 40, path, precision, 12);
 
         let error = largest_error(&actual, &expected);
         let codes = error * 255.0;
         println!("R8F64 tiled {path:?} at {precision:?}: largest error {error:e}, {codes:.3} 8-bit codes");
 
         let bound = match precision {
-            // Measured 8.08e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.5x
+            // Measured 8.06e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.5x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 2.11e-4 on the convolution path and 2.42e-4 on im2col, which is 0.062 of an 8-bit
-            // code, so 2x headroom.
-            Precision::F16 => 5e-4,
+            // Measured 2.96e-4 on the convolution path and 3.27e-4 on im2col, which is 0.083 of an 8-bit
+            // code, so 3x headroom.
+            Precision::F16 => 1e-3,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
     }
@@ -193,6 +278,9 @@ fn the_warm_up_succeeds_on_every_supported_path() {
             weights: weights.clone(),
             path,
             precision,
+            width: 40,
+            height: 30,
+            tile: 16,
         };
 
         let warmed = backend().build(task);
@@ -200,4 +288,66 @@ fn the_warm_up_succeeds_on_every_supported_path() {
         println!("warm-up {path:?} at {precision:?}: {warmed:?}");
         assert_eq!(warmed, Ok(()), "{path:?} at {precision:?}");
     }
+}
+
+#[test]
+fn a_production_sized_plane_matches_the_reference() {
+    let weights = synthetic_weights(8, 1, 7);
+    let plane = textured(512, 512);
+    let expected = reference_artcnn(&plane, 512, 512, &weights);
+    let runs = supported_runs();
+
+    for (path, precision) in runs {
+        let actual = run_tiled(&weights, &plane, 512, 512, path, precision, 512);
+
+        let error = largest_error(&actual, &expected);
+        let codes = error * 255.0;
+        println!("512x512 {path:?} at {precision:?}: largest error {error:e}, {codes:.3} 8-bit codes");
+
+        let bound = match precision {
+            // Measured 7.83e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.6x
+            // headroom.
+            Precision::F32 => 2e-5,
+            // Measured 5.80e-4 on both paths, which is 0.148 of an 8-bit code, so 3.4x headroom.
+            Precision::F16 => 2e-3,
+        };
+        assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
+    }
+}
+
+#[test]
+fn the_warm_up_refuses_an_unsupported_convolution() {
+    let weights = synthetic_weights(8, 1, 6);
+    let path = BodyPath::Convolution;
+    let precision = Precision::F32;
+    let supported = supports(path, precision);
+    let task = WarmUp {
+        weights,
+        path,
+        precision,
+        width: 40,
+        height: 30,
+        tile: 16,
+    };
+
+    let warmed = backend().build(task);
+
+    println!("warm-up {path:?} at {precision:?}: {warmed:?}");
+    if supported {
+        assert_eq!(warmed, Ok(()));
+        return;
+    }
+
+    assert!(matches!(warmed, Err(ArtcnnError::Convolution(_))), "{warmed:?}");
+}
+
+#[test]
+#[should_panic(expected = "the output is not twice the input on each side")]
+fn a_tiled_run_refuses_an_output_of_another_size() {
+    let weights = synthetic_weights(8, 1, 8);
+    let task = WiderOutput { weights };
+
+    let ran = backend().build(task);
+
+    println!("wider output: {ran:?}");
 }

@@ -70,9 +70,18 @@ pub enum WeightsError {
 
     #[error("the weights have {count} bytes after their last layer")]
     TrailingBytes { count: usize },
+
+    #[error("layer {index} holds {found:?} weight and bias values, but its shape needs {expected:?}")]
+    LayerLength {
+        index: usize,
+        found: [usize; 2],
+        expected: [usize; 2],
+    },
 }
 
-/// The shape of each layer of a network `features` wide with `blocks` residual blocks, as out, in, rows, columns.
+/// The shape of each layer of a network `features` wide with `blocks` residual blocks.
+///
+/// Each shape is the output channels, input channels, rows and columns.
 pub fn layer_shapes(features: u32, blocks: u32) -> Vec<[u32; 4]> {
     let body_count = 3 * blocks + 1;
     let mut shapes = vec![[features, 1, 3, 3]];
@@ -86,7 +95,8 @@ pub fn layer_shapes(features: u32, blocks: u32) -> Vec<[u32; 4]> {
 }
 
 impl Weights {
-    /// Reads weights, refusing a file whose layers are not those of a network `features` wide with `blocks` blocks.
+    /// Reads weights, refusing a file whose layers do not match a network `features` wide with `blocks`
+    /// blocks.
     pub fn parse(bytes: &[u8], features: u32, blocks: u32) -> Result<Self, WeightsError> {
         let mut reader = Reader { bytes, offset: 0 };
         let magic = reader.take(MAGIC.len())?;
@@ -141,6 +151,48 @@ impl Weights {
             blocks,
             layers,
         })
+    }
+
+    /// Checks the layers are those of a network `features` wide with `blocks` blocks.
+    ///
+    /// Each layer must have the model's shape, and hold as many weights and bias values as that shape needs.
+    pub fn validate(&self) -> Result<(), WeightsError> {
+        let expected_shapes = layer_shapes(self.features, self.blocks);
+        let found_count = self.layers.len() as u32;
+        let expected_count = expected_shapes.len() as u32;
+
+        if found_count != expected_count {
+            return Err(WeightsError::LayerCount {
+                found: found_count,
+                expected: expected_count,
+            });
+        }
+
+        for (index, (layer, expected)) in self.layers.iter().zip(expected_shapes).enumerate() {
+            let found = [layer.out_channels, layer.in_channels, 3, 3];
+
+            if found != expected {
+                return Err(WeightsError::LayerShape {
+                    index,
+                    found,
+                    expected,
+                });
+            }
+
+            let found_lengths = [layer.weights.len(), layer.bias.len()];
+            let weight_count = (layer.out_channels * layer.in_channels * 9) as usize;
+            let expected_lengths = [weight_count, layer.out_channels as usize];
+
+            if found_lengths != expected_lengths {
+                return Err(WeightsError::LayerLength {
+                    index,
+                    found: found_lengths,
+                    expected: expected_lengths,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
