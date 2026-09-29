@@ -428,3 +428,22 @@ fn odd_and_even_chains_land_in_the_output() {
         }
     }
 }
+
+#[test]
+fn a_single_step_chain_lands_in_the_output_and_leaves_the_input() {
+    let steps = vec![Step::Extreme(Extreme::Maximum, Shape::Square)];
+    let (width, height) = (37, 23);
+    let input = busy(width, height);
+    let expected = reference_chain(&input, width, height, &steps);
+
+    let task = Chained {
+        input: input.clone(),
+        width,
+        height,
+        steps,
+    };
+    let run = backend().build(task);
+
+    assert_eq!(run.output, expected, "the output differs");
+    assert_eq!(run.input_after, input, "the input changed");
+}

@@ -295,6 +295,7 @@ fn the_detail_example_keeps_texture_and_debands_the_rest() {
 
     assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
     assert_eq!(decoded.frames.len(), FRAMES as usize);
+    assert_eq!(deband_only.frames.len(), FRAMES as usize);
     for (frame, debanded_frame) in decoded.frames.iter().zip(&deband_only.frames) {
         let texture = columns_of(&frame.luma, half..SIZE);
         assert_eq!(texture, input_texture, "the texture half changed");

@@ -130,21 +130,21 @@ impl<R: Runtime> Mask for RangeMask<R> {
         let range_scratch = Scratch::new::<f32>(context, width, height);
         let maximum_scratch = Scratch::new::<f32>(context, width, height);
         let output_scratch = Scratch::new::<f32>(context, width, height);
-        let range_plane = range_scratch.plane();
+        let range_scratch_plane = range_scratch.plane();
         let maximum_plane = maximum_scratch.plane();
         let difference_plane = output_scratch.plane();
         range(
             &self.client,
             &sizing,
             luma_plane,
-            range_plane,
+            range_scratch_plane,
             maximum_plane,
             difference_plane,
             self.radius,
         );
 
-        // `range_plane` is only the range's scratch, so it is free to hold the scaled range.
-        let scaled_plane = range_plane;
+        // `range_scratch_plane` is only the range's scratch, so it is free to hold the scaled range.
+        let scaled_plane = range_scratch_plane;
         scale(&self.client, &sizing, difference_plane, scaled_plane, self.multi);
 
         let meta = frame.meta().clone();

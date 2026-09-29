@@ -322,7 +322,8 @@ fn eight_bit_thresholds_land_between_neighbouring_values() {
     let luma_values = code_values(&luma);
 
     let args = DetailArgs::default();
-    let expected = reference_detail_mask(&luma_values, width, height, &args, peak);
+    let cleaned = reference_detail_cleaned(&luma_values, width, height, &args, peak, peak);
+    let expected = store(&cleaned, peak);
     let swapped_args = DetailArgs {
         brz_mm: args.brz_ed,
         brz_ed: args.brz_mm,
@@ -336,7 +337,6 @@ fn eight_bit_thresholds_land_between_neighbouring_values() {
     let request = detail_args_json(&args);
     let masks = run_stage("detail/mask", request, format, frames);
 
-    let cleaned = reference_detail_cleaned(&luma_values, width, height, &args, peak, peak);
     let near_halves = assert_exact_off_store_halves("8-bit bumps", &masks[0], &expected, &cleaned, peak);
     let differing = differing_count(&masks[0], &expected);
     println!("8-bit bumps: {near_halves} samples on a store half, {differing} samples differ");
@@ -364,7 +364,8 @@ fn ten_bit_thresholds_land_between_neighbouring_values() {
     let luma_values = wide_code_values(&luma);
 
     let args = DetailArgs::default();
-    let expected = reference_detail_mask(&luma_values, width, height, &args, peak);
+    let cleaned = reference_detail_cleaned(&luma_values, width, height, &args, peak, peak);
+    let expected = store(&cleaned, peak);
 
     let eight_bit_scaled = reference_detail_mask_scaled(&luma_values, width, height, &args, peak, 255.0);
     assert_ne!(expected, eight_bit_scaled, "scaling at 255 changes nothing");
@@ -383,7 +384,6 @@ fn ten_bit_thresholds_land_between_neighbouring_values() {
     let request = detail_args_json(&args);
     let masks = run_stage("detail/mask", request, format, frames);
 
-    let cleaned = reference_detail_cleaned(&luma_values, width, height, &args, peak, peak);
     let near_halves = assert_exact_off_store_halves("10-bit bumps", &masks[0], &expected, &cleaned, peak);
     let differing = differing_count(&masks[0], &expected);
     println!("10-bit bumps: {near_halves} samples on a store half, {differing} samples differ");

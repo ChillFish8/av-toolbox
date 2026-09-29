@@ -311,4 +311,29 @@ mod tests {
         };
         assert_eq!(produced.template, StreamTemplate::Mask(expected));
     }
+
+    #[test]
+    fn zero_brz_turns_binarize_off() {
+        let off = binarize_threshold(0.0, 255.0);
+
+        assert_eq!(off, None);
+    }
+
+    #[test]
+    fn a_brz_becomes_a_rounded_code_value() {
+        let eight_bit_detail = binarize_threshold(0.005, 255.0);
+        let eight_bit_lines = binarize_threshold(0.08, 255.0);
+        let ten_bit_detail = binarize_threshold(0.005, 1023.0);
+        let ten_bit_lines = binarize_threshold(0.08, 1023.0);
+
+        assert_eq!(eight_bit_detail, Some(1.0));
+        assert_eq!(eight_bit_lines, Some(20.0));
+        assert_eq!(ten_bit_detail, Some(5.0));
+        assert_eq!(ten_bit_lines, Some(82.0));
+    }
+
+    #[test]
+    fn a_zero_brz_skips_binarize() {
+        assert_eq!(binarize_threshold(0.0, 255.0), None);
+    }
 }

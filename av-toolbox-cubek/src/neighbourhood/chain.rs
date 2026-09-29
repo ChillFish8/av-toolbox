@@ -16,9 +16,23 @@ pub enum Step {
 /// it writes, all f32 and one size.
 #[derive(Debug, Clone, Copy)]
 pub struct ChainPlanes<'a> {
+    /// The plane the first step reads.
     pub input: DevicePlane<'a>,
+    /// The plane the steps bounce through.
     pub scratch: DevicePlane<'a>,
+    /// The plane the last step writes.
     pub output: DevicePlane<'a>,
+}
+
+impl ChainPlanes<'_> {
+    /// Whether the three planes are held by three separate handles.
+    fn are_distinct(&self) -> bool {
+        let input = self.input.handle();
+        let scratch = self.scratch.handle();
+        let output = self.output.handle();
+
+        !std::ptr::eq(input, scratch) && !std::ptr::eq(input, output) && !std::ptr::eq(scratch, output)
+    }
 }
 
 /// Runs each of `steps` in turn, feeding each step's result into the next.
@@ -33,6 +47,7 @@ pub fn chain<R: Runtime>(
     steps: &[Step],
 ) {
     debug_assert!(!steps.is_empty(), "a chain needs at least one step");
+    debug_assert!(planes.are_distinct(), "a chain needs three distinct planes");
 
     let mut source = planes.input;
 
