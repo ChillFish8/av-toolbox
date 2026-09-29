@@ -64,10 +64,6 @@ const CORE_BELOW: u16 = 130;
 
 const COMB: u16 = 16;
 
-/// The most samples of a plane that may sit a code from `blend/masked`. It measured 24, on the U plane
-/// of darken at 8 bits, where darken alone is rounded before the blend.
-const OFF_BY_ONE_LIMIT: usize = 24;
-
 /// The lineart stages under test, and the arguments that make each one alone what a mask merges.
 ///
 /// A bound mask replaces thin's own mask, so thin alone runs with `mthr = 0` to warp every sample.
@@ -84,6 +80,7 @@ fn lined_plane(width: usize, height: usize, field: u16, lines: &[Line], scale: u
 
     for row in 0..height {
         let mut samples = vec![field; width];
+
         for line in lines {
             for (offset, value) in line.profile.iter().enumerate() {
                 let is_core = *value < CORE_BELOW;
@@ -149,6 +146,7 @@ fn clip(planes: &[Vec<u16>; 3], bits: u32) -> Vec<u8> {
     let luma = plane_bytes(&planes[0], bits);
     let u_plane = plane_bytes(&planes[1], bits);
     let v_plane = plane_bytes(&planes[2], bits);
+
     for _ in 0..FRAMES {
         let frame = y4m::Frame::new([&luma, &u_plane, &v_plane], None);
         encoder.write_frame(&frame).expect("writes a frame");
@@ -176,9 +174,35 @@ fn utf8(path: &Path) -> &str {
     path.to_str().expect("a utf-8 path")
 }
 
+/// Where a run of the pipeline writes each of its outputs.
+struct Outputs<'a> {
+    input: &'a str,
+    masked: &'a str,
+    blended: &'a str,
+    alone: &'a str,
+    mask: &'a str,
+}
+
+/// Every frame of the planes a run wrote.
+struct Run {
+    masked: Vec<[Vec<u16>; 3]>,
+    blended: Vec<[Vec<u16>; 3]>,
+    alone: Vec<[Vec<u16>; 3]>,
+    mask: Vec<[Vec<u16>; 3]>,
+}
+
 /// A pipeline that writes `stage` merged through a Prewitt mask to `masked`, and `stage` alone
-/// blended over the input by the same mask to `blended`.
-fn pipeline_text(stage: &str, alone_args: &str, input: &str, masked: &str, blended: &str) -> String {
+/// blended over the input by the same mask to `blended`. It also writes `stage` alone, and the mask as the
+/// frame that blends an empty frame to a full one.
+fn pipeline_text(stage: &str, alone_args: &str, peak: u16, outputs: &Outputs) -> String {
+    let Outputs {
+        input,
+        masked,
+        blended,
+        alone: alone_path,
+        mask: mask_path,
+    } = outputs;
+
     format!(
         r#"
 [source.input]
@@ -213,26 +237,57 @@ args.path = "{masked}"
 type = "y4m/pipe"
 inputs = ["blended"]
 args.path = "{blended}"
+
+[sink.alone_output]
+type = "y4m/pipe"
+inputs = ["alone"]
+args.path = "{alone_path}"
+
+[filter.empty]
+type = "solid/like"
+inputs = ["input"]
+args.colour.planes = [0, 0, 0]
+
+[filter.full]
+type = "solid/like"
+inputs = ["input"]
+args.colour.planes = [{peak}, {peak}, {peak}]
+
+[filter.mask_frame]
+type = "blend/masked"
+inputs = ["empty", "full", "edges"]
+
+[sink.mask_output]
+type = "y4m/pipe"
+inputs = ["mask_frame"]
+args.path = "{mask_path}"
 "#
     )
 }
 
-/// The first frame `stage` writes when merged through a mask, and when blended by `blend/masked`.
-fn masked_and_blended(stage: &str, alone_args: &str, bits: u32) -> ([Vec<u16>; 3], [Vec<u16>; 3]) {
+/// Every frame `stage` writes when merged through a mask, when blended by `blend/masked`, and alone.
+fn run_stage(stage: &str, alone_args: &str, bits: u32) -> Run {
     let folder = tempfile::tempdir().expect("a temp dir");
     let input = folder.path().join("input.y4m");
     let masked = folder.path().join("masked.y4m");
     let blended = folder.path().join("blended.y4m");
+    let alone = folder.path().join("alone.y4m");
+    let mask = folder.path().join("mask.y4m");
     let pipeline_path = folder.path().join("pipeline.toml");
 
+    let peak = (1u16 << bits) - 1;
     let planes = lined_planes(bits);
     let input_clip = clip(&planes, bits);
     fs::write(&input, input_clip).expect("writes the input");
 
-    let input_path = utf8(&input);
-    let masked_path = utf8(&masked);
-    let blended_path = utf8(&blended);
-    let text = pipeline_text(stage, alone_args, input_path, masked_path, blended_path);
+    let outputs = Outputs {
+        input: utf8(&input),
+        masked: utf8(&masked),
+        blended: utf8(&blended),
+        alone: utf8(&alone),
+        mask: utf8(&mask),
+    };
+    let text = pipeline_text(stage, alone_args, peak, &outputs);
     fs::write(&pipeline_path, &text).expect("writes the pipeline");
 
     let supplied = Supplied::new();
@@ -246,20 +301,81 @@ fn masked_and_blended(stage: &str, alone_args: &str, bits: u32) -> ([Vec<u16>; 3
     let engine = compiled.engine(settings).expect("should build the engine");
     let report = engine.run().expect("should run");
 
-    assert_eq!(report.frames, FRAMES * 2, "each sink counts every frame it wrote");
+    assert_eq!(report.frames, FRAMES * 4, "each sink counts every frame it wrote");
 
     let masked_stream = fs::read(&masked).expect("reads the masked output");
     let blended_stream = fs::read(&blended).expect("reads the blended output");
-    let mut masked_frames = decode(&masked_stream, bits);
-    let mut blended_frames = decode(&blended_stream, bits);
+    let alone_stream = fs::read(&alone).expect("reads the alone output");
+    let mask_stream = fs::read(&mask).expect("reads the mask output");
+    let run = Run {
+        masked: decode(&masked_stream, bits),
+        blended: decode(&blended_stream, bits),
+        alone: decode(&alone_stream, bits),
+        mask: decode(&mask_stream, bits),
+    };
 
-    assert_eq!(masked_frames.len(), FRAMES as usize);
-    assert_eq!(blended_frames.len(), FRAMES as usize);
+    assert_eq!(run.masked.len(), FRAMES as usize);
+    assert_eq!(run.blended.len(), FRAMES as usize);
+    assert_eq!(run.alone.len(), FRAMES as usize);
+    assert_eq!(run.mask.len(), FRAMES as usize);
 
-    let masked_first = masked_frames.swap_remove(0);
-    let blended_first = blended_frames.swap_remove(0);
+    run
+}
 
-    (masked_first, blended_first)
+/// How one plane of the masked output sits against the `blend/masked` output.
+struct Tally {
+    largest: u16,
+    differing: usize,
+    allowed: usize,
+    refused: usize,
+}
+
+/// The planes one frame is compared over.
+struct Frame<'a> {
+    masked: &'a [u16],
+    blended: &'a [u16],
+    input: &'a [u16],
+    alone: &'a [u16],
+    mask: &'a [u16],
+}
+
+/// Whether the sample at `index` may sit a code from `blend/masked` when `stage` alone is rounded first.
+///
+/// That takes a mask strictly between 0 and `peak`, and stage alone having moved the sample.
+fn may_round_differently(frame: &Frame, index: usize, peak: u16) -> bool {
+    let weight = frame.mask[index];
+    let blends = weight > 0 && weight < peak;
+    let moved = frame.alone[index] != frame.input[index];
+
+    blends && moved
+}
+
+fn tally(frame: &Frame, rounds_alone: bool, peak: u16) -> Tally {
+    let mut tally = Tally {
+        largest: 0,
+        differing: 0,
+        allowed: 0,
+        refused: 0,
+    };
+
+    for (index, (masked, blended)) in frame.masked.iter().zip(frame.blended).enumerate() {
+        let difference = masked.abs_diff(*blended);
+        if difference == 0 {
+            continue;
+        }
+
+        tally.largest = tally.largest.max(difference);
+        tally.differing += 1;
+
+        let allowed = rounds_alone && difference == 1 && may_round_differently(frame, index, peak);
+        if allowed {
+            tally.allowed += 1;
+        } else {
+            tally.refused += 1;
+        }
+    }
+
+    tally
 }
 
 fn changed(plane: &[u16], other: &[u16]) -> usize {
@@ -270,13 +386,10 @@ fn changed(plane: &[u16], other: &[u16]) -> usize {
         .count()
 }
 
-fn largest_difference(plane: &[u16], other: &[u16]) -> u16 {
-    plane
-        .iter()
-        .zip(other)
-        .map(|(left, right)| left.abs_diff(*right))
-        .max()
-        .unwrap_or(0)
+/// Darken's chroma lands between codes, so `blend/masked` rounds it before the blend where the masked
+/// path merges it unrounded.
+fn rounds_alone(stage: &str, plane: usize) -> bool {
+    stage == "lineart/darken" && plane != 0
 }
 
 /// Every stage and depth is measured before any is checked, so a failure reports them all.
@@ -286,29 +399,43 @@ fn a_mask_merges_each_lineart_filter_as_blend_masked_does() {
 
     for bits in [8, 10] {
         let input = lined_planes(bits);
+        let peak = (1u16 << bits) - 1;
 
         for (stage, alone_args) in STAGES {
-            let (masked, blended) = masked_and_blended(stage, alone_args, bits);
+            let run = run_stage(stage, alone_args, bits);
 
             for (plane, name) in PLANE_NAMES.iter().enumerate() {
-                let largest = largest_difference(&masked[plane], &blended[plane]);
-                let differing = changed(&masked[plane], &blended[plane]);
-                let moved = changed(&masked[plane], &input[plane]);
-                let samples = input[plane].len();
                 let label = format!("{stage} {bits}-bit {name}");
+                let samples = input[plane].len();
+                let rounds = rounds_alone(stage, plane);
 
-                println!("{label}: largest {largest}, {differing} of {samples} differ, {moved} moved");
+                for frame_index in 0..FRAMES as usize {
+                    let frame = Frame {
+                        masked: &run.masked[frame_index][plane],
+                        blended: &run.blended[frame_index][plane],
+                        input: &input[plane],
+                        alone: &run.alone[frame_index][plane],
+                        mask: &run.mask[frame_index][plane],
+                    };
+                    let tally = tally(&frame, rounds, peak);
+                    let moved = changed(frame.masked, frame.input);
 
-                if moved == 0 {
-                    failures.push(format!("{label} never moved a sample"));
-                }
+                    println!(
+                        "{label} frame {frame_index}: largest {}, {} of {samples} differ, {} allowed, {} \
+                         refused, {moved} moved",
+                        tally.largest, tally.differing, tally.allowed, tally.refused
+                    );
 
-                if largest > 1 {
-                    failures.push(format!("{label} differs by {largest}"));
-                }
+                    if moved == 0 {
+                        failures.push(format!("{label} frame {frame_index} never moved a sample"));
+                    }
 
-                if differing > OFF_BY_ONE_LIMIT {
-                    failures.push(format!("{label} differs at {differing} samples"));
+                    if tally.refused > 0 {
+                        failures.push(format!(
+                            "{label} frame {frame_index} has {} samples off, largest {}",
+                            tally.refused, tally.largest
+                        ));
+                    }
                 }
             }
         }

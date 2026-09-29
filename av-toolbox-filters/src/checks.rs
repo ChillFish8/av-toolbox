@@ -105,7 +105,11 @@ mod tests {
 
         let error = between_u32(STAGE, "value", 17, 0, 16).expect_err("above maximum");
 
-        assert!(error.to_string().contains(STAGE) && error.to_string().contains("17"));
+        let message = error.to_string();
+
+        assert!(message.contains(STAGE), "{message}");
+        assert!(message.contains("value"), "{message}");
+        assert!(message.contains("17"), "{message}");
     }
 
     #[test]
@@ -118,14 +122,12 @@ mod tests {
         let below_message = below.to_string();
         let above_message = above.to_string();
 
-        assert!(
-            below_message.contains(STAGE) && below_message.contains("-129"),
-            "{below_message}"
-        );
-        assert!(
-            above_message.contains("value") && above_message.contains("128"),
-            "{above_message}"
-        );
+        assert!(below_message.contains(STAGE), "{below_message}");
+        assert!(below_message.contains("value"), "{below_message}");
+        assert!(below_message.contains("-129"), "{below_message}");
+        assert!(above_message.contains(STAGE), "{above_message}");
+        assert!(above_message.contains("value"), "{above_message}");
+        assert!(above_message.contains("128"), "{above_message}");
     }
 
     #[test]

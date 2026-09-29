@@ -315,8 +315,8 @@ fn blended(input: &[u16], filtered: &[u16], weight: u8) -> Vec<f64> {
     input
         .iter()
         .zip(filtered)
-        .map(|(value, target)| {
-            let value = f64::from(*value);
+        .map(|(sample, target)| {
+            let value = f64::from(*sample);
             let change = f64::from(*target) - value;
 
             value + change * share
