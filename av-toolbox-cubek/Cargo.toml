@@ -7,10 +7,16 @@ description = "Shared CubeCL kernels that can be used within av-toolbox video fi
 
 [dependencies]
 cubecl = { workspace = true }
+cubek-convolution = { workspace = true }
+cubek-matmul = { workspace = true }
+cubek-std = { workspace = true }
+half = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-cubek = { path = ".", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true }
+av-toolbox-models = { path = "../av-toolbox-models" }
 
 [features]
 vulkan = ["cubecl/vulkan", "av-toolbox-gpu/vulkan"]

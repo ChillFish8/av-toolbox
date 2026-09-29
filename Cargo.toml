@@ -35,6 +35,10 @@ thiserror = "2.0.20"
 av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
 v_frame = "0.7"
 cubecl = { version = "0.10", features = ["std"] }
+cubek-convolution = "0.2.0"
+cubek-matmul = "0.2.0"
+cubek-std = "0.2.0"
+half = "2.7"
 etcetera = "0.11"
 strum = "0.28"
 strum_macros = "0.28"
