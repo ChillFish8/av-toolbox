@@ -265,10 +265,12 @@ dependencies = [
  "av-toolbox-core",
  "av-toolbox-cubek",
  "av-toolbox-gpu",
+ "av-toolbox-models",
  "cubecl",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 

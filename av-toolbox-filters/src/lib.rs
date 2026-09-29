@@ -18,6 +18,7 @@
 //! - `resample/chroma` changes a YUV clip's chroma subsampling and siting.
 //! - `planes/extract` pulls one plane, or the chroma pair, out of a clip.
 //! - `planes/merge` builds a clip by picking each plane from one of several clips.
+//! - `upscale/artcnn` doubles a clip's size, running its luma through the ArtCNN network.
 //! - `warp/awarpsharp` sharpens by pulling samples toward nearby edges, the way aWarpSharp2 does.
 
 mod bits;
@@ -35,6 +36,7 @@ mod resize;
 mod scratch;
 mod selection;
 mod sizing;
+mod upscale;
 mod warp;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
@@ -67,6 +69,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<planes::Extract>()?;
     registry.register_filter::<planes::Merge>()?;
     registry.register_filter::<warp::Awarpsharp>()?;
+    registry.register_filter::<upscale::Artcnn>()?;
 
     Ok(())
 }
@@ -111,5 +114,6 @@ mod tests {
         assert!(registered("planes/extract"));
         assert!(registered("planes/merge"));
         assert!(registered("warp/awarpsharp"));
+        assert!(registered("upscale/artcnn"));
     }
 }

@@ -9,6 +9,7 @@ description = "Filters that change the frames of av-toolbox pipelines."
 av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-cubek = { path = "../av-toolbox-cubek" }
 av-toolbox-gpu = { workspace = true }
+av-toolbox-models = { path = "../av-toolbox-models" }
 cubecl = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
@@ -18,6 +19,7 @@ tracing = { workspace = true }
 av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-cubek/vulkan"]
