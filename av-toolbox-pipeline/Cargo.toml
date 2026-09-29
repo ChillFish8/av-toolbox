@@ -19,7 +19,9 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
+av-toolbox-models = { path = "../av-toolbox-models" }
 schemars = { workspace = true }
 serde = { workspace = true }
 tempfile = { workspace = true }

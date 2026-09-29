@@ -1,5 +1,5 @@
 use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition, StageError};
-use av_toolbox_cubek::artcnn::Model;
+use av_toolbox_cubek::artcnn::{BodyPath, Model, Precision};
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -19,7 +19,7 @@ use av_toolbox_models::{Located, Store};
 use serde_json::json;
 
 use crate::upscale::Artcnn;
-use crate::upscale::artcnn::{ArtcnnArgs, ModelName, PrecisionName, locate};
+use crate::upscale::artcnn::{ArtcnnArgs, ModelName, PrecisionName, allocation_cap, body_path, locate};
 
 const STAGE: &str = "upscale/artcnn";
 
@@ -232,4 +232,47 @@ fn the_stage_runs_frames_in_parallel() {
     let arguments = args(json!({}));
 
     assert_eq!(Artcnn::parallelism(&arguments), Parallelism::Frame);
+}
+
+fn capabilities_multiplying(combinations: &[(ElementType, ElementType)]) -> Capabilities {
+    let accelerator = default_accelerators()[0];
+
+    Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .cooperative_matrix(combinations.iter().copied())
+        .build()
+}
+
+#[test]
+fn the_convolution_path_is_chosen_when_the_device_offers_it() {
+    let f16_only = capabilities_multiplying(&[(ElementType::F16, ElementType::F32)]);
+    let none = capabilities_multiplying(&[]);
+    let both = capabilities_multiplying(&[
+        (ElementType::F16, ElementType::F32),
+        (ElementType::F32, ElementType::F32),
+    ]);
+
+    assert_eq!(body_path(&f16_only, Precision::F16), BodyPath::Convolution);
+    assert_eq!(body_path(&f16_only, Precision::F32), BodyPath::Im2col);
+    assert_eq!(body_path(&none, Precision::F16), BodyPath::Im2col);
+    assert_eq!(body_path(&none, Precision::F32), BodyPath::Im2col);
+    assert_eq!(body_path(&both, Precision::F16), BodyPath::Convolution);
+    assert_eq!(body_path(&both, Precision::F32), BodyPath::Convolution);
+}
+
+#[test]
+fn an_unset_allocation_limit_is_no_cap() {
+    let unset = capabilities();
+    let accelerator = default_accelerators()[0];
+    let limited = Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .max_allocation(1 << 20)
+        .build();
+
+    assert_eq!(allocation_cap(&unset), usize::MAX);
+    assert_eq!(allocation_cap(&limited), 1 << 20);
 }

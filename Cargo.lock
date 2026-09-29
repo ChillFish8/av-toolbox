@@ -333,10 +333,12 @@ name = "av-toolbox-pipeline"
 version = "0.1.0"
 dependencies = [
  "av-toolbox-core",
+ "av-toolbox-cubek",
  "av-toolbox-filters",
  "av-toolbox-gpu",
  "av-toolbox-graph",
  "av-toolbox-masks",
+ "av-toolbox-models",
  "av-toolbox-runtime",
  "av-toolbox-sinks",
  "av-toolbox-sources",

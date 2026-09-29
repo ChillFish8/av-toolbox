@@ -16,13 +16,13 @@ use super::geometry::{Geometry, PlaneShape};
 use crate::sizing::Sizing;
 
 /// One plane's weight tables on the device.
-struct Tables {
+pub(crate) struct Tables {
     across: Weights,
     down: Weights,
 }
 
 impl Tables {
-    fn new<R: Runtime>(client: &ComputeClient<R>, shape: &PlaneShape, kernel: &Kernel) -> Self {
+    pub(crate) fn new<R: Runtime>(client: &ComputeClient<R>, shape: &PlaneShape, kernel: &Kernel) -> Self {
         let across_taps = taps(shape.width, shape.across.scale, shape.across.offset, kernel);
         let down_taps = taps(shape.height, shape.down.scale, shape.down.offset, kernel);
         let across = upload(client, &across_taps);
@@ -30,6 +30,52 @@ impl Tables {
 
         Self { across, down }
     }
+}
+
+/// How a resize stores samples of `sample`.
+pub(crate) fn samples_for(sample: SampleFormat) -> Samples {
+    match sample {
+        SampleFormat::U16 { depth } => Samples::U16 {
+            largest: depth.max_value(),
+        },
+        _ => Samples::U8,
+    }
+}
+
+/// Resizes `input` into `output` through `tables`, whatever their sizes.
+pub(crate) fn resize_plane<R: Runtime>(
+    client: &ComputeClient<R>,
+    context: &FrameContext,
+    input: &Plane,
+    output: &Plane,
+    tables: &Tables,
+    samples: Samples,
+) {
+    let (in_width, in_height) = input.dimensions();
+    let (out_width, out_height) = output.dimensions();
+    let scratch_bytes = out_width as usize * in_height as usize * size_of::<f32>();
+    let scratch = context.scratch(scratch_bytes);
+
+    let input_handle = input.buffer().handle();
+    let scratch_handle = scratch.handle();
+    let output_handle = output.buffer().handle();
+
+    // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
+    let input_plane = unsafe { DevicePlane::new(input_handle, in_width, in_height) };
+
+    // Safety: the scratch was sized for exactly `out_width * in_height` f32 samples.
+    let scratch_plane = unsafe { DevicePlane::new(scratch_handle, out_width, in_height) };
+
+    // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
+    let output_plane = unsafe { DevicePlane::new(output_handle, out_width, out_height) };
+
+    let planes = ResizePlanes {
+        input: input_plane,
+        scratch: scratch_plane,
+        output: output_plane,
+    };
+    let sizing = Sizing(context);
+    apply(client, &sizing, planes, &tables.across, &tables.down, samples);
 }
 
 fn missing_input(stage: &str) -> StageError {
@@ -65,12 +111,7 @@ impl<R: Runtime> Resizer<R> {
         kernel: &Kernel,
         identity: bool,
     ) -> Self {
-        let samples = match output.sample {
-            SampleFormat::U16 { depth } => Samples::U16 {
-                largest: depth.max_value(),
-            },
-            _ => Samples::U8,
-        };
+        let samples = samples_for(output.sample);
         let luma = Tables::new(&client, &shapes.luma, kernel);
         let chroma = shapes.chroma.map(|shape| Tables::new(&client, &shape, kernel));
 
@@ -92,41 +133,6 @@ impl<R: Runtime> Resizer<R> {
             (Some(chroma), true) => chroma,
             _ => &self.luma,
         }
-    }
-
-    fn resize(&self, context: &FrameContext, input: &Plane, output: &Plane, tables: &Tables) {
-        let (in_width, in_height) = input.dimensions();
-        let (out_width, out_height) = output.dimensions();
-        let scratch_bytes = out_width as usize * in_height as usize * size_of::<f32>();
-        let scratch = context.scratch(scratch_bytes);
-
-        let input_handle = input.buffer().handle();
-        let scratch_handle = scratch.handle();
-        let output_handle = output.buffer().handle();
-
-        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let input_plane = unsafe { DevicePlane::new(input_handle, in_width, in_height) };
-
-        // Safety: the scratch was sized for exactly `out_width * in_height` f32 samples.
-        let scratch_plane = unsafe { DevicePlane::new(scratch_handle, out_width, in_height) };
-
-        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let output_plane = unsafe { DevicePlane::new(output_handle, out_width, out_height) };
-
-        let planes = ResizePlanes {
-            input: input_plane,
-            scratch: scratch_plane,
-            output: output_plane,
-        };
-        let sizing = Sizing(context);
-        apply(
-            &self.client,
-            &sizing,
-            planes,
-            &tables.across,
-            &tables.down,
-            self.samples,
-        );
     }
 }
 
@@ -156,7 +162,14 @@ impl<R: Runtime> Filter for Resizer<R> {
 
             let tables = self.tables_for(*channel);
 
-            self.resize(context, input_plane, output_plane, tables);
+            resize_plane(
+                &self.client,
+                context,
+                input_plane,
+                output_plane,
+                tables,
+                self.samples,
+            );
         }
 
         Ok(output)
