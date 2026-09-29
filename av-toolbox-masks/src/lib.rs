@@ -3,6 +3,8 @@
 //! Every mask stage produces a single U8 plane, where 0 is background and 255 is fully selected.
 //!
 //! - `detail/mask` marks texture and edges, as vsmasktools' `detail_mask` does.
+//! - `detail/neo` marks detail from a bilateral's difference and lines from Prewitt, as vsmasktools'
+//!   `detail_mask_neo` does.
 //! - `detail/range` marks where the local maximum and minimum differ.
 //! - `edges/kirsch` finds edges by the strongest of 8 compass kernels.
 //! - `edges/prewitt` finds edges by the Prewitt gradient's magnitude.
@@ -31,6 +33,7 @@ use av_toolbox_core::{PipelineRegistry, RegistryError};
 /// Registers every mask this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_mask::<detail::DetailMask>()?;
+    registry.register_mask::<detail::Neo>()?;
     registry.register_mask::<detail::Range>()?;
     registry.register_mask::<edges::Edges<edges::Kirsch>>()?;
     registry.register_mask::<edges::Edges<edges::Prewitt>>()?;
@@ -64,6 +67,7 @@ mod tests {
     #[test]
     fn every_mask_is_registered() {
         assert!(registered("detail/mask"));
+        assert!(registered("detail/neo"));
         assert!(registered("detail/range"));
         assert!(registered("edges/kirsch"));
         assert!(registered("edges/prewitt"));

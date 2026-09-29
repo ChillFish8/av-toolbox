@@ -31,8 +31,7 @@ use cubecl::prelude::{ComputeClient, Runtime};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{join_maximum, range};
-use crate::gauss::jetpack_radius;
+use super::{gaussian_for, join_maximum, range};
 use crate::luma::{Luma, accepts_luma, load_luma_code_values, produces_luma_mask, store_mask};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
@@ -93,12 +92,6 @@ impl DetailMaskArgs {
 
         Ok(())
     }
-}
-
-fn gaussian_for<R: Runtime>(client: &ComputeClient<R>, sigma: f32) -> Gaussian {
-    let radius = jetpack_radius(sigma);
-
-    Gaussian::with_radius(client, sigma, radius)
 }
 
 fn no_frame() -> StageError {

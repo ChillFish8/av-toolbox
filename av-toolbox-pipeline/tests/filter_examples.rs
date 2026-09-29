@@ -36,18 +36,24 @@ fn gradient_luma() -> Vec<u8> {
 
 /// A C420 y4m clip whose luma is `gradient_luma`, with flat chroma.
 fn gradient_clip() -> Vec<u8> {
+    let luma = gradient_luma();
+
+    clip_with_luma(&luma)
+}
+
+/// A C420 y4m clip of `FRAMES` frames whose luma is `luma`, with flat chroma.
+fn clip_with_luma(luma: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::new();
     let ratio = y4m::Ratio::new(24, 1);
     let mut encoder = y4m::encode(SIZE, SIZE, ratio)
         .write_header(&mut bytes)
         .expect("writes the header");
 
-    let luma = gradient_luma();
     let chroma_samples = (SIZE / 2) * (SIZE / 2);
     let u_plane = vec![FLAT_U; chroma_samples];
     let v_plane = vec![FLAT_V; chroma_samples];
     for _ in 0..FRAMES {
-        let frame = y4m::Frame::new([&luma, &u_plane, &v_plane], None);
+        let frame = y4m::Frame::new([luma, &u_plane, &v_plane], None);
         encoder.write_frame(&frame).expect("writes a frame");
     }
 
@@ -83,11 +89,18 @@ fn example(name: &str) -> PathBuf {
 
 /// Writes `gradient_clip` as the input, runs `name` with `extra_flags`, and decodes the output.
 fn run_example(name: &str, extra_flags: &[(&str, &str)]) -> Decoded {
+    let clip = gradient_clip();
+
+    run_example_on(name, extra_flags, &clip)
+}
+
+/// Writes `clip` as the input, runs `name` with `extra_flags`, and decodes the output.
+fn run_example_on(name: &str, extra_flags: &[(&str, &str)], clip: &[u8]) -> Decoded {
     let folder = tempfile::tempdir().expect("a temp dir");
     let input = folder.path().join("input.y4m");
     let output = folder.path().join("output.y4m");
 
-    fs::write(&input, gradient_clip()).expect("writes the input");
+    fs::write(&input, clip).expect("writes the input");
 
     let input_path = utf8(&input);
     let output_path = utf8(&output);
@@ -210,5 +223,81 @@ fn the_dehalo_example_leaves_an_even_ramp_alone() {
         assert_eq!(frame.luma, expected_luma);
         assert!(frame.u_plane.iter().all(|sample| *sample == FLAT_U));
         assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
+    }
+}
+
+/// The luma of a clip whose left half is a slow gradient and whose right half is a busy texture.
+fn gradient_and_texture_luma() -> Vec<u8> {
+    let half = SIZE / 2;
+
+    (0..SIZE)
+        .flat_map(|row| {
+            (0..SIZE).map(move |column| {
+                if column < half {
+                    return (100 + column / 16) as u8;
+                }
+
+                ((row * 37 + column * 17 + row * column) % 251) as u8
+            })
+        })
+        .collect()
+}
+
+/// The samples of `plane` in the `columns` of every row.
+fn columns_of(plane: &[u8], columns: std::ops::Range<usize>) -> Vec<u8> {
+    plane
+        .chunks(SIZE)
+        .flat_map(|row| row[columns.clone()].iter().copied())
+        .collect()
+}
+
+/// The mean of each row's samples in the `columns`.
+fn row_means_over(plane: &[u8], columns: std::ops::Range<usize>) -> Vec<f64> {
+    let width = columns.len() as f64;
+
+    plane
+        .chunks(SIZE)
+        .map(|row| {
+            let total: u32 = row[columns.clone()].iter().map(|sample| u32::from(*sample)).sum();
+
+            f64::from(total) / width
+        })
+        .collect()
+}
+
+#[test]
+fn the_detail_example_keeps_texture_and_debands_the_rest() {
+    let half = SIZE / 2;
+    let luma = gradient_and_texture_luma();
+    let clip = clip_with_luma(&luma);
+    let decoded = run_example_on("detail.toml", &[], &clip);
+
+    let input_texture = columns_of(&luma, half..SIZE);
+    let input_gradient = columns_of(&luma, 0..half);
+    let input_means = row_means_over(&luma, 0..half);
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for frame in &decoded.frames {
+        let texture = columns_of(&frame.luma, half..SIZE);
+        assert_eq!(texture, input_texture, "the texture half changed");
+
+        let gradient = columns_of(&frame.luma, 0..half);
+        let changed = gradient
+            .iter()
+            .zip(&input_gradient)
+            .filter(|(found, expected)| found != expected)
+            .count();
+        println!("gradient samples debanded: {changed} of {}", gradient.len());
+        assert!(changed > 0, "the gradient half was not debanded");
+
+        let means = row_means_over(&frame.luma, 0..half);
+        let largest = means
+            .iter()
+            .zip(&input_means)
+            .map(|(found, expected)| (found - expected).abs())
+            .fold(0.0, f64::max);
+        println!("largest gradient row mean move: {largest}");
+        assert!(largest <= 1.0, "a gradient row mean moved by {largest}");
     }
 }

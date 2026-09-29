@@ -1,0 +1,38 @@
+# Debands a clip everywhere except where detail/mask finds texture, so the texture keeps its input.
+#
+# deband/placebo smooths the whole clip, detail/mask marks the texture and edges, and blend/masked
+# takes the input back wherever the mask is set.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "y4m/pipe"
+args.path = "{{ input }}"
+
+[filter.debanded]
+type = "deband/placebo"
+inputs = ["input"]
+args.iterations = 2
+args.threshold = [4.0, 3.0, 3.0]
+args.grain = [6.0, 0.0, 0.0]
+
+[mask.detail]
+type = "detail/mask"
+inputs = ["input"]
+
+[filter.blend]
+type = "blend/masked"
+inputs = ["debanded", "input", "detail"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["blend"]
+args.path = "{{ output }}"
