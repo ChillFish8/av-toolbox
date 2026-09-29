@@ -15,7 +15,7 @@ pub enum RegistryError {
     #[error("`{identifier}` in the lock is not a table of files")]
     NotATable { identifier: String },
 
-    #[error("`{identifier}`'s `{file}` in the lock is {value}, which is not a lowercase sha256")]
+    #[error("`{identifier}`'s `{file}` in the lock is `{value}`, which is not a lowercase sha256")]
     BadChecksum {
         identifier: String,
         file: String,
@@ -65,7 +65,7 @@ impl Registry {
                     return Err(RegistryError::BadChecksum {
                         identifier,
                         file: name.clone(),
-                        value: format!("{value:?}"),
+                        value: plain_text(value),
                     });
                 };
 
@@ -98,6 +98,14 @@ pub fn registry() -> &'static Registry {
 fn parse_embedded_lock() -> Registry {
     let parsed = Registry::parse(LOCK);
     parsed.expect("the embedded dependencies.lock parses")
+}
+
+/// A lock value as written, a string without its quotes.
+fn plain_text(value: &toml::Value) -> String {
+    match value.as_str() {
+        Some(text) => text.to_string(),
+        None => format!("{value:?}"),
+    }
 }
 
 fn is_sha256(text: &str) -> bool {
@@ -167,6 +175,15 @@ mod tests {
 
             assert!(message.contains("pack") && message.contains("f.bin"), "{message}");
         }
+    }
+
+    #[test]
+    fn a_bad_checksum_is_shown_as_its_plain_text() {
+        let error = Registry::parse("[pack]\n\"f.bin\" = \"abc\"\n").expect_err("bad checksum");
+
+        let message = error.to_string();
+        assert!(message.contains("`abc`"), "{message}");
+        assert!(!message.contains("String("), "{message}");
     }
 
     #[test]

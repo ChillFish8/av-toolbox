@@ -1,12 +1,12 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use crate::lookup::Store;
 use crate::registry::{Pack, Registry, to_hex};
-use crate::root::installed_tags;
+use crate::root::{installed_tags, is_release_tag};
 
 /// The one file an archive may hold beyond its pack's files.
 const LICENSE: &str = "LICENSE";
@@ -19,8 +19,8 @@ pub enum InstallError {
     #[error("the archive could not be read: {0}")]
     Archive(#[from] zip::result::ZipError),
 
-    #[error(transparent)]
-    Io(#[from] io::Error),
+    #[error("{}: {source}", path.display())]
+    Io { path: PathBuf, source: io::Error },
 
     #[error("the archive holds `{0}`, which is not part of the pack")]
     ExtraFile(String),
@@ -34,6 +34,9 @@ pub enum InstallError {
         expected: String,
         found: String,
     },
+
+    #[error("`{0}` is not a release tag, which is `v` and a semantic version")]
+    InvalidTag(String),
 }
 
 impl Store {
@@ -53,9 +56,17 @@ impl Store {
             return Err(InstallError::UnknownPack(identifier.to_string()));
         };
 
+        if !is_release_tag(tag) {
+            return Err(InstallError::InvalidTag(tag.to_string()));
+        }
+
         let root = self.root();
-        std::fs::create_dir_all(root)?;
-        let staging = tempfile::Builder::new().prefix(".staging-").tempdir_in(root)?;
+        std::fs::create_dir_all(root).at(root)?;
+
+        let staging = tempfile::Builder::new()
+            .prefix(".staging-")
+            .tempdir_in(root)
+            .at(root)?;
         let mut archive = zip::ZipArchive::new(archive)?;
         let mut extracted: Vec<String> = Vec::new();
 
@@ -64,8 +75,8 @@ impl Store {
             let name = entry.name().to_string();
             let expected = expected_sha256(pack, &name)?;
             let target = staging.path().join(&name);
-            let mut written = File::create(&target)?;
-            let found = copy_hashing(&mut entry, &mut written)?;
+            let mut written = File::create(&target).at(&target)?;
+            let found = copy_hashing(&mut entry, &mut written).at(&target)?;
 
             if let Some(expected) = expected
                 && expected != found
@@ -87,23 +98,23 @@ impl Store {
         }
 
         let tag_dir = root.join(tag);
-        std::fs::create_dir_all(&tag_dir)?;
+        std::fs::create_dir_all(&tag_dir).at(&tag_dir)?;
 
         let destination = tag_dir.join(identifier);
         if destination.exists() {
-            std::fs::remove_dir_all(&destination)?;
+            std::fs::remove_dir_all(&destination).at(&destination)?;
         }
 
         let staged = staging.path();
-        std::fs::rename(staged, &destination)?;
+        std::fs::rename(staged, &destination).at(&destination)?;
 
         Ok(destination)
     }
 
     /// The installed tags other than `keep_tag` that hold the `identifier` pack, highest version first.
-    pub fn other_tags(&self, identifier: &str, keep_tag: &str) -> io::Result<Vec<String>> {
+    pub fn other_tags(&self, identifier: &str, keep_tag: &str) -> Result<Vec<String>, InstallError> {
         let root = self.root();
-        let tags = installed_tags(root)?;
+        let tags = installed_tags(root).at(root)?;
         let others = tags
             .into_iter()
             .filter(|tag| tag != keep_tag)
@@ -116,22 +127,39 @@ impl Store {
     /// Removes the `identifier` pack from every tag but `keep_tag`, returning the tags it was removed from.
     ///
     /// A tag directory left empty is removed too.
-    pub fn prune(&self, identifier: &str, keep_tag: &str) -> io::Result<Vec<String>> {
+    pub fn prune(&self, identifier: &str, keep_tag: &str) -> Result<Vec<String>, InstallError> {
         let others = self.other_tags(identifier, keep_tag)?;
 
         for tag in &others {
             let pack_dir = self.pack_dir(tag, identifier);
-            std::fs::remove_dir_all(&pack_dir)?;
+            std::fs::remove_dir_all(&pack_dir).at(&pack_dir)?;
 
             let tag_dir = self.root().join(tag);
-            let mut remaining = std::fs::read_dir(&tag_dir)?;
+            let mut remaining = std::fs::read_dir(&tag_dir).at(&tag_dir)?;
 
             if remaining.next().is_none() {
-                std::fs::remove_dir(&tag_dir)?;
+                std::fs::remove_dir(&tag_dir).at(&tag_dir)?;
             }
         }
 
         Ok(others)
+    }
+}
+
+/// Names the path an I/O call was working on when it fails.
+trait AtPath<T> {
+    fn at(self, path: &Path) -> Result<T, InstallError>;
+}
+
+impl<T> AtPath<T> for io::Result<T> {
+    fn at(self, path: &Path) -> Result<T, InstallError> {
+        match self {
+            Ok(value) => Ok(value),
+            Err(source) => Err(InstallError::Io {
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
     }
 }
 
@@ -267,9 +295,11 @@ mod tests {
         let registry = fake_registry();
         let archive = zip_of(&[("w.bin", WEIGHTS), ("x.bin", EXTRA)]);
 
-        let installed = store.install(&registry, "fake", "v0.1.0", archive);
+        let installed = store
+            .install(&registry, "fake", "v0.1.0", archive)
+            .expect("installed");
 
-        assert!(installed.is_ok(), "{installed:?}");
+        assert_eq!(entries_of(&installed), ["w.bin", "x.bin"]);
     }
 
     #[test]
@@ -388,6 +418,7 @@ mod tests {
             let archive = complete_pack();
             store.install(&registry, "fake", tag, archive).expect("installed");
         }
+
         let other_pack = root.join("v0.2.0").join("another");
         std::fs::create_dir_all(&other_pack).expect("created");
 
@@ -400,6 +431,43 @@ mod tests {
         let kept_tag = root.join("v0.2.0");
         assert_eq!(entries_of(&kept_tag), ["another"]);
         assert!(store.pack_dir("v0.3.0", "fake").is_dir());
+    }
+
+    #[test]
+    fn a_root_that_is_a_file_is_refused_naming_it() {
+        let temp = tempfile::tempdir().expect("a temp dir");
+        let root = temp.path().join("models");
+        std::fs::write(&root, b"not a directory").expect("written");
+        let store = Store::new(root.clone(), "v0.1.0");
+        let registry = fake_registry();
+        let archive = complete_pack();
+
+        let error = store
+            .install(&registry, "fake", "v0.1.0", archive)
+            .expect_err("refused");
+
+        let message = error.to_string();
+        let shown = root.display().to_string();
+        assert!(message.contains(&shown), "{message}");
+    }
+
+    #[test]
+    fn a_tag_that_is_not_a_release_is_refused_and_leaves_nothing() {
+        let temp = tempfile::tempdir().expect("a temp dir");
+        let store = store_in(&temp, "v0.1.0");
+        let registry = fake_registry();
+
+        for tag in ["nightly", "0.2.0", "release/v1"] {
+            let archive = complete_pack();
+
+            let error = store.install(&registry, "fake", tag, archive).expect_err(tag);
+
+            assert!(
+                matches!(&error, InstallError::InvalidTag(name) if name == tag),
+                "{tag}: {error}"
+            );
+            assert!(entries_of(temp.path()).is_empty(), "{tag}");
+        }
     }
 
     #[test]

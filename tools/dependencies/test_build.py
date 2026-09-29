@@ -209,3 +209,41 @@ def test_zips_are_identical_across_builds(tmp_path):
     second = zip_path.read_bytes()
 
     assert first == second
+
+
+def test_two_dependencies_with_the_same_builtin_name_are_refused(tmp_path):
+    repository = tmp_path / "repository"
+    add_dependency(repository, "fake")
+    add_dependency(repository, "other", content=b"other")
+
+    with pytest.raises(build.BuildError, match="out.bin"):
+        build.build([], repository, check=False)
+
+
+def test_a_full_build_drops_lock_sections_of_removed_dependencies(tmp_path):
+    repository = tmp_path / "repository"
+    add_dependency(repository, "fake")
+    build.build([], repository, check=False)
+    stale_section = '\n[zzz]\n"gone.bin" = "' + "a" * 64 + '"\n'
+    stale_lock = lock_path(repository).read_text() + stale_section
+    lock_path(repository).write_text(stale_lock)
+
+    checked = build.build([], repository, check=True)
+    rebuilt = build.build([], repository, check=False)
+
+    lock = lock_path(repository).read_text()
+    assert checked == 1
+    assert rebuilt == 0
+    assert "[zzz]" not in lock
+    assert "[fake]" in lock
+
+
+def test_a_failing_converter_is_reported_naming_the_dependency(tmp_path):
+    repository = tmp_path / "repository"
+    add_dependency(repository, "fake")
+    failing = REVERSING_CONVERTER + "sys.exit(1)\n"
+    converter = repository / "dependencies" / "fake" / "convert.py"
+    converter.write_text(failing)
+
+    with pytest.raises(build.BuildError, match="fake"):
+        build.build([], repository, check=False)

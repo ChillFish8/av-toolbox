@@ -86,9 +86,12 @@ def convert_model(source: Path, target: Path, features: int, blocks: int) -> Non
         weight = initializers[node.input[1]]
         bias = initializers[node.input[2]]
         expected_weight_shape = (out_channels, in_channels, 3, 3)
+        expected_bias_shape = (out_channels,)
 
-        if weight.shape != expected_weight_shape or bias.shape != (out_channels,):
-            raise ConvertError(f"{source.name}: {node.name} has shape {weight.shape}, expected {expected_weight_shape}")
+        if weight.shape != expected_weight_shape or bias.shape != expected_bias_shape:
+            found = f"weight {weight.shape} and bias {bias.shape}"
+            wanted = f"weight {expected_weight_shape} and bias {expected_bias_shape}"
+            raise ConvertError(f"{source.name}: {node.name} has shapes {found}, expected {wanted}")
 
         ohwi = weight.transpose(0, 2, 3, 1)
         contiguous = numpy.ascontiguousarray(ohwi)

@@ -30,6 +30,7 @@
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-pipeline/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-cubek/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/av-toolbox-models/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

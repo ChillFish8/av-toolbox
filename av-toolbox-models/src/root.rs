@@ -26,20 +26,21 @@ pub fn default_root() -> PathBuf {
 /// Where models are stored, honouring [MODELS_ENV].
 pub fn models_root() -> PathBuf {
     let raw = std::env::var_os(MODELS_ENV);
+    let raw_text = raw.as_deref();
     let default = default_root();
 
-    resolve_root(raw.as_deref(), default)
+    resolve_root(raw_text, &default)
 }
 
 /// Reads the override variable, falling back to `default` when it is unset or blank.
-fn resolve_root(raw: Option<&OsStr>, default: PathBuf) -> PathBuf {
+fn resolve_root(raw: Option<&OsStr>, default: &Path) -> PathBuf {
     let Some(raw) = raw else {
-        return default;
+        return default.to_path_buf();
     };
 
     let blank = raw.to_str().is_some_and(|text| text.trim().is_empty());
     if blank {
-        return default;
+        return default.to_path_buf();
     }
 
     PathBuf::from(raw)
@@ -81,6 +82,11 @@ pub fn installed_tags(root: &Path) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
+/// Whether `name` is a release tag, `v` and a semantic version.
+pub fn is_release_tag(name: &str) -> bool {
+    parse_tag(name).is_some()
+}
+
 fn parse_tag(name: &str) -> Option<Version> {
     let stripped = name.strip_prefix('v')?;
     Version::parse(stripped).ok()
@@ -100,21 +106,23 @@ mod tests {
     fn an_unset_or_blank_variable_falls_back_to_the_default() {
         let empty = OsString::from("");
         let spaces = OsString::from("   ");
+        let fallback = default();
 
-        let unset = resolve_root(None, default());
-        let empty_root = resolve_root(Some(&empty), default());
-        let spaces_root = resolve_root(Some(&spaces), default());
+        let unset = resolve_root(None, &fallback);
+        let empty_root = resolve_root(Some(&empty), &fallback);
+        let spaces_root = resolve_root(Some(&spaces), &fallback);
 
-        assert_eq!(unset, default());
-        assert_eq!(empty_root, default());
-        assert_eq!(spaces_root, default());
+        assert_eq!(unset, fallback);
+        assert_eq!(empty_root, fallback);
+        assert_eq!(spaces_root, fallback);
     }
 
     #[test]
     fn a_path_in_the_variable_wins() {
         let raw = OsString::from("/mnt/models");
+        let fallback = default();
 
-        let resolved = resolve_root(Some(&raw), default());
+        let resolved = resolve_root(Some(&raw), &fallback);
 
         assert_eq!(resolved, PathBuf::from("/mnt/models"));
     }
@@ -148,6 +156,7 @@ mod tests {
             let directory = base.join(name);
             std::fs::create_dir(&directory).expect("created");
         }
+
         let plain_file = base.join("v2.0.0");
         std::fs::write(&plain_file, b"not a directory").expect("written");
 

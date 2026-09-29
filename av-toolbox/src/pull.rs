@@ -1,15 +1,20 @@
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{self, BufRead, IsTerminal, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
-use av_toolbox_models::{InstallError, Registry, Store, registry};
+use av_toolbox_models::{InstallError, Registry, Store, is_release_tag, registry};
 
 use crate::cli::{Args, PullArgs};
 use crate::report;
 
 const REPOSITORY: &str = "ChillFish8/av-toolbox";
 const USER_AGENT: &str = concat!("av-toolbox/", env!("CARGO_PKG_VERSION"));
+
+/// How long to wait for a connection, and then for a response to start.
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PullError {
@@ -28,8 +33,14 @@ pub(crate) enum PullError {
     #[error("the pack could not be installed: {0}")]
     Install(#[from] InstallError),
 
-    #[error(transparent)]
-    Io(#[from] io::Error),
+    #[error("the old versions could not be removed: {0}")]
+    Prune(InstallError),
+
+    #[error("{}: {source}", path.display())]
+    Io { path: PathBuf, source: io::Error },
+
+    #[error("the latest release's tag, `{0}`, is not `v` and a semantic version")]
+    InvalidTag(String),
 }
 
 /// Whether a download found anything.
@@ -65,21 +76,22 @@ pub(crate) fn run(args: &Args, pull_args: &PullArgs) -> ExitCode {
     let mut stderr = report::stderr(args.color);
     let store = Store::from_environment();
     let registry = registry();
-    let outcome = pull(&store, registry, &UreqFetch, &TerminalConfirm, pull_args);
+    let fetch = UreqFetch::new();
+    let outcome = pull(&store, registry, &fetch, &TerminalConfirm, pull_args);
+    let identifier = &pull_args.identifier;
 
     match outcome {
         Ok(Outcome::AlreadyInstalled(path)) => {
             let shown = path.display();
-            let identifier = &pull_args.identifier;
             eprintln!("{identifier} is already installed at {shown}. Pass --force to download it again");
             ExitCode::SUCCESS
         },
         Ok(Outcome::Installed { path, tag, pruned }) => {
             let shown = path.display();
-            eprintln!("installed {} {tag} to {shown}", pull_args.identifier);
+            eprintln!("installed {identifier} {tag} to {shown}");
 
             for old in &pruned {
-                eprintln!("removed {} {old}", pull_args.identifier);
+                eprintln!("removed {identifier} {old}");
             }
 
             ExitCode::SUCCESS
@@ -121,8 +133,8 @@ pub(crate) fn pull(
     }
 
     let root = store.root();
-    std::fs::create_dir_all(root)?;
-    let mut download = tempfile::tempfile_in(root)?;
+    std::fs::create_dir_all(root).at(root)?;
+    let mut download = tempfile::tempfile_in(root).at(root)?;
     let own_url = release_url(&own_tag, identifier);
     let fetched = fetch.download(&own_url, &mut download)?;
 
@@ -138,6 +150,11 @@ pub(crate) fn pull(
                     identifier: identifier.to_string(),
                 });
             };
+
+            if !is_release_tag(&latest) {
+                return Err(PullError::InvalidTag(latest));
+            }
+
             tracing::warn!("using the latest release, {latest}");
 
             let latest_dir = store.pack_dir(&latest, identifier);
@@ -145,8 +162,8 @@ pub(crate) fn pull(
                 return Ok(Outcome::AlreadyInstalled(latest_dir));
             }
 
-            download.set_len(0)?;
-            download.seek(SeekFrom::Start(0))?;
+            download.set_len(0).at(root)?;
+            download.seek(SeekFrom::Start(0)).at(root)?;
 
             let latest_url = release_url(&latest, identifier);
             let retried = fetch.download(&latest_url, &mut download)?;
@@ -162,14 +179,21 @@ pub(crate) fn pull(
         },
     };
 
-    download.seek(SeekFrom::Start(0))?;
+    download.seek(SeekFrom::Start(0)).at(root)?;
     let path = store.install(registry, identifier, &tag, &mut download)?;
 
-    let others = store.other_tags(identifier, &tag)?;
+    let others = store.other_tags(identifier, &tag).map_err(PullError::Prune)?;
     let count = others.len();
-    let should_prune = count > 0 && (args.prune || confirm.delete_old(identifier, count));
+    let should_prune = if count == 0 {
+        false
+    } else if args.prune {
+        true
+    } else {
+        confirm.delete_old(identifier, count)
+    };
+
     let pruned = if should_prune {
-        store.prune(identifier, &tag)?
+        store.prune(identifier, &tag).map_err(PullError::Prune)?
     } else {
         Vec::new()
     };
@@ -210,19 +234,52 @@ fn latest_tag_from(url: &str, text: &str) -> Result<String, PullError> {
     }
 }
 
-fn download_failed(url: &str, error: &ureq::Error) -> PullError {
+fn download_failed(url: &str, error: &impl Display) -> PullError {
     PullError::Download {
         url: url.to_string(),
         reason: error.to_string(),
     }
 }
 
+/// Names the path an I/O call was working on when it fails.
+trait AtPath<T> {
+    fn at(self, path: &Path) -> Result<T, PullError>;
+}
+
+impl<T> AtPath<T> for io::Result<T> {
+    fn at(self, path: &Path) -> Result<T, PullError> {
+        match self {
+            Ok(value) => Ok(value),
+            Err(source) => Err(PullError::Io {
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    }
+}
+
 /// Fetches from GitHub over HTTPS.
-struct UreqFetch;
+///
+/// Connecting, and then waiting for a response to start, each give up after [TIMEOUT].
+struct UreqFetch {
+    agent: ureq::Agent,
+}
+
+impl UreqFetch {
+    fn new() -> Self {
+        let config = ureq::Agent::config_builder()
+            .timeout_connect(Some(TIMEOUT))
+            .timeout_recv_response(Some(TIMEOUT))
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+
+        Self { agent }
+    }
+}
 
 impl Fetch for UreqFetch {
     fn download(&self, url: &str, into: &mut File) -> Result<Fetched, PullError> {
-        let request = ureq::get(url).header("User-Agent", USER_AGENT);
+        let request = self.agent.get(url).header("User-Agent", USER_AGENT);
         let called = request.call();
 
         let mut response = match called {
@@ -232,14 +289,20 @@ impl Fetch for UreqFetch {
         };
 
         let mut body = response.body_mut().as_reader();
-        io::copy(&mut body, into)?;
+        let copied = io::copy(&mut body, into);
+
+        if let Err(error) = copied {
+            return Err(download_failed(url, &error));
+        }
 
         Ok(Fetched::Written)
     }
 
     fn latest_tag(&self) -> Result<Option<String>, PullError> {
         let url = format!("https://api.github.com/repos/{REPOSITORY}/releases/latest");
-        let request = ureq::get(&url)
+        let request = self
+            .agent
+            .get(&url)
             .header("User-Agent", USER_AGENT)
             .header("Accept", "application/vnd.github+json");
         let called = request.call();
@@ -330,7 +393,7 @@ mod tests {
                 return Ok(Fetched::NotFound);
             };
 
-            into.write_all(bytes)?;
+            into.write_all(bytes).expect("written");
             Ok(Fetched::Written)
         }
 
@@ -627,6 +690,44 @@ mod tests {
         let listing = std::fs::read_dir(temp_path).expect("listed");
         assert!(matches!(error, PullError::Install(_)));
         assert_eq!(listing.count(), 0);
+    }
+
+    #[test]
+    fn a_root_that_is_a_file_is_refused_naming_it() {
+        let temp = tempfile::tempdir().expect("a temp dir");
+        let root = temp.path().join("models");
+        std::fs::write(&root, b"not a directory").expect("written");
+        let store = Store::new(root.clone(), "v0.1.0");
+        let assets = [(url("v0.1.0"), pack_zip(WEIGHTS))];
+        let releases = FakeReleases::with(&assets, "v0.1.0");
+        let answer = Answer::of(false);
+        let registry = fake_registry();
+
+        let request = args(false, false);
+        let error = pull(&store, &registry, &releases, &answer, &request).expect_err("refused");
+
+        let message = error.to_string();
+        let shown = root.display().to_string();
+        assert!(message.contains(&shown), "{message}");
+    }
+
+    #[test]
+    fn a_latest_tag_that_is_not_a_release_is_refused_before_downloading_it() {
+        let temp = tempfile::tempdir().expect("a temp dir");
+        let store = store_in(&temp, "v9.9.9");
+        let assets = [(url("nightly"), pack_zip(WEIGHTS))];
+        let releases = FakeReleases::with(&assets, "nightly");
+        let answer = Answer::of(false);
+        let registry = fake_registry();
+
+        let request = args(false, false);
+        let error = pull(&store, &registry, &releases, &answer, &request).expect_err("refused");
+
+        assert!(
+            matches!(&error, PullError::InvalidTag(tag) if tag == "nightly"),
+            "{error}"
+        );
+        assert_eq!(*releases.requested.borrow(), [url("v9.9.9")]);
     }
 
     #[test]

@@ -1,5 +1,5 @@
+import importlib.util
 import struct
-import sys
 from pathlib import Path
 
 import numpy
@@ -7,14 +7,22 @@ import onnx
 import pytest
 from onnx import TensorProto, helper, numpy_helper
 
-sys.path.insert(0, str(Path(__file__).parent))
-
-import convert
+CONVERTER_PATH = Path(__file__).parent / "convert.py"
+CONVERTER_SPEC = importlib.util.spec_from_file_location("artcnn_convert", CONVERTER_PATH)
+convert = importlib.util.module_from_spec(CONVERTER_SPEC)
+CONVERTER_SPEC.loader.exec_module(convert)
 
 PLAIN = {"strides": [1, 1], "dilations": [1, 1], "auto_pad": "SAME_UPPER"}
 
 
-def tiny_model(path: Path, features: int = 2, blocks: int = 1, attributes=PLAIN, first_weight=None):
+def tiny_model(
+    path: Path,
+    features: int = 2,
+    blocks: int = 1,
+    attributes=PLAIN,
+    first_weight=None,
+    first_bias_length=None,
+):
     """Writes a chain of convolutions with ArtCNN's layer shapes, returning each layer's weight and bias."""
     shapes = convert.expected_shapes(features, blocks)
     generator = numpy.random.default_rng(7)
@@ -25,7 +33,12 @@ def tiny_model(path: Path, features: int = 2, blocks: int = 1, attributes=PLAIN,
 
     for index, (out_channels, in_channels) in enumerate(shapes):
         weight = generator.standard_normal((out_channels, in_channels, 3, 3)).astype(numpy.float32)
-        bias = generator.standard_normal(out_channels).astype(numpy.float32)
+        bias_length = out_channels
+
+        if index == 0 and first_bias_length is not None:
+            bias_length = first_bias_length
+
+        bias = generator.standard_normal(bias_length).astype(numpy.float32)
 
         if index == 0 and first_weight is not None:
             weight[0, 0, 0, 0] = first_weight
@@ -146,6 +159,15 @@ def test_a_model_with_the_wrong_width_is_refused(tmp_path):
     tiny_model(source, features=3)
 
     with pytest.raises(convert.ConvertError, match="shape"):
+        convert.convert_model(source, target, 2, 1)
+
+
+def test_a_wrong_bias_shape_is_reported(tmp_path):
+    source = tmp_path / "tiny.onnx"
+    target = tmp_path / "tiny.bin"
+    tiny_model(source, first_bias_length=3)
+
+    with pytest.raises(convert.ConvertError, match=r"bias \(3,\)"):
         convert.convert_model(source, target, 2, 1)
 
 

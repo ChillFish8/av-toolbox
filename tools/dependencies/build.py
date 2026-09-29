@@ -60,7 +60,22 @@ def load_dependency(directory: Path) -> Dependency:
 
 def discover(dependencies_root: Path) -> list[Dependency]:
     manifests = sorted(dependencies_root.glob("*/dependency.toml"))
-    return [load_dependency(manifest.parent) for manifest in manifests]
+    dependencies = [load_dependency(manifest.parent) for manifest in manifests]
+    check_builtin_names(dependencies)
+
+    return dependencies
+
+
+def check_builtin_names(dependencies: list[Dependency]) -> None:
+    """Refuses two dependencies declaring the same builtin file, as every builtin shares one directory."""
+    owners: dict[str, str] = {}
+
+    for dependency in dependencies:
+        for name in dependency.builtin:
+            if name in owners:
+                raise BuildError(f"{name} is a builtin of both {owners[name]} and {dependency.identifier}")
+
+            owners[name] = dependency.identifier
 
 
 def sha256_of(path: Path) -> str:
@@ -96,7 +111,11 @@ def fetch(source: Source, cache: Path) -> Path:
 def convert(dependency: Dependency, sources_dir: Path, output_dir: Path) -> None:
     script = dependency.directory / "convert.py"
     command = ["uv", "run", "--script", str(script), str(sources_dir), str(output_dir)]
-    subprocess.run(command, check=True)
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as error:
+        message = f"{dependency.identifier}: convert.py exited with status {error.returncode}"
+        raise BuildError(message) from error
 
     written = sorted(path.name for path in output_dir.iterdir())
     expected = sorted(dependency.files)
@@ -156,8 +175,12 @@ def build(identifiers: list[str], repository: Path, check: bool) -> int:
     target = repository / "target" / "dependencies"
     lock_path = dependencies_root / "dependencies.lock"
     builtin_root = repository / "av-toolbox-models" / "builtin"
-    lock = read_lock(lock_path)
     builtin_files: dict[str, bytes] = {}
+
+    # A full build writes every section again, so sections of removed dependencies are dropped.
+    lock = {}
+    if identifiers:
+        lock = read_lock(lock_path)
 
     for dependency in chosen:
         with tempfile.TemporaryDirectory() as work_name:
