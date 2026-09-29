@@ -1,0 +1,27 @@
+# Doubles a y4m clip with ArtCNN. Luma goes through the R8F64 network and chroma through Catrom.
+#
+# Set args.model to "r16f96" after `av-toolbox pull artcnn`.
+# Set args.precision to "f32" for full-precision feature maps.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the doubled clip"
+default = "output.y4m"
+
+[source.input]
+type = "y4m/pipe"
+args.path = "{{ input }}"
+
+[filter.doubled]
+type = "upscale/artcnn"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["doubled"]
+args.path = "{{ output }}"

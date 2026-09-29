@@ -38,6 +38,7 @@ fn every_example_explains_without_a_device() {
         "solid.toml",
         "image.toml",
         "recolour-lines.toml",
+        "artcnn.toml",
     ];
 
     for name in names {

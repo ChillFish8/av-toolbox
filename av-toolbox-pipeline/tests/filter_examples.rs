@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use av_toolbox_cubek::artcnn::{Model, Weights};
+use av_toolbox_cubek::testing::reference_artcnn;
 use av_toolbox_gpu::{Backend, Device};
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
@@ -481,5 +483,54 @@ fn the_lineart_cleanup_example_darkens_and_thins_a_line() {
 
         assert!(frame.u_plane.iter().all(|sample| sample.abs_diff(FLAT_U) <= 1));
         assert!(frame.v_plane.iter().all(|sample| sample.abs_diff(FLAT_V) <= 1));
+    }
+}
+
+/// How far an output luma code may sit from the rounded reference.
+///
+/// The stage measured 1 code out at f16 on an AMD R9700, so one code of headroom is kept.
+const ARTCNN_LUMA_BOUND: f64 = 2.0;
+
+/// The builtin R8F64 network's doubled `luma`, as rounded 8-bit codes.
+fn reference_artcnn_luma(luma: &[u8]) -> Vec<f64> {
+    let model = Model::R8F64;
+    let bytes = av_toolbox_models::builtin("artcnn", model.file_name()).expect("R8F64 is built in");
+    let weights = Weights::parse(bytes, model.features(), model.blocks()).expect("the builtin weights parse");
+    let unit: Vec<f32> = luma.iter().map(|code| f32::from(*code) / 255.0).collect();
+    let doubled = reference_artcnn(&unit, SIZE as u32, SIZE as u32, &weights);
+
+    doubled
+        .iter()
+        .map(|value| (value * 255.0).round().clamp(0.0, 255.0))
+        .collect()
+}
+
+#[test]
+fn the_artcnn_example_doubles_the_clip() {
+    let decoded = run_example("artcnn.toml", &[]);
+    let expected = reference_artcnn_luma(&gradient_luma());
+    let doubled_chroma = SIZE * SIZE;
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for (index, frame) in decoded.frames.iter().enumerate() {
+        assert_eq!(frame.luma.len(), SIZE * 2 * SIZE * 2);
+        assert_eq!(frame.u_plane.len(), doubled_chroma);
+        assert_eq!(frame.v_plane.len(), doubled_chroma);
+        assert!(frame.u_plane.iter().all(|sample| *sample == FLAT_U));
+        assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
+
+        // The clip repeats one frame, so every frame is compared against the same reference.
+        let largest = frame
+            .luma
+            .iter()
+            .zip(&expected)
+            .map(|(found, reference)| (f64::from(*found) - reference).abs())
+            .fold(0.0, f64::max);
+        println!("frame {index}: largest luma difference from the reference: {largest}");
+        assert!(
+            largest <= ARTCNN_LUMA_BOUND,
+            "frame {index}: luma is {largest} codes from the reference"
+        );
     }
 }
