@@ -20,10 +20,10 @@ const PATHS: [BodyPath; 2] = [BodyPath::Convolution, BodyPath::Im2col];
 
 const PRECISIONS: [Precision; 2] = [Precision::F32, Precision::F16];
 
-const PEAK: f32 = 65535.0;
+pub(super) const PEAK: f32 = 65535.0;
 
 /// The code the output is filled with before the pass, which is -1 once divided by the peak.
-const UNTOUCHED: f32 = -PEAK;
+pub(super) const UNTOUCHED: f32 = -PEAK;
 
 /// Whether the device has a cooperative matrix taking `precision`'s type and accumulating in f32.
 fn has_cooperative_matrix<R: Runtime>(client: &ComputeClient<R>, precision: Precision) -> bool {
@@ -68,7 +68,7 @@ fn supports(path: BodyPath, precision: Precision) -> bool {
     backend().build(task)
 }
 
-fn supported_runs() -> Vec<(BodyPath, Precision)> {
+pub(super) fn supported_runs() -> Vec<(BodyPath, Precision)> {
     let mut runs = Vec::new();
 
     for path in PATHS {
@@ -158,7 +158,7 @@ impl BuildTask for Forward {
     }
 }
 
-fn largest_error(actual: &[f32], expected: &[f64]) -> f64 {
+pub(super) fn largest_error(actual: &[f32], expected: &[f64]) -> f64 {
     assert_eq!(actual.len(), expected.len());
 
     actual
@@ -221,7 +221,7 @@ fn largest_errors(
     errors
 }
 
-fn r8f64() -> Weights {
+pub(super) fn r8f64() -> Weights {
     let model = Model::R8F64;
     let builtin = av_toolbox_models::builtin("artcnn", model.file_name());
     let bytes = builtin.expect("R8F64 is built in");

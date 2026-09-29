@@ -1,6 +1,18 @@
 use half::f16;
 
-use crate::artcnn::{Layer, Model, Weights, WeightsError, layer_shapes};
+use crate::artcnn::{
+    BodyPath,
+    Layer,
+    Model,
+    Precision,
+    Region,
+    TILE_BUDGET,
+    Weights,
+    WeightsError,
+    layer_shapes,
+    tile_side,
+    tiles,
+};
 
 fn builtin_r8f64() -> &'static [u8] {
     let bytes = av_toolbox_models::builtin("artcnn", "ArtCNN_R8F64.bin");
@@ -192,4 +204,66 @@ fn every_refusal_reads_as_a_sentence() {
 
         assert!(!message.is_empty() && !message.contains('\u{2014}'), "{message}");
     }
+}
+
+#[test]
+fn tiles_cover_the_plane_once_with_clipped_halos() {
+    let width = 23;
+    let height = 17;
+
+    let list = tiles(width, height, 8, 3);
+
+    let mut covered = vec![0u32; (width * height) as usize];
+    for (region, core) in &list {
+        assert!(region.x <= core.x && region.y <= core.y);
+        assert!(region.x + region.width >= core.x + core.width);
+        assert!(region.x + region.width <= width && region.y + region.height <= height);
+
+        let left_halo = core.x - region.x;
+        let expected_left = core.x.min(3);
+        assert_eq!(left_halo, expected_left);
+
+        for row in core.y..core.y + core.height {
+            for column in core.x..core.x + core.width {
+                covered[(row * width + column) as usize] += 1;
+            }
+        }
+    }
+
+    assert!(covered.iter().all(|count| *count == 1));
+    assert_eq!(list.len(), 9);
+}
+
+#[test]
+fn a_plane_smaller_than_a_tile_is_one_tile_with_no_halo() {
+    let list = tiles(5, 4, 64, 27);
+
+    let whole = Region {
+        x: 0,
+        y: 0,
+        width: 5,
+        height: 4,
+    };
+    assert_eq!(list, [(whole, whole)]);
+}
+
+#[test]
+fn the_tile_side_fits_the_budget() {
+    // R8F64 at f16 on the convolution path holds 4 maps of 64 f16 values per sample, 512 bytes.
+    // sqrt(2^30 / 512) = 1448 samples a side haloed, so the centre is 1448 - 2 * 27 = 1394.
+    let convolution = tile_side(64, 27, Precision::F16, BodyPath::Convolution, TILE_BUDGET);
+
+    // At f32 on the im2col path, a sample holds 4 * 64 * 4 + 9 * 64 * 4 = 3328 bytes.
+    // sqrt(2^30 / 3328) = 568, so the centre is 568 - 54 = 514.
+    let columns = tile_side(64, 27, Precision::F32, BodyPath::Im2col, TILE_BUDGET);
+
+    assert_eq!(convolution, 1394);
+    assert_eq!(columns, 514);
+}
+
+#[test]
+fn a_tiny_budget_still_gives_a_tile() {
+    let side = tile_side(96, 51, Precision::F32, BodyPath::Im2col, 1024);
+
+    assert_eq!(side, 1);
 }
