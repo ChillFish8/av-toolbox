@@ -294,6 +294,46 @@ fn a_layer_missing_a_bias_value_is_refused() {
 }
 
 #[test]
+fn a_layer_whose_weight_count_overflows_u32_is_refused_not_wrapped() {
+    let features = 21_846;
+    let shapes = layer_shapes(features, 1);
+    let mut layers = Vec::new();
+
+    for [out_channels, in_channels, _, _] in shapes {
+        layers.push(Layer {
+            out_channels,
+            in_channels,
+            weights: Vec::new(),
+            bias: Vec::new(),
+        });
+    }
+
+    layers[0].weights = vec![f16::ZERO; features as usize * 9];
+    layers[0].bias = vec![f16::ZERO; features as usize];
+
+    // 21,846 * 21,846 * 9 = 4,295,229,444 weights, which wraps in u32 to 4,295,229,444 - 2^32 = 262,148.
+    layers[1].weights = vec![f16::ZERO; 262_148];
+    layers[1].bias = vec![f16::ZERO; features as usize];
+
+    let weights = Weights {
+        features,
+        blocks: 1,
+        layers,
+    };
+
+    let error = weights.validate().expect_err("wrapped weight count");
+
+    assert_eq!(
+        error,
+        WeightsError::LayerLength {
+            index: 1,
+            found: [262_148, 21_846],
+            expected: [4_295_229_444, 21_846]
+        }
+    );
+}
+
+#[test]
 fn tiles_cover_the_plane_once_with_clipped_halos() {
     let width = 23;
     let height = 17;

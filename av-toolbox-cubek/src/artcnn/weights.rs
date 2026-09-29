@@ -180,8 +180,9 @@ impl Weights {
             }
 
             let found_lengths = [layer.weights.len(), layer.bias.len()];
-            let weight_count = (layer.out_channels * layer.in_channels * 9) as usize;
-            let expected_lengths = [weight_count, layer.out_channels as usize];
+            let out_channels = layer.out_channels as usize;
+            let in_channels = layer.in_channels as usize;
+            let expected_lengths = [out_channels * in_channels * 9, out_channels];
 
             if found_lengths != expected_lengths {
                 return Err(WeightsError::LayerLength {
