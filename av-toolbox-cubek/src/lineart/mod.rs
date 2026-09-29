@@ -7,6 +7,7 @@ use cubecl::prelude::*;
 
 use crate::dehalo::{DifferencePlanes, difference};
 use crate::neighbourhood::{Extreme, NeighbourPlanes, Shape, Smooth, extreme, smooth};
+use crate::warp::WarpParams;
 use crate::{DevicePlane, Dispatch, reflect};
 
 /// The planes one merge reads and writes, all f32 and one size.
@@ -457,4 +458,203 @@ pub fn darken<R: Runtime>(
         weight: planes.blurred,
     };
     merge(client, dispatch, mix, settings.peak);
+}
+
+/// The settings of one toon pass, all in the code values of the plane being filtered.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ToonSettings {
+    /// How strongly a line is deepened.
+    pub strength: f32,
+    /// The darkness at or below which a line is left alone.
+    pub l: f32,
+    /// The darkness at or above which a line is deepened in full.
+    pub u: f32,
+    /// The middle of the sample range, where a difference of 0 sits.
+    pub n: f32,
+    /// The largest sample value.
+    pub peak: f32,
+    /// The warp that thins the darkness map.
+    pub warp: WarpParams,
+}
+
+/// The planes finding the darkness map reads, writes and uses as scratch, all f32 and one size.
+#[derive(Debug, Clone, Copy)]
+pub struct ToonDifferencePlanes<'a> {
+    pub input: DevicePlane<'a>,
+    /// The plane grown by one sample.
+    pub grown: DevicePlane<'a>,
+    /// The grown plane shrunk by one sample.
+    pub closed: DevicePlane<'a>,
+    /// How far each sample sits below its closing.
+    pub diff: DevicePlane<'a>,
+    /// `diff` shifted up by `n`, ready to warp.
+    pub shifted: DevicePlane<'a>,
+}
+
+/// The planes finishing a toon pass reads, writes and uses as scratch, all f32 and one size.
+#[derive(Debug, Clone, Copy)]
+pub struct ToonFinishPlanes<'a> {
+    pub input: DevicePlane<'a>,
+    pub output: DevicePlane<'a>,
+    /// The darkness map, held to the warped map in place.
+    pub diff: DevicePlane<'a>,
+    /// The warped darkness map, still shifted up by `n`.
+    pub warped: DevicePlane<'a>,
+    /// Where the largest darkness around each sample is written.
+    pub widest: DevicePlane<'a>,
+}
+
+/// Writes how far each sample sits below its closing, held to `peak - n`, and that map shifted by `n`.
+#[cube(launch_unchecked)]
+fn toon_difference_kernel(
+    input: &Array<f32>,
+    closed: &Array<f32>,
+    diff: &mut Array<f32>,
+    shifted: &mut Array<f32>,
+    n: f32,
+    peak: f32,
+) {
+    if ABSOLUTE_POS >= diff.len() {
+        terminate!();
+    }
+
+    let below = closed[ABSOLUTE_POS] - input[ABSOLUTE_POS];
+    let held = f32::min(below, peak - n);
+
+    diff[ABSOLUTE_POS] = held;
+    shifted[ABSOLUTE_POS] = held + n;
+}
+
+/// Holds the darkness to what the warp left of it.
+#[cube(launch_unchecked)]
+fn toon_limit_kernel(diff: &mut Array<f32>, warped: &Array<f32>, n: f32) {
+    if ABSOLUTE_POS >= diff.len() {
+        terminate!();
+    }
+
+    diff[ABSOLUTE_POS] = f32::min(diff[ABSOLUTE_POS], warped[ABSOLUTE_POS] - n);
+}
+
+/// Deepens each sample by its darkness, scaled by how dark the line around it is.
+#[cube(launch_unchecked)]
+fn toon_kernel(
+    input: &Array<f32>,
+    diff: &Array<f32>,
+    widest: &Array<f32>,
+    output: &mut Array<f32>,
+    l: f32,
+    u: f32,
+    strength: f32,
+) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let darkness = diff[ABSOLUTE_POS];
+    let around = widest[ABSOLUTE_POS];
+
+    let mut dark = darkness;
+    if around <= l {
+        dark = 0.0;
+    } else if around < u {
+        dark = darkness * (around - l) / (u - l);
+    }
+
+    output[ABSOLUTE_POS] = input[ABSOLUTE_POS] - dark * strength;
+}
+
+/// Finds how dark each sample is against its closing, and shifts that map up by `n` for the warp.
+///
+/// The closing is the plane grown then shrunk by one sample. The darkness is how far a sample
+/// sits below it, held to `peak - n` so the shifted map stays inside the sample range.
+pub fn toon_difference<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ToonDifferencePlanes<'_>,
+    settings: &ToonSettings,
+) {
+    let grow = NeighbourPlanes {
+        input: planes.input,
+        output: planes.grown,
+    };
+    extreme(client, dispatch, grow, Extreme::Maximum, Shape::Square);
+
+    let shrink = NeighbourPlanes {
+        input: planes.grown,
+        output: planes.closed,
+    };
+    extreme(client, dispatch, shrink, Extreme::Minimum, Shape::Square);
+
+    let samples = planes.diff.samples();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+    let input = planes.input.array::<R>();
+    let closed = planes.closed.array::<R>();
+    let diff = planes.diff.array::<R>();
+    let shifted = planes.shifted.array::<R>();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        toon_difference_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            input,
+            closed,
+            diff,
+            shifted,
+            settings.n,
+            settings.peak,
+        );
+    }
+}
+
+/// Deepens lines by their darkness, given the darkness map after the warp.
+///
+/// The darkness is held to what the warp left of it. Where the largest darkness around a sample is
+/// at most `l` nothing changes, from `u` up the whole darkness is taken off, and between the two a
+/// share of it is, growing evenly. That is scaled by `strength` and taken off the input.
+pub fn toon_finish<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ToonFinishPlanes<'_>,
+    settings: &ToonSettings,
+) {
+    let samples = planes.output.samples();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+    let diff = planes.diff.array::<R>();
+    let warped = planes.warped.array::<R>();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        toon_limit_kernel::launch_unchecked::<R>(client, cubes.clone(), unit, diff, warped, settings.n);
+    }
+
+    let spread = NeighbourPlanes {
+        input: planes.diff,
+        output: planes.widest,
+    };
+    extreme(client, dispatch, spread, Extreme::Maximum, Shape::Square);
+
+    let input = planes.input.array::<R>();
+    let diff = planes.diff.array::<R>();
+    let widest = planes.widest.array::<R>();
+    let output = planes.output.array::<R>();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        toon_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            input,
+            diff,
+            widest,
+            output,
+            settings.l,
+            settings.u,
+            settings.strength,
+        );
+    }
 }

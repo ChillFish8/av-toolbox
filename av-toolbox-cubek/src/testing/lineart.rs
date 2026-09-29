@@ -1,5 +1,5 @@
-use super::reflect;
-use crate::lineart::DarkenSettings;
+use super::{reference_padded_warp, reflect};
+use crate::lineart::{DarkenSettings, ToonSettings};
 
 /// Merges on the CPU in f64, mirroring [merge](crate::lineart::merge).
 pub fn reference_merge(input: &[f32], filtered: &[f32], weight: &[f32], weight_peak: f32) -> Vec<f32> {
@@ -243,4 +243,49 @@ fn read_reflected(input: &[f64], width: u32, height: u32, column: i32, row: i32)
     let y = reflect(row, height as i32) as u32;
 
     input[(y * width + x) as usize]
+}
+
+/// Deepens lines on the CPU in f64, mirroring [toon_difference](crate::lineart::toon_difference) and
+/// [toon_finish](crate::lineart::toon_finish).
+pub fn reference_toon(input: &[f32], width: u32, height: u32, settings: &ToonSettings) -> Vec<f32> {
+    let values: Vec<f64> = input.iter().map(|value| f64::from(*value)).collect();
+    let strength = f64::from(settings.strength);
+    let l = f64::from(settings.l);
+    let u = f64::from(settings.u);
+    let n = f64::from(settings.n);
+    let peak = f64::from(settings.peak);
+
+    let maxed = window_extreme(&values, width, height, f64::max);
+    let closed = window_extreme(&maxed, width, height, f64::min);
+    let diff: Vec<f64> = closed
+        .iter()
+        .zip(&values)
+        .map(|(closing, value)| (closing - value).min(peak - n))
+        .collect();
+
+    let shifted: Vec<f32> = diff.iter().map(|value| (value + n) as f32).collect();
+    let warped = reference_padded_warp(&shifted, width, height, &settings.warp);
+    let limited: Vec<f64> = diff
+        .iter()
+        .zip(&warped)
+        .map(|(darkness, moved)| darkness.min(f64::from(*moved) - n))
+        .collect();
+    let widest = window_extreme(&limited, width, height, f64::max);
+
+    let mut output = Vec::with_capacity(values.len());
+    for index in 0..values.len() {
+        let darkness = limited[index];
+        let around = widest[index];
+        let dark = if around <= l {
+            0.0
+        } else if around >= u {
+            darkness
+        } else {
+            darkness * (around - l) / (u - l)
+        };
+
+        output.push((values[index] - dark * strength) as f32);
+    }
+
+    output
 }
