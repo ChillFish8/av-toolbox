@@ -489,7 +489,8 @@ fn chroma_tables<R: Runtime>(client: &ComputeClient<R>, input: &FrameFormat) -> 
 
 /// Doubles a clip's size, running its luma through the ArtCNN network and its chroma through Catrom.
 ///
-/// Each worker holds up to about 1 GiB of device scratch.
+/// It runs as a single instance, since one frame's kernels already fill the device, and holds up to about
+/// 1 GiB of device scratch.
 pub(crate) struct Artcnn;
 
 impl StageDefinition for Artcnn {
@@ -504,7 +505,7 @@ impl StageDefinition for Artcnn {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Frame
+        Parallelism::Stream
     }
 
     fn inputs() -> &'static InputSignature {

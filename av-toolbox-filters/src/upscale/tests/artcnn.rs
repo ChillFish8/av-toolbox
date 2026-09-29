@@ -277,10 +277,10 @@ fn the_builtin_model_is_found_without_a_store() {
 }
 
 #[test]
-fn the_stage_runs_frames_in_parallel() {
+fn the_stage_runs_as_a_single_instance() {
     let arguments = args(json!({}));
 
-    assert_eq!(Artcnn::parallelism(&arguments), Parallelism::Frame);
+    assert_eq!(Artcnn::parallelism(&arguments), Parallelism::Stream);
 }
 
 #[test]
