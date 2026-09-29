@@ -7,6 +7,7 @@ members = [
     "av-toolbox-filters",
     "av-toolbox-graph",
     "av-toolbox-masks",
+    "av-toolbox-models",
     "av-toolbox-pipeline",
     "av-toolbox-runtime",
     "av-toolbox-gpu",
@@ -47,3 +48,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 codespan-reporting = "0.13"
 ctrlc = "3.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+semver = "1.0"
+sha2 = "0.10"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+ureq = "3.4"
