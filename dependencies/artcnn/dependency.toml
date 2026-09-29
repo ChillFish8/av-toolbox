@@ -1,0 +1,13 @@
+identifier = "artcnn"
+files = ["ArtCNN_R8F64.bin", "ArtCNN_R16F96.bin"]
+builtin = ["ArtCNN_R8F64.bin"]
+
+[[sources]]
+name = "ArtCNN_R8F64.onnx"
+url = "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/ArtCNN_R8F64.onnx"
+sha256 = "e446f67ce1c36e281d4fccf3082956656d605c101450406fbec0ad372f44722c"
+
+[[sources]]
+name = "ArtCNN_R16F96.onnx"
+url = "https://github.com/Artoriuz/ArtCNN/releases/download/v1.6.2/ArtCNN_R16F96.onnx"
+sha256 = "498f1295c43f5799ef5bdea14a8f5b7a68d1f99ae67fee8a8f77ec9b25ca3e8d"

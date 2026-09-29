@@ -46,4 +46,4 @@ dependencies-check:
 
 # Tests the dependency builder and every converter.
 dependencies-test:
-    uv run --with pytest pytest tools/dependencies
+    uv run --with pytest --with onnx==1.23.0 --with numpy==2.5.3 pytest tools/dependencies dependencies
