@@ -3,6 +3,7 @@
 mod adaptive;
 mod canny;
 mod combine;
+mod detail;
 mod edges;
 mod reference;
 mod retinex;

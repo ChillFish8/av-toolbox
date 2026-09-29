@@ -2,6 +2,7 @@
 //!
 //! Every mask stage produces a single U8 plane, where 0 is background and 255 is fully selected.
 //!
+//! - `detail/range` marks where the local maximum and minimum differ.
 //! - `edges/kirsch` finds edges by the strongest of 8 compass kernels.
 //! - `edges/prewitt` finds edges by the Prewitt gradient's magnitude.
 //! - `edges/retinex` finds edges in a retinex-lit copy of the luma, which brings out lines in dark areas.
@@ -14,7 +15,9 @@
 //! - `mask/union` keeps the largest sample of every input.
 //! - `mask/vote` selects the pixels enough of its inputs agree on.
 
+mod detail;
 mod edges;
+mod gauss;
 mod lines;
 mod luma;
 mod mask;
@@ -26,6 +29,7 @@ use av_toolbox_core::{PipelineRegistry, RegistryError};
 
 /// Registers every mask this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
+    registry.register_mask::<detail::Range>()?;
     registry.register_mask::<edges::Edges<edges::Kirsch>>()?;
     registry.register_mask::<edges::Edges<edges::Prewitt>>()?;
     registry.register_mask::<edges::Retinex>()?;
@@ -57,6 +61,7 @@ mod tests {
 
     #[test]
     fn every_mask_is_registered() {
+        assert!(registered("detail/range"));
         assert!(registered("edges/kirsch"));
         assert!(registered("edges/prewitt"));
         assert!(registered("edges/retinex"));

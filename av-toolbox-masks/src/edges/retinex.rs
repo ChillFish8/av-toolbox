@@ -33,6 +33,7 @@ use cubecl::prelude::{ComputeClient, Runtime};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::gauss::jetpack_radius;
 use crate::luma::{Luma, accepts_luma, load_luma_code_values, produces_luma_mask, store_mask};
 use crate::sizing::{Scratch, Sizing, mask_plane};
 
@@ -128,20 +129,13 @@ impl RetinexArgs {
     }
 }
 
-/// The blur radius for `sigma`, `ceil(6 * sigma + 1) / 2`, as vs-jetpack rounds it.
-fn retinex_blur_radius(sigma: f32) -> u32 {
-    let reach = (6.0 * sigma + 1.0).ceil();
-
-    reach as u32 / 2
-}
-
 /// The radius the blur runs at, or `None` when `sigma` is 0 and the blur is skipped.
 fn blur_radius(sigma: f32) -> Option<u32> {
     if sigma <= 0.0 {
         return None;
     }
 
-    Some(retinex_blur_radius(sigma))
+    Some(jetpack_radius(sigma))
 }
 
 /// The code value the join binarizes at, or `None` when `brz` is 0 and binarizing is skipped.
@@ -550,11 +544,5 @@ mod tests {
     #[test]
     fn a_zero_brz_skips_binarize() {
         assert_eq!(binarize_threshold(0.0, 255.0), None);
-    }
-
-    #[test]
-    fn the_blur_radius_is_vs_jetpacks() {
-        assert_eq!(blur_radius(1.0), Some(3));
-        assert_eq!(blur_radius(5.0), Some(15));
     }
 }
