@@ -49,7 +49,7 @@ use super::mask::{
     missing_input,
 };
 use crate::bits::bits_of;
-use crate::checks::{at_least, between_f32, between_u32};
+use crate::checks::{at_least, between_f32, between_i32, between_u32};
 use crate::padded_warp::padded_warp;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
@@ -111,12 +111,6 @@ pub(crate) struct ToonArgs {
     pub(crate) planes: Option<Vec<ChannelName>>,
 }
 
-fn bad_depth(depth: i32) -> StageError {
-    let message = format!("{STAGE} needs depth between {MIN_DEPTH} and {MAX_DEPTH}, got {depth}");
-
-    StageError::msg(message)
-}
-
 fn thresholds_out_of_order(l_thr: f32, u_thr: f32) -> StageError {
     let message = format!("{STAGE} needs l_thr below u_thr, got l_thr {l_thr} and u_thr {u_thr}");
 
@@ -129,10 +123,7 @@ pub(crate) fn toon_settings(args: &ToonArgs, sample: SampleFormat) -> Result<Too
     between_f32(STAGE, "l_thr", args.l_thr, 0.0, MAX_EIGHT_BIT)?;
     between_f32(STAGE, "u_thr", args.u_thr, 0.0, MAX_EIGHT_BIT)?;
     between_u32(STAGE, "blur", args.blur, 0, MAX_BLUR)?;
-
-    if !(MIN_DEPTH..=MAX_DEPTH).contains(&args.depth) {
-        return Err(bad_depth(args.depth));
-    }
+    between_i32(STAGE, "depth", args.depth, MIN_DEPTH, MAX_DEPTH)?;
 
     if args.l_thr >= args.u_thr {
         return Err(thresholds_out_of_order(args.l_thr, args.u_thr));
@@ -316,6 +307,7 @@ impl<R: Runtime> Filter for Toner<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
+            peak: self.planewise.peak,
             inner: &*self,
         };
 

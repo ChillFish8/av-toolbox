@@ -263,6 +263,7 @@ impl<R: Runtime> Filter for Darkener<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
+            peak: self.planewise.peak,
             inner: &*self,
         };
 

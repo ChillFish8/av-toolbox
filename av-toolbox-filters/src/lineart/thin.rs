@@ -45,7 +45,7 @@ use super::mask::{
     missing_input,
 };
 use crate::bits::bits_of;
-use crate::checks::{between_f32, between_u32};
+use crate::checks::{between_f32, between_i32, between_u32};
 use crate::padded_warp::padded_warp;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
@@ -109,12 +109,6 @@ pub(crate) struct ThinArgs {
     pub(crate) planes: Option<Vec<ChannelName>>,
 }
 
-fn bad_depth(depth: i32) -> StageError {
-    let message = format!("{STAGE} needs depth between {MIN_DEPTH} and {MAX_DEPTH}, got {depth}");
-
-    StageError::msg(message)
-}
-
 /// The passes that grow and soften a binarized line mask, `radius` square maxima then an inflate.
 pub(crate) fn mask_steps(radius: u32) -> Vec<Step> {
     let maximum = Step::Extreme(Extreme::Maximum, Shape::Square);
@@ -131,10 +125,7 @@ pub(crate) fn thin_settings(args: &ThinArgs, sample: SampleFormat) -> Result<Thi
     between_u32(STAGE, "thresh", args.thresh, 0, MAX_THRESH)?;
     between_f32(STAGE, "mthr", args.mthr, 0.0, 1.0)?;
     between_u32(STAGE, "mrad", args.mrad, 0, MAX_RADIUS)?;
-
-    if !(MIN_DEPTH..=MAX_DEPTH).contains(&args.depth) {
-        return Err(bad_depth(args.depth));
-    }
+    between_i32(STAGE, "depth", args.depth, MIN_DEPTH, MAX_DEPTH)?;
 
     let bits = bits_of(sample);
     let peak = ((1u32 << bits) - 1) as f32;
@@ -340,6 +331,7 @@ impl<R: Runtime> Filter for Thinner<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
+            peak: self.planewise.peak,
             inner: &pass,
         };
 

@@ -356,8 +356,8 @@ impl MaskDefinition for Retinex {
         let client = context.client().clone();
         let peak = luma.peak();
 
-        let blur_radius = blur_radius(args.sigma);
-        let blur = blur_radius.map(|radius| Gaussian::with_radius(&client, args.sigma, radius));
+        let gaussian_radius = blur_radius(args.sigma);
+        let blur = gaussian_radius.map(|radius| Gaussian::with_radius(&client, args.sigma, radius));
         let binarize_threshold = binarize_threshold(args.brz, peak);
         let settings = RetinexSettings::new(args.sigmas, args.lower_thr, args.upper_thr, peak);
 

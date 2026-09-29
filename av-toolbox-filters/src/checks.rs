@@ -12,6 +12,12 @@ fn out_of_range_u32(stage: &str, name: &str, value: u32, minimum: u32, maximum: 
     StageError::msg(message)
 }
 
+fn out_of_range_i32(stage: &str, name: &str, value: i32, minimum: i32, maximum: i32) -> StageError {
+    let message = format!("{stage} needs {name} between {minimum} and {maximum}, got {value}");
+
+    StageError::msg(message)
+}
+
 fn out_of_range_f32(stage: &str, name: &str, value: f32, minimum: f32, maximum: f32) -> StageError {
     let message = format!("{stage} needs {name} between {minimum} and {maximum}, got {value}");
 
@@ -40,6 +46,21 @@ pub(crate) fn between_u32(
     }
 
     Err(out_of_range_u32(stage, name, value, minimum, maximum))
+}
+
+/// Refuses `value` unless it falls between `minimum` and `maximum`, inclusive.
+pub(crate) fn between_i32(
+    stage: &str,
+    name: &str,
+    value: i32,
+    minimum: i32,
+    maximum: i32,
+) -> Result<(), StageError> {
+    if (minimum..=maximum).contains(&value) {
+        return Ok(());
+    }
+
+    Err(out_of_range_i32(stage, name, value, minimum, maximum))
 }
 
 /// Refuses `value` unless it falls between `minimum` and `maximum`, inclusive.
@@ -85,6 +106,26 @@ mod tests {
         let error = between_u32(STAGE, "value", 17, 0, 16).expect_err("above maximum");
 
         assert!(error.to_string().contains(STAGE) && error.to_string().contains("17"));
+    }
+
+    #[test]
+    fn between_i32_accepts_the_bounds_and_refuses_outside_them() {
+        assert!(between_i32(STAGE, "value", -128, -128, 127).is_ok());
+        assert!(between_i32(STAGE, "value", 127, -128, 127).is_ok());
+
+        let below = between_i32(STAGE, "value", -129, -128, 127).expect_err("below minimum");
+        let above = between_i32(STAGE, "value", 128, -128, 127).expect_err("above maximum");
+        let below_message = below.to_string();
+        let above_message = above.to_string();
+
+        assert!(
+            below_message.contains(STAGE) && below_message.contains("-129"),
+            "{below_message}"
+        );
+        assert!(
+            above_message.contains("value") && above_message.contains("128"),
+            "{above_message}"
+        );
     }
 
     #[test]

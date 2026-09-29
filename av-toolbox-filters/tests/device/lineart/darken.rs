@@ -126,7 +126,8 @@ fn darken_matches_the_reference() {
     }
 }
 
-/// A 150 line in 200 becomes 135, a 600 line in 800 becomes 539, and with `protection = 50` 148.
+/// A 150 line in 200 becomes 135, and with `protection = 50` 148. A 600 line in 800 becomes 538.5,
+/// a tie that rounds up to 539.
 #[test]
 fn darken_deepens_a_faded_line_on_the_device() {
     let cases = [

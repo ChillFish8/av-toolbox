@@ -1,7 +1,7 @@
 use av_toolbox_core::{InputParam, InputSignature, StageError, StreamType};
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::lineart::{MergePlanes, merge};
+use av_toolbox_cubek::lineart::{MergePlanes, clamped_merge};
 use av_toolbox_cubek::values::widen;
 use av_toolbox_gpu::{
     Channel,
@@ -167,7 +167,7 @@ fn mask_plane_of_another_size(
     plane: (u32, u32),
 ) -> StageError {
     let message = format!(
-        "{stage} was handed a {}x{} mask plane for {channel}, which is {}x{}",
+        "{stage} was handed a {}x{} mask plane for {channel}, whose plane is {}x{}",
         mask.0, mask.1, plane.0, plane.1,
     );
 
@@ -182,9 +182,9 @@ fn missing_mask_plane(stage: &str, channel: Channel) -> StageError {
 
 /// Runs `inner` on a plane, then moves the input toward its output by the frame's mask.
 ///
-/// Each plane becomes `input + (filtered - input) * mask / 255`, using the mask's full plane for a
-/// full size plane and its chroma plane for a subsampled one. Without a mask the plane is the
-/// inner filter's output.
+/// Each plane becomes `input + (filtered - input) * mask / 255`, with `filtered` first held to
+/// `0..=peak`. The mask's full plane serves a full size plane and its chroma plane a subsampled
+/// one. Without a mask the plane is the inner filter's output.
 ///
 /// The merge reads `input` after the inner filter runs, so the inner filter must leave `input`
 /// unchanged.
@@ -195,6 +195,8 @@ pub(crate) struct MaskedFilter<'a, R: Runtime, F> {
     pub(crate) format: &'a FrameFormat,
     /// The frame's mask, `None` when no mask is bound.
     pub(crate) mask: Option<&'a Mask>,
+    /// The largest sample value of the frame being filtered.
+    pub(crate) peak: f32,
     pub(crate) inner: &'a F,
 }
 
@@ -247,7 +249,7 @@ impl<R: Runtime, F: PlaneFilter> PlaneFilter for MaskedFilter<'_, R, F> {
             filtered: output,
             weight: weight_plane,
         };
-        merge(self.client, &sizing, planes, MASK_PEAK);
+        clamped_merge(self.client, &sizing, planes, MASK_PEAK, self.peak);
 
         Ok(())
     }

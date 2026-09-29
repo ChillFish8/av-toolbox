@@ -1,6 +1,19 @@
-use av_toolbox_cubek::lineart::{MergePlanes, VinverseParams, VinversePlanes, merge, vertical_121, vinverse};
+use av_toolbox_cubek::lineart::{
+    MergePlanes,
+    VinverseParams,
+    VinversePlanes,
+    clamped_merge,
+    merge,
+    vertical_121,
+    vinverse,
+};
 use av_toolbox_cubek::neighbourhood::NeighbourPlanes;
-use av_toolbox_cubek::testing::{reference_merge, reference_vertical_121, reference_vinverse};
+use av_toolbox_cubek::testing::{
+    reference_clamped_merge,
+    reference_merge,
+    reference_vertical_121,
+    reference_vinverse,
+};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -42,6 +55,36 @@ impl BuildTask for Merge {
             weight: plane(&weight, self.width, self.height),
         };
         merge(client, &sizing, planes, 255.0);
+
+        read_f32(client, &filtered)
+    }
+}
+
+/// Runs [clamped_merge](av_toolbox_cubek::lineart::clamped_merge) with a weight peak of 255.
+struct ClampedMerge {
+    merge: Merge,
+    peak: f32,
+}
+
+impl BuildTask for ClampedMerge {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let width = self.merge.width;
+        let height = self.merge.height;
+
+        let input = upload_f32(client, &self.merge.input);
+        let filtered = upload_f32(client, &self.merge.filtered);
+        let weight = upload_f32(client, &self.merge.weight);
+        let planes = MergePlanes {
+            input: plane(&input, width, height),
+            filtered: plane(&filtered, width, height),
+            weight: plane(&weight, width, height),
+        };
+        clamped_merge(client, &sizing, planes, 255.0, self.peak);
 
         read_f32(client, &filtered)
     }
@@ -182,6 +225,65 @@ fn a_full_weight_lands_on_a_fractional_filtered_value_far_from_the_input() {
     let actual = backend().build(task);
 
     assert_eq!(actual, vec![0.3, 1000.0]);
+}
+
+/// `shifted` carries `busy` up to 80 below 0 and 74 above 255, so the clamp holds both ends.
+#[test]
+fn clamped_merge_matches_the_reference() {
+    let mut worst = 0.0f32;
+
+    for (width, height) in SIZES {
+        let input = busy(width, height);
+        let filtered = shifted(&input);
+        let weight = weights(width, height);
+        let outside = filtered
+            .iter()
+            .filter(|value| !(0.0..=255.0).contains(*value))
+            .count();
+        let merge = Merge {
+            input: input.clone(),
+            filtered: filtered.clone(),
+            weight: weight.clone(),
+            width,
+            height,
+        };
+        let task = ClampedMerge { merge, peak: 255.0 };
+
+        let actual = backend().build(task);
+        let expected = reference_clamped_merge(&input, &filtered, &weight, 255.0, 255.0);
+
+        assert_eq!(actual.len(), expected.len());
+
+        let difference = largest_difference(&actual, &expected);
+        println!(
+            "clamped merge {width}x{height}: largest difference {difference}, {outside} outside the range"
+        );
+        assert!(
+            difference <= MERGE_TOLERANCE,
+            "clamped merge {width}x{height} differs by {difference}",
+        );
+
+        worst = worst.max(difference);
+    }
+
+    println!("clamped merge: largest difference over every size {worst}");
+}
+
+/// A full weight hands back a filtered value below 0 as 0 and one above the peak as the peak.
+#[test]
+fn a_full_weight_hands_back_the_clamped_filtered_value() {
+    let merge = Merge {
+        input: vec![60.0, 200.0, 100.0],
+        filtered: vec![-67.0, 300.0, 42.5],
+        weight: vec![255.0, 255.0, 255.0],
+        width: 3,
+        height: 1,
+    };
+    let task = ClampedMerge { merge, peak: 255.0 };
+
+    let actual = backend().build(task);
+
+    assert_eq!(actual, vec![0.0, 255.0, 42.5]);
 }
 
 #[test]

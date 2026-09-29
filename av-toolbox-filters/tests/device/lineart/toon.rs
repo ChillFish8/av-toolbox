@@ -308,6 +308,72 @@ fn a_zero_mask_hands_back_the_toon_input() {
     }
 }
 
+/// Blends `filtered` over `input` by a uniform mask of `weight`, as `blend/masked` does, in f64.
+fn blended(input: &[u16], filtered: &[u16], weight: u8) -> Vec<f64> {
+    let share = f64::from(weight) / 255.0;
+
+    input
+        .iter()
+        .zip(filtered)
+        .map(|(value, target)| {
+            let value = f64::from(*value);
+            let change = f64::from(*target) - value;
+
+            value + change * share
+        })
+        .collect()
+}
+
+/// A mask of 128 over a 60 line in 220 lands between the input and what toon alone outputs, as
+/// `blend/masked` does. Toon alone takes that line below 0, so the line checks the merge clamps.
+#[test]
+fn a_half_mask_lands_between_the_input_and_toon_alone() {
+    for sample in [SampleFormat::U8, ten_bit()] {
+        let scale = (peak_of(sample) as u16 + 1) / 256;
+        let format = yuv420(sample);
+        let planes = faded_line_planes(&format, 220 * scale, 60 * scale);
+        let (mask, mask_chroma) = uniform_mask(&format, 128);
+
+        let alone = run_once(TOON, format, format, json!({}), &planes);
+        let masked = run_masked(TOON, format, json!({}), &planes, mask, mask_chroma);
+
+        let input = luma_codes(&planes, sample);
+        let alone_luma = luma_codes(&alone, sample);
+        let masked_luma = luma_codes(&masked, sample);
+        let expected = blended(&input, &alone_luma, 128);
+        let as_f32: Vec<f32> = expected.iter().map(|value| *value as f32).collect();
+        let rounding = rounding_of(&as_f32);
+        let expected_codes = reference_narrow(&as_f32, peak_of(sample) as f32);
+        let result = agreement(&masked_luma, &expected_codes);
+        let stray: Vec<usize> = (0..masked_luma.len())
+            .filter(|index| masked_luma[*index] != expected_codes[*index])
+            .filter(|index| !rounding.at_risk.contains(index))
+            .collect();
+        let column = (WIDTH / 2) as usize;
+
+        println!(
+            "{sample}: toon alone gives {} on the line, masked {}, blended {}, largest {}, {} off, \
+             {} at risk, nearest margin {}",
+            alone_luma[column],
+            masked_luma[column],
+            expected_codes[column],
+            result.largest,
+            result.off_by_one,
+            rounding.at_risk.len(),
+            rounding.nearest,
+        );
+        assert_eq!(
+            alone_luma[column], 0,
+            "{sample} toon alone keeps the line above 0"
+        );
+        assert!(result.largest <= 1, "{sample} differs by {}", result.largest);
+        assert!(
+            stray.is_empty(),
+            "{sample} differs at {stray:?}, which do not sit near a boundary"
+        );
+    }
+}
+
 #[test]
 fn toon_leaves_unselected_planes_as_the_input_buffers() {
     let format = yuv420(SampleFormat::U8);

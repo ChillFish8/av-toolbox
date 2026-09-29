@@ -21,6 +21,19 @@ pub fn reference_merge(input: &[f32], filtered: &[f32], weight: &[f32], weight_p
         .collect()
 }
 
+/// Merges on the CPU in f64, mirroring [clamped_merge](crate::lineart::clamped_merge).
+pub fn reference_clamped_merge(
+    input: &[f32],
+    filtered: &[f32],
+    weight: &[f32],
+    weight_peak: f32,
+    peak: f32,
+) -> Vec<f32> {
+    let held: Vec<f32> = filtered.iter().map(|value| value.clamp(0.0, peak)).collect();
+
+    reference_merge(input, &held, weight, weight_peak)
+}
+
 /// The vertical `1 2 1` blur on the CPU, mirroring [vertical_121](crate::lineart::vertical_121).
 pub fn reference_vertical_121(input: &[f32], width: u32, height: u32) -> Vec<f32> {
     let rows = height as i32;

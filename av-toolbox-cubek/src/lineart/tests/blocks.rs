@@ -1,6 +1,6 @@
 use crate::depth::Element;
 use crate::lineart::ThinSettings;
-use crate::testing::{reference_merge, reference_thin, reference_vertical_121};
+use crate::testing::{reference_clamped_merge, reference_merge, reference_thin, reference_vertical_121};
 use crate::warp::{BlurKind, WarpParams};
 
 #[test]
@@ -23,6 +23,18 @@ fn a_full_weight_lands_on_a_fractional_filtered_value_far_from_the_input() {
     let merged = reference_merge(&input, &filtered, &weight, 255.0);
 
     assert_eq!(merged, vec![0.3, 1000.0]);
+}
+
+/// `60 + (0 - 60) * 51 / 255 = 48` and `200 + (255 - 200) * 51 / 255 = 211`.
+#[test]
+fn a_clamped_merge_holds_the_filtered_value_to_the_range_first() {
+    let input = [60.0, 200.0];
+    let filtered = [-67.0, 300.0];
+    let weight = [51.0, 51.0];
+
+    let merged = reference_clamped_merge(&input, &filtered, &weight, 255.0, 255.0);
+
+    assert_eq!(merged, vec![48.0, 211.0]);
 }
 
 #[test]

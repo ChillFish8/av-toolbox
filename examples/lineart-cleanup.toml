@@ -1,7 +1,7 @@
 # Cleans the lines of a clip with lineart/vinverse, then lineart/thin, then lineart/darken.
 #
-# vinverse removes residual combing on every plane, thin narrows the lines on luma, and darken deepens
-# them on luma. Darkening comes last so the thinning does not lighten the darkened lines.
+# vinverse removes residual combing on every plane. On luma, thin narrows anti-aliased lines and darken
+# deepens faded ones. thin can lighten the thinnest lines.
 
 [variable.input]
 type = "path"

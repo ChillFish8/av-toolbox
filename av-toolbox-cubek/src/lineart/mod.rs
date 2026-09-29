@@ -38,6 +38,29 @@ fn merge_kernel(input: &Array<f32>, filtered: &mut Array<f32>, weight: &Array<f3
     filtered[ABSOLUTE_POS] = kept + taken;
 }
 
+/// Holds `filtered` to `0..=peak`, then mixes the two planes as `input * (1 - share) + filtered * share`,
+/// with `share = weight / weight_peak`.
+#[cube(launch_unchecked)]
+fn clamped_merge_kernel(
+    input: &Array<f32>,
+    filtered: &mut Array<f32>,
+    weight: &Array<f32>,
+    weight_peak: f32,
+    peak: f32,
+) {
+    if ABSOLUTE_POS >= filtered.len() {
+        terminate!();
+    }
+
+    let share = weight[ABSOLUTE_POS] / weight_peak;
+    let capped = f32::min(filtered[ABSOLUTE_POS], peak);
+    let target = f32::max(capped, 0.0);
+    let kept = input[ABSOLUTE_POS] * (1.0 - share);
+    let taken = target * share;
+
+    filtered[ABSOLUTE_POS] = kept + taken;
+}
+
 #[cube(launch_unchecked)]
 fn vertical_121_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32) {
     if ABSOLUTE_POS >= output.len() {
@@ -74,6 +97,39 @@ pub fn merge<R: Runtime>(
     // Safety: every plane holds `samples` f32 values.
     unsafe {
         merge_kernel::launch_unchecked::<R>(client, cubes, unit, input, filtered, weight, weight_peak);
+    }
+}
+
+/// Writes `input + (clamp(filtered, 0, peak) - input) * weight / weight_peak` into `filtered`.
+///
+/// Holding `filtered` to the sample range first means a partial weight lands between the input and
+/// the filtered plane as it would be stored.
+pub fn clamped_merge<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: MergePlanes<'_>,
+    weight_peak: f32,
+    peak: f32,
+) {
+    let samples = planes.filtered.samples();
+    let input = planes.input.array::<R>();
+    let filtered = planes.filtered.array::<R>();
+    let weight = planes.weight.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: every plane holds `samples` f32 values.
+    unsafe {
+        clamped_merge_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            input,
+            filtered,
+            weight,
+            weight_peak,
+            peak,
+        );
     }
 }
 
