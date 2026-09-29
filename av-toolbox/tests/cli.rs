@@ -364,6 +364,24 @@ fn a_var_without_equals_exits_two() {
     assert_eq!(output.status.code(), Some(2));
 }
 
+#[test]
+fn pull_refuses_an_unknown_pack_without_downloading() {
+    let models = tempfile::tempdir().expect("a temp dir");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+        .env("AVTB_MODELS", models.path())
+        .args(["--color", "never", "pull", "nothing"])
+        .output()
+        .expect("the binary runs");
+    let stderr = text(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("`nothing`") && stderr.contains("artcnn"),
+        "{stderr}"
+    );
+}
+
 #[cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device {
     use std::io::Write;

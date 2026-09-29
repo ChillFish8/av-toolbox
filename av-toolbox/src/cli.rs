@@ -74,6 +74,12 @@ pub(crate) enum Command {
     /// By default the pipeline is compiled on the chosen device, so the drawing shows where frames
     /// move between host and device and which stages run in parallel.
     Explain(ExplainArgs),
+
+    /// Download a pack of model weights from this project's GitHub releases.
+    ///
+    /// The pack comes from the release matching this build's version, or from the latest release when that one
+    /// does not exist. Every file is checked against the checksum this build expects before it is installed.
+    Pull(PullArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -155,6 +161,20 @@ pub(crate) struct ExplainArgs {
     /// Draw the stages and their connections without opening a device.
     #[arg(long)]
     pub(crate) structure_only: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct PullArgs {
+    /// The pack to download, such as `artcnn`.
+    pub(crate) identifier: String,
+
+    /// Delete the pack's other installed versions without asking.
+    #[arg(long)]
+    pub(crate) prune: bool,
+
+    /// Download the pack again even when this version is already installed.
+    #[arg(long)]
+    pub(crate) force: bool,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]

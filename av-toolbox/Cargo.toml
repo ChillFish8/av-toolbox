@@ -8,20 +8,26 @@ license.workspace = true
 av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-gpu = { workspace = true }
 av-toolbox-graph = { path = "../av-toolbox-graph" }
+av-toolbox-models = { path = "../av-toolbox-models" }
 av-toolbox-pipeline = { path = "../av-toolbox-pipeline" }
 av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 bytesize = { workspace = true }
 clap = { workspace = true }
 codespan-reporting = { workspace = true }
 ctrlc = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+ureq = { workspace = true }
 
 [dev-dependencies]
 image = { workspace = true }
 tempfile = { workspace = true }
 y4m = { workspace = true }
+zip = { workspace = true }
 
 [features]
 vulkan = ["av-toolbox-pipeline/vulkan", "av-toolbox-gpu/vulkan"]

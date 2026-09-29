@@ -4,6 +4,7 @@ mod explain;
 mod list_devices;
 mod list_stages;
 mod load;
+mod pull;
 mod report;
 
 use std::process::ExitCode;
@@ -25,6 +26,7 @@ fn main() -> ExitCode {
         Command::ListDevices => list_devices::run(&args.accelerators),
         Command::ListStages(list) => list_stages::run(&args, list),
         Command::Explain(explain) => explain::run(&args, explain),
+        Command::Pull(pull_args) => pull::run(&args, pull_args),
     }
 }
 
