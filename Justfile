@@ -35,3 +35,15 @@ check-backends:
     cargo clippy -p av-toolbox-gpu --features cuda,rocm,vulkan,gpu-tests --all-targets -- -D warnings
     cargo check -p av-toolbox-gpu 2>&1 | grep -q "at least one accelerator backend"
     cargo check -p av-toolbox-gpu --features vulkan,metal 2>&1 | grep -q "cannot both be enabled"
+
+# Builds the optional dependencies under dependencies/, or only the ones named.
+dependencies *IDENTIFIERS:
+    uv run --script tools/dependencies/build.py {{IDENTIFIERS}}
+
+# Rebuilds every dependency and fails if the lock or a builtin file would change.
+dependencies-check:
+    uv run --script tools/dependencies/build.py --check
+
+# Tests the dependency builder and every converter.
+dependencies-test:
+    uv run --with pytest pytest tools/dependencies
