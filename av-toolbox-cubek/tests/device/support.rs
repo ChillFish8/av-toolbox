@@ -27,6 +27,15 @@ pub fn upload_f32<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Hand
     client.create_from_slice(bytes)
 }
 
+pub fn upload_f16<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Handle {
+    let bytes: Vec<u8> = values
+        .iter()
+        .flat_map(|value| half::f16::from_f32(*value).to_le_bytes())
+        .collect();
+
+    client.create_from_slice(&bytes)
+}
+
 pub fn upload_u8<R: Runtime>(client: &ComputeClient<R>, values: &[u8]) -> Handle {
     client.create_from_slice(values)
 }
@@ -42,6 +51,19 @@ pub fn read_f32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<f
         .expect("the device should hand back the buffer");
 
     f32::from_bytes(&bytes).to_vec()
+}
+
+pub fn read_f16<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<f32> {
+    let owned = handle.clone();
+    let bytes = client
+        .read_one(owned)
+        .expect("the device should hand back the buffer");
+    let (pairs, _) = bytes.as_chunks::<2>();
+
+    pairs
+        .iter()
+        .map(|pair| half::f16::from_le_bytes(*pair).to_f32())
+        .collect()
 }
 
 pub fn read_u32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u32> {
