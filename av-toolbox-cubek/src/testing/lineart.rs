@@ -1,5 +1,7 @@
-use super::{reference_padded_warp, reflect};
-use crate::lineart::{DarkenSettings, ToonSettings};
+use super::{reference_binarize, reference_chain, reference_edges, reference_padded_warp, reflect};
+use crate::edges::{EdgeLimits, Operator};
+use crate::lineart::{DarkenSettings, ThinSettings, ToonSettings};
+use crate::neighbourhood::{Extreme, Shape, Spread, Step};
 
 /// Merges on the CPU in f64, mirroring [merge](crate::lineart::merge).
 pub fn reference_merge(input: &[f32], filtered: &[f32], weight: &[f32], weight_peak: f32) -> Vec<f32> {
@@ -288,4 +290,22 @@ pub fn reference_toon(input: &[f32], width: u32, height: u32, settings: &ToonSet
     }
 
     output
+}
+
+/// Warp-sharpens the lines of a plane on the CPU, mirroring the thin pass.
+///
+/// The warped plane is merged back over the input by a line mask. The mask is the Prewitt magnitude
+/// binarized at `threshold`, grown by `radius` square maximum passes, then inflated once.
+pub fn reference_thin(input: &[f32], width: u32, height: u32, settings: &ThinSettings) -> Vec<f32> {
+    let warped = reference_padded_warp(input, width, height, &settings.warp);
+    let limits = EdgeLimits::open(settings.peak);
+    let magnitude = reference_edges(input, width, height, Operator::Prewitt, limits);
+    let binary = reference_binarize(&magnitude, settings.threshold, settings.peak);
+
+    let mut steps = vec![Step::Extreme(Extreme::Maximum, Shape::Square); settings.radius as usize];
+    let inflate = Step::Spread(Spread::Inflate);
+    steps.push(inflate);
+    let mask = reference_chain(&binary, width, height, &steps);
+
+    reference_merge(input, &warped, &mask, settings.peak)
 }

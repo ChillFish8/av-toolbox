@@ -25,6 +25,7 @@ pub use self::hysteresis::reference_hysteresis;
 pub use self::lineart::{
     reference_darken,
     reference_merge,
+    reference_thin,
     reference_toon,
     reference_vertical_121,
     reference_vinverse,

@@ -658,3 +658,16 @@ pub fn toon_finish<R: Runtime>(
         );
     }
 }
+
+/// The settings of one thin pass, all in the code values of the plane being filtered.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThinSettings {
+    /// The warp that thins lines.
+    pub warp: WarpParams,
+    /// The Prewitt magnitude at or above which a sample is part of a line.
+    pub threshold: f32,
+    /// How many square maximum passes grow the line mask.
+    pub radius: u32,
+    /// The largest sample value.
+    pub peak: f32,
+}

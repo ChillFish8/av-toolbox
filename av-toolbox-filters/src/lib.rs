@@ -9,6 +9,7 @@
 //!   self, the way havsfunc's YAHR does.
 //! - `dering/hq` smooths ringing inside a mask of the area around edges.
 //! - `lineart/darken` darkens thin lines, as vs-jetpack's fast_line_darken does.
+//! - `lineart/thin` warp-sharpens only on lines, to thin them.
 //! - `lineart/toon` darkens lines by a warp-thinned map of how dark they are, as havsfunc's Toon does.
 //! - `lineart/vinverse` removes residual combing, as vs-jetpack's vinverse does.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
@@ -51,6 +52,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<dehalo::Yahr>()?;
     registry.register_filter::<dering::Hq>()?;
     registry.register_filter::<lineart::Darken>()?;
+    registry.register_filter::<lineart::Thin>()?;
     registry.register_filter::<lineart::Toon>()?;
     registry.register_filter::<lineart::Vinverse>()?;
     registry.register_filter::<Resize<Point>>()?;
@@ -94,6 +96,7 @@ mod tests {
         assert!(registered("dehalo/yahr"));
         assert!(registered("dering/hq"));
         assert!(registered("lineart/darken"));
+        assert!(registered("lineart/thin"));
         assert!(registered("lineart/toon"));
         assert!(registered("lineart/vinverse"));
         assert!(registered("resize/point"));
