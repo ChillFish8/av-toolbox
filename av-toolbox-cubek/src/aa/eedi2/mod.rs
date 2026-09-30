@@ -13,6 +13,9 @@ use cubecl::server::Handle;
 pub use self::fill::eedi2_fill_round;
 use crate::{DevicePlane, Dispatch};
 
+/// The widest row an EEDI2 field pass rebuilds, the widest its gap fill rounds exactly.
+pub const EEDI2_MAX_WIDTH: u32 = 65535;
+
 /// The arguments of the EEDI2 stage, before they are scaled to a plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Eedi2Arguments {
@@ -268,16 +271,16 @@ pub(crate) struct FieldPass<'a> {
 impl<'a> FieldPass<'a> {
     /// Checks the plane, the offset and every scratch buffer's size.
     ///
-    /// The width is capped at 65535, the widest row the fill's integer rounding handles.
+    /// The width is capped at [EEDI2_MAX_WIDTH](crate::aa::EEDI2_MAX_WIDTH).
     pub(crate) fn new(input: DevicePlane<'a>, scratch: Eedi2Scratch<'a>, offset: u32) -> Self {
         let width = input.width();
         let height = input.height();
 
         assert!(offset <= 1, "an EEDI2 field offset is 0 or 1, not {offset}");
         assert!(
-            (1..=65535).contains(&width) && height >= 4 && height.is_multiple_of(2),
-            "an EEDI2 plane needs an even height of at least 4 and a width of at most 65535, not \
-             {width}x{height}"
+            (1..=EEDI2_MAX_WIDTH).contains(&width) && height >= 4 && height.is_multiple_of(2),
+            "an EEDI2 plane needs an even height of at least 4 and a width of at most {EEDI2_MAX_WIDTH}, \
+             not {width}x{height}"
         );
 
         let input_bytes = input.samples() * size_of::<f32>();

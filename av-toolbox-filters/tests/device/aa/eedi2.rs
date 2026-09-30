@@ -1,5 +1,5 @@
 use av_toolbox_cubek::testing::{Eedi2Parameters, reference_eedi2_antialias, reference_narrow};
-use av_toolbox_gpu::{Channel, FrameFormat, FrameLayout, SampleFormat};
+use av_toolbox_gpu::{Channel, Depth, FrameFormat, FrameLayout, SampleFormat};
 use serde_json::json;
 
 use super::{
@@ -13,7 +13,7 @@ use super::{
     yuv420,
     yuv422,
 };
-use crate::support::{encoded, peak_of, run_masked, run_once, shared_planes, ten_bit, uniform_mask};
+use crate::support::{encoded, run_masked, run_once, shared_planes, ten_bit, uniform_mask};
 
 const STAGE: &str = "aa/eedi2";
 
@@ -68,7 +68,8 @@ fn aliased_lines(width: u32, height: u32, sample: SampleFormat) -> Vec<u16> {
 
 /// The lines of [aliased_lines] over `texture`.
 fn textured_lines(width: u32, height: u32, sample: SampleFormat, texture: Texture) -> Vec<u16> {
-    let scale = (peak_of(sample) + 1) / 256;
+    let bits = bits_of(sample);
+    let scale = 1 << (bits - 8);
 
     (0..width * height)
         .map(|index| {
@@ -118,21 +119,29 @@ fn default_parameters(sample: SampleFormat) -> Eedi2Parameters {
     }
 }
 
-/// Every argument moved off its default, with `pp` 0, as `aa/eedi2` takes them.
-fn custom_arguments(direction: &str) -> serde_json::Value {
+/// The arguments of `parameters` as `aa/eedi2` takes them, along `direction`.
+fn stage_arguments(parameters: &Eedi2Parameters, direction: &str) -> serde_json::Value {
     json!({
-        "mthresh": 20,
-        "lthresh": 15,
-        "vthresh": 30,
-        "estr": 1,
-        "dstr": 3,
-        "maxd": 12,
-        "nt": 10,
-        "pp": 0,
+        "mthresh": parameters.mthresh,
+        "lthresh": parameters.lthresh,
+        "vthresh": parameters.vthresh,
+        "estr": parameters.estr,
+        "dstr": parameters.dstr,
+        "maxd": parameters.maxd,
+        "nt": parameters.nt,
+        "pp": parameters.pp,
         "direction": direction,
     })
 }
 
+/// Every argument moved off its default, with `pp` 0, as `aa/eedi2` takes them.
+fn custom_arguments(direction: &str) -> serde_json::Value {
+    let parameters = custom_parameters(SampleFormat::U8);
+
+    stage_arguments(&parameters, direction)
+}
+
+/// Every argument moved off its default, with `pp` 0.
 fn custom_parameters(sample: SampleFormat) -> Eedi2Parameters {
     Eedi2Parameters {
         mthresh: 20,
@@ -301,6 +310,18 @@ fn ten_bit_matches_the_reference() {
 }
 
 #[test]
+fn sixteen_bit_matches_the_reference() {
+    let sample = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let values = aliased_lines(WIDTH, HEIGHT, sample);
+
+    for direction in DIRECTIONS {
+        assert_grey_matches(&values, sample, direction);
+    }
+}
+
+#[test]
 fn every_argument_reaches_the_device() {
     let sample = SampleFormat::U8;
     let format = grey(WIDTH, HEIGHT, sample);
@@ -322,6 +343,125 @@ fn every_argument_reaches_the_device() {
         let label = format!("custom arguments {direction}");
         assert_ne!(expected, with_defaults, "{label} read the same as the defaults");
         assert_exact(&found[0], &expected, WIDTH, &label);
+    }
+}
+
+/// The arguments the sensitivity test moves off one at a time.
+///
+/// `mthresh` is above 10, so the Laplacian test decides some 8-bit pixels.
+const SENSITIVITY_BASE: Eedi2Parameters = Eedi2Parameters {
+    mthresh: 16,
+    lthresh: 12,
+    vthresh: 30,
+    estr: 2,
+    dstr: 4,
+    maxd: 12,
+    nt: 40,
+    pp: 1,
+    bits: 8,
+    ssw: 0,
+};
+
+/// Each argument moved alone off [SENSITIVITY_BASE](crate::aa::eedi2::SENSITIVITY_BASE), by name.
+fn moved_arguments() -> [(&'static str, Eedi2Parameters); 8] {
+    let base = SENSITIVITY_BASE;
+
+    [
+        ("mthresh", Eedi2Parameters { mthresh: 24, ..base }),
+        ("lthresh", Eedi2Parameters { lthresh: 24, ..base }),
+        ("vthresh", Eedi2Parameters { vthresh: 60, ..base }),
+        ("estr", Eedi2Parameters { estr: 1, ..base }),
+        ("dstr", Eedi2Parameters { dstr: 2, ..base }),
+        ("maxd", Eedi2Parameters { maxd: 4, ..base }),
+        ("nt", Eedi2Parameters { nt: 10, ..base }),
+        ("pp", Eedi2Parameters { pp: 0, ..base }),
+    ]
+}
+
+/// A deterministic hash of a sample's position, for noise.
+fn scramble(column: u32, row: u32) -> u32 {
+    let mut state = column.wrapping_mul(0x9e37_79b1) ^ row.wrapping_mul(0x85eb_ca77);
+    state ^= state >> 15;
+    state = state.wrapping_mul(0x2c1b_3c6d);
+    state ^= state >> 12;
+
+    state
+}
+
+/// Diagonal bands of `low` and `high` with some noise, `slope` columns per row.
+fn noisy_diagonals(width: u32, height: u32, slope: u32, low: u32, high: u32, noise: u32) -> Vec<u16> {
+    let mut plane = Vec::new();
+    for row in 0..height {
+        for column in 0..width {
+            let band = (column + slope * row) / 9 % 2;
+            let base = if band == 0 { low } else { high };
+            let jitter = scramble(column, row) % (noise + 1);
+            let value = base + jitter;
+            plane.push(value as u16);
+        }
+    }
+
+    plane
+}
+
+/// Faint noisy stripes above shallow noisy diagonals, 8-bit.
+///
+/// The stripes leave the edge mask to the thresholds, and the diagonals need a long reach.
+fn sensitive_plane(width: u32, height: u32) -> Vec<u16> {
+    let mut plane = noisy_diagonals(width, height / 2, 9, 70, 130, 20);
+    let diagonals = noisy_diagonals(width, height / 2, 6, 60, 140, 24);
+    plane.extend(diagonals);
+
+    plane
+}
+
+/// The plane of [sensitive_plane](crate::aa::eedi2::sensitive_plane), transposed for a horizontal pass so
+/// that it meets the same rows a vertical pass does.
+fn sensitive_plane_along(width: u32, height: u32, direction: &str) -> Vec<u16> {
+    if direction != "horizontal" {
+        return sensitive_plane(width, height);
+    }
+
+    let turned = sensitive_plane(height, width);
+    let widened: Vec<f32> = turned.iter().map(|value| f32::from(*value)).collect();
+    let swapped = transposed(&widened, height, width);
+
+    swapped.iter().map(|value| *value as u16).collect()
+}
+
+/// Runs a `Grey` clip of `values` through `aa/eedi2` with `parameters` along `direction`.
+fn run_grey(values: &[u16], format: FrameFormat, parameters: &Eedi2Parameters, direction: &str) -> Vec<u16> {
+    let plane_values = [values.to_vec()];
+    let planes = encoded(&format, &plane_values);
+    let args = stage_arguments(parameters, direction);
+
+    let filtered = run_once(STAGE, format, format, args, &planes);
+
+    let mut found = decoded(&format, &filtered);
+    found.remove(0)
+}
+
+#[test]
+fn each_argument_alone_reaches_the_device() {
+    let width = 64;
+    let height = 64;
+    let format = grey(width, height, SampleFormat::U8);
+
+    for direction in DIRECTIONS {
+        let values = sensitive_plane_along(width, height, direction);
+        let base = expected_plane(&values, width, height, &SENSITIVITY_BASE, UNSHIFTED, direction);
+        let found = run_grey(&values, format, &SENSITIVITY_BASE, direction);
+        let label = format!("the base {direction}");
+        assert_exact(&found, &base, width, &label);
+
+        for (name, parameters) in moved_arguments() {
+            let expected = expected_plane(&values, width, height, &parameters, UNSHIFTED, direction);
+            let found = run_grey(&values, format, &parameters, direction);
+
+            let label = format!("{name} moved {direction}");
+            assert_ne!(expected, base, "{label} reads the same as the base");
+            assert_exact(&found, &expected, width, &label);
+        }
     }
 }
 

@@ -10,7 +10,14 @@ use av_toolbox_core::{
     StageInstance,
 };
 use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::aa::{Eedi2Arguments, Eedi2Scratch, Eedi2Settings, eedi2_field, eedi2_scratch};
+use av_toolbox_cubek::aa::{
+    EEDI2_MAX_WIDTH,
+    Eedi2Arguments,
+    Eedi2Scratch,
+    Eedi2Settings,
+    eedi2_field,
+    eedi2_scratch,
+};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_gpu::{
     BuildContext,
@@ -64,9 +71,6 @@ const MIN_ROW_WIDTH: u32 = 8;
 
 /// The fewest rows a plane needs in the direction EEDI2 runs, two for each of a field's 7 rows.
 const MIN_PLANE_ROWS: u32 = 14;
-
-/// The most samples in a row EEDI2 rebuilds, the widest its gap fill rounds exactly.
-const MAX_ROW_WIDTH: u32 = 65535;
 
 fn default_mthresh() -> i32 {
     10
@@ -155,7 +159,7 @@ fn too_small(channel: Channel, direction: Direction, size: (u32, u32), smallest:
 
 fn too_large(channel: Channel, direction: Direction, dimension: &str, size: u32) -> StageError {
     let message = format!(
-        "{STAGE} needs a {dimension} of at most {MAX_ROW_WIDTH} on plane {channel} with direction \
+        "{STAGE} needs a {dimension} of at most {EEDI2_MAX_WIDTH} on plane {channel} with direction \
          {direction}, got {size}"
     );
 
@@ -217,12 +221,12 @@ fn checked_size(channel: Channel, direction: Direction, width: u32, height: u32)
     }
 
     let runs_vertically = matches!(direction, Direction::Vertical | Direction::Both);
-    if runs_vertically && width > MAX_ROW_WIDTH {
+    if runs_vertically && width > EEDI2_MAX_WIDTH {
         return Err(too_large(channel, direction, "width", width));
     }
 
     let runs_horizontally = matches!(direction, Direction::Horizontal | Direction::Both);
-    if runs_horizontally && height > MAX_ROW_WIDTH {
+    if runs_horizontally && height > EEDI2_MAX_WIDTH {
         return Err(too_large(channel, direction, "height", height));
     }
 

@@ -1,0 +1,12 @@
+width 24
+height 16
+bits 8
+pp 1
+ssw 0
+mthresh 14
+lthresh 12
+vthresh 36
+estr 1
+dstr 3
+maxd 8
+nt 30

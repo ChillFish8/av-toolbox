@@ -3,7 +3,7 @@
 use cubecl::prelude::*;
 
 use super::votes::{MapScale, lim};
-use super::{Eedi2Settings, FieldPass, GapBuffer, field_sample, row_launch};
+use super::{Eedi2Settings, FieldBuffer, FieldPass, GapBuffer, field_sample, row_launch};
 use crate::{DevicePlane, Dispatch};
 
 /// The values the lattice compares with, scaled to the plane.
@@ -665,13 +665,14 @@ pub(super) fn lattice_candidates<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: the input plane holds `width * 2 * rows` values, and every scratch buffer at least
-    // `width * (rows - 1)`, as `FieldPass::new` checked. Each unit writes only its own gap pixel. It reads
-    // the field rows either side of its gap row, and searches only pixels inside the row, with every shift
-    // clamped so each column it reads stays inside the row.
+    // Safety: the input plane holds `width * 2 * rows` values, `directions` `width * rows` and every other
+    // scratch buffer at least `width * (rows - 1)`, as `FieldPass::new` checked. Each unit writes only its
+    // own gap pixel. It reads the field rows either side of its gap row, in the input and in `directions`,
+    // and searches only pixels inside the row, with every shift clamped so each column it reads stays
+    // inside the row.
     unsafe {
         let input = pass.input.array::<R>();
-        let directions = pass.gap_array::<R>(GapBuffer::Directions);
+        let directions = pass.field_array::<R>(FieldBuffer::Directions);
         let gaps = pass.gap_array::<R>(GapBuffer::Working);
         let values = pass.gap_array::<R>(GapBuffer::Candidates);
         let candidate_directions = pass.gap_array::<R>(GapBuffer::Spare);

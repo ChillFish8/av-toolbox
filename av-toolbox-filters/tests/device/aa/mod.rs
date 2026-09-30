@@ -27,8 +27,8 @@ pub(super) fn yuv422(width: u32, height: u32, sample: SampleFormat) -> FrameForm
 
 pub(super) fn bits_of(sample: SampleFormat) -> u32 {
     match sample {
-        SampleFormat::U8 => 8,
-        _ => 10,
+        SampleFormat::U16 { depth } => u32::from(depth.bits()),
+        _ => 8,
     }
 }
 

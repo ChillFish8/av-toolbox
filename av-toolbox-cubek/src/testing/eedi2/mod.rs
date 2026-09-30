@@ -152,7 +152,7 @@ impl Grid {
     }
 }
 
-/// The thresholds of one field pass, scaled to the plane's bit depth as reference section 1.2 gives.
+/// The thresholds of one field pass, scaled to the plane's bit depth and subsampling.
 struct Scaled {
     /// `bits - 8`, the shift from 8-bit code values.
     shift: i64,

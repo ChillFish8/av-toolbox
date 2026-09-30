@@ -1,6 +1,6 @@
 use super::Eedi2Parameters;
 
-/// Builds an [Eedi2Fixture] from the five files the harness writes for the case `name`.
+/// Builds an [Eedi2Fixture] from the five files written for the case `name`.
 macro_rules! eedi2_fixture {
     ($name:literal) => {
         Eedi2Fixture {
@@ -28,7 +28,7 @@ pub struct Eedi2Fixture {
 }
 
 /// Every EEDI2 field pass fixture.
-pub const EEDI2_FIXTURES: [Eedi2Fixture; 9] = [
+pub const EEDI2_FIXTURES: [Eedi2Fixture; 10] = [
     eedi2_fixture!("worked"),
     eedi2_fixture!("diagonal_pp0"),
     eedi2_fixture!("diagonal_pp1"),
@@ -38,6 +38,7 @@ pub const EEDI2_FIXTURES: [Eedi2Fixture; 9] = [
     eedi2_fixture!("negative_lim"),
     eedi2_fixture!("left_dependency"),
     eedi2_fixture!("settings"),
+    eedi2_fixture!("arguments"),
 ];
 
 pub(super) fn decode_plane(bytes: &[u8]) -> Vec<f32> {

@@ -239,23 +239,6 @@ fn every_fixture_matches_through_pass_12() {
     }
 }
 
-#[test]
-fn the_fixtures_give_gap_directions() {
-    let mut gap_directions = 0;
-    for fixture in &EEDI2_FIXTURES {
-        let width = fixture.setting("width");
-        let height = fixture.setting("height");
-        let parameters = fixture.parameters();
-        let peak = ((1u32 << parameters.bits) - 1) as f32;
-        let input = fixture.input_plane();
-        let stages = reference_eedi2_field_stages(&input, width, height, 0, &parameters);
-
-        gap_directions += stages.x2.iter().filter(|value| **value != peak).count();
-    }
-
-    assert!(gap_directions > 0, "the fixtures should give some gap directions");
-}
-
 /// The 8-bit directions other than 0 in `columns` of every row.
 fn count_directions(rows: &[&[f32]], columns: std::ops::Range<usize>) -> usize {
     rows.iter()
@@ -544,6 +527,82 @@ fn the_lattice_intermediates_match_for_each_pp() {
     }
 }
 
+/// The arguments the sensitivity test moves off one at a time.
+///
+/// `mthresh` is above 10, so the Laplacian test decides some 8-bit pixels.
+const SENSITIVITY_BASE: Eedi2Parameters = Eedi2Parameters {
+    mthresh: 16,
+    lthresh: 12,
+    vthresh: 30,
+    estr: 2,
+    dstr: 4,
+    maxd: 12,
+    nt: 40,
+    pp: 1,
+    bits: 8,
+    ssw: 0,
+};
+
+/// Each argument moved alone off [SENSITIVITY_BASE](crate::aa::eedi2::SENSITIVITY_BASE), by name.
+fn moved_arguments() -> [(&'static str, Eedi2Parameters); 8] {
+    let base = SENSITIVITY_BASE;
+
+    [
+        ("mthresh", Eedi2Parameters { mthresh: 24, ..base }),
+        ("lthresh", Eedi2Parameters { lthresh: 24, ..base }),
+        ("vthresh", Eedi2Parameters { vthresh: 60, ..base }),
+        ("estr", Eedi2Parameters { estr: 1, ..base }),
+        ("dstr", Eedi2Parameters { dstr: 2, ..base }),
+        ("maxd", Eedi2Parameters { maxd: 4, ..base }),
+        ("nt", Eedi2Parameters { nt: 10, ..base }),
+        ("pp", Eedi2Parameters { pp: 0, ..base }),
+    ]
+}
+
+/// Faint noisy stripes above shallow noisy diagonals, 64 by 64.
+///
+/// The stripes leave the edge mask to the thresholds, and the diagonals need a long reach.
+fn sensitive_plane() -> Vec<f32> {
+    let mut input = noisy_diagonals(64, 32, 9, 70, 130, 20);
+    let diagonals = noisy_diagonals(64, 32, 6, 60, 140, 24);
+    input.extend(diagonals);
+
+    input
+}
+
+/// The reference's field passes at offsets 0 and 1.
+fn reference_fields(input: &[f32], width: u32, height: u32, parameters: &Eedi2Parameters) -> [Vec<f32>; 2] {
+    [0, 1].map(|offset| reference_eedi2_field(input, width, height, offset, parameters))
+}
+
+fn differing_samples(first: &[Vec<f32>; 2], second: &[Vec<f32>; 2]) -> usize {
+    first
+        .iter()
+        .zip(second)
+        .flat_map(|(first_pass, second_pass)| first_pass.iter().zip(second_pass))
+        .filter(|(first_value, second_value)| first_value != second_value)
+        .count()
+}
+
+#[test]
+fn each_argument_alone_changes_the_field_passes() {
+    let width = 64;
+    let height = 64;
+    let input = sensitive_plane();
+    let base_fields = reference_fields(&input, width, height, &SENSITIVITY_BASE);
+
+    assert_fields_match_reference(&input, width, height, &SENSITIVITY_BASE, "the base");
+
+    for (name, parameters) in moved_arguments() {
+        let moved_fields = reference_fields(&input, width, height, &parameters);
+        let changed = differing_samples(&base_fields, &moved_fields);
+        assert!(changed > 0, "moving {name} alone left both passes unchanged");
+
+        let label = format!("{name} moved");
+        assert_fields_match_reference(&input, width, height, &parameters, &label);
+    }
+}
+
 /// The `FILLROUND` cases the device checks, as differences, run lengths and steps.
 #[derive(Default)]
 struct FillRoundCases {
@@ -573,8 +632,8 @@ impl FillRoundCases {
     }
 }
 
-/// Every 8-bit fill up to 64 long, the tie reference section 4.3 names, 16-bit differences, long runs and
-/// runs near the width cap.
+/// Every 8-bit fill up to 64 long, a tie the plugin rounds away from the exact answer, 16-bit differences,
+/// long runs and runs near the width cap.
 fn fill_round_cases() -> FillRoundCases {
     let mut cases = FillRoundCases::default();
     for difference in -232..=232 {

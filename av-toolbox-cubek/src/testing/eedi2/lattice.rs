@@ -158,7 +158,7 @@ fn pair_average(rows: &GapRows, column: i64, shift: i64) -> i64 {
     (above + below + 2) >> 2
 }
 
-/// The directional search of reference section 1.15.2, within 2 pixels of `direction`, as the rebuilt
+/// The lowest cost shift within 2 pixels of `direction` that the cleaned directions back up, as the rebuilt
 /// value and the shift it took.
 fn directional_pick(
     rows: &GapRows,
@@ -205,7 +205,7 @@ fn directional_pick(
     pick
 }
 
-/// The fallback search of reference section 1.15.3 within `dt`, as the rebuilt value and the shift it took.
+/// The lowest cost shift within `dt` of vertical, as the rebuilt value and the shift it took.
 ///
 /// It only takes a value between the samples directly above and below.
 fn fallback_pick(rows: &GapRows, column: i64, scaled: &Scaled) -> Option<(i64, i64)> {

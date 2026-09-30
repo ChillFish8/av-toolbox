@@ -4,6 +4,7 @@ mod sangnom;
 mod transpose;
 
 pub use self::eedi2::{
+    EEDI2_MAX_WIDTH,
     Eedi2Arguments,
     Eedi2Scratch,
     Eedi2ScratchSizes,

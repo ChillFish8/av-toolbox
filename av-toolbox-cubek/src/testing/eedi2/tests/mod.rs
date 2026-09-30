@@ -18,7 +18,7 @@ fn direction(pixels: f32) -> f32 {
     128.0 + 4.0 * pixels
 }
 
-/// The 45 degree staircase of reference section 6, 40 left of the diagonal and 200 right of it.
+/// A 45 degree staircase, 40 left of the diagonal and 200 right of it.
 fn staircase() -> Vec<f32> {
     let mut plane = Vec::with_capacity(WORKED_WIDTH * WORKED_WIDTH);
     for row in 0..WORKED_WIDTH as i64 {
@@ -65,7 +65,7 @@ fn the_worked_example_matches_by_hand() {
     let pass_b = reference_eedi2_field(&plane, 16, 16, 1, &with_pp);
     let merged = reference_eedi2_antialias(&plane, 16, 16, &with_pp);
 
-    // The masks of reference section 6.1.
+    // The edge masks of pass A.
     let e0 = mask_of(&[
         "................",
         "..####..........",
@@ -102,7 +102,7 @@ fn the_worked_example_matches_by_hand() {
     assert_eq!(pass_a.e3, e2);
     assert_eq!(pass_a.e, e2);
 
-    // The directions of reference sections 6.2 and 6.3.
+    // The directions of pass A.
     let two_left = direction(-2.0);
     assert_eq!(pass_a.d0[2 * WORKED_WIDTH + 5], two_left);
     assert_eq!(pass_a.d1[2 * WORKED_WIDTH + 5], two_left);
@@ -122,14 +122,14 @@ fn the_worked_example_matches_by_hand() {
     assert_eq!(row_slice(&pass_a.d3, 2), d3_row_2);
     assert_eq!(row_slice(&pass_a.x4, 1), x4_row_1);
 
-    // The lattice at gap row 1 of reference section 6.4.
+    // The lattice of pass A at gap row 1.
     assert_eq!(pass_a.l[WORKED_WIDTH + 5], two_left);
     assert_eq!(pass_a.r[WORKED_WIDTH + 5], 160.0);
     assert_eq!(pass_a.l[WORKED_WIDTH + 4], direction(-3.0));
     assert_eq!(pass_a.r[WORKED_WIDTH + 4], 40.0);
     assert_eq!(pass_a.y2[WORKED_WIDTH + 4], PEAK);
 
-    // Pass A of reference section 6.5, without and with post-processing.
+    // Pass A, without and with post-processing.
     let row_1 = row_of(&[40.0, 40.0, 120.0, 120.0], 200.0);
     let row_3_without_pp = row_of(&[40.0, 40.0, 40.0, 40.0, 40.0, 160.0], 200.0);
     let row_3 = row_of(&[40.0, 40.0, 40.0, 40.0, 120.0, 160.0], 200.0);
@@ -153,7 +153,7 @@ fn the_worked_example_matches_by_hand() {
     assert_eq!(row_slice(&pass_a.output, 13), row_13);
     assert_eq!(row_slice(&pass_a.output, 15), row_15);
 
-    // Pass B of reference section 6.5.
+    // Pass B.
     let row_0 = row_of(&[40.0, 40.0, 40.0], 200.0);
     let row_2 = row_of(&[40.0, 40.0, 40.0, 120.0, 120.0], 200.0);
     let row_4 = row_of(&[40.0, 40.0, 40.0, 40.0, 40.0, 120.0, 160.0], 200.0);
@@ -165,7 +165,7 @@ fn the_worked_example_matches_by_hand() {
     assert_eq!(row_slice(&pass_b, 6), row_6);
     assert_eq!(row_slice(&pass_b, 14), row_14);
 
-    // The double-rate anti-alias of reference section 6.5.
+    // The double-rate anti-alias.
     let rows: [[u16; 16]; 16] = [
         [
             40, 40, 120, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200,
@@ -408,6 +408,23 @@ fn the_clamp_keeps_every_read_in_the_row() {
 
     assert!(has_direction_near_an_edge(&pass0.d0) || has_direction_near_an_edge(&pass1.d0));
     assert!(has_direction_near_an_edge(&pass0.l) || has_direction_near_an_edge(&pass1.l));
+}
+
+#[test]
+fn the_fixtures_give_gap_directions() {
+    let mut gap_directions = 0;
+    for fixture in &EEDI2_FIXTURES {
+        let width = fixture.setting("width");
+        let height = fixture.setting("height");
+        let parameters = fixture.parameters();
+        let peak = ((1u32 << parameters.bits) - 1) as f32;
+        let input = fixture.input_plane();
+        let stages = reference_eedi2_field_stages(&input, width, height, 0, &parameters);
+
+        gap_directions += stages.x2.iter().filter(|value| **value != peak).count();
+    }
+
+    assert!(gap_directions > 0, "the fixtures should give some gap directions");
 }
 
 #[test]

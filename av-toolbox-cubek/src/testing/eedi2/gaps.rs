@@ -430,13 +430,13 @@ mod tests {
 
     #[test]
     fn fill_round_keeps_the_plugins_tie_rounding() {
-        // Reference section 4.3 gives -14.5 exactly, which the plugin's f32 quotient turns into -13.
+        // Exact arithmetic gives -14.5, which the plugin's f32 quotient turns into -13.
         assert_eq!(fill_round(-232, 432, 27), -13);
     }
 
     #[test]
     fn fill_round_truncates_negative_steps_toward_zero() {
-        // As reference section 1.14 gives, -1.2 becomes 0 and -1.6 becomes -1.
+        // After adding a half and truncating, -1.2 becomes 0 and -1.6 becomes -1.
         assert_eq!(fill_round(-6, 5, 1), 0);
         assert_eq!(fill_round(-8, 5, 1), -1);
         assert_eq!(fill_round(6, 5, 1), 1);
