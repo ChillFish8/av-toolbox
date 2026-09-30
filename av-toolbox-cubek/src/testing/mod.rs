@@ -10,6 +10,7 @@ mod padding;
 mod resize;
 mod retinex;
 mod rgvs;
+mod sangnom;
 
 pub use self::artcnn::{
     GOLDEN_R8F64,
@@ -60,6 +61,7 @@ pub use self::retinex::{
     reference_retinex,
 };
 pub use self::rgvs::{reference_remove_grain, reference_repair};
+pub use self::sangnom::{reference_sangnom_antialias, reference_sangnom_field};
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 use crate::warp::{BlurKind, WarpParams};

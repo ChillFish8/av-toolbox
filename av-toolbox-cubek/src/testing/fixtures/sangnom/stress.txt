@@ -1,0 +1,4 @@
+width 24
+height 16
+bits 16
+aa 128
