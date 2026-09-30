@@ -61,3 +61,37 @@ pub(super) fn assert_exact(found: &[u16], expected: &[u16], width: u32, label: &
         );
     }
 }
+
+/// A plane with a one-sample-wide line of 220 on a flat 40, falling one row every 6 columns.
+///
+/// The line is too shallow for its rows to join up, so it is drawn as a staircase of flat runs.
+pub(super) fn one_sample_diagonal(width: u32, height: u32) -> Vec<u16> {
+    let first_row = height / 4;
+
+    (0..width * height)
+        .map(|index| {
+            let column = index % width;
+            let row = index / width;
+            let line_row = first_row + column / 6;
+
+            if row == line_row { 220 } else { 40 }
+        })
+        .collect()
+}
+
+/// The largest absolute difference between two vertically adjacent samples of a `width` wide plane.
+///
+/// Over a flat background, only the samples around a drawn line differ, so this is the tallest step
+/// the line leaves.
+pub(super) fn largest_vertical_step(plane: &[u16], width: u32) -> u16 {
+    let width = width as usize;
+    let upper_rows = plane.chunks_exact(width);
+    let lower_rows = plane.chunks_exact(width).skip(1);
+
+    upper_rows
+        .zip(lower_rows)
+        .flat_map(|(upper, lower)| upper.iter().zip(lower))
+        .map(|(above, below)| above.abs_diff(*below))
+        .max()
+        .unwrap_or(0)
+}

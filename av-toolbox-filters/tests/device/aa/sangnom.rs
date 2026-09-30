@@ -1,9 +1,18 @@
-use av_toolbox_cubek::aa::sangnom_aaf;
+use av_toolbox_cubek::aa::{sangnom_aaf, sangnom_max};
 use av_toolbox_cubek::testing::{reference_narrow, reference_sangnom_antialias};
 use av_toolbox_gpu::{FrameFormat, SampleFormat};
 use serde_json::json;
 
-use super::{assert_exact, bits_of, decoded, grey, transposed, yuv420};
+use super::{
+    assert_exact,
+    bits_of,
+    decoded,
+    grey,
+    largest_vertical_step,
+    one_sample_diagonal,
+    transposed,
+    yuv420,
+};
 use crate::support::{encoded, peak_of, run_masked, run_once, shared_planes, ten_bit, uniform_mask};
 
 const STAGE: &str = "aa/sangnom";
@@ -60,18 +69,10 @@ fn dotted_peak(width: u32, height: u32, sample: SampleFormat) -> Vec<u16> {
         .collect()
 }
 
-/// SangNom's largest rebuilt sample for `sample`.
-fn max_of(sample: SampleFormat) -> f32 {
-    match sample {
-        SampleFormat::U8 => 255.0,
-        _ => 65535.0,
-    }
-}
-
 fn vertical_reference(values: &[f32], width: u32, height: u32, sample: SampleFormat, aa: u32) -> Vec<f32> {
     let bits = bits_of(sample);
     let aaf = sangnom_aaf(aa, bits);
-    let max = max_of(sample);
+    let max = sangnom_max(bits);
 
     reference_sangnom_antialias(values, width, height, aaf, max)
 }
@@ -257,5 +258,52 @@ fn a_flat_frame_is_unchanged() {
         let filtered = run_once(STAGE, format, format, args, &planes);
 
         assert_eq!(filtered, planes, "{sample}");
+    }
+}
+
+#[test]
+fn every_plane_of_a_subsampled_clip_matches_at_its_own_size() {
+    let sample = SampleFormat::U8;
+    let format = yuv420(WIDTH, HEIGHT, sample);
+    let values = diagonal_planes(&format);
+    let planes = encoded(&format, &values);
+    let args = json!({ "planes": ["y", "u", "v"], "direction": "both" });
+
+    let filtered = run_once(STAGE, format, format, args, &planes);
+
+    let found = decoded(&format, &filtered);
+    let peak = peak_of(sample) as f32;
+    for (index, channel) in format.channels().iter().enumerate() {
+        let (width, height) = format.channel_dimensions(*channel).expect("a listed channel");
+        let reference = reference_values(&values[index], width, height, sample, DEFAULT_AA, "both");
+        let expected = reference_narrow(&reference, peak);
+
+        let label = format!("{channel:?} at {width}x{height}");
+        assert_ne!(expected, values[index], "{label} leaves the plane unchanged");
+        assert_exact(&found[index], &expected, width, &label);
+    }
+}
+
+#[test]
+fn a_one_sample_diagonal_comes_back_with_smaller_steps() {
+    let width = 32;
+    let height = 24;
+    let format = grey(width, height, SampleFormat::U8);
+    let values = one_sample_diagonal(width, height);
+    let plane_values = [values.clone()];
+    let planes = encoded(&format, &plane_values);
+    let before = largest_vertical_step(&values, width);
+
+    for direction in ["vertical", "both"] {
+        let args = json!({ "direction": direction });
+
+        let filtered = run_once(STAGE, format, format, args, &planes);
+
+        let found = decoded(&format, &filtered);
+        let after = largest_vertical_step(&found[0], width);
+        assert!(
+            after < before,
+            "{direction} leaves a step of {after}, the input's was {before}"
+        );
     }
 }

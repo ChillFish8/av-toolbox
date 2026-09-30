@@ -406,7 +406,7 @@ impl SangnomFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aa::sangnom_aaf;
+    use crate::aa::{sangnom_aaf, sangnom_max, sangnom_scratch};
 
     #[test]
     fn the_worked_example_matches_by_hand() {
@@ -434,7 +434,7 @@ mod tests {
             let bits = metadata_value(fixture.metadata, "bits");
             let aa = metadata_value(fixture.metadata, "aa");
             let aaf = sangnom_aaf(aa, bits);
-            let max = if bits == 8 { 255.0 } else { 65535.0 };
+            let max = sangnom_max(bits);
             let plane = decode_plane(fixture.input);
             let expected_pass0 = decode_plane(fixture.pass0);
             let expected_pass1 = decode_plane(fixture.pass1);
@@ -464,5 +464,27 @@ mod tests {
         assert_eq!(sangnom_aaf(48, 10), 252.0);
         assert_eq!(sangnom_aaf(17, 8), 22.0);
         assert_eq!(sangnom_aaf(128, 16), 43008.0);
+    }
+
+    #[test]
+    fn max_is_255_at_8_bits_and_65535_above() {
+        assert_eq!(sangnom_max(8), 255.0);
+        assert_eq!(sangnom_max(9), 65535.0);
+        assert_eq!(sangnom_max(10), 65535.0);
+        assert_eq!(sangnom_max(16), 65535.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "SangNom takes 8 to 16 bits per sample, not 17")]
+    fn max_refuses_17_bits() {
+        sangnom_max(17);
+    }
+
+    #[test]
+    fn the_scratch_holds_nine_field_heights() {
+        // 9 directions of 540 by 1920 f32 values, and of 1080 by 3840 at 4K.
+        assert_eq!(sangnom_scratch(1920, 1080), 37_324_800);
+        assert_eq!(sangnom_scratch(3840, 2160), 149_299_200);
+        assert_eq!(sangnom_scratch(5, 2), 180);
     }
 }

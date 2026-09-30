@@ -1,4 +1,4 @@
-use av_toolbox_cubek::aa::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_scratch};
+use av_toolbox_cubek::aa::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_max, sangnom_scratch};
 use av_toolbox_cubek::testing::{SANGNOM_FIXTURES, reference_sangnom_field};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -96,7 +96,7 @@ fn every_fixture_matches_on_the_device() {
         let bits = fixture.setting("bits");
         let aa = fixture.setting("aa");
         let aaf = sangnom_aaf(aa, bits);
-        let max = if bits == 8 { 255.0 } else { 65535.0 };
+        let max = sangnom_max(bits);
         let input = fixture.input_plane();
         let expected_pass0 = fixture.pass0_plane();
         let expected_pass1 = fixture.pass1_plane();
@@ -154,7 +154,6 @@ fn a_ten_bit_pass_may_exceed_the_peak() {
         .chain(&pass1)
         .filter(|value| **value > 1023.0)
         .count();
-    println!("{above_peak} of {} samples are above 1023", 2 * input.len());
 
     assert_exact(&pass0, &expected_pass0, width, "10-bit at offset 0");
     assert_exact(&pass1, &expected_pass1, width, "10-bit at offset 1");
@@ -162,4 +161,53 @@ fn a_ten_bit_pass_may_exceed_the_peak() {
         above_peak > 0,
         "the plane should push some samples above the peak"
     );
+}
+
+#[test]
+fn a_two_row_plane_copies_each_kept_row() {
+    let width = 7;
+    let height = 2;
+    let input: Vec<f32> = (0..width * height)
+        .map(|index| (scramble(index, 0) % 256) as f32)
+        .collect();
+
+    let aaf = sangnom_aaf(48, 8);
+
+    assert_matches_reference(&input, width, height, aaf, 255.0, "7x2");
+}
+
+/// One field pass given a `smoothed` scratch one value short.
+struct UndersizedScratch;
+
+impl BuildTask for UndersizedScratch {
+    type Output = ();
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let width = 8;
+        let height = 6;
+        let samples = (width * height) as usize;
+        let input_values = vec![0.0; samples];
+        let needed = sangnom_scratch(width, height);
+        let short_bytes = needed - size_of::<f32>();
+
+        let input = upload_f32(client, &input_values);
+        let output = empty(client, samples * size_of::<f32>());
+        let smoothed = empty(client, short_bytes);
+
+        let planes = SangnomPlanes {
+            input: plane(&input, width, height),
+            output: plane(&output, width, height),
+            smoothed: &smoothed,
+        };
+        sangnom_field(client, &sizing, planes, 0, 63.0, 255.0);
+    }
+}
+
+#[test]
+#[should_panic(expected = "the smoothed scratch holds 860 bytes, expected 864")]
+fn an_undersized_scratch_is_refused() {
+    backend().build(UndersizedScratch);
 }

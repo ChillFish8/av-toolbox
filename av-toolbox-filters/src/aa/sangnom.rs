@@ -10,7 +10,7 @@ use av_toolbox_core::{
     StageInstance,
 };
 use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::aa::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_scratch};
+use av_toolbox_cubek::aa::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_max, sangnom_scratch};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_gpu::{
     BuildContext,
@@ -52,12 +52,6 @@ use crate::sizing::Sizing;
 const STAGE: &str = "aa/sangnom";
 
 const MAX_AA: u32 = 128;
-
-/// The most a rebuilt 8-bit sample may reach.
-const EIGHT_BIT_MAX: f32 = 255.0;
-
-/// The most a rebuilt sample above 8 bits may reach.
-const WIDE_MAX: f32 = 65535.0;
 
 fn default_aa() -> u32 {
     48
@@ -158,7 +152,7 @@ impl FilterDefinition for Sangnom {
         let bits = bits_of(input.sample);
         let element = if bits == 8 { Element::U8 } else { Element::U16 };
         let peak = ((1u32 << bits) - 1) as f32;
-        let max = if bits == 8 { EIGHT_BIT_MAX } else { WIDE_MAX };
+        let max = sangnom_max(bits);
         let aaf = sangnom_aaf(args.aa, bits);
 
         let planewise = Planewise {

@@ -10,8 +10,8 @@ const DIRECTIONS: u32 = 9;
 
 /// The planes one SangNom field pass reads and writes, with its scratch.
 ///
-/// `input` and `output` are f32 code values of one size. `smoothed` holds `9 * height * width` f32
-/// values, as [sangnom_scratch](crate::aa::sangnom_scratch) gives.
+/// `input` and `output` are f32 code values of one size. `smoothed` holds `9 * (height / 2) * width`
+/// f32 values, as [sangnom_scratch](crate::aa::sangnom_scratch) gives.
 #[derive(Debug, Clone, Copy)]
 pub struct SangnomPlanes<'a> {
     pub input: DevicePlane<'a>,
@@ -36,10 +36,25 @@ pub fn sangnom_aaf(aa: u32, bits: u32) -> f32 {
     threshold as f32
 }
 
+/// The most a SangNom field pass may rebuild a sample to on a plane of `bits` per sample.
+///
+/// It is 255 at 8 bits and 65535 from 9 to 16 bits, so a rebuilt sample may pass the format's peak.
+pub fn sangnom_max(bits: u32) -> f32 {
+    assert!(
+        (8..=16).contains(&bits),
+        "SangNom takes 8 to 16 bits per sample, not {bits}"
+    );
+
+    if bits == 8 { 255.0 } else { 65535.0 }
+}
+
 /// The byte size of the `smoothed` scratch a `width` by `height` field pass needs.
+///
+/// Each direction holds one row per gap between kept lines, `height / 2` rows in all.
 pub fn sangnom_scratch(width: u32, height: u32) -> usize {
     let directions = DIRECTIONS as usize;
-    let samples = width as usize * height as usize;
+    let field_height = height as usize / 2;
+    let samples = width as usize * field_height;
 
     directions * samples * size_of::<f32>()
 }
@@ -169,14 +184,13 @@ fn line_sum(
     input: &Array<f32>,
     smoothed: &Array<f32>,
     width: u32,
-    height: u32,
+    field_height: u32,
     offset: u32,
     gap: u32,
     column: u32,
     direction: u32,
     max: f32,
 ) -> f32 {
-    let field_height = height / 2;
     let own = raw_cost(input, width, offset, field_height, gap, column, direction, max);
     let next_gap = gap + 1;
     let below = raw_cost(
@@ -192,7 +206,7 @@ fn line_sum(
 
     let mut above = 0.0f32;
     if gap > 1 {
-        let above_index = (direction * height + gap - 1) * width + column;
+        let above_index = (direction * field_height + gap - 1) * width + column;
         above = smoothed[above_index as usize];
     }
 
@@ -207,13 +221,13 @@ fn sangnom_smooth_row_kernel(
     input: &Array<f32>,
     smoothed: &mut Array<f32>,
     width: u32,
-    height: u32,
+    field_height: u32,
     offset: u32,
     gap: u32,
     max: f32,
 ) {
     let position = ABSOLUTE_POS as u32;
-    if position >= 9 * width {
+    if position >= DIRECTIONS * width {
         terminate!();
     }
 
@@ -228,12 +242,20 @@ fn sangnom_smooth_row_kernel(
         let clamped = i32::min(at_least_zero, last_column);
         let tap_column = clamped as u32;
         total += line_sum(
-            input, smoothed, width, height, offset, gap, tap_column, direction, max,
+            input,
+            smoothed,
+            width,
+            field_height,
+            offset,
+            gap,
+            tap_column,
+            direction,
+            max,
         );
     }
 
     let scaled = f32::floor(total * 0.0625);
-    let smoothed_index = (direction * height + gap) * width + column;
+    let smoothed_index = (direction * field_height + gap) * width + column;
     smoothed[smoothed_index as usize] = f32::min(scaled, max);
 }
 
@@ -314,7 +336,7 @@ fn sangnom_choose_kernel(
         output[ABSOLUTE_POS] = input[((height - 2) * width + column) as usize];
     } else {
         let gap = (row + 1 - offset) / 2;
-        let samples = width * height;
+        let samples = width * (height / 2);
         let index = gap * width + column;
         let direction = choose_direction(smoothed, index, samples, aaf);
         let pair = direction_pair(input, width, offset, gap, column, direction, max);
@@ -326,8 +348,8 @@ fn sangnom_choose_kernel(
 /// One SangNom field pass, keeping the rows of parity `offset` and rebuilding the others.
 ///
 /// The planes hold integer code values. `aaf` is the direction threshold from
-/// [sangnom_aaf](crate::aa::sangnom_aaf), and `max` is 255 for 8-bit input and 65535 above, so a
-/// rebuilt sample may pass the format's peak. The row with no kept row on one side copies its kept
+/// [sangnom_aaf](crate::aa::sangnom_aaf), and `max` the cap from [sangnom_max](crate::aa::sangnom_max),
+/// so a rebuilt sample may pass the format's peak. The row with no kept row on one side copies its kept
 /// neighbour. The plane's height must be even.
 pub fn sangnom_field<R: Runtime>(
     client: &ComputeClient<R>,
@@ -361,26 +383,34 @@ pub fn sangnom_field<R: Runtime>(
 
     let directions = DIRECTIONS as usize;
     let samples = planes.input.samples();
-    let smoothed_values = directions * samples;
-    let row_units = directions * width as usize;
     let field_height = height / 2;
+    let smoothed_values = directions * field_height as usize * width as usize;
+    let row_units = directions * width as usize;
+    let row_cubes = dispatch.cube_count(row_units);
+    let row_unit = dispatch.cube_dim();
 
     // Each gap reads the whole smoothed gap above it, so every gap is its own launch, which the
     // device finishes before the next starts. Barriers inside one cube did not make global writes
     // visible across it on every device.
     for gap in 1..field_height {
-        let row_cubes = dispatch.cube_count(row_units);
-        let row_unit = dispatch.cube_dim();
-
         // Safety: the input holds `width * height` f32 values and `smoothed` at least
-        // `9 * height * width`, both asserted above. Each unit writes only its own sample of gap
+        // `9 * (height / 2) * width`, both asserted above. Each unit writes only its own sample of gap
         // `gap`, reads only gap `gap - 1`, and clamps every column into the plane.
         unsafe {
             let input = planes.input.array::<R>();
             let smoothed = ArrayArg::from_raw_parts(planes.smoothed.clone(), smoothed_values);
 
             sangnom_smooth_row_kernel::launch_unchecked::<R>(
-                client, row_cubes, row_unit, input, smoothed, width, height, offset, gap, max,
+                client,
+                row_cubes.clone(),
+                row_unit,
+                input,
+                smoothed,
+                width,
+                field_height,
+                offset,
+                gap,
+                max,
             );
         }
     }
@@ -389,7 +419,7 @@ pub fn sangnom_field<R: Runtime>(
     let unit = dispatch.cube_dim();
 
     // Safety: the input and output hold `width * height` f32 values and `smoothed` at least
-    // `9 * height * width`, all asserted above. Each unit writes only its own output sample, and every
+    // `9 * (height / 2) * width`, all asserted above. Each unit writes only its own output sample, and every
     // read is clamped into the plane.
     unsafe {
         let input = planes.input.array::<R>();
