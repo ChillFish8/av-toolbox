@@ -13,8 +13,14 @@ use av_toolbox_cubek::testing::{
     Eedi3Fixture,
     Eedi3Parameters,
     Eedi3Pass,
+    Eedi3PlaneKind,
     Eedi3Variant,
+    Lending,
+    SplitMix,
     TieOrder,
+    random_eedi3_mask,
+    random_eedi3_parameters,
+    random_eedi3_plane,
     reference_eedi3_field,
     reference_eedi3_field_variant,
 };
@@ -41,7 +47,7 @@ fn settings_for(parameters: &Eedi3Parameters) -> Eedi3Settings {
     Eedi3Settings::new(&arguments, parameters.bits)
 }
 
-/// A plane with its size, arguments and optional `sclip`.
+/// A plane with its size, arguments and optional `sclip` and `mclip`.
 struct PlaneCase {
     label: String,
     width: u32,
@@ -49,6 +55,7 @@ struct PlaneCase {
     parameters: Eedi3Parameters,
     input: Vec<f32>,
     sclip: Option<Vec<f32>>,
+    mclip: Option<Vec<f32>>,
 }
 
 impl PlaneCase {
@@ -60,6 +67,7 @@ impl PlaneCase {
             parameters,
             input,
             sclip: None,
+            mclip: None,
         }
     }
 
@@ -75,7 +83,7 @@ impl PlaneCase {
     fn clips(&self) -> Eedi3Clips<'_> {
         Eedi3Clips {
             sclip: self.sclip.as_deref(),
-            mclip: None,
+            mclip: self.mclip.as_deref(),
         }
     }
 
@@ -137,6 +145,7 @@ struct FieldPasses {
     height: u32,
     settings: Eedi3Settings,
     sclip: Option<Vec<f32>>,
+    mclip: Option<Vec<f32>>,
 }
 
 impl BuildTask for FieldPasses {
@@ -152,13 +161,16 @@ impl BuildTask for FieldPasses {
 
         let input = upload_f32(client, &self.input);
         let sclip = self.sclip.as_deref().map(|values| upload_f32(client, values));
+        let mclip = self.mclip.as_deref().map(|values| upload_f32(client, values));
         let rebuilt = empty(client, sizes.rebuilt);
         let directions = empty(client, sizes.directions);
         let backpointers = empty(client, sizes.backpointers);
+        let lenders = empty(client, sizes.lenders);
         let scratch = Eedi3Scratch {
             rebuilt: &rebuilt,
             directions: &directions,
             backpointers: &backpointers,
+            lenders: &lenders,
         };
 
         let mut passes = Vec::new();
@@ -168,6 +180,9 @@ impl BuildTask for FieldPasses {
             let output_plane = plane(&output, self.width, self.height);
             let clips = Eedi3DeviceClips {
                 sclip: sclip
+                    .as_ref()
+                    .map(|handle| plane(handle, self.width, self.height)),
+                mclip: mclip
                     .as_ref()
                     .map(|handle| plane(handle, self.width, self.height)),
             };
@@ -205,6 +220,7 @@ fn on_device(case: &PlaneCase) -> Vec<DevicePass> {
         height: case.height,
         settings: settings_for(&case.parameters),
         sclip: case.sclip.clone(),
+        mclip: case.mclip.clone(),
     };
 
     backend().build(task)
@@ -575,4 +591,230 @@ fn settings_follow_the_plugin() {
 
         assert_eq!(found, weight_bits, "based_aa's weights at {bits} bits");
     }
+}
+
+/// A mask set over each band of columns, from `left` up to `right`, on every row.
+fn column_band_mask(width: u32, height: u32, bands: &[(u32, u32)]) -> Vec<f32> {
+    let mut mask = vec![0.0; width as usize * height as usize];
+    for row in 0..height {
+        for (left, right) in bands {
+            for column in *left..*right {
+                mask[(row * width + column) as usize] = 255.0;
+            }
+        }
+    }
+
+    mask
+}
+
+/// The larger plane an `mclip` fixture's tally adds, with its arguments and both clips.
+fn larger_masked_case(parameters: Eedi3Parameters) -> PlaneCase {
+    let input_bands = Bands {
+        slope: 2,
+        period: 40,
+        low: 40,
+        high: 200,
+        noise: 10,
+    };
+    let sclip_bands = Bands {
+        slope: 1,
+        period: 25,
+        low: 60,
+        high: 180,
+        noise: 20,
+    };
+    let input = diagonal_bands(480, 64, &input_bands);
+    let sclip = diagonal_bands(480, 64, &sclip_bands);
+    let mclip = column_band_mask(480, 64, &[(30, 90), (200, 210), (400, 470)]);
+
+    let mut case = PlaneCase::new("a larger mclip", 480, 64, parameters, input);
+    case.sclip = Some(sclip);
+    case.mclip = Some(mclip);
+
+    case
+}
+
+/// The `mclip` fixtures are too small for the tally's bounds on their own, so a larger plane with the same
+/// arguments and both clips counts toward them too.
+#[test]
+fn every_mclip_fixture_matches_on_the_device() {
+    let masked_fixtures: Vec<&Eedi3Fixture> = EEDI3_FIXTURES
+        .iter()
+        .filter(|fixture| fixture.mclip.is_some())
+        .collect();
+    assert!(!masked_fixtures.is_empty(), "no fixture has an mclip");
+
+    let mut tally = CloseDecisionTally::new();
+    for fixture in masked_fixtures {
+        let mut case = PlaneCase::of_fixture(fixture);
+        case.sclip = fixture.sclip_plane();
+        case.mclip = fixture.mclip_plane();
+        compare_case(&mut tally, &case);
+
+        let larger = larger_masked_case(case.parameters);
+        compare_case(&mut tally, &larger);
+    }
+
+    assert_tally(&tally, "every mclip fixture");
+}
+
+/// Both field passes of `case` on the reference, under `variant`.
+fn reference_passes(case: &PlaneCase, variant: &Eedi3Variant) -> Vec<Eedi3Pass> {
+    (0..2)
+        .map(|offset| case.reference_variant(offset, variant))
+        .collect()
+}
+
+/// How many output samples and directions differ between two runs of both field passes.
+fn changed_samples(first: &[Eedi3Pass], second: &[Eedi3Pass]) -> usize {
+    let mut changed = 0;
+    for (first_pass, second_pass) in first.iter().zip(second) {
+        let outputs = first_pass.output.iter().zip(&second_pass.output);
+        let directions = first_pass.directions.iter().zip(&second_pass.directions);
+
+        changed += outputs.filter(|(left, right)| left != right).count();
+        changed += directions.filter(|(left, right)| left != right).count();
+    }
+
+    changed
+}
+
+/// A mask where the second rebuilt row of each pass lends, the third borrows for column 0 alone, and every
+/// other row borrows for column 0 and column 1. The first rebuilt row borrows with no row above to lend.
+fn lending_mask(width: u32, height: u32, mdis: u32) -> Vec<f32> {
+    let mut mask = vec![0.0; width as usize * height as usize];
+    for row in 0..height {
+        let field_row = row / 2;
+        let set_column = if field_row == 1 {
+            0
+        } else if field_row == 2 {
+            mdis + 1
+        } else {
+            mdis + 6
+        };
+
+        let start = row * width;
+        mask[(start + set_column) as usize] = 255.0;
+        mask[(start + width / 2) as usize] = 255.0;
+    }
+
+    mask
+}
+
+/// A gentle ramp, with noise at the left of the top rows, so the rows that lend have costly connections
+/// and the rows that borrow cheap ones.
+fn noisy_top_left(width: u32, height: u32) -> Vec<f32> {
+    let mut input = Vec::new();
+    for row in 0..height {
+        for column in 0..width {
+            let mut value = 100 + column / 8;
+            if row < 12 && column < 24 {
+                value = scramble(column, row) % 256;
+            }
+
+            input.push(value as f32);
+        }
+    }
+
+    input
+}
+
+#[test]
+fn lent_costs_reach_the_device() {
+    let width = 160;
+    let height = 48;
+    let input = noisy_top_left(width, height);
+    let parameters = Eedi3Parameters {
+        gamma: 60.0,
+        mdis: 8,
+        ..Eedi3Parameters::default()
+    };
+    let mut case = PlaneCase::new("lent costs", width, height, parameters, input);
+    let mask = lending_mask(width, height, parameters.mdis);
+    case.mclip = Some(mask);
+
+    let plugin_variant = Eedi3Variant::default();
+    let plugin = reference_passes(&case, &plugin_variant);
+    let without_lending = Eedi3Variant {
+        lending: Lending::Off,
+        ..Eedi3Variant::default()
+    };
+    let unlent = reference_passes(&case, &without_lending);
+    let changed = changed_samples(&plugin, &unlent);
+    assert!(changed > 0, "dropping the lent costs left both passes unchanged");
+
+    let mut tally = CloseDecisionTally::new();
+    compare_case(&mut tally, &case);
+    assert_tally(&tally, "lent costs");
+}
+
+#[test]
+fn a_mask_changes_the_path_of_active_columns() {
+    let width = 240;
+    let height = 48;
+    let bands = Bands {
+        slope: 2,
+        period: 36,
+        low: 20,
+        high: 230,
+        noise: 30,
+    };
+    let input = diagonal_bands(width, height, &bands);
+    let parameters = Eedi3Parameters {
+        mdis: 8,
+        ..Eedi3Parameters::default()
+    };
+    let mask = column_band_mask(width, height, &[(20, 60), (100, 110), (170, 200)]);
+    let unmasked = PlaneCase::new("unmasked", width, height, parameters, input.clone());
+    let mut masked = PlaneCase::new("masked", width, height, parameters, input);
+    masked.mclip = Some(mask.clone());
+
+    let mut changed_under_mask = 0;
+    for offset in 0..2 {
+        let without_mclip = unmasked.reference(offset);
+        let with_mclip = masked.reference(offset);
+        let samples = without_mclip.output.iter().zip(&with_mclip.output);
+        for (index, (first, second)) in samples.enumerate() {
+            if mask[index] != 0.0 && first != second {
+                changed_under_mask += 1;
+            }
+        }
+    }
+
+    assert!(
+        changed_under_mask > 0,
+        "the mask changed no sample where it is set"
+    );
+
+    let mut tally = CloseDecisionTally::new();
+    compare_case(&mut tally, &masked);
+    assert_tally(&tally, "a mask changes the path");
+}
+
+/// A plane of 8 to 16 bits, 8 to 200 columns and 4 to 40 rows, with random arguments and a random mask.
+fn random_masked_case(seed: u64) -> PlaneCase {
+    let mut random = SplitMix(seed);
+    let bits = 8 + random.below(9);
+    let width = 8 + random.below(193);
+    let height = 4 + 2 * random.below(19);
+    let parameters = random_eedi3_parameters(&mut random, bits);
+    let input = random_eedi3_plane(&mut random, width, height, bits, &[Eedi3PlaneKind::NoisyEdge]);
+    let mclip = random_eedi3_mask(&mut random, width, height);
+
+    let label = format!("seed {seed}");
+    let mut case = PlaneCase::new(&label, width, height, parameters, input);
+    case.mclip = Some(mclip);
+
+    case
+}
+
+#[test]
+fn seeded_random_masks_match() {
+    let mut tally = CloseDecisionTally::new();
+    for seed in 0..50 {
+        let case = random_masked_case(seed);
+        compare_case(&mut tally, &case);
+    }
+
+    assert_tally(&tally, "seeded random masks");
 }

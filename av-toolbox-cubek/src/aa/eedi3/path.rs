@@ -2,7 +2,16 @@
 // by name.
 use cubecl::prelude::*;
 
-use super::{BACKPOINTERS_PER_WORD, EEDI3_MAX_MDIS, FieldPass, plane_row, row_start, sample_at};
+use super::mask::ActiveWindow;
+use super::{
+    BACKPOINTERS_PER_WORD,
+    EEDI3_MAX_MDIS,
+    FieldPass,
+    TO_ZERO_CODE,
+    plane_row,
+    row_start,
+    sample_at,
+};
 use crate::aa::row_cubes;
 
 /// The starts of the four kept rows a rebuilt row reads, each reflected into the plane.
@@ -146,16 +155,78 @@ fn reach(column: u32, width: u32, mdis: u32) -> i32 {
     u32::min(room, mdis) as i32
 }
 
+/// The plane geometry a rebuilt row's costs read.
+#[derive(CubeType)]
+struct RowShape {
+    width: u32,
+    height: u32,
+    first_rebuilt: u32,
+    nrad: u32,
+}
+
+/// The cost at `column` along `direction` of the rebuilt row that lends it, stored at `slot` of the
+/// lenders, or 0 when no row lends it.
+#[cube]
+fn lent_cost(
+    input: &Array<f32>,
+    lenders: &Array<i32>,
+    slot: u32,
+    shape: &RowShape,
+    column: i32,
+    direction: i32,
+    weights: &CostWeights,
+) -> f32 {
+    let lender = lenders[slot as usize];
+
+    let mut cost = 0.0f32;
+    if lender >= 0 {
+        let row = plane_row(lender as u32, shape.first_rebuilt);
+        let kept = KeptRows::new(row, shape.width, shape.height);
+        cost = connection_cost(input, &kept, shape.width, column, direction, shape.nrad, weights);
+    }
+
+    cost
+}
+
+/// The backpointer code an inactive `column` gives the column before it along `direction`, a copy of
+/// `previous_code`.
+///
+/// Within `mdis` columns of either side, the two widest directions the column before can take instead
+/// lean one step back towards 0.
+#[cube]
+fn copied_code(previous_code: u32, column: u32, width: u32, direction: i32, mdis: u32) -> u32 {
+    let edge = u32::min(column - 1, width - column) as i32;
+
+    let mut code = previous_code;
+    if edge < mdis as i32 {
+        if direction == -edge {
+            code = 2u32;
+        }
+
+        if direction == edge {
+            code = 0u32;
+        }
+    }
+
+    code
+}
+
 /// The path search, one cube per rebuilt row and one unit per direction, which walks the row left to right
 /// and records each direction's cheapest predecessor.
 ///
 /// The path costs of the previous column and the current one live in shared memory, in two halves that
 /// swap every column, so one barrier per column orders every read before the next write. Each unit packs
-/// its backpointers into a word, 2 bits a column holding the predecessor's offset plus 1, and stores it
-/// every 16 columns.
+/// its backpointers into a word, 2 bits a column, and stores it every 16 columns. A code of 0 to 2 holds
+/// the predecessor's offset plus 1, and a code of 3 leads to direction 0.
+///
+/// Under a mask, an inactive column copies the path state of the previous one. At column 0 and 1 it takes
+/// the costs of the rebuilt row above that lends them. A direction a column cannot take keeps a path cost
+/// of 0 and leads to direction 0.
 #[cube(launch_unchecked)]
 fn path_kernel(
     input: &Array<f32>,
+    mclip: &Array<f32>,
+    lenders: &Array<i32>,
     backpointers: &mut Array<u32>,
     width: u32,
     groups: u32,
@@ -168,6 +239,7 @@ fn path_kernel(
     gamma: f32,
     nrad: u32,
     mdis: u32,
+    #[comptime] masked: bool,
 ) {
     let field_row = CUBE_POS as u32;
     if field_row >= rows {
@@ -180,6 +252,12 @@ fn path_kernel(
     let word_start = (field_row * span + lane) * groups;
     let row = plane_row(field_row, first_rebuilt);
     let kept = KeptRows::new(row, width, height);
+    let shape = RowShape {
+        width,
+        height,
+        first_rebuilt,
+        nrad,
+    };
     let weights = CostWeights {
         alpha3,
         beta,
@@ -188,17 +266,31 @@ fn path_kernel(
     let half = comptime!((2 * EEDI3_MAX_MDIS + 1) as usize);
     let mut path_costs = SharedMemory::<f32>::new(comptime!(2 * half));
 
+    let mask_start = row * width;
+    let leaving_distance = mdis as i32 + 1;
+    let mut window = ActiveWindow::new(mclip, mask_start, 0, mdis, width, masked);
+
     let mut word = 0u32;
+    let mut previous_code = u32::new(TO_ZERO_CODE as i64);
     for column in 0..width {
         let widest = reach(column, width, mdis);
         let current = (column % 2) as usize * half;
         let previous = half - current;
+        let inside = i32::abs(direction) <= widest;
+        let signed_column = column as i32;
+        let entering = signed_column + mdis as i32;
+        let leaving = signed_column - leaving_distance;
+        let active = window.slide(mclip, mask_start, entering, leaving, width, masked);
 
-        if i32::abs(direction) <= widest {
-            let cost = connection_cost(input, &kept, width, column as i32, direction, nrad, &weights);
+        // A direction outside the column's reach keeps a path cost of 0. The zeros are read. An inactive
+        // run from the left edge copies them from column 1 to its first active column.
+        let mut path_cost = 0.0f32;
+        let mut code = u32::new(TO_ZERO_CODE as i64);
+        if active && inside {
+            let cost = connection_cost(input, &kept, width, signed_column, direction, nrad, &weights);
 
             if column == 0 {
-                path_costs[current + lane as usize] = cost;
+                path_cost = cost;
             } else {
                 let previous_widest = reach(column - 1, width, mdis);
                 let mut best = 0.0f32;
@@ -228,15 +320,37 @@ fn path_kernel(
                     }
                 }
 
-                path_costs[current + lane as usize] = best + cost;
-                let code = (chosen - direction + 1) as u32;
-                let shift = (column - 1) % BACKPOINTERS_PER_WORD * 2;
-                word |= code << shift;
+                path_cost = best + cost;
+                code = (chosen - direction + 1) as u32;
             }
         }
 
+        if comptime!(masked) {
+            let lent_slot = rows + 2 * field_row;
+
+            if !active && column == 0 {
+                if direction == 0 {
+                    path_cost = lent_cost(input, lenders, lent_slot, &shape, 0, 0, &weights);
+                }
+            } else if !active && column == 1 {
+                if inside {
+                    let slot = lent_slot + 1;
+                    path_cost = lent_cost(input, lenders, slot, &shape, 1, direction, &weights);
+                }
+            } else if !active {
+                path_cost = path_costs[previous + lane as usize];
+                code = copied_code(previous_code, column, width, direction, mdis);
+            }
+        }
+
+        path_costs[current + lane as usize] = path_cost;
+
         if column >= 1 {
             let back_column = column - 1;
+            let shift = back_column % BACKPOINTERS_PER_WORD * 2;
+            word |= code << shift;
+            previous_code = code;
+
             let word_full = back_column % BACKPOINTERS_PER_WORD == BACKPOINTERS_PER_WORD - 1;
             if word_full || back_column + 2 == width {
                 let index = word_start + back_column / BACKPOINTERS_PER_WORD;
@@ -255,15 +369,20 @@ pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPa
     let cubes = row_cubes(pass.rows);
     let shape = CubeDim::new_1d(span);
     let weights = pass.settings.weights;
+    let mask = pass.mask_plane();
+    let masked = pass.mclip.is_some();
 
     debug_assert!(span <= 2 * EEDI3_MAX_MDIS + 1, "the settings checked mdis");
 
-    // Safety: the input holds `width * height` f32 values and `backpointers` a `u32` per word of every
-    // rebuilt row, as `FieldPass::new` checked. Each cube owns one rebuilt row and each unit one direction,
-    // writing only that direction's words of that row. Every read of the input reflects and clamps into
-    // the plane.
+    // Safety: the input and the mask hold `width * height` f32 values, `lenders` three `i32` values per
+    // rebuilt row and `backpointers` a `u32` per word of every rebuilt row, as `FieldPass::new` checked.
+    // Each cube owns one rebuilt row and each unit one direction, writing only that direction's words of
+    // that row. Every read of the input reflects and clamps into the plane, and the mask is read only
+    // inside the row. A lender is a rebuilt row above, or -1 and never read.
     unsafe {
         let input = pass.input.array::<R>();
+        let mclip = mask.array::<R>();
+        let lenders = pass.lenders_array::<R>();
         let backpointers = pass.backpointers_array::<R>();
         let groups = pass.groups();
 
@@ -272,6 +391,8 @@ pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPa
             cubes,
             shape,
             input,
+            mclip,
+            lenders,
             backpointers,
             pass.width,
             groups,
@@ -284,6 +405,7 @@ pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPa
             weights.gamma,
             pass.settings.nrad,
             pass.settings.mdis,
+            masked,
         );
     }
 }

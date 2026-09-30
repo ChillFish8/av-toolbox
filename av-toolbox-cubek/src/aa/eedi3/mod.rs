@@ -1,5 +1,6 @@
 mod check;
 mod interpolate;
+mod mask;
 mod path;
 
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
@@ -14,6 +15,9 @@ const EEDI3_MAX_MDIS: u32 = 40;
 
 /// The backpointers packed into one `u32`, 2 bits each.
 const BACKPOINTERS_PER_WORD: u32 = 16;
+
+/// The backpointer code of a step that comes from direction 0, whatever direction it leads into.
+const TO_ZERO_CODE: u32 = 3;
 
 /// The arguments of one EEDI3 field pass, on the 8-bit scale.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -172,13 +176,17 @@ impl Eedi3Settings {
 /// - `directions` holds the direction each rebuilt sample was interpolated along, as `i32` values.
 /// - `backpointers` holds the path's backpointers, 2 bits each, 16 columns to a `u32`. Each rebuilt row
 ///   holds one run of words per direction, each run covering the columns in order.
+/// - `lenders` holds `i32` values used under a mask. First comes one per rebuilt row, whose bits say
+///   whether its column 0 and column 1 are active. Then come two per rebuilt row, the rebuilt rows that
+///   lend it the costs of column 0 and column 1.
 ///
-/// The three buffers must be distinct. [eedi3_scratch](crate::aa::eedi3_scratch) gives the size of each.
+/// The four buffers must be distinct. [eedi3_scratch](crate::aa::eedi3_scratch) gives the size of each.
 #[derive(Debug, Clone, Copy)]
 pub struct Eedi3Scratch<'a> {
     pub rebuilt: &'a Handle,
     pub directions: &'a Handle,
     pub backpointers: &'a Handle,
+    pub lenders: &'a Handle,
 }
 
 /// The byte size of each buffer of an [Eedi3Scratch](crate::aa::Eedi3Scratch).
@@ -187,28 +195,34 @@ pub struct Eedi3ScratchSizes {
     pub rebuilt: usize,
     pub directions: usize,
     pub backpointers: usize,
+    pub lenders: usize,
 }
 
 /// The scratch sizes a `width` by `height` field pass searching up to `mdis` columns needs.
 pub fn eedi3_scratch(width: u32, height: u32, mdis: u32) -> Eedi3ScratchSizes {
-    let rebuilt_samples = height as usize / 2 * width as usize;
+    let rows = height as usize / 2;
+    let rebuilt_samples = rows * width as usize;
     let directions = 2 * mdis as usize + 1;
     let groups = width.div_ceil(BACKPOINTERS_PER_WORD) as usize;
-    let words = height as usize / 2 * directions * groups;
+    let words = rows * directions * groups;
 
     Eedi3ScratchSizes {
         rebuilt: rebuilt_samples * size_of::<f32>(),
         directions: rebuilt_samples * size_of::<i32>(),
         backpointers: words * size_of::<u32>(),
+        lenders: 3 * rows * size_of::<i32>(),
     }
 }
 
 /// The optional planes a field pass reads beside its input, each at the input's size.
 ///
-/// `sclip` replaces the vertical cubic the reliability check falls back to.
+/// `sclip` replaces the vertical cubic the reliability check falls back to. `mclip` holds 8-bit mask
+/// values, and a column is searched only where a non-zero value lies within `mdis` columns of it on the
+/// same row.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Eedi3DeviceClips<'a> {
     pub sclip: Option<DevicePlane<'a>>,
+    pub mclip: Option<DevicePlane<'a>>,
 }
 
 /// Asserts that `handle` holds at least `bytes`, naming the buffer `name`.
@@ -285,6 +299,7 @@ pub(crate) struct FieldPass<'a> {
     input: DevicePlane<'a>,
     output: DevicePlane<'a>,
     sclip: Option<DevicePlane<'a>>,
+    mclip: Option<DevicePlane<'a>>,
     scratch: Eedi3Scratch<'a>,
     settings: Eedi3Settings,
     offset: u32,
@@ -310,7 +325,7 @@ impl<'a> FieldPass<'a> {
         assert!(offset <= 1, "an EEDI3 field offset is 0 or 1, not {offset}");
         assert!(
             width >= 4 && height >= 4 && height.is_multiple_of(2),
-            "an EEDI3 plane needs a width of at least 4 and an even height of at least 4, not {width}x{height}"
+            "an EEDI3 plane needs a width and an even height of at least 4, not {width}x{height}"
         );
 
         let sizes = eedi3_scratch(width, height, settings.mdis);
@@ -326,14 +341,20 @@ impl<'a> FieldPass<'a> {
             assert_plane(&sclip, width, height, "sclip");
         }
 
+        if let Some(mclip) = clips.mclip {
+            assert_plane(&mclip, width, height, "mclip");
+        }
+
         assert_holds(scratch.rebuilt, sizes.rebuilt, "rebuilt scratch");
         assert_holds(scratch.directions, sizes.directions, "directions scratch");
         assert_holds(scratch.backpointers, sizes.backpointers, "backpointers scratch");
+        assert_holds(scratch.lenders, sizes.lenders, "lenders scratch");
 
         Self {
             input,
             output,
             sclip: clips.sclip,
+            mclip: clips.mclip,
             scratch,
             settings: *settings,
             offset,
@@ -382,13 +403,28 @@ impl<'a> FieldPass<'a> {
         // Safety: `new` checked that `backpointers` holds a `u32` per word of every rebuilt row.
         unsafe { ArrayArg::from_raw_parts(owned, words) }
     }
+
+    /// The lenders scratch as a kernel argument.
+    fn lenders_array<R: Runtime>(&self) -> ArrayArg<R> {
+        let owned = self.scratch.lenders.clone();
+        let values = 3 * self.rows as usize;
+
+        // Safety: `new` checked that `lenders` holds three `i32` values per rebuilt row.
+        unsafe { ArrayArg::from_raw_parts(owned, values) }
+    }
+
+    /// The mask plane, or the input standing in for it when the pass has none.
+    fn mask_plane(&self) -> DevicePlane<'a> {
+        self.mclip.unwrap_or(self.input)
+    }
 }
 
 /// One EEDI3 field pass, keeping the rows of parity `offset` and rebuilding the others into `output`.
 ///
 /// The planes hold integer code values and must be distinct buffers of the same size, at least 4 by 4
 /// with an even height. Each rebuilt row follows the cheapest path of directions along the row, and the
-/// reliability check then blends unreliable samples towards `sclip` or a vertical cubic.
+/// reliability check then blends unreliable samples towards `sclip` or a vertical cubic. Under `mclip`,
+/// a column with no set mask sample within `mdis` columns skips its search and takes direction 0.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
@@ -404,6 +440,11 @@ pub fn eedi3_field<R: Runtime>(
     clips: Eedi3DeviceClips<'_>,
 ) {
     let pass = FieldPass::new(input, output, scratch, offset, settings, clips);
+
+    if pass.mclip.is_some() {
+        mask::mark_active_edges(client, &pass);
+        mask::find_lenders(client, &pass);
+    }
 
     path::search_paths(client, &pass);
     interpolate::backtrack(client, &pass);

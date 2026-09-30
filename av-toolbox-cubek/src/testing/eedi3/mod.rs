@@ -1,6 +1,7 @@
 mod check;
 mod fixtures;
 mod path;
+mod random;
 #[cfg(test)]
 mod tests;
 mod touched;
@@ -8,6 +9,13 @@ mod touched;
 use self::check::{PassPlanes, interpolate_row, reliability_check};
 pub use self::fixtures::{EEDI3_FIXTURES, Eedi3Fixture};
 use self::path::{Grid, Mask, Weights, search_row};
+pub use self::random::{
+    Eedi3PlaneKind,
+    SplitMix,
+    random_eedi3_mask,
+    random_eedi3_parameters,
+    random_eedi3_plane,
+};
 pub use self::touched::CloseDecisionTally;
 
 /// The arguments of one EEDI3 field pass, with the plane's bit depth.

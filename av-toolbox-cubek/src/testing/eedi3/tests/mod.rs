@@ -1,6 +1,13 @@
 use std::panic;
 
 use super::path::{Grid, connection_cost};
+use super::random::{
+    Eedi3PlaneKind,
+    SplitMix,
+    random_eedi3_mask,
+    random_eedi3_parameters,
+    random_eedi3_plane,
+};
 use super::{
     CheckOrder,
     CloseDecisionTally,
@@ -289,122 +296,13 @@ fn a_tie_goes_to_the_smallest_direction() {
     );
 }
 
-/// A small fixed-seed generator, so every run draws the same planes.
-struct SplitMix(u64);
-
-impl SplitMix {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut mixed = self.0;
-        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-
-        mixed ^ (mixed >> 31)
-    }
-
-    fn below(&mut self, bound: u32) -> u32 {
-        let drawn = self.next() % u64::from(bound);
-        drawn as u32
-    }
-
-    /// A value between 0 and 1, in steps of 2^-24.
-    fn unit(&mut self) -> f32 {
-        let drawn = self.next() >> 40;
-        drawn as f32 / (1u32 << 24) as f32
-    }
-}
-
-fn random_parameters(random: &mut SplitMix, bits: u32) -> Eedi3Parameters {
-    let alpha = random.unit();
-    let mut beta = random.unit() * (1.0 - alpha);
-    while alpha + beta > 1.0 {
-        beta *= 0.999;
-    }
-
-    Eedi3Parameters {
-        alpha,
-        beta,
-        gamma: random.unit() * 100.0,
-        nrad: random.below(4),
-        mdis: 1 + random.below(40),
-        vcheck: random.below(4),
-        vthresh: [
-            0.5 + random.unit() * 100.0,
-            0.5 + random.unit() * 100.0,
-            0.5 + random.unit() * 10.0,
-        ],
-        bits,
-    }
-}
-
-/// Noise, a hard sloped edge, the edge with light noise, or low noise around one level.
-fn random_plane(random: &mut SplitMix, width: u32, height: u32, bits: u32) -> Vec<f32> {
-    let peak = (1u32 << bits) - 1;
-    let kind = random.below(4);
-    let low = random.below(peak + 1) as i32;
-    let high = random.below(peak + 1) as i32;
-    let slope = (random.unit() - 0.5) * 16.0;
-    let shift = random.unit() * width as f32;
-    let spread = match kind {
-        2 => peak as i32 / 40,
-        3 => 1 + random.below(3) as i32,
-        _ => 0,
-    };
-
-    let mut plane = Vec::with_capacity(width as usize * height as usize);
-    for row in 0..height {
-        for column in 0..width {
-            if kind == 0 {
-                let value = random.below(peak + 1);
-                plane.push(value as f32);
-                continue;
-            }
-
-            let beyond_edge = column as f32 > slope * row as f32 + shift;
-            let level = if beyond_edge && kind != 3 { high } else { low };
-            let noise = random.below(2 * spread as u32 + 1) as i32 - spread;
-            let value = (level + noise).clamp(0, peak as i32);
-            plane.push(value as f32);
-        }
-    }
-
-    plane
-}
-
-/// Sparse dots, a few blocks, or every sample set.
-fn random_mask(random: &mut SplitMix, width: u32, height: u32) -> Vec<f32> {
-    let samples = width as usize * height as usize;
-    let kind = random.below(3);
-
-    let mut mask = vec![0.0; samples];
-    match kind {
-        0 => {
-            let odds = 20 + random.below(200);
-            for value in &mut mask {
-                if random.below(odds) == 0 {
-                    *value = (1 + random.below(255)) as f32;
-                }
-            }
-        },
-        1 => {
-            let blocks = 1 + random.below(4);
-            for _ in 0..blocks {
-                let left = random.below(width);
-                let top = random.below(height);
-                let right = (left + 1 + random.below(12)).min(width);
-                let bottom = (top + 1 + random.below(12)).min(height);
-                for row in top..bottom {
-                    for column in left..right {
-                        mask[(row * width + column) as usize] = 255.0;
-                    }
-                }
-            }
-        },
-        _ => mask.fill(255.0),
-    }
-
-    mask
-}
+/// Every plane kind, in the order the random cases draw them.
+const PLANE_KINDS: [Eedi3PlaneKind; 4] = [
+    Eedi3PlaneKind::Noise,
+    Eedi3PlaneKind::Edge,
+    Eedi3PlaneKind::NoisyEdge,
+    Eedi3PlaneKind::Level,
+];
 
 /// A plane of 8 to 16 bits and 8 to 96 columns, with a third of the seeds taking `sclip` and a third
 /// taking `mclip`.
@@ -413,10 +311,10 @@ fn random_case(seed: u64) -> PlaneInputs {
     let bits = 8 + random.below(9);
     let width = 8 + random.below(89);
     let height = 4 + 2 * random.below(19);
-    let parameters = random_parameters(&mut random, bits);
-    let plane = random_plane(&mut random, width, height, bits);
-    let sclip = random_plane(&mut random, width, height, bits);
-    let mclip = random_mask(&mut random, width, height);
+    let parameters = random_eedi3_parameters(&mut random, bits);
+    let plane = random_eedi3_plane(&mut random, width, height, bits, &PLANE_KINDS);
+    let sclip = random_eedi3_plane(&mut random, width, height, bits, &PLANE_KINDS);
+    let mclip = random_eedi3_mask(&mut random, width, height);
 
     PlaneInputs {
         width,

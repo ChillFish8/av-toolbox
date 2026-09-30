@@ -2,7 +2,8 @@
 // by name.
 use cubecl::prelude::*;
 
-use super::{BACKPOINTERS_PER_WORD, FieldPass, plane_row, row_start, sample_at};
+use super::mask::ActiveWindow;
+use super::{BACKPOINTERS_PER_WORD, FieldPass, TO_ZERO_CODE, plane_row, row_start, sample_at};
 use crate::Dispatch;
 use crate::aa::row_launch;
 
@@ -10,15 +11,19 @@ use crate::aa::row_launch;
 /// column back to the first.
 ///
 /// The direction it follows stays between `-mdis` and `mdis` even on a backpointer the path search never
-/// wrote, so every word it reads lies inside the row.
+/// wrote, so every word it reads lies inside the row. Under a mask, an inactive column takes direction 0
+/// while the walk still follows its backpointer.
 #[cube(launch_unchecked)]
 fn backtrack_kernel(
     backpointers: &Array<u32>,
+    mclip: &Array<f32>,
     directions: &mut Array<i32>,
     width: u32,
     groups: u32,
+    first_rebuilt: u32,
     rows: u32,
     mdis: u32,
+    #[comptime] masked: bool,
 ) {
     let field_row = ABSOLUTE_POS as u32;
     if field_row >= rows {
@@ -29,6 +34,9 @@ fn backtrack_kernel(
     let row_words = field_row * span * groups;
     let first_sample = field_row * width;
     let widest = mdis as i32;
+    let mask_start = plane_row(field_row, first_rebuilt) * width;
+    let window_start = width as i32 - 1 - widest;
+    let mut window = ActiveWindow::new(mclip, mask_start, window_start, mdis + 1, width, masked);
 
     let mut direction = 0i32;
     directions[(first_sample + width - 1) as usize] = 0i32;
@@ -39,10 +47,25 @@ fn backtrack_kernel(
         let word = backpointers[index as usize];
         let shift = column % BACKPOINTERS_PER_WORD * 2;
         let code = (word >> shift) & 3u32;
-        let followed = direction + code as i32 - 1;
+
+        let mut followed = 0i32;
+        if code != TO_ZERO_CODE {
+            followed = direction + code as i32 - 1;
+        }
 
         direction = i32::clamp(followed, -widest, widest);
-        directions[(first_sample + column) as usize] = direction;
+
+        let signed_column = column as i32;
+        let entering = signed_column - widest;
+        let leaving = signed_column + widest + 1;
+        let active = window.slide(mclip, mask_start, entering, leaving, width, masked);
+
+        let mut taken = 0i32;
+        if active {
+            taken = direction;
+        }
+
+        directions[(first_sample + column) as usize] = taken;
     }
 }
 
@@ -102,12 +125,16 @@ fn interpolate_kernel(
 /// Launches the backtrack over every rebuilt row, writing the directions.
 pub(super) fn backtrack<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>) {
     let (cubes, unit) = row_launch(pass.rows);
+    let mask = pass.mask_plane();
+    let masked = pass.mclip.is_some();
 
-    // Safety: `backpointers` holds a `u32` per word of every rebuilt row and `directions` an `i32` per
-    // rebuilt sample, as `FieldPass::new` checked. Each unit owns one rebuilt row, the only row it reads
-    // and writes, and keeps the direction it follows between `-mdis` and `mdis`.
+    // Safety: `backpointers` holds a `u32` per word of every rebuilt row, `directions` an `i32` per
+    // rebuilt sample and the mask `width * height` f32 values, as `FieldPass::new` checked. Each unit owns
+    // one rebuilt row, the only row it reads and writes, keeps the direction it follows between `-mdis`
+    // and `mdis`, and reads the mask only inside its row.
     unsafe {
         let backpointers = pass.backpointers_array::<R>();
+        let mclip = mask.array::<R>();
         let directions = pass.directions_array::<R>();
         let groups = pass.groups();
 
@@ -116,11 +143,14 @@ pub(super) fn backtrack<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<
             cubes,
             unit,
             backpointers,
+            mclip,
             directions,
             pass.width,
             groups,
+            pass.first_rebuilt,
             pass.rows,
             pass.settings.mdis,
+            masked,
         );
     }
 }
