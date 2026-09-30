@@ -34,9 +34,9 @@ fn limlut(index: f32) -> f32 {
 #[derive(CubeType)]
 pub(super) struct MapScale {
     pub(super) peak: f32,
-    neutral: f32,
-    unit: f32,
-    reduce_quarter: f32,
+    pub(super) neutral: f32,
+    pub(super) unit: f32,
+    pub(super) reduce_quarter: f32,
 }
 
 #[cube]
@@ -53,7 +53,7 @@ impl MapScale {
 
 /// `LIM(value)`, the agreement threshold for the direction map value `value`.
 #[cube]
-fn lim(value: f32, scale: &MapScale) -> f32 {
+pub(super) fn lim(value: f32, scale: &MapScale) -> f32 {
     let distance = f32::abs(value - scale.neutral);
     let index = f32::floor(distance * scale.reduce_quarter);
 

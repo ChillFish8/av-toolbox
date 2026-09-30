@@ -173,7 +173,7 @@ fn round_dropping(value: i64, dropped: i64) -> i64 {
 ///
 /// The quotient is found by long division to 24 bits and rounded to nearest even. The exact product is then
 /// rounded to 24 bits the same way, and half is added before truncating.
-fn fill_round(difference: i64, length: i64, step: i64) -> i64 {
+pub(super) fn fill_round(difference: i64, length: i64, step: i64) -> i64 {
     if difference == 0 || step == 0 {
         return 0;
     }

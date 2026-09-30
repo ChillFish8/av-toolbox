@@ -8,7 +8,7 @@ mod tests;
 
 use self::directions::{clean_directions, expand_directions, filter_directions, raw_directions};
 pub use self::fixtures::{EEDI2_FIXTURES, Eedi2Fixture};
-use self::gaps::{expand_gaps, fill_gaps, filter_gaps, gap_directions};
+use self::gaps::{expand_gaps, fill_gaps, fill_round, filter_gaps, gap_directions};
 use self::lattice::{lattice, post_process};
 use self::mask::{dilate, edge_mask, erode, remove_small_gaps};
 
@@ -438,6 +438,13 @@ pub fn reference_eedi2_field(
     let stages = reference_eedi2_field_stages(plane, width, height, offset, parameters);
 
     stages.output
+}
+
+/// `FILLROUND(difference, length, step)`, the plugin's `trunc(step * (difference / length) + 0.5)` with
+/// both the quotient and the product rounded to f32, as the fills of
+/// [reference_eedi2_field](crate::testing::reference_eedi2_field) compute it.
+pub fn reference_fill_round(difference: i64, length: i64, step: i64) -> i64 {
+    fill_round(difference, length, step)
 }
 
 /// EEDI2's double-rate anti-alias on the CPU, `floor((pass(0) + pass(1) + 1) / 2)`.

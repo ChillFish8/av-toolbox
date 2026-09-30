@@ -409,3 +409,41 @@ fn the_clamp_keeps_every_read_in_the_row() {
     assert!(has_direction_near_an_edge(&pass0.d0) || has_direction_near_an_edge(&pass1.d0));
     assert!(has_direction_near_an_edge(&pass0.l) || has_direction_near_an_edge(&pass1.l));
 }
+
+#[test]
+fn the_fixtures_fill_gaps_and_post_process() {
+    let mut filled = 0;
+    let mut reset = 0;
+
+    for fixture in &EEDI2_FIXTURES {
+        let width = fixture.setting("width");
+        let height = fixture.setting("height");
+        let parameters = fixture.parameters();
+        let input = fixture.input_plane();
+
+        for offset in 0..2 {
+            let stages = reference_eedi2_field_stages(&input, width, height, offset, &parameters);
+            filled += stages
+                .x2
+                .iter()
+                .zip(&stages.x4)
+                .filter(|(x2, x4)| x2 != x4)
+                .count();
+
+            let rows = stages.r.chunks(width as usize);
+            let rebuilt_rows = (0..).map(|gap| 2 * gap + 1 + offset as usize);
+            for (row, rebuilt) in rebuilt_rows.zip(rows) {
+                let start = row * width as usize;
+                let output_row = &stages.output[start..start + width as usize];
+                reset += output_row
+                    .iter()
+                    .zip(rebuilt)
+                    .filter(|(output_value, rebuilt_value)| output_value != rebuilt_value)
+                    .count();
+            }
+        }
+    }
+
+    assert!(filled > 0, "the fixtures should fill some gap directions");
+    assert!(reset > 0, "the fixtures should post-process some rebuilt samples");
+}

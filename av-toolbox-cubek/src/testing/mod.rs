@@ -41,6 +41,7 @@ pub use self::eedi2::{
     reference_eedi2_antialias,
     reference_eedi2_field,
     reference_eedi2_field_stages,
+    reference_fill_round,
 };
 pub use self::hysteresis::reference_hysteresis;
 pub use self::lineart::{

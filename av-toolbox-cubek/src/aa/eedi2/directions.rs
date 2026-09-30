@@ -524,7 +524,7 @@ fn clean_directions_kernel(
 
 /// Whether gap pixel `column` of gap row `gap` touches the edge mask above or below it.
 #[cube]
-fn touches_edge(edges: &Array<f32>, width: u32, gap: u32, column: u32) -> bool {
+pub(super) fn touches_edge(edges: &Array<f32>, width: u32, gap: u32, column: u32) -> bool {
     let above = gap * width + column;
     let below = above + width;
 
@@ -909,24 +909,28 @@ pub(super) fn gap_directions<R: Runtime>(
     }
 }
 
-/// Launches pass 11, filtering `X0` in `working` into `X1` in `spare`.
+/// Launches `filter2x`, filtering the gap map in `source` into `destination`.
 pub(super) fn filter_gaps<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
+    source: GapBuffer,
+    destination: GapBuffer,
 ) {
+    assert_ne!(source, destination, "filter2x cannot filter a gap map in place");
+
     let samples = pass.gap_samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: `working` and `spare` hold at least `width * (rows - 1)` values and `edges` `width * rows`,
+    // Safety: every scratch buffer holds at least `width * (rows - 1)` values and `edges` `width * rows`,
     // as `FieldPass::new` checked. Each unit writes only its own gap pixel and reads only the gap rows
     // around it that exist, at columns within one of its own only when those lie inside the row.
     unsafe {
-        let source = pass.gap_array::<R>(GapBuffer::Working);
+        let source = pass.gap_array::<R>(source);
         let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.gap_array::<R>(GapBuffer::Spare);
+        let destination = pass.gap_array::<R>(destination);
 
         filter_gaps_kernel::launch_unchecked::<R>(
             client,
@@ -945,24 +949,28 @@ pub(super) fn filter_gaps<R: Runtime>(
     }
 }
 
-/// Launches pass 12, expanding `X1` in `spare` into `X2` in `working`.
+/// Launches `expand2x`, expanding the gap map in `source` into `destination`.
 pub(super) fn expand_gaps<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
+    source: GapBuffer,
+    destination: GapBuffer,
 ) {
+    assert_ne!(source, destination, "expand2x cannot expand a gap map in place");
+
     let samples = pass.gap_samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: `spare` and `working` hold at least `width * (rows - 1)` values and `edges` `width * rows`,
+    // Safety: every scratch buffer holds at least `width * (rows - 1)` values and `edges` `width * rows`,
     // as `FieldPass::new` checked. Each unit writes only its own gap pixel and reads only the gap rows
     // around it that exist, at columns within one of its own only when those lie inside the row.
     unsafe {
-        let source = pass.gap_array::<R>(GapBuffer::Spare);
+        let source = pass.gap_array::<R>(source);
         let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.gap_array::<R>(GapBuffer::Working);
+        let destination = pass.gap_array::<R>(destination);
 
         expand_gaps_kernel::launch_unchecked::<R>(
             client,
