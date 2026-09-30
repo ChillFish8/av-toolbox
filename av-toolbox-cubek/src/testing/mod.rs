@@ -3,6 +3,7 @@ mod bilateral;
 mod dehalo;
 mod dering;
 mod edges;
+mod eedi2;
 mod hysteresis;
 mod lineart;
 mod neighbourhood;
@@ -32,6 +33,15 @@ pub use self::dehalo::{
 };
 pub use self::dering::{reference_hq_dering, reference_ring_mask};
 pub use self::edges::{reference_add_capped, reference_binarize, reference_edges};
+pub use self::eedi2::{
+    EEDI2_FIXTURES,
+    Eedi2Fixture,
+    Eedi2Parameters,
+    Eedi2Stages,
+    reference_eedi2_antialias,
+    reference_eedi2_field,
+    reference_eedi2_field_stages,
+};
 pub use self::hysteresis::reference_hysteresis;
 pub use self::lineart::{
     reference_clamped_merge,
