@@ -61,7 +61,12 @@ pub use self::retinex::{
     reference_retinex,
 };
 pub use self::rgvs::{reference_remove_grain, reference_repair};
-pub use self::sangnom::{reference_sangnom_antialias, reference_sangnom_field};
+pub use self::sangnom::{
+    SANGNOM_FIXTURES,
+    SangnomFixture,
+    reference_sangnom_antialias,
+    reference_sangnom_field,
+};
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 use crate::warp::{BlurKind, WarpParams};

@@ -254,133 +254,159 @@ pub fn reference_sangnom_antialias(plane: &[f32], width: u32, height: u32, aaf: 
         .collect()
 }
 
+const WORKED_TXT: &str = include_str!("fixtures/sangnom/worked.txt");
+const WORKED_IN: &[u8] = include_bytes!("fixtures/sangnom/worked.in");
+const WORKED_PASS0: &[u8] = include_bytes!("fixtures/sangnom/worked.pass0");
+const WORKED_PASS1: &[u8] = include_bytes!("fixtures/sangnom/worked.pass1");
+const WORKED_AA: &[u8] = include_bytes!("fixtures/sangnom/worked.aa");
+const DIAGONAL_TXT: &str = include_str!("fixtures/sangnom/diagonal.txt");
+const DIAGONAL_IN: &[u8] = include_bytes!("fixtures/sangnom/diagonal.in");
+const DIAGONAL_PASS0: &[u8] = include_bytes!("fixtures/sangnom/diagonal.pass0");
+const DIAGONAL_PASS1: &[u8] = include_bytes!("fixtures/sangnom/diagonal.pass1");
+const DIAGONAL_AA: &[u8] = include_bytes!("fixtures/sangnom/diagonal.aa");
+const EXTREMES_TXT: &str = include_str!("fixtures/sangnom/extremes.txt");
+const EXTREMES_IN: &[u8] = include_bytes!("fixtures/sangnom/extremes.in");
+const EXTREMES_PASS0: &[u8] = include_bytes!("fixtures/sangnom/extremes.pass0");
+const EXTREMES_PASS1: &[u8] = include_bytes!("fixtures/sangnom/extremes.pass1");
+const EXTREMES_AA: &[u8] = include_bytes!("fixtures/sangnom/extremes.aa");
+const NOISE_TXT: &str = include_str!("fixtures/sangnom/noise.txt");
+const NOISE_IN: &[u8] = include_bytes!("fixtures/sangnom/noise.in");
+const NOISE_PASS0: &[u8] = include_bytes!("fixtures/sangnom/noise.pass0");
+const NOISE_PASS1: &[u8] = include_bytes!("fixtures/sangnom/noise.pass1");
+const NOISE_AA: &[u8] = include_bytes!("fixtures/sangnom/noise.aa");
+const WIDE_TXT: &str = include_str!("fixtures/sangnom/wide.txt");
+const WIDE_IN: &[u8] = include_bytes!("fixtures/sangnom/wide.in");
+const WIDE_PASS0: &[u8] = include_bytes!("fixtures/sangnom/wide.pass0");
+const WIDE_PASS1: &[u8] = include_bytes!("fixtures/sangnom/wide.pass1");
+const WIDE_AA: &[u8] = include_bytes!("fixtures/sangnom/wide.aa");
+const STRESS_TXT: &str = include_str!("fixtures/sangnom/stress.txt");
+const STRESS_IN: &[u8] = include_bytes!("fixtures/sangnom/stress.in");
+const STRESS_PASS0: &[u8] = include_bytes!("fixtures/sangnom/stress.pass0");
+const STRESS_PASS1: &[u8] = include_bytes!("fixtures/sangnom/stress.pass1");
+const STRESS_AA: &[u8] = include_bytes!("fixtures/sangnom/stress.aa");
+
+/// One case written by the plugin's own core with the smoothing spanning the plane's width.
+///
+/// Every plane is little-endian u16 samples, and `metadata` holds the `width`, `height`, `bits` and `aa`
+/// it was written with.
+pub struct SangnomFixture {
+    pub name: &'static str,
+    pub metadata: &'static str,
+    pub input: &'static [u8],
+    pub pass0: &'static [u8],
+    pub pass1: &'static [u8],
+    pub merged: &'static [u8],
+}
+
+/// Every SangNom field pass fixture.
+pub const SANGNOM_FIXTURES: [SangnomFixture; 6] = [
+    SangnomFixture {
+        name: "worked",
+        metadata: WORKED_TXT,
+        input: WORKED_IN,
+        pass0: WORKED_PASS0,
+        pass1: WORKED_PASS1,
+        merged: WORKED_AA,
+    },
+    SangnomFixture {
+        name: "diagonal",
+        metadata: DIAGONAL_TXT,
+        input: DIAGONAL_IN,
+        pass0: DIAGONAL_PASS0,
+        pass1: DIAGONAL_PASS1,
+        merged: DIAGONAL_AA,
+    },
+    SangnomFixture {
+        name: "extremes",
+        metadata: EXTREMES_TXT,
+        input: EXTREMES_IN,
+        pass0: EXTREMES_PASS0,
+        pass1: EXTREMES_PASS1,
+        merged: EXTREMES_AA,
+    },
+    SangnomFixture {
+        name: "noise",
+        metadata: NOISE_TXT,
+        input: NOISE_IN,
+        pass0: NOISE_PASS0,
+        pass1: NOISE_PASS1,
+        merged: NOISE_AA,
+    },
+    SangnomFixture {
+        name: "wide",
+        metadata: WIDE_TXT,
+        input: WIDE_IN,
+        pass0: WIDE_PASS0,
+        pass1: WIDE_PASS1,
+        merged: WIDE_AA,
+    },
+    SangnomFixture {
+        name: "stress",
+        metadata: STRESS_TXT,
+        input: STRESS_IN,
+        pass0: STRESS_PASS0,
+        pass1: STRESS_PASS1,
+        merged: STRESS_AA,
+    },
+];
+
+fn decode_plane(bytes: &[u8]) -> Vec<f32> {
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    assert!(
+        remainder.is_empty(),
+        "a plane of u16 samples has an odd {} bytes",
+        bytes.len()
+    );
+
+    pairs
+        .iter()
+        .map(|pair| {
+            let sample = u16::from_le_bytes(*pair);
+            f32::from(sample)
+        })
+        .collect()
+}
+
+fn metadata_value(metadata: &str, key: &str) -> u32 {
+    for line in metadata.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some(key) {
+            continue;
+        }
+
+        let value = parts.next().expect("every metadata key has a value");
+        return value.parse().expect("every metadata value is an integer");
+    }
+
+    panic!("the fixture metadata has no `{key}`");
+}
+
+impl SangnomFixture {
+    /// The value of `key` in the metadata, one of `width`, `height`, `bits` or `aa`.
+    pub fn setting(&self, key: &str) -> u32 {
+        metadata_value(self.metadata, key)
+    }
+
+    /// The input plane as f32 code values.
+    pub fn input_plane(&self) -> Vec<f32> {
+        decode_plane(self.input)
+    }
+
+    /// The field pass keeping the even rows, as f32 code values.
+    pub fn pass0_plane(&self) -> Vec<f32> {
+        decode_plane(self.pass0)
+    }
+
+    /// The field pass keeping the odd rows, as f32 code values.
+    pub fn pass1_plane(&self) -> Vec<f32> {
+        decode_plane(self.pass1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::aa::sangnom_aaf;
-
-    const WORKED_TXT: &str = include_str!("fixtures/sangnom/worked.txt");
-    const WORKED_IN: &[u8] = include_bytes!("fixtures/sangnom/worked.in");
-    const WORKED_PASS0: &[u8] = include_bytes!("fixtures/sangnom/worked.pass0");
-    const WORKED_PASS1: &[u8] = include_bytes!("fixtures/sangnom/worked.pass1");
-    const WORKED_AA: &[u8] = include_bytes!("fixtures/sangnom/worked.aa");
-    const DIAGONAL_TXT: &str = include_str!("fixtures/sangnom/diagonal.txt");
-    const DIAGONAL_IN: &[u8] = include_bytes!("fixtures/sangnom/diagonal.in");
-    const DIAGONAL_PASS0: &[u8] = include_bytes!("fixtures/sangnom/diagonal.pass0");
-    const DIAGONAL_PASS1: &[u8] = include_bytes!("fixtures/sangnom/diagonal.pass1");
-    const DIAGONAL_AA: &[u8] = include_bytes!("fixtures/sangnom/diagonal.aa");
-    const EXTREMES_TXT: &str = include_str!("fixtures/sangnom/extremes.txt");
-    const EXTREMES_IN: &[u8] = include_bytes!("fixtures/sangnom/extremes.in");
-    const EXTREMES_PASS0: &[u8] = include_bytes!("fixtures/sangnom/extremes.pass0");
-    const EXTREMES_PASS1: &[u8] = include_bytes!("fixtures/sangnom/extremes.pass1");
-    const EXTREMES_AA: &[u8] = include_bytes!("fixtures/sangnom/extremes.aa");
-    const NOISE_TXT: &str = include_str!("fixtures/sangnom/noise.txt");
-    const NOISE_IN: &[u8] = include_bytes!("fixtures/sangnom/noise.in");
-    const NOISE_PASS0: &[u8] = include_bytes!("fixtures/sangnom/noise.pass0");
-    const NOISE_PASS1: &[u8] = include_bytes!("fixtures/sangnom/noise.pass1");
-    const NOISE_AA: &[u8] = include_bytes!("fixtures/sangnom/noise.aa");
-    const WIDE_TXT: &str = include_str!("fixtures/sangnom/wide.txt");
-    const WIDE_IN: &[u8] = include_bytes!("fixtures/sangnom/wide.in");
-    const WIDE_PASS0: &[u8] = include_bytes!("fixtures/sangnom/wide.pass0");
-    const WIDE_PASS1: &[u8] = include_bytes!("fixtures/sangnom/wide.pass1");
-    const WIDE_AA: &[u8] = include_bytes!("fixtures/sangnom/wide.aa");
-    const STRESS_TXT: &str = include_str!("fixtures/sangnom/stress.txt");
-    const STRESS_IN: &[u8] = include_bytes!("fixtures/sangnom/stress.in");
-    const STRESS_PASS0: &[u8] = include_bytes!("fixtures/sangnom/stress.pass0");
-    const STRESS_PASS1: &[u8] = include_bytes!("fixtures/sangnom/stress.pass1");
-    const STRESS_AA: &[u8] = include_bytes!("fixtures/sangnom/stress.aa");
-
-    /// One case written by the plugin's own core with the smoothing spanning the plane's width.
-    struct Fixture {
-        name: &'static str,
-        metadata: &'static str,
-        input: &'static [u8],
-        pass0: &'static [u8],
-        pass1: &'static [u8],
-        merged: &'static [u8],
-    }
-
-    const FIXTURES: [Fixture; 6] = [
-        Fixture {
-            name: "worked",
-            metadata: WORKED_TXT,
-            input: WORKED_IN,
-            pass0: WORKED_PASS0,
-            pass1: WORKED_PASS1,
-            merged: WORKED_AA,
-        },
-        Fixture {
-            name: "diagonal",
-            metadata: DIAGONAL_TXT,
-            input: DIAGONAL_IN,
-            pass0: DIAGONAL_PASS0,
-            pass1: DIAGONAL_PASS1,
-            merged: DIAGONAL_AA,
-        },
-        Fixture {
-            name: "extremes",
-            metadata: EXTREMES_TXT,
-            input: EXTREMES_IN,
-            pass0: EXTREMES_PASS0,
-            pass1: EXTREMES_PASS1,
-            merged: EXTREMES_AA,
-        },
-        Fixture {
-            name: "noise",
-            metadata: NOISE_TXT,
-            input: NOISE_IN,
-            pass0: NOISE_PASS0,
-            pass1: NOISE_PASS1,
-            merged: NOISE_AA,
-        },
-        Fixture {
-            name: "wide",
-            metadata: WIDE_TXT,
-            input: WIDE_IN,
-            pass0: WIDE_PASS0,
-            pass1: WIDE_PASS1,
-            merged: WIDE_AA,
-        },
-        Fixture {
-            name: "stress",
-            metadata: STRESS_TXT,
-            input: STRESS_IN,
-            pass0: STRESS_PASS0,
-            pass1: STRESS_PASS1,
-            merged: STRESS_AA,
-        },
-    ];
-
-    fn decode_plane(bytes: &[u8]) -> Vec<f32> {
-        let (pairs, remainder) = bytes.as_chunks::<2>();
-        assert!(
-            remainder.is_empty(),
-            "a plane of u16 samples has an odd {} bytes",
-            bytes.len()
-        );
-
-        pairs
-            .iter()
-            .map(|pair| {
-                let sample = u16::from_le_bytes(*pair);
-                f32::from(sample)
-            })
-            .collect()
-    }
-
-    fn metadata_value(metadata: &str, key: &str) -> u32 {
-        for line in metadata.lines() {
-            let mut parts = line.split_whitespace();
-            if parts.next() != Some(key) {
-                continue;
-            }
-
-            let value = parts.next().expect("every metadata key has a value");
-            return value.parse().expect("every metadata value is an integer");
-        }
-
-        panic!("the fixture metadata has no `{key}`");
-    }
 
     #[test]
     fn the_worked_example_matches_by_hand() {
@@ -402,7 +428,7 @@ mod tests {
 
     #[test]
     fn every_fixture_matches_the_plugin() {
-        for fixture in &FIXTURES {
+        for fixture in &SANGNOM_FIXTURES {
             let width = metadata_value(fixture.metadata, "width");
             let height = metadata_value(fixture.metadata, "height");
             let bits = metadata_value(fixture.metadata, "bits");
