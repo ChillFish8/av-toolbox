@@ -3,18 +3,13 @@ mod thin;
 mod toon;
 mod vinverse;
 
-use av_toolbox_cubek::depth::Element;
-use av_toolbox_gpu::{Channel, ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
+use av_toolbox_gpu::{Channel, ChromaLocation, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 
-use crate::support::{frame, from_bytes, to_bytes};
+use crate::support::{element_of, frame, from_bytes, peak_of, to_bytes};
 
 pub(super) const WIDTH: u32 = 64;
 
 pub(super) const HEIGHT: u32 = 48;
-
-pub(super) fn ten_bit() -> SampleFormat {
-    SampleFormat::U16 { depth: Depth::TEN }
-}
 
 pub(super) fn yuv420(sample: SampleFormat) -> FrameFormat {
     let layout = FrameLayout::Yuv {
@@ -22,26 +17,6 @@ pub(super) fn yuv420(sample: SampleFormat) -> FrameFormat {
     };
 
     frame(WIDTH, HEIGHT, layout, sample, ChromaLocation::Left)
-}
-
-pub(super) fn element_of(sample: SampleFormat) -> Element {
-    match sample {
-        SampleFormat::U8 => Element::U8,
-        _ => Element::U16,
-    }
-}
-
-pub(super) fn peak_of(sample: SampleFormat) -> u32 {
-    match sample {
-        SampleFormat::U8 => 255,
-        _ => 1023,
-    }
-}
-
-pub(super) fn encoded(format: &FrameFormat, values: &[Vec<u16>]) -> Vec<Vec<u8>> {
-    let element = element_of(format.sample);
-
-    values.iter().map(|plane| to_bytes(plane, element)).collect()
 }
 
 /// How far a plane is from the reference.

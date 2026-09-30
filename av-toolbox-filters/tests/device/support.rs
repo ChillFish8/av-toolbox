@@ -16,6 +16,7 @@ use av_toolbox_gpu::{
     Channel,
     ChromaLocation,
     ColourInfo,
+    Depth,
     Device,
     FrameFormat,
     FrameLayout,
@@ -836,4 +837,28 @@ pub(crate) fn shared_planes(stage: &str, format: FrameFormat, args: serde_json::
     let filter = built_filter(&backend, stage, format, format, args);
 
     backend.build(SharedPlanes { filter, format })
+}
+
+pub(crate) fn ten_bit() -> SampleFormat {
+    SampleFormat::U16 { depth: Depth::TEN }
+}
+
+pub(crate) fn element_of(sample: SampleFormat) -> Element {
+    match sample {
+        SampleFormat::U8 => Element::U8,
+        _ => Element::U16,
+    }
+}
+
+pub(crate) fn peak_of(sample: SampleFormat) -> u32 {
+    match sample {
+        SampleFormat::U8 => 255,
+        _ => 1023,
+    }
+}
+
+pub(crate) fn encoded(format: &FrameFormat, values: &[Vec<u16>]) -> Vec<Vec<u8>> {
+    let element = element_of(format.sample);
+
+    values.iter().map(|plane| to_bytes(plane, element)).collect()
 }

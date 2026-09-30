@@ -1,5 +1,6 @@
 //! Filters that change the frames of a stream
 //!
+//! - `aa/sangnom` anti-aliases by rebuilding each field along its edges, the way SangNom2 does.
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 //! - `deband/placebo` smooths banding with libplacebo's algorithm, then adds grain.
 //! - `dehalo/alpha` removes halos by pulling pixels toward a halo-free estimate made by resizing.
@@ -21,6 +22,7 @@
 //! - `upscale/artcnn` doubles a clip's size, running its luma through the ArtCNN network.
 //! - `warp/awarpsharp` sharpens by pulling samples toward nearby edges, the way aWarpSharp2 does.
 
+mod aa;
 mod bits;
 mod blend;
 mod checks;
@@ -47,6 +49,7 @@ use self::resize::{Bicubic, Bilinear, Lanczos, Point, Resize, Spline16, Spline36
 
 /// Registers every filter this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
+    registry.register_filter::<aa::Sangnom>()?;
     registry.register_filter::<blend::Masked>()?;
     registry.register_filter::<deband::Placebo>()?;
     registry.register_filter::<dehalo::Alpha>()?;
@@ -92,6 +95,7 @@ mod tests {
 
     #[test]
     fn every_filter_is_registered() {
+        assert!(registered("aa/sangnom"));
         assert!(registered("blend/masked"));
         assert!(registered("deband/placebo"));
         assert!(registered("dehalo/alpha"));

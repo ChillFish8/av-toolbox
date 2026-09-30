@@ -8,17 +8,24 @@ use super::{
     WIDTH,
     agreement,
     changed,
-    element_of,
-    encoded,
     faded_line_planes,
     lined_scene,
     luma_codes,
-    peak_of,
     rounding_of,
-    ten_bit,
     yuv420,
 };
-use crate::support::{from_bytes, run_masked, run_once, shared_planes, to_bytes, uniform_mask};
+use crate::support::{
+    element_of,
+    encoded,
+    from_bytes,
+    peak_of,
+    run_masked,
+    run_once,
+    shared_planes,
+    ten_bit,
+    to_bytes,
+    uniform_mask,
+};
 
 const DARKEN: &str = "lineart/darken";
 

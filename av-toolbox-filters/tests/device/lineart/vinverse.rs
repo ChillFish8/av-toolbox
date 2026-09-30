@@ -3,8 +3,20 @@ use av_toolbox_cubek::testing::{reference_narrow, reference_vinverse};
 use av_toolbox_gpu::{FrameFormat, SampleFormat};
 use serde_json::json;
 
-use super::{agreement, changed, element_of, encoded, peak_of, ten_bit, yuv420};
-use crate::support::{from_bytes, run_masked, run_once, shared_planes, split_mask, to_bytes, uniform_mask};
+use super::{agreement, changed, yuv420};
+use crate::support::{
+    element_of,
+    encoded,
+    from_bytes,
+    peak_of,
+    run_masked,
+    run_once,
+    shared_planes,
+    split_mask,
+    ten_bit,
+    to_bytes,
+    uniform_mask,
+};
 
 const STAGE: &str = "lineart/vinverse";
 
