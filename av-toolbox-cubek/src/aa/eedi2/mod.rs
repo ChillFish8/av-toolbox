@@ -206,19 +206,6 @@ fn assert_plane_size(handle: &Handle, bytes: usize, name: &str) {
     );
 }
 
-/// The cubes and cube shape that launch one unit per gap row, `rows` in all.
-///
-/// Each unit walks a whole row, branching on its content, so every row gets a cube of its own and never
-/// waits on another row's branches. The cubes are laid out 65535 to a line, the least every device allows.
-fn row_launch(rows: u32) -> (CubeCount, CubeDim) {
-    let across = u32::min(rows, 65535);
-    let lines = rows.div_ceil(across);
-    let count = CubeCount::Static(across, lines, 1);
-    let shape = CubeDim::new_1d(1);
-
-    (count, shape)
-}
-
 /// Field row `row` at `column`, read from plane row `2 * row + offset`.
 #[cube]
 pub(super) fn field_sample(input: &Array<f32>, width: u32, offset: u32, row: u32, column: u32) -> f32 {

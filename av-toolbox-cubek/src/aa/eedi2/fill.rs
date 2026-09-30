@@ -5,9 +5,10 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 
 use super::directions::touches_edge;
-use super::{Eedi2Settings, FieldBuffer, FieldPass, GapBuffer, row_launch};
+use super::{Eedi2Settings, FieldBuffer, FieldPass, GapBuffer};
 #[cfg(any(test, feature = "test-support"))]
 use crate::Dispatch;
+use crate::aa::row_launch;
 
 /// Rounds a value cut down to `kept` to nearest, ties to even, from the first dropped bit `guard` and
 /// whether any lower dropped bit was set.

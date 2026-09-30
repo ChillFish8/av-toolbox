@@ -3,7 +3,8 @@
 use cubecl::prelude::*;
 
 use super::votes::{MapScale, lim};
-use super::{Eedi2Settings, FieldBuffer, FieldPass, GapBuffer, field_sample, row_launch};
+use super::{Eedi2Settings, FieldBuffer, FieldPass, GapBuffer, field_sample};
+use crate::aa::row_launch;
 use crate::{DevicePlane, Dispatch};
 
 /// The values the lattice compares with, scaled to the plane.
