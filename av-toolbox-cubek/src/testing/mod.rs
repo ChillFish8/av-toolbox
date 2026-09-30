@@ -4,6 +4,7 @@ mod dehalo;
 mod dering;
 mod edges;
 mod eedi2;
+mod eedi3;
 mod hysteresis;
 mod lineart;
 mod neighbourhood;
@@ -42,6 +43,23 @@ pub use self::eedi2::{
     reference_eedi2_field,
     reference_eedi2_field_stages,
     reference_fill_round,
+};
+pub use self::eedi3::{
+    CheckOrder,
+    CloseDecisionTally,
+    Contraction,
+    EEDI3_FIXTURES,
+    Eedi3Antialias,
+    Eedi3Clips,
+    Eedi3Fixture,
+    Eedi3Parameters,
+    Eedi3Pass,
+    Eedi3Variant,
+    Lending,
+    TieOrder,
+    reference_eedi3_antialias,
+    reference_eedi3_field,
+    reference_eedi3_field_variant,
 };
 pub use self::hysteresis::reference_hysteresis;
 pub use self::lineart::{

@@ -1,0 +1,12 @@
+width 32
+height 12
+bits 8
+alpha 0.200000003
+beta 0.25
+gamma 20
+nrad 2
+mdis 20
+vcheck 2
+vthresh0 32
+vthresh1 64
+vthresh2 4
