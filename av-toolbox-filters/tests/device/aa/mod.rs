@@ -1,3 +1,4 @@
+mod eedi2;
 mod sangnom;
 
 use av_toolbox_gpu::{ChromaLocation, FrameFormat, FrameLayout, SampleFormat, Subsampling};
@@ -11,6 +12,14 @@ pub(super) fn grey(width: u32, height: u32, sample: SampleFormat) -> FrameFormat
 pub(super) fn yuv420(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
     let layout = FrameLayout::Yuv {
         subsampling: Subsampling::Yuv420,
+    };
+
+    frame(width, height, layout, sample, ChromaLocation::Left)
+}
+
+pub(super) fn yuv422(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv422,
     };
 
     frame(width, height, layout, sample, ChromaLocation::Left)

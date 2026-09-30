@@ -1,5 +1,7 @@
 //! Filters that change the frames of a stream
 //!
+//! - `aa/eedi2` anti-aliases by re-interpolating each field along a smoothed map of edge directions, the
+//!   way EEDI2 does.
 //! - `aa/sangnom` anti-aliases by rebuilding each field along its edges, the way SangNom2 does.
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 //! - `deband/placebo` smooths banding with libplacebo's algorithm, then adds grain.
@@ -49,6 +51,7 @@ use self::resize::{Bicubic, Bilinear, Lanczos, Point, Resize, Spline16, Spline36
 
 /// Registers every filter this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
+    registry.register_filter::<aa::Eedi2>()?;
     registry.register_filter::<aa::Sangnom>()?;
     registry.register_filter::<blend::Masked>()?;
     registry.register_filter::<deband::Placebo>()?;
@@ -95,6 +98,7 @@ mod tests {
 
     #[test]
     fn every_filter_is_registered() {
+        assert!(registered("aa/eedi2"));
         assert!(registered("aa/sangnom"));
         assert!(registered("blend/masked"));
         assert!(registered("deband/placebo"));

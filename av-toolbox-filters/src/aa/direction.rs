@@ -53,7 +53,7 @@ fn odd_size(stage: &str, channel: Channel, direction: Direction, dimension: &str
     StageError::msg(message)
 }
 
-fn missing_plane(stage: &str, channel: Channel) -> StageError {
+pub(crate) fn missing_plane(stage: &str, channel: Channel) -> StageError {
     let message = format!("{stage} was handed a format without a size for plane {channel}");
 
     StageError::msg(message)
@@ -97,27 +97,28 @@ pub(crate) trait FieldPass {
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32);
 }
 
-/// Anti-aliases `input` into `output` along `direction`, with `pass` rebuilding each field.
+/// Anti-aliases `input` into `output` along `direction`.
 ///
-/// A vertical run averages the pass keeping the even rows with the pass keeping the odd rows. A
-/// horizontal run does the same on the transposed plane.
+/// A vertical run averages the `vertical` pass keeping the even rows with the one keeping the odd rows.
+/// A horizontal run does the same with the `horizontal` pass on the transposed plane.
 pub(crate) fn run_direction<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
-    pass: &impl FieldPass,
+    vertical: &impl FieldPass,
+    horizontal: &impl FieldPass,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     direction: Direction,
 ) {
     match direction {
-        Direction::Vertical => run_vertical(client, context, pass, input, output),
-        Direction::Horizontal => run_horizontal(client, context, pass, input, output),
+        Direction::Vertical => run_vertical(client, context, vertical, input, output),
+        Direction::Horizontal => run_horizontal(client, context, horizontal, input, output),
         Direction::Both => {
-            let vertical = Scratch::new::<f32>(context, input.width(), input.height());
-            let vertical_plane = vertical.plane();
+            let vertical_result = Scratch::new::<f32>(context, input.width(), input.height());
+            let vertical_plane = vertical_result.plane();
 
-            run_vertical(client, context, pass, input, vertical_plane);
-            run_horizontal(client, context, pass, vertical_plane, output);
+            run_vertical(client, context, vertical, input, vertical_plane);
+            run_horizontal(client, context, horizontal, vertical_plane, output);
         },
     }
 }

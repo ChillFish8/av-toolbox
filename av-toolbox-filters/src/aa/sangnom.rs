@@ -205,7 +205,7 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
         input: DevicePlane<'_>,
         output: DevicePlane<'_>,
     ) -> Result<(), StageError> {
-        run_direction(&self.client, context, self, input, output, self.direction);
+        run_direction(&self.client, context, self, self, input, output, self.direction);
 
         Ok(())
     }
