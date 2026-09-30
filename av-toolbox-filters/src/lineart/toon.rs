@@ -38,18 +38,18 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::mask::{
+use crate::bits::bits_of;
+use crate::checks::{at_least, between_f32, between_i32, between_u32};
+use crate::masked::{
     INPUT,
-    LINEART_INPUTS,
     MASK,
+    MASKED_INPUTS,
     MaskedFilter,
-    accepts_lineart_input,
+    accepts_masked_input,
     checked_input,
     checked_mask,
     missing_input,
 };
-use crate::bits::bits_of;
-use crate::checks::{at_least, between_f32, between_i32, between_u32};
 use crate::padded_warp::padded_warp;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
@@ -172,7 +172,7 @@ impl StageDefinition for Toon {
     }
 
     fn inputs() -> &'static InputSignature {
-        LINEART_INPUTS
+        MASKED_INPUTS
     }
 }
 
@@ -186,7 +186,7 @@ impl FilterDefinition for Toon {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_lineart_input(STAGE, index, offered)
+        accepts_masked_input(STAGE, index, offered)
     }
 
     fn produces(

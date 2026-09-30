@@ -20,27 +20,27 @@ use crate::planewise::PlaneFilter;
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
 
-/// The slot of the frames every lineart stage filters.
+/// The slot of the frames a masked stage filters.
 pub(crate) const INPUT: usize = 0;
 
-/// The slot of the optional mask every lineart stage merges through.
+/// The slot of the optional mask a masked stage merges through.
 pub(crate) const MASK: usize = 1;
 
 /// The largest value a mask sample holds.
 const MASK_PEAK: f32 = 255.0;
 
-/// The inputs every lineart stage takes, a required `input` and an optional `mask` carrying
-/// planes to match it.
-pub(crate) const LINEART_INPUTS: &InputSignature = &InputSignature::new(&[
+/// The inputs of a masked stage, a required `input` and an optional `mask` carrying planes to
+/// match it.
+pub(crate) const MASKED_INPUTS: &InputSignature = &InputSignature::new(&[
     InputParam::required("input").accepting(StreamType::Frames),
     InputParam::optional("mask")
         .accepting(StreamType::Mask)
         .planes_of("input"),
 ]);
 
-/// The samples a lineart stage accepts on `index`, U8 and U16 frames for the input and a U8
+/// The samples a masked stage accepts on `index`, U8 and U16 frames for the input and a U8
 /// mask for the mask.
-pub(crate) fn accepts_lineart_input(
+pub(crate) fn accepts_masked_input(
     stage: &str,
     index: usize,
     offered: StreamFormat,
@@ -261,7 +261,7 @@ mod tests {
 
     use super::*;
 
-    const STAGE: &str = "lineart/test";
+    const STAGE: &str = "masked/test";
 
     fn frame_format(sample: SampleFormat) -> FrameFormat {
         FrameFormat {
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn the_mask_is_optional_and_asks_for_planes_of_input() {
-        let params = LINEART_INPUTS.params();
+        let params = MASKED_INPUTS.params();
         let input = params[INPUT];
         let mask = params[MASK];
 
@@ -306,9 +306,9 @@ mod tests {
         let ten_bit_frames = StreamFormat::Frames(frame_format(ten_bit));
         let u8_mask = mask(8, 6, SampleFormat::U8);
 
-        let eight_bit = accepts_lineart_input(STAGE, INPUT, eight_bit_frames).expect("frames are readable");
-        let ten_bit_set = accepts_lineart_input(STAGE, INPUT, ten_bit_frames).expect("frames are readable");
-        let masks = accepts_lineart_input(STAGE, MASK, u8_mask).expect("a mask is readable");
+        let eight_bit = accepts_masked_input(STAGE, INPUT, eight_bit_frames).expect("frames are readable");
+        let ten_bit_set = accepts_masked_input(STAGE, INPUT, ten_bit_frames).expect("frames are readable");
+        let masks = accepts_masked_input(STAGE, MASK, u8_mask).expect("a mask is readable");
 
         assert!(eight_bit.accepts(SampleFormat::U8));
         assert!(ten_bit_set.accepts(ten_bit));
@@ -321,8 +321,8 @@ mod tests {
         let float_frames = StreamFormat::Frames(frame_format(SampleFormat::F32));
         let wide_mask = mask(8, 6, ten_bit);
 
-        let floats = accepts_lineart_input(STAGE, INPUT, float_frames).expect("frames are readable");
-        let wide = accepts_lineart_input(STAGE, MASK, wide_mask).expect("a mask is readable");
+        let floats = accepts_masked_input(STAGE, INPUT, float_frames).expect("frames are readable");
+        let wide = accepts_masked_input(STAGE, MASK, wide_mask).expect("a mask is readable");
 
         assert!(floats.is_empty());
         assert!(wide.is_empty());
@@ -332,7 +332,7 @@ mod tests {
     fn a_mask_in_the_input_slot_is_refused() {
         let wrong = mask(8, 6, SampleFormat::U8);
 
-        let error = accepts_lineart_input(STAGE, INPUT, wrong).expect_err("the input takes frames");
+        let error = accepts_masked_input(STAGE, INPUT, wrong).expect_err("the input takes frames");
         let message = error.to_string();
 
         assert!(message.contains(STAGE), "{message}");
@@ -344,7 +344,7 @@ mod tests {
     fn frames_in_the_mask_slot_are_refused() {
         let frames = StreamFormat::Frames(frame_format(SampleFormat::U8));
 
-        let error = accepts_lineart_input(STAGE, MASK, frames).expect_err("the mask slot takes a mask");
+        let error = accepts_masked_input(STAGE, MASK, frames).expect_err("the mask slot takes a mask");
         let message = error.to_string();
 
         assert!(message.contains(STAGE), "{message}");
@@ -356,7 +356,7 @@ mod tests {
     fn a_stream_past_the_mask_slot_is_refused() {
         let frames = StreamFormat::Frames(frame_format(SampleFormat::U8));
 
-        let error = accepts_lineart_input(STAGE, 2, frames).expect_err("there are only two slots");
+        let error = accepts_masked_input(STAGE, 2, frames).expect_err("there are only two slots");
         let message = error.to_string();
 
         assert!(message.contains(STAGE), "{message}");

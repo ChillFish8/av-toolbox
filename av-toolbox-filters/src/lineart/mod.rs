@@ -1,5 +1,4 @@
 mod darken;
-mod mask;
 #[cfg(test)]
 mod tests;
 mod thin;

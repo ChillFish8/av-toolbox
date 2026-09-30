@@ -28,6 +28,7 @@ mod deband;
 mod dehalo;
 mod dering;
 mod lineart;
+mod masked;
 mod padded_warp;
 mod planes;
 mod planewise;
