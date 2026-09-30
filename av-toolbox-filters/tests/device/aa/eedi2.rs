@@ -3,11 +3,13 @@ use av_toolbox_gpu::{Channel, Depth, FrameFormat, FrameLayout, SampleFormat};
 use serde_json::json;
 
 use super::{
+    DIRECTIONS,
     assert_exact,
     bits_of,
     decoded,
     grey,
     largest_vertical_step,
+    noisy_diagonals,
     one_sample_diagonal,
     transposed,
     yuv420,
@@ -20,9 +22,6 @@ const STAGE: &str = "aa/eedi2";
 const WIDTH: u32 = 48;
 
 const HEIGHT: u32 = 32;
-
-/// The directions `aa/eedi2` runs along, as its arguments name them.
-const DIRECTIONS: [&str; 3] = ["vertical", "horizontal", "both"];
 
 /// The subsampling shift `ssw` of each pass over one plane.
 #[derive(Debug, Clone, Copy)]
@@ -376,32 +375,6 @@ fn moved_arguments() -> [(&'static str, Eedi2Parameters); 8] {
         ("nt", Eedi2Parameters { nt: 10, ..base }),
         ("pp", Eedi2Parameters { pp: 0, ..base }),
     ]
-}
-
-/// A deterministic hash of a sample's position, for noise.
-fn scramble(column: u32, row: u32) -> u32 {
-    let mut state = column.wrapping_mul(0x9e37_79b1) ^ row.wrapping_mul(0x85eb_ca77);
-    state ^= state >> 15;
-    state = state.wrapping_mul(0x2c1b_3c6d);
-    state ^= state >> 12;
-
-    state
-}
-
-/// Diagonal bands of `low` and `high` with some noise, `slope` columns per row.
-fn noisy_diagonals(width: u32, height: u32, slope: u32, low: u32, high: u32, noise: u32) -> Vec<u16> {
-    let mut plane = Vec::new();
-    for row in 0..height {
-        for column in 0..width {
-            let band = (column + slope * row) / 9 % 2;
-            let base = if band == 0 { low } else { high };
-            let jitter = scramble(column, row) % (noise + 1);
-            let value = base + jitter;
-            plane.push(value as u16);
-        }
-    }
-
-    plane
 }
 
 /// Faint noisy stripes above shallow noisy diagonals, 8-bit.

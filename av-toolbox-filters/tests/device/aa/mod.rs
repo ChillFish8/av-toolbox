@@ -1,9 +1,13 @@
 mod eedi2;
+mod eedi3;
 mod sangnom;
 
 use av_toolbox_gpu::{ChromaLocation, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 
 use crate::support::{element_of, frame, from_bytes};
+
+/// The directions an anti-aliasing stage runs along, as its arguments name them.
+pub(super) const DIRECTIONS: [&str; 3] = ["vertical", "horizontal", "both"];
 
 pub(super) fn grey(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
     frame(width, height, FrameLayout::Grey, sample, ChromaLocation::Left)
@@ -103,4 +107,37 @@ pub(super) fn largest_vertical_step(plane: &[u16], width: u32) -> u16 {
         .map(|(above, below)| above.abs_diff(*below))
         .max()
         .unwrap_or(0)
+}
+
+/// A deterministic hash of a sample's position, for noise.
+pub(super) fn scramble(column: u32, row: u32) -> u32 {
+    let mut state = column.wrapping_mul(0x9e37_79b1) ^ row.wrapping_mul(0x85eb_ca77);
+    state ^= state >> 15;
+    state = state.wrapping_mul(0x2c1b_3c6d);
+    state ^= state >> 12;
+
+    state
+}
+
+/// Diagonal bands of `low` and `high` with some noise, `slope` columns per row.
+pub(super) fn noisy_diagonals(
+    width: u32,
+    height: u32,
+    slope: u32,
+    low: u32,
+    high: u32,
+    noise: u32,
+) -> Vec<u16> {
+    let mut plane = Vec::new();
+    for row in 0..height {
+        for column in 0..width {
+            let band = (column + slope * row) / 9 % 2;
+            let base = if band == 0 { low } else { high };
+            let jitter = scramble(column, row) % (noise + 1);
+            let value = base + jitter;
+            plane.push(value as u16);
+        }
+    }
+
+    plane
 }
