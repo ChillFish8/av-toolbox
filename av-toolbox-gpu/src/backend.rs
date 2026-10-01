@@ -235,12 +235,14 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use super::*;
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    use crate::test_device;
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::testing::TEST_ACCELERATOR;
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn a_backend_opens_and_runs_work_against_its_client() {
-        let backend = Backend::open(TEST_ACCELERATOR, Device::Default).expect("should open");
+        let backend = Backend::open(TEST_ACCELERATOR, test_device()).expect("should open");
 
         assert_eq!(backend.accelerator(), TEST_ACCELERATOR);
         assert!(backend.capabilities().can_compute(crate::ElementType::F32));
@@ -275,7 +277,7 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn one_backend_hands_out_one_pool() {
-        let backend = Backend::open(TEST_ACCELERATOR, Device::Default).expect("should open");
+        let backend = Backend::open(TEST_ACCELERATOR, test_device()).expect("should open");
 
         struct ReserveTwice;
 

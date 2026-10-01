@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use av_toolbox_gpu::{Backend, Device};
+use av_toolbox_gpu::{Backend, test_device};
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
 
@@ -295,7 +295,7 @@ fn run_stage(stage: &str, alone_args: &str, bits: u32) -> Run {
         av_toolbox_pipeline::load(&pipeline_path, &DiskFiles, &supplied).expect("the file should load");
     let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
     let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
     let settings = Settings::default();
     let engine = compiled.engine(settings).expect("should build the engine");

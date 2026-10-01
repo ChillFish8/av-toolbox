@@ -18,7 +18,6 @@ use av_toolbox_gpu::{
     ChromaLocation,
     ColourInfo,
     Depth,
-    Device,
     FrameFormat,
     FrameLayout,
     FrameMeta,
@@ -31,11 +30,12 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamItem,
     Subsampling,
+    test_device,
 };
 use cubecl::prelude::Runtime;
 
 fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 /// The chroma a subsampled layout's mask carries in these tests, sited at `ChromaLocation::Left`.

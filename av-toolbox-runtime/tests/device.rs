@@ -30,7 +30,6 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     ColourInfo,
-    Device,
     FormatSet,
     Frame,
     FrameContext,
@@ -45,6 +44,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
     Subsampling,
+    test_device,
 };
 use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build, plan, solve};
 use av_toolbox_runtime::{Engine, Settings};
@@ -349,7 +349,7 @@ fn a_real_graph_runs_on_a_real_device() {
     let built = build(&registry, &specs).expect("should build");
     let mut graph = built.into_graph();
 
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let formats = solve(&graph, &registry, backend.capabilities()).expect("should solve");
     let made = plan(&graph, &registry).expect("should plan");
     graph.set_execution_plan(made);
@@ -372,7 +372,7 @@ fn a_widened_region_runs_on_a_real_device() {
     let built = build(&registry, &specs).expect("should build");
     let mut graph = built.into_graph();
 
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let formats = solve(&graph, &registry, backend.capabilities()).expect("should solve");
     let made = plan(&graph, &registry).expect("should plan");
 

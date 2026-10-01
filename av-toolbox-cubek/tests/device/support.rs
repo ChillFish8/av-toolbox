@@ -1,11 +1,11 @@
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::{DevicePlane, Dispatch};
-use av_toolbox_gpu::{Backend, Device, FrameContext};
+use av_toolbox_gpu::{Backend, FrameContext, test_device};
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
 pub fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 /// Sizes launches the way a stage would, from a frame context.

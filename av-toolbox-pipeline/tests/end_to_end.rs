@@ -21,7 +21,6 @@ use av_toolbox_gpu::{
     Backend,
     BuildContext,
     Capabilities,
-    Device,
     DeviceSide,
     FormatSet,
     Frame,
@@ -32,6 +31,7 @@ use av_toolbox_gpu::{
     Runtime,
     StreamFormat,
     StreamTemplate,
+    test_device,
 };
 use av_toolbox_graph::NodeRole;
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
@@ -187,7 +187,7 @@ args.path = "{output_path}"
     let specs = loaded.specs;
 
     let pipeline = Pipeline::build(&registry, &specs).expect("should build");
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
 
     let mut crossings = 0;

@@ -204,7 +204,7 @@ fn registry() -> PipelineRegistry {
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 #[test]
 fn a_pipeline_builds_optimises_renders_and_instantiates() {
-    use av_toolbox_gpu::{Backend, Device};
+    use av_toolbox_gpu::{Backend, test_device};
 
     let specs = vec![
         spec(StageKind::Source, "input", "demo/read", vec![], json!({})),
@@ -226,7 +226,7 @@ fn a_pipeline_builds_optimises_renders_and_instantiates() {
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains("\"input\""));
 
-    let backend = Backend::open_default(Device::Default).expect("should open");
+    let backend = Backend::open_default(test_device()).expect("should open");
     let solved = solve(&graph, &registry, backend.capabilities()).expect("should solve");
 
     let stages = graph

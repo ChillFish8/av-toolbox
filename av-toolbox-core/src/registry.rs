@@ -1050,12 +1050,12 @@ mod tests {
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     mod device_tests {
-        use av_toolbox_gpu::{Backend, Device};
+        use av_toolbox_gpu::{Backend, test_device};
 
         use super::*;
 
         fn backend() -> Backend {
-            Backend::open_default(Device::Default).expect("should open")
+            Backend::open_default(test_device()).expect("should open")
         }
 
         fn formats() -> ResolvedFormats {

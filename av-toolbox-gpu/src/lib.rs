@@ -118,5 +118,5 @@ pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};
 pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_codegen_stack_limit};
 pub use self::stream_policy::StreamPolicy;
 #[cfg(any(test, feature = "test-support"))]
-pub use self::testing::{flush_counting_context, testing_context};
+pub use self::testing::{flush_counting_context, test_device, testing_context};
 pub use self::warmup::WarmUp;

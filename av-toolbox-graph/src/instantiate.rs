@@ -449,12 +449,12 @@ mod tests {
     use av_toolbox_core::StageKind;
     use av_toolbox_gpu::{
         ColourInfo,
-        Device,
         FrameFormat,
         FrameLayout,
         SampleFormat,
         StreamFormat,
         Subsampling,
+        test_device,
     };
     use serde_json::json;
 
@@ -464,7 +464,7 @@ mod tests {
     use crate::{DiagnosticCode, Spanned, StageSpec, build, testing};
 
     fn backend() -> Backend {
-        Backend::open_default(Device::Default).expect("should open")
+        Backend::open_default(test_device()).expect("should open")
     }
 
     /// Solves `graph` for real, against the capabilities of the backend it will build against.

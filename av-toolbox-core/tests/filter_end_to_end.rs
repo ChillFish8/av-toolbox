@@ -27,7 +27,6 @@ use av_toolbox_gpu::{
     Capabilities,
     Channel,
     ColourInfo,
-    Device,
     DeviceSide,
     FormatSet,
     Frame,
@@ -43,6 +42,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
     Subsampling,
+    test_device,
 };
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
@@ -389,7 +389,7 @@ impl BuildTask for RunShared {
 }
 
 fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 #[test]

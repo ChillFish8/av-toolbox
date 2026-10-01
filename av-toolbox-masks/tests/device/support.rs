@@ -15,7 +15,6 @@ use av_toolbox_gpu::{
     BuildTask,
     ColourInfo,
     Depth,
-    Device,
     Frame,
     FrameContext,
     FrameFormat,
@@ -30,13 +29,14 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamItem,
     Subsampling,
+    test_device,
 };
 use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
 use cubecl::server::Handle;
 use serde_json::Value;
 
 pub fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 pub fn mask_format(width: u32, height: u32) -> MaskFormat {

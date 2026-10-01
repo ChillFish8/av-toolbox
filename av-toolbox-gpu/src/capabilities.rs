@@ -554,10 +554,11 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn the_built_backend_reports_a_usable_capability_table() {
+        use crate::test_device;
         use crate::testing::TEST_ACCELERATOR;
 
         let capabilities =
-            capabilities_for(TEST_ACCELERATOR, Device::Default).expect("the backend should open");
+            capabilities_for(TEST_ACCELERATOR, test_device()).expect("the backend should open");
 
         assert_eq!(capabilities.accelerator, TEST_ACCELERATOR);
         assert!(
@@ -649,9 +650,10 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn this_device_reports_its_cooperative_matrices() {
+        use crate::test_device;
         use crate::testing::TEST_ACCELERATOR;
 
-        let capabilities = capabilities_for(TEST_ACCELERATOR, Device::Default).expect("the device opens");
+        let capabilities = capabilities_for(TEST_ACCELERATOR, test_device()).expect("the device opens");
         let f16_into_f32 = capabilities.has_cooperative_matrix(ElementType::F16, ElementType::F32);
 
         println!("f16 into f32 cooperative matrix: {f16_into_f32}");

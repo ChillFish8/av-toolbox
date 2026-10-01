@@ -24,7 +24,6 @@ use av_toolbox_gpu::{
     Backend,
     BuildContext,
     Capabilities,
-    Device,
     FormatSet,
     FrameContext,
     FrameFormat,
@@ -36,6 +35,7 @@ use av_toolbox_gpu::{
     Runtime,
     StreamFormat,
     Transfer,
+    test_device,
 };
 use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build, place_transfers, plan, solve};
 use av_toolbox_runtime::{Engine, RunReport, Settings};
@@ -184,7 +184,7 @@ fn run(specs: &[StageSpec]) -> Result<RunReport, String> {
     let built = build(&registry, specs).map_err(|error| format!("{error:?}"))?;
     let mut graph = built.into_graph();
 
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let capabilities = backend.capabilities();
     let mut formats = solve(&graph, &registry, capabilities).map_err(|error| format!("{error:?}"))?;
     place_transfers(&mut graph, &registry, &mut formats).map_err(|error| format!("{error:?}"))?;

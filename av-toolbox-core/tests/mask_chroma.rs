@@ -25,7 +25,6 @@ use av_toolbox_gpu::{
     BuildTask,
     Capabilities,
     ChromaLocation,
-    Device,
     DeviceSide,
     FormatSet,
     FrameContext,
@@ -41,6 +40,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
     Subsampling,
+    test_device,
 };
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
@@ -256,7 +256,7 @@ impl MaskDefinition for HostPattern {
 }
 
 fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 /// Builds `identifier` the way a pipeline would, with its output resolved to carry `chroma`.

@@ -11,7 +11,6 @@ use crate::{
     Channel,
     ChromaLocation,
     ColourInfo,
-    Device,
     FrameContext,
     FrameFormat,
     FrameLayout,
@@ -29,10 +28,11 @@ use crate::{
     StreamItem,
     Subsampling,
     TryWait,
+    test_device,
 };
 
 fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 fn frame_format() -> FrameFormat {

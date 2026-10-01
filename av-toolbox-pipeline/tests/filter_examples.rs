@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use av_toolbox_cubek::artcnn::{Model, Weights};
 use av_toolbox_cubek::testing::reference_artcnn;
-use av_toolbox_gpu::{Backend, Device};
+use av_toolbox_gpu::{Backend, test_device};
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
 
@@ -213,7 +213,7 @@ fn run_example_on(name: &str, extra_flags: &[(&str, &str)], clip: &[u8]) -> Deco
     let loaded = av_toolbox_pipeline::load(&example_path, &DiskFiles, &supplied).expect("the example loads");
     let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
     let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
     let settings = Settings::default();
     let engine = compiled.engine(settings).expect("should build the engine");

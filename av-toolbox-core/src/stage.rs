@@ -560,7 +560,7 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn a_definition_builds_its_instance_against_a_real_backend() {
-        use av_toolbox_gpu::{Backend, BuildTask, Device};
+        use av_toolbox_gpu::{Backend, BuildTask, test_device};
 
         struct BuildExample {
             args: ExampleArgs,
@@ -576,7 +576,7 @@ mod tests {
             }
         }
 
-        let backend = Backend::open_default(Device::Default).expect("should open");
+        let backend = Backend::open_default(test_device()).expect("should open");
         let bound = bind_inputs(&InputSignature::EMPTY, &[]).expect("should bind");
 
         let task = BuildExample {

@@ -619,7 +619,7 @@ mod tests {
     use crate::frame::sample::SampleFormat;
     use crate::testing::CountingAllocator;
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
-    use crate::{Backend, Device};
+    use crate::{Backend, test_device};
     use crate::{BufferPool, HostPlanes, RingSpec, StreamFormat, StreamPolicy};
 
     fn format() -> FrameFormat {
@@ -1048,7 +1048,7 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn a_plane_binds_as_an_array_of_its_samples() {
-        let backend = Backend::open_default(Device::Default).expect("a backend should open");
+        let backend = Backend::open_default(test_device()).expect("a backend should open");
         let context = backend.frame_context();
         let frame = context.alloc_frame(&format(), FrameMeta::at(0));
 

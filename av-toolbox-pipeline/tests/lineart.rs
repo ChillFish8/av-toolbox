@@ -4,7 +4,7 @@ use std::fs;
 use std::ops::Range;
 use std::path::Path;
 
-use av_toolbox_gpu::{Backend, ChromaLocation, Device, MaskChroma, StreamFormat, Subsampling};
+use av_toolbox_gpu::{Backend, ChromaLocation, MaskChroma, StreamFormat, Subsampling, test_device};
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
 
@@ -214,7 +214,7 @@ fn the_lineart_example_blends_the_overlay_into_the_lines() {
     let loaded = av_toolbox_pipeline::load(example_path, &DiskFiles, &supplied).expect("the example loads");
     let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
     let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
     let settings = Settings::default();
     let engine = compiled.engine(settings).expect("should build the engine");
@@ -291,7 +291,7 @@ args.path = "{second_output_path}"
 
     let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
     let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
 
     let mut chroma_carriers = Vec::new();

@@ -24,7 +24,6 @@ use av_toolbox_gpu::{
     Backend,
     BuildContext,
     Capabilities,
-    Device,
     FormatSet,
     FrameContext,
     HostSide,
@@ -32,6 +31,7 @@ use av_toolbox_gpu::{
     ResolvedFormats,
     Runtime,
     StreamFormat,
+    test_device,
 };
 use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build, place_transfers, plan, solve};
 use av_toolbox_runtime::{Engine, Settings};
@@ -198,7 +198,7 @@ fn a_piped_y4m_stream_runs_through_the_engine_on_a_real_device() {
     let built = build(&registry, &specs).expect("should build");
     let mut graph = built.into_graph();
 
-    let backend = Backend::open_default(Device::Default).expect("should open a device");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
     let capabilities = backend.capabilities();
     let mut formats = solve(&graph, &registry, capabilities).expect("should solve");
     place_transfers(&mut graph, &registry, &mut formats).expect("should place transfers");

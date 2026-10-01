@@ -15,7 +15,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-cubek = { path = ".", features = ["test-support"] }
-av-toolbox-gpu = { workspace = true }
+av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 av-toolbox-models = { path = "../av-toolbox-models" }
 
 [features]

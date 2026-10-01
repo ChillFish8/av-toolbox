@@ -10,6 +10,7 @@ use crate::{
     Accelerator,
     BufferPool,
     Capabilities,
+    Device,
     DeviceAllocator,
     FrameContext,
     StreamPolicy,
@@ -188,4 +189,52 @@ pub fn flush_counting_context(policy: StreamPolicy) -> (FrameContext, Arc<Atomic
     let context = FrameContext::new(pool, capabilities);
 
     (context, flushes)
+}
+
+/// The device GPU tests open, named by the `AVTB_DEVICE` environment variable.
+///
+/// Falls back to [Device::Default] when the variable is unset or empty. Panics when it is set to
+/// something that is not a device selector.
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_device() -> Device {
+    let value = std::env::var("AVTB_DEVICE").ok();
+    device_from_value(value.as_deref())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn device_from_value(value: Option<&str>) -> Device {
+    let Some(text) = value.filter(|text| !text.is_empty()) else {
+        return Device::Default;
+    };
+
+    match text.parse() {
+        Ok(device) => device,
+        Err(error) => panic!("AVTB_DEVICE is set to {text:?}, which is not a device selector: {error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_from_value_falls_back_to_default_when_unset_or_empty() {
+        assert_eq!(device_from_value(None), Device::Default);
+        assert_eq!(device_from_value(Some("")), Device::Default);
+    }
+
+    #[test]
+    fn device_from_value_parses_a_selector() {
+        assert_eq!(
+            device_from_value(Some("discrete:1")),
+            Device::Discrete { index: 1 }
+        );
+        assert_eq!(device_from_value(Some("cpu")), Device::Cpu);
+    }
+
+    #[test]
+    #[should_panic(expected = "AVTB_DEVICE is set to \"nonsense\"")]
+    fn device_from_value_panics_on_a_bad_selector() {
+        device_from_value(Some("nonsense"));
+    }
 }

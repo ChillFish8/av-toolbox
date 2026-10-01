@@ -17,7 +17,6 @@ use av_toolbox_gpu::{
     ChromaLocation,
     ColourInfo,
     Depth,
-    Device,
     FrameFormat,
     FrameLayout,
     FrameMeta,
@@ -32,11 +31,12 @@ use av_toolbox_gpu::{
     StreamItem,
     StreamTemplate,
     Subsampling,
+    test_device,
 };
 use cubecl::prelude::Runtime;
 
 pub(crate) fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 pub(crate) fn frame(

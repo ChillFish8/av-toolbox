@@ -227,8 +227,8 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn a_real_client_reports_a_power_of_two_alignment() {
-        use crate::Device;
         use crate::probe::{RuntimeTask, with_runtime};
+        use crate::test_device;
         use crate::testing::TEST_ACCELERATOR;
 
         struct ReadAlignment;
@@ -242,7 +242,7 @@ mod tests {
         }
 
         let alignment =
-            with_runtime(TEST_ACCELERATOR, Device::Default, ReadAlignment).expect("the backend should open");
+            with_runtime(TEST_ACCELERATOR, test_device(), ReadAlignment).expect("the backend should open");
 
         assert!(alignment.is_power_of_two(), "{alignment}");
     }

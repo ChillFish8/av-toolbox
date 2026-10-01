@@ -6,7 +6,7 @@ use cubecl::prelude::*;
 use crate::frame::tests::binding::{elements, launch};
 use crate::probe::{RuntimeTask, with_runtime};
 use crate::testing::TEST_ACCELERATOR;
-use crate::{Backend, BuildContext, Device, FrameMeta, Mask, MaskFormat, SampleFormat, StreamPolicy};
+use crate::{Backend, BuildContext, FrameMeta, Mask, MaskFormat, SampleFormat, StreamPolicy, test_device};
 
 /// How many hand-offs each policy is put through.
 const HAND_OFFS: usize = 40;
@@ -280,7 +280,7 @@ fn reads_fresh_data<R: Runtime>(context: &BuildContext<R>, hazard: Hazard) -> bo
 fn stale_reads(ordering: WorkOrder, hazard: Hazard) -> usize {
     let task = CountStaleReads { ordering, hazard };
 
-    with_runtime(TEST_ACCELERATOR, Device::Default, task).expect("the backend should open")
+    with_runtime(TEST_ACCELERATOR, test_device(), task).expect("the backend should open")
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn a_shared_stream_reads_a_fanned_out_buffer_before_it_is_reused() {
 
 #[test]
 fn a_backend_keeps_its_accelerators_policy() {
-    let backend = Backend::open(TEST_ACCELERATOR, Device::Default).expect("should open");
+    let backend = Backend::open(TEST_ACCELERATOR, test_device()).expect("should open");
     let expected = StreamPolicy::for_accelerator(TEST_ACCELERATOR);
 
     assert_eq!(backend.stream_policy(), expected);

@@ -8,7 +8,7 @@ use crate::frame::gpu::FrameMeta;
 use crate::frame::layout::{Channel, FrameLayout, Subsampling};
 use crate::frame::sample::SampleFormat;
 use crate::memory::{RingGeometry, RingSpec};
-use crate::{Backend, BuildContext, BuildTask, Device};
+use crate::{Backend, BuildContext, BuildTask, test_device};
 
 /// A base no index into these buffers can reach, so a sample above it was never written again.
 const BASELINE: u32 = 1_000_000;
@@ -231,7 +231,7 @@ impl BuildTask for WriteAddedChroma {
 }
 
 fn backend() -> Backend {
-    Backend::open_default(Device::Default).expect("a backend should open")
+    Backend::open_default(test_device()).expect("a backend should open")
 }
 
 #[test]
