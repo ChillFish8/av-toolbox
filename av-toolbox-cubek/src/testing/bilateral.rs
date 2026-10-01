@@ -1,6 +1,7 @@
 use crate::bilateral::{BilateralSettings, positions};
 
-fn clamped_index(width: u32, height: u32, column: i32, row: i32) -> usize {
+/// The index of `column`, `row` clamped into a `width` by `height` plane.
+pub(super) fn clamped_index(width: u32, height: u32, column: i32, row: i32) -> usize {
     let last_column = width as i32 - 1;
     let last_row = height as i32 - 1;
     let x = column.clamp(0, last_column);

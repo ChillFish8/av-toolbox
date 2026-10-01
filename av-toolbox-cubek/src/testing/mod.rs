@@ -14,6 +14,10 @@ mod resize;
 mod retinex;
 mod rgvs;
 mod sangnom;
+#[cfg(test)]
+mod tests;
+
+use std::fmt::Display;
 
 pub use self::artcnn::{
     GOLDEN_R8F64,
@@ -25,11 +29,16 @@ pub use self::artcnn::{
     synthetic_weights,
 };
 pub use self::based::{
+    BasedParameters,
+    BasedStages,
+    Direction,
+    reference_based_aa,
     reference_binarize_prewitt,
     reference_box_halve,
     reference_double_mclip,
     reference_median_of_three,
     reference_pscale_blend,
+    reference_supersample,
 };
 pub use self::bilateral::{reference_bilateral, reference_range_weight};
 pub use self::dehalo::{
@@ -125,6 +134,21 @@ pub fn reflect(index: i32, length: i32) -> i32 {
     let period = 2 * length - 2;
     let folded = index.abs() % period;
     if folded >= length { period - folded } else { folded }
+}
+
+/// `values`, `width` samples wide, with its rows and columns swapped.
+pub fn transposed_plane<T: Copy + Default>(values: &[T], width: u32, height: u32) -> Vec<T> {
+    let columns = width as usize;
+    let rows = height as usize;
+
+    let mut swapped = vec![T::default(); values.len()];
+    for row in 0..rows {
+        for column in 0..columns {
+            swapped[column * rows + row] = values[row * columns + column];
+        }
+    }
+
+    swapped
 }
 
 /// A separable blur on the CPU with `weights` along each axis and reflect-101 borders.
@@ -532,16 +556,20 @@ pub fn reference_narrow(values: &[f32], peak: f32) -> Vec<u16> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Panics at the first sample of a `width` wide plane where `found` and `expected` differ.
+pub fn assert_same_plane<T: PartialEq + Display>(found: &[T], expected: &[T], width: u32, label: &str) {
+    assert_eq!(found.len(), expected.len(), "{label} has the wrong sample count");
 
-    #[test]
-    fn narrowing_rounds_half_up_and_clamps() {
-        let values = [-3.0, 0.49, 0.5, 1.5, 254.5, 300.0];
-
-        let narrowed = reference_narrow(&values, 255.0);
-
-        assert_eq!(narrowed, vec![0, 0, 1, 2, 255, 255]);
+    let differing = found
+        .iter()
+        .zip(expected)
+        .position(|(actual, wanted)| actual != wanted);
+    if let Some(index) = differing {
+        let column = index as u32 % width;
+        let row = index as u32 / width;
+        panic!(
+            "{label} differs first at {column},{row}: found {}, expected {}",
+            found[index], expected[index],
+        );
     }
 }

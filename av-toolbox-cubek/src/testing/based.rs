@@ -1,7 +1,32 @@
+use super::bilateral::clamped_index;
 use super::edges::prewitt_gradients;
 use super::resize::reference_resize_float;
-use crate::neighbourhood::median_of_three_sample;
+use super::{
+    Eedi3Antialias,
+    Eedi3Clips,
+    Eedi3Parameters,
+    reference_artcnn,
+    reference_bilateral,
+    reference_clamped_merge,
+    reference_eedi3_antialias,
+    reference_extreme,
+    reference_narrow,
+    reference_smooth,
+    transposed_plane,
+};
+use crate::artcnn::Weights;
+use crate::bilateral::{BilateralSettings, positions};
+use crate::neighbourhood::{Extreme, Shape, Smooth, median_of_three_sample};
 use crate::resize::{Kernel, centred_taps};
+
+/// The postfilter's bilateral spatial sigma.
+const SIGMA_S: f32 = 2.0;
+
+/// The postfilter's bilateral range sigma, on the `0..1` scale.
+const SIGMA_R: f32 = 1.0 / 255.0;
+
+/// The peak of a bound mask.
+const BOUND_MASK_PEAK: f32 = 255.0;
 
 /// Binarizes the Prewitt gradients on the CPU in 64-bit integers, mirroring
 /// [binarize_prewitt](crate::aa::binarize_prewitt).
@@ -103,6 +128,388 @@ pub fn reference_median_of_three(first: &[f32], second: &[f32], third: &[f32]) -
         .zip(third)
         .map(|((first_value, second_value), third_value)| {
             median_of_three_sample(*first_value, *second_value, *third_value)
+        })
+        .collect()
+}
+
+/// The axes `aa/based` anti-aliases along.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// Vertically, then horizontally on the vertical result.
+    #[default]
+    Both,
+    Vertical,
+    Horizontal,
+}
+
+impl Direction {
+    fn runs_vertically(self) -> bool {
+        matches!(self, Self::Both | Self::Vertical)
+    }
+
+    fn runs_horizontally(self) -> bool {
+        matches!(self, Self::Both | Self::Horizontal)
+    }
+}
+
+/// The arguments of `aa/based`, with the luma's bit depth.
+///
+/// `mask_thr` is on the 8-bit scale and scales by `2^(bits - 8)`. EEDI3 runs with `eedi3` at `bits`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BasedParameters {
+    pub mask_thr: u32,
+    pub edge_mask: bool,
+    pub pscale: f32,
+    pub postfilter: bool,
+    pub direction: Direction,
+    pub eedi3: Eedi3Parameters,
+    pub bits: u32,
+}
+
+impl Default for BasedParameters {
+    fn default() -> Self {
+        let eedi3 = Eedi3Parameters {
+            alpha: 0.125,
+            gamma: 40.0,
+            vthresh: [12.0, 24.0, 4.0],
+            ..Eedi3Parameters::default()
+        };
+
+        Self {
+            mask_thr: 60,
+            edge_mask: true,
+            pscale: 0.0,
+            postfilter: true,
+            direction: Direction::Both,
+            eedi3,
+            bits: 8,
+        }
+    }
+}
+
+/// Every intermediate plane of `aa/based` on one luma plane.
+///
+/// `supersampled`, `mclip` and `antialiased` are twice the luma's size, and every other plane is the
+/// luma's size. `mask` and `mclip` are empty when `edge_mask` is false. `merged` is the plane before its
+/// one rounding, and `output` holds integer code values.
+///
+/// `touched` marks the output samples a close decision of an EEDI3 pass can change, with each pass judged
+/// on the input this reference hands it. A doubled sample reaches the output sample it is halved into,
+/// then, with the postfilter, every sample whose bilateral reads that one. The merge keeps a mark only
+/// where the mask is non-zero.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasedStages {
+    pub mask: Vec<f32>,
+    pub mclip: Vec<f32>,
+    pub supersampled: Vec<f32>,
+    pub antialiased: Vec<f32>,
+    pub merged: Vec<f32>,
+    pub output: Vec<f32>,
+    pub touched: Vec<bool>,
+}
+
+/// The plane the horizontal EEDI3 pass reads as its `sclip`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HorizontalSclip {
+    /// The transposed supersampled luma.
+    Supersampled,
+    /// The horizontal pass's own input.
+    #[cfg_attr(not(test), expect(dead_code))]
+    PassInput,
+}
+
+pub(super) fn peak_of(bits: u32) -> f32 {
+    let peak = (1u32 << bits) - 1;
+
+    peak as f32
+}
+
+/// Runs `aa/based` on one luma plane on the CPU, from its supersampled luma.
+///
+/// `supersampled` holds the doubled luma in code values, `2 * width` by `2 * height`. A bound `mask`
+/// holds 8-bit values and is used as it is. Without one, the mask is built from `luma` when `edge_mask`
+/// is set.
+pub fn reference_based_aa(
+    luma: &[f32],
+    width: u32,
+    height: u32,
+    parameters: &BasedParameters,
+    mask: Option<&[f32]>,
+    supersampled: &[f32],
+) -> BasedStages {
+    composed(
+        luma,
+        width,
+        height,
+        parameters,
+        mask,
+        supersampled,
+        HorizontalSclip::Supersampled,
+    )
+}
+
+/// [reference_based_aa](crate::testing::reference_based_aa), with the horizontal pass reading
+/// `horizontal_sclip` as its `sclip`.
+pub(super) fn composed(
+    luma: &[f32],
+    width: u32,
+    height: u32,
+    parameters: &BasedParameters,
+    mask: Option<&[f32]>,
+    supersampled: &[f32],
+    horizontal_sclip: HorizontalSclip,
+) -> BasedStages {
+    assert!(
+        width >= 2 && height >= 2,
+        "aa/based needs a luma plane of at least 2 by 2, not {width}x{height}"
+    );
+    assert!(
+        parameters.edge_mask || mask.is_none(),
+        "aa/based takes no bound mask without edge_mask"
+    );
+
+    let samples = width as usize * height as usize;
+    let doubled_width = 2 * width;
+    let doubled_height = 2 * height;
+    assert_eq!(luma.len(), samples, "the luma plane is not {width}x{height}");
+    assert_eq!(
+        supersampled.len(),
+        4 * samples,
+        "the supersampled plane is not {doubled_width}x{doubled_height}"
+    );
+
+    let peak = peak_of(parameters.bits);
+    if let Some(bound) = mask {
+        assert_eq!(bound.len(), samples, "the bound mask is not {width}x{height}");
+    }
+
+    let (mask, mask_peak) = match mask {
+        Some(bound) => (bound.to_vec(), BOUND_MASK_PEAK),
+        None if parameters.edge_mask => (built_mask(luma, width, height, parameters), peak),
+        None => (Vec::new(), peak),
+    };
+
+    let mclip = if parameters.edge_mask {
+        reference_double_mclip(&mask, width, height, mask_peak)
+    } else {
+        Vec::new()
+    };
+
+    let doubled = DoubledPlanes {
+        supersampled,
+        mclip: parameters.edge_mask.then_some(mclip.as_slice()),
+        width: doubled_width,
+        height: doubled_height,
+    };
+    let eedi3 = Eedi3Parameters {
+        bits: parameters.bits,
+        ..parameters.eedi3
+    };
+    let antialiased = antialias(&doubled, &eedi3, parameters.direction, horizontal_sclip);
+
+    let halved = reference_box_halve(&antialiased.output, doubled_width, doubled_height);
+    let blended = if parameters.pscale == 1.0 {
+        halved
+    } else {
+        let down = reference_box_halve(supersampled, doubled_width, doubled_height);
+        let keep = 1.0 - parameters.pscale;
+        reference_pscale_blend(&halved, luma, &down, keep)
+    };
+
+    let filtered = if parameters.postfilter {
+        let settings = BilateralSettings {
+            sigma_s: SIGMA_S,
+            sigma_r: SIGMA_R,
+            peak,
+        };
+        let smoothed = reference_bilateral(&blended, luma, width, height, settings);
+        reference_median_of_three(&blended, luma, &smoothed)
+    } else {
+        blended
+    };
+
+    let merged = if parameters.edge_mask {
+        reference_clamped_merge(luma, &filtered, &mask, mask_peak, peak)
+    } else {
+        filtered
+    };
+
+    let narrowed = reference_narrow(&merged, peak);
+    let output = narrowed.iter().map(|code| f32::from(*code)).collect();
+    let merge_mask = parameters.edge_mask.then_some(mask.as_slice());
+    let touched = reached_output(
+        &antialiased.touched,
+        width,
+        height,
+        parameters.postfilter,
+        merge_mask,
+    );
+
+    BasedStages {
+        mask,
+        mclip,
+        supersampled: supersampled.to_vec(),
+        antialiased: antialiased.output,
+        merged,
+        output,
+        touched,
+    }
+}
+
+/// Builds the mask from `luma`: a Prewitt binarize, a 3x3 maximum and a 3x3 box.
+fn built_mask(luma: &[f32], width: u32, height: u32, parameters: &BasedParameters) -> Vec<f32> {
+    let peak = peak_of(parameters.bits);
+    let scaled = parameters.mask_thr << (parameters.bits - 8);
+    let threshold = scaled * scaled;
+
+    let binarized = reference_binarize_prewitt(luma, width, height, threshold, peak);
+    let widened = reference_extreme(&binarized, width, height, Extreme::Maximum, Shape::Square);
+
+    reference_smooth(&widened, width, height, Smooth::Box)
+}
+
+/// The doubled planes EEDI3 reads.
+pub(super) struct DoubledPlanes<'a> {
+    pub(super) supersampled: &'a [f32],
+    pub(super) mclip: Option<&'a [f32]>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
+/// EEDI3's anti-alias of the supersampled luma along `direction`, reading it as `sclip` too.
+///
+/// A sample is touched when a close decision of either pass can change it.
+pub(super) fn antialias(
+    doubled: &DoubledPlanes<'_>,
+    parameters: &Eedi3Parameters,
+    direction: Direction,
+    horizontal_sclip: HorizontalSclip,
+) -> Eedi3Antialias {
+    let width = doubled.width;
+    let height = doubled.height;
+
+    let mut output = doubled.supersampled.to_vec();
+    let mut touched = vec![false; output.len()];
+    if direction.runs_vertically() {
+        let clips = Eedi3Clips {
+            sclip: Some(doubled.supersampled),
+            mclip: doubled.mclip,
+        };
+        let vertical = reference_eedi3_antialias(&output, width, height, parameters, clips);
+
+        output = vertical.output;
+        touched = vertical.touched;
+    }
+
+    if direction.runs_horizontally() {
+        let turned = transposed_plane(&output, width, height);
+        let turned_sclip = match horizontal_sclip {
+            HorizontalSclip::Supersampled => transposed_plane(doubled.supersampled, width, height),
+            HorizontalSclip::PassInput => turned.clone(),
+        };
+        let turned_mclip = doubled.mclip.map(|mclip| transposed_plane(mclip, width, height));
+        let clips = Eedi3Clips {
+            sclip: Some(&turned_sclip),
+            mclip: turned_mclip.as_deref(),
+        };
+        let horizontal = reference_eedi3_antialias(&turned, height, width, parameters, clips);
+
+        let horizontal_touched = transposed_plane(&horizontal.touched, height, width);
+        output = transposed_plane(&horizontal.output, height, width);
+        touched = touched
+            .iter()
+            .zip(&horizontal_touched)
+            .map(|(first, second)| *first || *second)
+            .collect();
+    }
+
+    Eedi3Antialias { output, touched }
+}
+
+/// The luma samples a touched sample of the doubled `antialiased` plane can reach.
+pub(super) fn reached_output(
+    antialiased: &[bool],
+    width: u32,
+    height: u32,
+    postfilter: bool,
+    mask: Option<&[f32]>,
+) -> Vec<bool> {
+    let doubled_width = 2 * width as usize;
+    let mut halved = Vec::with_capacity(width as usize * height as usize);
+    for row in 0..height as usize {
+        for column in 0..width as usize {
+            let top = 2 * row * doubled_width + 2 * column;
+            let bottom = top + doubled_width;
+            let block = [top, top + 1, bottom, bottom + 1];
+            let reached = block.iter().any(|index| antialiased[*index]);
+
+            halved.push(reached);
+        }
+    }
+
+    let mut reached = if postfilter {
+        bilateral_reach(&halved, width, height)
+    } else {
+        halved
+    };
+
+    if let Some(mask) = mask {
+        for (mark, weight) in reached.iter_mut().zip(mask) {
+            *mark = *mark && *weight != 0.0;
+        }
+    }
+
+    reached
+}
+
+/// Marks every sample whose bilateral reads a marked sample of `marks`, itself included.
+///
+/// The bilateral's reads clamp to the plane, so a mark near the edge reaches further inward.
+fn bilateral_reach(marks: &[bool], width: u32, height: u32) -> Vec<bool> {
+    let offsets = positions(SIGMA_S);
+    let mut signed = Vec::with_capacity(2 * offsets.len());
+    for offset in offsets {
+        signed.push(-(offset as i32));
+        signed.push(offset as i32);
+    }
+
+    let mut reached = Vec::with_capacity(marks.len());
+    for row in 0..height as i32 {
+        for column in 0..width as i32 {
+            let centre_index = clamped_index(width, height, column, row);
+            let centre = marks[centre_index];
+            let read = signed.iter().any(|offset_y| {
+                signed.iter().any(|offset_x| {
+                    let index = clamped_index(width, height, column + offset_x, row + offset_y);
+                    marks[index]
+                })
+            });
+
+            reached.push(centre || read);
+        }
+    }
+
+    reached
+}
+
+/// ArtCNN's doubled `luma` on the CPU in f64, rounded to code values as its last layer rounds.
+pub fn reference_supersample(
+    luma: &[f32],
+    width: u32,
+    height: u32,
+    weights: &Weights,
+    bits: u32,
+) -> Vec<f32> {
+    let peak = peak_of(bits);
+    let unit: Vec<f32> = luma.iter().map(|code| code / peak).collect();
+    let doubled = reference_artcnn(&unit, width, height, weights);
+    let wide_peak = f64::from(peak);
+
+    doubled
+        .iter()
+        .map(|value| {
+            let rounded = (value * wide_peak + 0.5).floor();
+            rounded as f32
         })
         .collect()
 }

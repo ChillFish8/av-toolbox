@@ -87,7 +87,8 @@ fn sample_pairs(bytes: &[u8]) -> &[[u8; 2]] {
     pairs
 }
 
-fn decode_plane(bytes: &[u8]) -> Vec<f32> {
+/// Little-endian 16-bit samples as f32 code values.
+pub(in crate::testing) fn decode_plane(bytes: &[u8]) -> Vec<f32> {
     sample_pairs(bytes)
         .iter()
         .map(|pair| {
@@ -107,7 +108,8 @@ fn decode_directions(bytes: &[u8]) -> Vec<i32> {
         .collect()
 }
 
-fn metadata_text<'a>(metadata: &'a str, key: &str) -> &'a str {
+/// The text after `key` on its line of `metadata`.
+pub(in crate::testing) fn metadata_text<'a>(metadata: &'a str, key: &str) -> &'a str {
     for line in metadata.lines() {
         let mut parts = line.split_whitespace();
         if parts.next() != Some(key) {
