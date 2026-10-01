@@ -1,9 +1,10 @@
-use av_toolbox_cubek::aa::{binarize_prewitt, double_mclip, pscale_blend};
+use av_toolbox_cubek::aa::{binarize_prewitt, double_mclip, prewitt_threshold, pscale_blend};
 use av_toolbox_cubek::neighbourhood::{Extreme, Shape, Smooth, median_of_three};
 use av_toolbox_cubek::resize::{Kernel, ResizePlanes, apply_float, centred_taps, upload};
 use av_toolbox_cubek::testing::{
     Eedi3PlaneKind,
     SplitMix,
+    assert_same_plane,
     random_eedi3_mask,
     random_eedi3_plane,
     reference_binarize_prewitt,
@@ -149,23 +150,11 @@ fn run_job<R: Runtime>(client: &ComputeClient<R>, sizing: &Sizing, job: Job) -> 
     read_f32(client, &output)
 }
 
-/// Asserts that `output` equals `reference`, naming job `job`, the first differing sample and both values.
-fn assert_exact(output: &[f32], reference: &[f32], job: usize) {
-    assert_eq!(
-        output.len(),
-        reference.len(),
-        "job {job} wrote the wrong number of samples"
-    );
+/// Asserts that `output`, a plane `width` wide, equals `reference`, naming job `job`.
+fn assert_job(output: &[f32], reference: &[f32], width: u32, job: usize) {
+    let label = format!("job {job}");
 
-    let differing = output
-        .iter()
-        .zip(reference)
-        .position(|(found, expected)| found.to_bits() != expected.to_bits());
-    if let Some(index) = differing {
-        let found = output[index];
-        let expected = reference[index];
-        panic!("job {job}: sample {index} was {found}, expected {expected}");
-    }
+    assert_same_plane(output, reference, width, &label);
 }
 
 fn on_device(jobs: Vec<Job>) -> Vec<Vec<f32>> {
@@ -248,12 +237,6 @@ fn binarize_planes(random: &mut SplitMix, width: u32, height: u32, bits: u32) ->
     planes
 }
 
-fn squared_threshold(mask_thr: u32, bits: u32) -> u32 {
-    let scaled = mask_thr << (bits - 8);
-
-    scaled * scaled
-}
-
 #[test]
 fn binarize_prewitt_matches_the_reference_exactly() {
     let width = 67;
@@ -269,7 +252,7 @@ fn binarize_prewitt_matches_the_reference_exactly() {
 
         for input in planes {
             for mask_thr in [60, drawn, 255] {
-                let threshold = squared_threshold(mask_thr, bits);
+                let threshold = prewitt_threshold(mask_thr, bits);
                 let reference = reference_binarize_prewitt(&input, width, height, threshold, peak);
 
                 expected.push(reference);
@@ -286,14 +269,14 @@ fn binarize_prewitt_matches_the_reference_exactly() {
     let outputs = on_device(jobs);
 
     for (index, (output, reference)) in outputs.iter().zip(&expected).enumerate() {
-        assert_exact(output, reference, index);
+        assert_job(output, reference, width, index);
     }
 }
 
 /// The mask built from `luma` at `bits`, as `aa/based` builds it.
 fn built_mask(luma: &[f32], width: u32, height: u32, bits: u32) -> Vec<f32> {
     let peak = ((1u32 << bits) - 1) as f32;
-    let threshold = squared_threshold(60, bits);
+    let threshold = prewitt_threshold(60, bits);
     let binarized = reference_binarize_prewitt(luma, width, height, threshold, peak);
     let widened = reference_extreme(&binarized, width, height, Extreme::Maximum, Shape::Square);
 
@@ -353,7 +336,7 @@ fn double_mclip_matches_the_reference_exactly() {
     let outputs = on_device(jobs);
 
     for (index, (output, reference)) in outputs.iter().zip(&expected).enumerate() {
-        assert_exact(output, reference, index);
+        assert_job(output, reference, 2 * width, index);
     }
 }
 
@@ -370,7 +353,7 @@ fn box_halving_matches_the_reference_exactly() {
             for input in planes {
                 let reference = reference_box_halve(&input, width, height);
 
-                expected.push(reference);
+                expected.push((reference, width / 2));
                 jobs.push(Job {
                     inputs: vec![input],
                     width,
@@ -383,8 +366,8 @@ fn box_halving_matches_the_reference_exactly() {
 
     let outputs = on_device(jobs);
 
-    for (index, (output, reference)) in outputs.iter().zip(&expected).enumerate() {
-        assert_exact(output, reference, index);
+    for (index, (output, (reference, halved_width))) in outputs.iter().zip(&expected).enumerate() {
+        assert_job(output, reference, *halved_width, index);
     }
 }
 
@@ -402,10 +385,12 @@ fn blend_planes(random: &mut SplitMix, width: u32, height: u32, bits: u32) -> Ve
     vec![aa, luma, down]
 }
 
+const BLEND_WIDTH: u32 = 67;
+
 /// Runs the blend at `keep` over random scenes at every depth, handing back each output beside its
 /// reference.
 fn blends(keep: f32, seed: u64) -> Vec<(Vec<f32>, Vec<f32>)> {
-    let width = 67;
+    let width = BLEND_WIDTH;
     let height = 45;
     let mut random = SplitMix(seed);
 
@@ -436,7 +421,7 @@ fn pscale_blend_at_0_matches_the_reference_exactly() {
     let results = blends(1.0, 24);
 
     for (index, (output, reference)) in results.iter().enumerate() {
-        assert_exact(output, reference, index);
+        assert_job(output, reference, BLEND_WIDTH, index);
     }
 }
 
@@ -454,7 +439,7 @@ fn pscale_blend_at_1_keeps_aa_exactly() {
     let results = blends(0.0, 26);
 
     for (index, (output, reference)) in results.iter().enumerate() {
-        assert_exact(output, reference, index);
+        assert_job(output, reference, BLEND_WIDTH, index);
     }
 }
 

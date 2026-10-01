@@ -51,7 +51,7 @@ struct BasedFixture {
     mclip: &'static [u8],
 }
 
-const BASED_FIXTURES: [BasedFixture; 2] = [based_fixture!("lines_8"), based_fixture!("clip_16")];
+const BASED_FIXTURES: [BasedFixture; 2] = [based_fixture!("lines_8"), based_fixture!("fence_16")];
 
 /// A 24 by 16 luma plane at 8 bits and ArtCNN's doubled luma of it, one byte per sample.
 const TINY_METADATA: &str = include_str!("../fixtures/based/tiny_8.txt");
@@ -165,8 +165,18 @@ impl BasedFixture {
     }
 }
 
-/// How far a merged value may lie from a half code and still round either way.
+/// How far a merged value may lie from a half code and still round either way, on the 8-bit scale.
+///
+/// It scales with the bit depth, as f32's spacing does with the size of the codes. At 16 bits one step of
+/// f32 is about 0.002 codes.
 const CLOSE_ROUNDING: f32 = 1e-4;
+
+/// [CLOSE_ROUNDING] in codes at `bits` per sample.
+fn close_rounding(bits: u32) -> f32 {
+    let scale = (1u32 << (bits - 8)) as f32;
+
+    CLOSE_ROUNDING * scale
+}
 
 #[test]
 fn the_composed_reference_matches_the_model() {
@@ -183,23 +193,27 @@ fn the_composed_reference_matches_the_model() {
         let antialiased = fixture.codes(fixture.antialiased);
         let output = fixture.codes(fixture.output);
 
-        assert_same_plane(&stages.mask, &mask, width, &format!("{name} mask"));
-        assert_same_plane(&stages.mclip, &mclip, doubled_width, &format!("{name} mclip"));
+        let mask_label = format!("{name} mask");
+        let mclip_label = format!("{name} mclip");
+        let antialiased_label = format!("{name} aa2");
+        let output_label = format!("{name} output");
+        let window = close_rounding(parameters.bits);
+
+        assert_same_plane(&stages.mask, &mask, width, &mask_label);
+        assert_same_plane(&stages.mclip, &mclip, doubled_width, &mclip_label);
         assert_same_plane(
             &stages.antialiased,
             &antialiased,
             doubled_width,
-            &format!("{name} aa2"),
+            &antialiased_label,
         );
-
-        let label = format!("{name} output");
         assert_close_roundings(
             &stages.output,
             &output,
             &stages.merged,
-            CLOSE_ROUNDING,
+            window,
             width,
-            &label,
+            &output_label,
         );
     }
 }

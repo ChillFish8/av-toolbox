@@ -59,7 +59,7 @@ pub(crate) fn assert_holds(handle: &Handle, bytes: usize, name: &str) {
 }
 
 /// Asserts that `plane` is `width` by `height` and its buffer holds it as f32, naming it `name`.
-pub(crate) fn assert_plane(plane: &DevicePlane<'_>, width: u32, height: u32, name: &str) {
+pub fn assert_plane(plane: &DevicePlane<'_>, width: u32, height: u32, name: &str) {
     assert!(
         plane.width() == width && plane.height() == height,
         "the {name} plane is {}x{}, expected {width}x{height}",

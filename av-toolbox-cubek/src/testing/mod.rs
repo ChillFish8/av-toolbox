@@ -29,10 +29,12 @@ pub use self::artcnn::{
     synthetic_weights,
 };
 pub use self::based::{
+    BOUND_MASK_PEAK,
     BasedFinish,
     BasedParameters,
     BasedStages,
     Direction,
+    peak_of,
     reference_based_aa,
     reference_based_finish,
     reference_based_mask,
@@ -561,31 +563,31 @@ pub fn reference_narrow(values: &[f32], peak: f32) -> Vec<u16> {
 
 /// Panics at the first sample of a `width` wide plane where `found` and `expected` differ.
 pub fn assert_same_plane<T: PartialEq + Display>(found: &[T], expected: &[T], width: u32, label: &str) {
-    assert_eq!(found.len(), expected.len(), "{label} has the wrong sample count");
-
-    let differing = found
-        .iter()
-        .zip(expected)
-        .position(|(actual, wanted)| actual != wanted);
-    if let Some(index) = differing {
-        let column = index as u32 % width;
-        let row = index as u32 / width;
-        panic!(
-            "{label} differs first at {column},{row}: found {}, expected {}",
-            found[index], expected[index],
-        );
-    }
+    assert_first_match(found, expected, width, label, |actual, wanted| actual == wanted);
 }
 
 /// Panics at the first sample of a `width` wide plane where `found` is further than `tolerance` from
 /// `expected`.
 pub fn assert_plane_within(found: &[f32], expected: &[f32], tolerance: f32, width: u32, label: &str) {
+    let within = |actual: &f32, wanted: &f32| (actual - wanted).abs() <= tolerance;
+
+    assert_first_match(found, expected, width, label, within);
+}
+
+/// Panics at the first sample of a `width` wide plane where `matches` rejects `found` against `expected`.
+fn assert_first_match<T: Display>(
+    found: &[T],
+    expected: &[T],
+    width: u32,
+    label: &str,
+    matches: impl Fn(&T, &T) -> bool,
+) {
     assert_eq!(found.len(), expected.len(), "{label} has the wrong sample count");
 
     let differing = found
         .iter()
         .zip(expected)
-        .position(|(actual, wanted)| (actual - wanted).abs() > tolerance);
+        .position(|(actual, wanted)| !matches(actual, wanted));
     if let Some(index) = differing {
         let column = index as u32 % width;
         let row = index as u32 / width;

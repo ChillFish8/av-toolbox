@@ -12,13 +12,13 @@ use av_toolbox_core::{
     StageError,
     StageInstance,
 };
-use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::aa::{
     Eedi3Arguments,
     Eedi3DeviceClips,
     Eedi3Settings,
     binarize_prewitt,
     double_mclip,
+    prewitt_threshold,
     pscale_blend,
     transpose,
 };
@@ -35,6 +35,7 @@ use av_toolbox_cubek::neighbourhood::{
     smooth,
 };
 use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Weights, apply_float, centred_taps, upload};
+use av_toolbox_cubek::{DevicePlane, assert_plane};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -62,7 +63,6 @@ use serde::{Deserialize, Deserializer};
 use crate::aa::direction::{Direction, run_direction};
 use crate::aa::eedi3::{
     Eedi3FieldPass,
-    Eedi3Tuning,
     checked_tuning,
     default_beta,
     default_mdis,
@@ -139,13 +139,13 @@ pub(crate) struct BasedArgs {
     pub(crate) direction: Direction,
     /// EEDI3's settings.
     #[serde(default)]
-    pub(crate) eedi3: BasedEedi3Args,
+    pub(crate) eedi3: Eedi3Tuning,
 }
 
-/// EEDI3's settings inside `aa/based`, with the limits `aa/eedi3` puts on them.
+/// EEDI3's settings before they are checked, as `aa/based`'s `eedi3` object gives them.
 #[derive(Debug, Deserialize, JsonSchema, PartialEq)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct BasedEedi3Args {
+pub(crate) struct Eedi3Tuning {
     /// The weight of the neighbourhood cost, 0 or between 1e-30 and 1.
     pub(crate) alpha: f64,
     /// The weight of the vertical difference cost, 0 or between 1e-30 and 1, on the 8-bit scale.
@@ -167,7 +167,7 @@ pub(crate) struct BasedEedi3Args {
     pub(crate) vthresh: [f64; 3],
 }
 
-impl Default for BasedEedi3Args {
+impl Default for Eedi3Tuning {
     fn default() -> Self {
         Self {
             alpha: 0.125,
@@ -177,20 +177,6 @@ impl Default for BasedEedi3Args {
             mdis: default_mdis(),
             vcheck: default_vcheck(),
             vthresh: [12.0, 24.0, 4.0],
-        }
-    }
-}
-
-impl BasedEedi3Args {
-    fn tuning(&self) -> Eedi3Tuning {
-        Eedi3Tuning {
-            alpha: self.alpha,
-            beta: self.beta,
-            gamma: self.gamma,
-            nrad: self.nrad,
-            mdis: self.mdis,
-            vcheck: self.vcheck,
-            vthresh: self.vthresh,
         }
     }
 }
@@ -285,8 +271,7 @@ fn checked_settings(args: &BasedArgs) -> Result<Eedi3Arguments, StageError> {
     between_u32(STAGE, "mask_thr", args.mask_thr, 0, MAX_MASK_THR)?;
     between_f32(STAGE, "pscale", args.pscale, 0.0, 1.0)?;
 
-    let tuning = args.eedi3.tuning();
-    checked_tuning(STAGE, &tuning)
+    checked_tuning(STAGE, &args.eedi3)
 }
 
 /// Refuses a `width` by `height` luma plane that EEDI3 cannot run on once doubled.
@@ -478,16 +463,6 @@ pub struct EdgePlanes<'a> {
     pub bound: bool,
 }
 
-/// Asserts that `plane` is `width` by `height`, naming it `name`.
-fn assert_size(plane: &DevicePlane<'_>, width: u32, height: u32, name: &str) {
-    assert!(
-        plane.width() == width && plane.height() == height,
-        "the {name} plane is {}x{}, expected {width}x{height}",
-        plane.width(),
-        plane.height(),
-    );
-}
-
 /// The box tables that halve a doubled plane on each axis.
 struct Halving {
     across: Weights,
@@ -581,8 +556,7 @@ impl<R: Runtime> BasedChain<R> {
 
         let client = context.client().clone();
         let settings = Eedi3Settings::new(arguments, bits);
-        let scaled = args.mask_thr << (bits - 8);
-        let threshold = scaled * scaled;
+        let threshold = prewitt_threshold(args.mask_thr, bits);
         let keep = (args.pscale != 1.0).then_some(1.0 - args.pscale);
         let halving = Halving::new(&client, width, height);
         let peak = ((1u32 << bits) - 1) as f32;
@@ -604,12 +578,13 @@ impl<R: Runtime> BasedChain<R> {
     pub(crate) fn run(&self, context: &FrameContext, planes: BasedPlanes<'_>) -> Result<(), StageError> {
         let width = planes.luma.width();
         let height = planes.luma.height();
-        assert_size(&planes.supersampled, 2 * width, 2 * height, "supersampled");
-        assert_size(&planes.antialiased, 2 * width, 2 * height, "antialiased");
-        assert_size(&planes.merged, width, height, "merged");
+        assert_plane(&planes.luma, width, height, "luma");
+        assert_plane(&planes.supersampled, 2 * width, 2 * height, "supersampled");
+        assert_plane(&planes.antialiased, 2 * width, 2 * height, "antialiased");
+        assert_plane(&planes.merged, width, height, "merged");
         if let Some(edges) = planes.edges {
-            assert_size(&edges.mask, width, height, "mask");
-            assert_size(&edges.mclip, 2 * width, 2 * height, "mclip");
+            assert_plane(&edges.mask, width, height, "mask");
+            assert_plane(&edges.mclip, 2 * width, 2 * height, "mclip");
         }
 
         let mask_peak = match planes.edges {

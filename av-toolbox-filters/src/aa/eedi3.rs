@@ -39,6 +39,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
 
+use crate::aa::based::Eedi3Tuning;
 use crate::aa::direction::{Direction, FieldPass, checked_dimensions, missing_plane, run_direction};
 use crate::bits::bits_of;
 use crate::checks::between_u32;
@@ -140,17 +141,6 @@ pub(crate) struct Eedi3Args {
     /// The axes to anti-alias along, both when not given.
     #[serde(default)]
     pub(crate) direction: Direction,
-}
-
-/// EEDI3's settings as a stage's arguments give them, before they are checked.
-pub(crate) struct Eedi3Tuning {
-    pub(crate) alpha: f64,
-    pub(crate) beta: f64,
-    pub(crate) gamma: f64,
-    pub(crate) nrad: u32,
-    pub(crate) mdis: u32,
-    pub(crate) vcheck: u32,
-    pub(crate) vthresh: [f64; 3],
 }
 
 fn wrong_threshold_count(stage: &str, count: usize) -> String {

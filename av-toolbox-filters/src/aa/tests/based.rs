@@ -19,7 +19,7 @@ use av_toolbox_models::Store;
 use serde_json::json;
 
 use crate::aa::Based;
-use crate::aa::based::{BasedArgs, BasedEedi3Args, checked_frame_mask, planned};
+use crate::aa::based::{BasedArgs, Eedi3Tuning, checked_frame_mask, planned};
 use crate::aa::direction::Direction;
 use crate::artcnn::{ModelName, PrecisionName};
 
@@ -144,10 +144,10 @@ fn the_defaults_match_based_aa() {
 fn an_eedi3_object_keeps_the_defaults_it_does_not_name() {
     let parsed = args(json!({ "eedi3": { "alpha": 0.3, "mdis": 10 } }));
 
-    let expected = BasedEedi3Args {
+    let expected = Eedi3Tuning {
         alpha: 0.3,
         mdis: 10,
-        ..BasedEedi3Args::default()
+        ..Eedi3Tuning::default()
     };
     assert_eq!(parsed.eedi3, expected);
 }

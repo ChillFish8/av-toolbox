@@ -53,4 +53,4 @@ pub mod warp;
 
 pub use self::border::reflect;
 pub use self::dispatch::Dispatch;
-pub use self::plane::DevicePlane;
+pub use self::plane::{DevicePlane, assert_plane};

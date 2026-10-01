@@ -148,6 +148,16 @@ fn pscale_blend_kernel(
     output[ABSOLUTE_POS] = aa[ABSOLUTE_POS] + kept;
 }
 
+/// The squared threshold [binarize_prewitt](crate::aa::binarize_prewitt) compares against at `bits` per
+/// sample.
+///
+/// `mask_thr` is on the 8-bit scale and scales by `2^(bits - 8)`.
+pub fn prewitt_threshold(mask_thr: u32, bits: u32) -> u32 {
+    let scaled = mask_thr << (bits - 8);
+
+    scaled * scaled
+}
+
 /// Writes `peak` where the Prewitt gradients of `input` satisfy `gx^2 + gy^2 >= threshold`, and 0
 /// elsewhere.
 ///
@@ -164,6 +174,7 @@ pub fn binarize_prewitt<R: Runtime>(
     let width = input.width();
     let height = input.height();
 
+    assert_plane(&input, width, height, "input");
     assert_plane(&output, width, height, "output");
 
     let samples = output.samples();
@@ -205,6 +216,7 @@ pub fn double_mclip<R: Runtime>(
     let width = mask.width();
     let height = mask.height();
 
+    assert_plane(&mask, width, height, "mask");
     assert_plane(&output, 2 * width, 2 * height, "output");
 
     let samples = output.samples();
@@ -213,8 +225,8 @@ pub fn double_mclip<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: the mask holds `width * height` f32 values, the asserted output `samples`, and every
-    // read is clamped inside the mask.
+    // Safety: the asserted mask holds `width * height` f32 values, the asserted output `samples`, and
+    // every read is clamped inside the mask.
     unsafe {
         double_mclip_kernel::launch_unchecked::<R>(
             client,
@@ -245,6 +257,7 @@ pub fn pscale_blend<R: Runtime>(
     assert_plane(&aa, width, height, "aa");
     assert_plane(&luma, width, height, "luma");
     assert_plane(&down, width, height, "down");
+    assert_plane(&output, width, height, "output");
 
     let samples = output.samples();
     let aa_array = aa.array::<R>();

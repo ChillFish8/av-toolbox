@@ -14,6 +14,7 @@ use super::{
     reference_smooth,
     transposed_plane,
 };
+use crate::aa::prewitt_threshold;
 use crate::artcnn::Weights;
 use crate::bilateral::{BilateralSettings, positions};
 use crate::neighbourhood::{Extreme, Shape, Smooth, median_of_three_sample};
@@ -26,7 +27,7 @@ const SIGMA_S: f32 = 2.0;
 const SIGMA_R: f32 = 1.0 / 255.0;
 
 /// The peak of a bound mask.
-const BOUND_MASK_PEAK: f32 = 255.0;
+pub const BOUND_MASK_PEAK: f32 = 255.0;
 
 /// Binarizes the Prewitt gradients on the CPU in 64-bit integers, mirroring
 /// [binarize_prewitt](crate::aa::binarize_prewitt).
@@ -218,7 +219,8 @@ pub(super) enum HorizontalSclip {
     PassInput,
 }
 
-pub(super) fn peak_of(bits: u32) -> f32 {
+/// The largest code value at `bits` per sample.
+pub fn peak_of(bits: u32) -> f32 {
     let peak = (1u32 << bits) - 1;
 
     peak as f32
@@ -340,8 +342,7 @@ pub(super) fn composed(
 /// Builds the mask of `aa/based` from `luma` on the CPU: a Prewitt binarize, a 3x3 maximum and a 3x3 box.
 pub fn reference_based_mask(luma: &[f32], width: u32, height: u32, parameters: &BasedParameters) -> Vec<f32> {
     let peak = peak_of(parameters.bits);
-    let scaled = parameters.mask_thr << (parameters.bits - 8);
-    let threshold = scaled * scaled;
+    let threshold = prewitt_threshold(parameters.mask_thr, parameters.bits);
 
     let binarized = reference_binarize_prewitt(luma, width, height, threshold, peak);
     let widened = reference_extreme(&binarized, width, height, Extreme::Maximum, Shape::Square);

@@ -1,6 +1,7 @@
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::artcnn::{Model, Weights};
 use av_toolbox_cubek::testing::{
+    BOUND_MASK_PEAK,
     BasedFinish,
     BasedParameters,
     CloseDecisionTally,
@@ -11,6 +12,7 @@ use av_toolbox_cubek::testing::{
     assert_close_roundings,
     assert_plane_within,
     assert_same_plane,
+    peak_of,
     reference_based_aa,
     reference_based_finish,
     reference_based_mask,
@@ -162,16 +164,12 @@ fn cropped(plane: &[u16], plane_width: u32, left: u32, top: u32, width: u32, hei
     block
 }
 
-fn peak_of(bits: u32) -> f32 {
-    let peak = (1u32 << bits) - 1;
-
-    peak as f32
-}
-
 /// The planes one run of the stage's chain wrote, read back from the device.
 ///
-/// `mask` and `mclip` are empty when `edge_mask` is false.
+/// `mask` and `mclip` are empty when `edge_mask` is false. `bound` holds the 8-bit mask the run was
+/// given in place of building one.
 struct DeviceStages {
+    bound: Option<Vec<f32>>,
     mask: Vec<f32>,
     mclip: Vec<f32>,
     supersampled: Vec<f32>,
@@ -186,6 +184,7 @@ struct ChainRun {
     height: u32,
     bits: u32,
     edge_mask: bool,
+    bound: Option<Vec<f32>>,
     args: serde_json::Value,
 }
 
@@ -227,13 +226,19 @@ impl BuildTask for ChainRun {
         let supersampled = client.empty(doubled_bytes);
         let antialiased = client.empty(doubled_bytes);
         let merged = client.empty(bytes);
-        let mask = client.empty(bytes);
+        let mask = match &self.bound {
+            Some(values) => {
+                let mask_bytes = f32::as_bytes(values);
+                client.create_from_slice(mask_bytes)
+            },
+            None => client.empty(bytes),
+        };
         let mclip = client.empty(doubled_bytes);
 
         let edges = self.edge_mask.then(|| EdgePlanes {
             mask: plane(&mask, width, height),
             mclip: plane(&mclip, 2 * width, 2 * height),
-            bound: false,
+            bound: self.bound.is_some(),
         });
         let planes = BasedPlanes {
             luma: plane(&luma, width, height),
@@ -258,6 +263,7 @@ impl BuildTask for ChainRun {
         let merged_values = read_f32(build, &merged);
 
         DeviceStages {
+            bound: self.bound,
             mask: mask_values,
             mclip: mclip_values,
             supersampled: supersampled_values,
@@ -267,8 +273,15 @@ impl BuildTask for ChainRun {
     }
 }
 
-/// Runs the chain with `parameters` at f32 on a `width` by `height` `luma` plane.
-fn run_chain(luma: &[f32], width: u32, height: u32, parameters: &BasedParameters) -> DeviceStages {
+/// Runs the chain with `parameters` at f32 on a `width` by `height` `luma` plane, merging through `bound`
+/// when it is given.
+fn run_chain(
+    luma: &[f32],
+    width: u32,
+    height: u32,
+    parameters: &BasedParameters,
+    bound: Option<&[f32]>,
+) -> DeviceStages {
     let args = stage_arguments(parameters, "f32");
     let task = ChainRun {
         luma: luma.to_vec(),
@@ -276,6 +289,7 @@ fn run_chain(luma: &[f32], width: u32, height: u32, parameters: &BasedParameters
         height,
         bits: parameters.bits,
         edge_mask: parameters.edge_mask,
+        bound: bound.map(<[f32]>::to_vec),
         args,
     };
 
@@ -393,10 +407,10 @@ fn largest_difference(found: &[f32], expected: &[f32]) -> f32 {
 
 /// Checks each step of `found` against the references fed the device's own intermediates.
 ///
-/// The mask lies within the code tolerance, which leaves no room for a binarize that differs, and `mclip`
-/// matches exactly. `aa2` meets EEDI3's reference through the tally on this plane alone, with the touched
-/// bound. The merged plane from the device's `aa2` lies within the code tolerance, and its rounded output
-/// differs only by close roundings.
+/// A built mask lies within the code tolerance, which leaves no room for a binarize that differs, and a
+/// bound one comes back as it was given. `mclip` matches exactly. `aa2` meets EEDI3's reference through the
+/// tally on this plane alone, with the touched bound. The merged plane from the device's `aa2` lies within
+/// the code tolerance, and its rounded output differs only by close roundings.
 fn assert_steps_match(
     found: &DeviceStages,
     luma: &[f32],
@@ -410,15 +424,24 @@ fn assert_steps_match(
     let tolerance = code_tolerance(parameters.bits);
 
     let mask = if parameters.edge_mask {
-        let expected_mask = reference_based_mask(luma, width, height, parameters);
         let mask_label = format!("{label} mask");
-        assert_plane_within(&found.mask, &expected_mask, tolerance, width, &mask_label);
+        let mask_peak = match &found.bound {
+            Some(bound) => {
+                assert_same_plane(&found.mask, bound, width, &mask_label);
+                BOUND_MASK_PEAK
+            },
+            None => {
+                let expected_mask = reference_based_mask(luma, width, height, parameters);
+                assert_plane_within(&found.mask, &expected_mask, tolerance, width, &mask_label);
+                peak
+            },
+        };
 
-        let expected_mclip = reference_double_mclip(&found.mask, width, height, peak);
+        let expected_mclip = reference_double_mclip(&found.mask, width, height, mask_peak);
         let mclip_label = format!("{label} mclip");
         assert_same_plane(&found.mclip, &expected_mclip, 2 * width, &mclip_label);
 
-        Some((found.mask.as_slice(), peak))
+        Some((found.mask.as_slice(), mask_peak))
     } else {
         None
     };
@@ -463,17 +486,25 @@ fn assert_steps_match(
     println!("{label}: {close_roundings} close final roundings differ");
 }
 
-/// Runs the chain with `parameters` along every direction on `luma`, checking each step.
+/// Runs the chain with `parameters` along every direction on `luma`, checking each step, merging through
+/// `bound` when it is given.
 ///
 /// "both" is checked against the horizontal reference on the vertical run's `aa2`.
-fn assert_directions_match(luma: &[u16], width: u32, height: u32, parameters: &BasedParameters, label: &str) {
+fn assert_directions_match(
+    luma: &[u16],
+    width: u32,
+    height: u32,
+    parameters: &BasedParameters,
+    bound: Option<&[f32]>,
+    label: &str,
+) {
     let values = widened(luma);
 
     let vertical_parameters = BasedParameters {
         direction: Direction::Vertical,
         ..*parameters
     };
-    let vertical = run_chain(&values, width, height, &vertical_parameters);
+    let vertical = run_chain(&values, width, height, &vertical_parameters, bound);
     let vertical_label = format!("{label} vertical");
     assert_steps_match(
         &vertical,
@@ -489,7 +520,7 @@ fn assert_directions_match(luma: &[u16], width: u32, height: u32, parameters: &B
         direction: Direction::Horizontal,
         ..*parameters
     };
-    let horizontal = run_chain(&values, width, height, &horizontal_parameters);
+    let horizontal = run_chain(&values, width, height, &horizontal_parameters, bound);
     let horizontal_label = format!("{label} horizontal");
     assert_steps_match(
         &horizontal,
@@ -505,7 +536,7 @@ fn assert_directions_match(luma: &[u16], width: u32, height: u32, parameters: &B
         direction: Direction::Both,
         ..*parameters
     };
-    let both = run_chain(&values, width, height, &both_parameters);
+    let both = run_chain(&values, width, height, &both_parameters, bound);
     let both_label = format!("{label} both");
     let supersample_label = format!("{both_label} supersample against the vertical run's");
     assert_same_plane(
@@ -531,7 +562,7 @@ fn assert_steps_match_at(sample: SampleFormat) {
     let parameters = default_parameters(bits, Direction::Both);
     let label = format!("{bits}-bit");
 
-    assert_directions_match(&luma, WIDTH, HEIGHT, &parameters, &label);
+    assert_directions_match(&luma, WIDTH, HEIGHT, &parameters, None, &label);
 }
 
 #[test]
@@ -562,7 +593,7 @@ fn each_step_matches_on_a_square_plane() {
     let luma = cropped(&fence, WIDTH, 0, 0, size, size);
     let parameters = default_parameters(8, Direction::Both);
 
-    assert_directions_match(&luma, size, size, &parameters, "square");
+    assert_directions_match(&luma, size, size, &parameters, None, "square");
 }
 
 /// The builtin R8F64 network's weights.
@@ -754,13 +785,13 @@ fn assert_variant_matches(parameters: &BasedParameters, label: &str) {
             direction: Direction::Vertical,
             ..*parameters
         };
-        let run = run_chain(&values, WIDTH, HEIGHT, &vertical_parameters);
+        let run = run_chain(&values, WIDTH, HEIGHT, &vertical_parameters, None);
         Some(run.antialiased)
     } else {
         None
     };
 
-    let found = run_chain(&values, WIDTH, HEIGHT, parameters);
+    let found = run_chain(&values, WIDTH, HEIGHT, parameters, None);
 
     let defaults = default_parameters(8, parameters.direction);
     let default_reference = reference_based_aa(&values, WIDTH, HEIGHT, &defaults, None, &found.supersampled);
@@ -910,4 +941,85 @@ fn chroma_is_handed_through() {
     let shared = shared_planes(STAGE, format, args);
 
     assert_eq!(shared, vec![false, true, true]);
+}
+
+/// A mask of 255 over the left third of a `WIDTH` by `HEIGHT` frame, the 8-bit fence over the middle third
+/// and 0 over the right third.
+fn textured_mask() -> Vec<u8> {
+    let fence = fixture_plane(FENCE, 8);
+    let third = WIDTH / 3;
+
+    fence
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let column = index as u32 % WIDTH;
+            if column < third {
+                255
+            } else if column < 2 * third {
+                *value as u8
+            } else {
+                0
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn a_textured_bound_mask_matches_the_reference_at_10_bit() {
+    let sample = ten_bit();
+    let bits = bits_of(sample);
+    let fence = fixture_plane(FENCE, bits);
+    let mask = textured_mask();
+    let mask_values: Vec<f32> = mask.iter().map(|value| f32::from(*value)).collect();
+    let parameters = default_parameters(bits, Direction::Both);
+
+    assert_directions_match(
+        &fence,
+        WIDTH,
+        HEIGHT,
+        &parameters,
+        Some(&mask_values),
+        "bound mask",
+    );
+
+    let format = yuv420(WIDTH, HEIGHT, sample);
+    let values: Vec<Vec<u16>> = format
+        .channels()
+        .iter()
+        .map(|channel| {
+            let (width, height) = format.channel_dimensions(*channel).expect("a listed channel");
+            cropped(&fence, WIDTH, 0, 0, width, height)
+        })
+        .collect();
+    let planes = encoded(&format, &values);
+    let (_, mask_chroma) = uniform_mask(&format, 0);
+    let args = stage_arguments(&parameters, "f32");
+
+    let filtered = run_masked(STAGE, format, args, &planes, mask, mask_chroma);
+
+    let luma = widened(&fence);
+    let chain = run_chain(&luma, WIDTH, HEIGHT, &parameters, Some(&mask_values));
+    let expected = reference_based_aa(
+        &luma,
+        WIDTH,
+        HEIGHT,
+        &parameters,
+        Some(&mask_values),
+        &chain.supersampled,
+    );
+    assert!(
+        expected.output != luma,
+        "the reference leaves the luma unchanged under the bound mask"
+    );
+
+    let found = decoded(&format, &filtered);
+    let found_luma = widened(&found[0]);
+    let difference = output_difference(&found_luma, &expected.output, &mask_values, bits, "bound mask");
+    println!("bound mask: {difference:?}");
+    assert!(
+        difference.share <= END_TO_END_SHARE,
+        "{} of output samples differ under the bound mask",
+        difference.share
+    );
 }
