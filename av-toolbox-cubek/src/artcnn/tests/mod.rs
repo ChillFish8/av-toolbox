@@ -464,6 +464,49 @@ fn a_frame_clips_only_the_side_it_is_short_on() {
 }
 
 #[test]
+fn a_narrow_network_widens_conv0_to_the_padded_last_layer() {
+    let sizes = haloed_scratch(8, 3, Precision::F16, BodyPath::Convolution, 10, 12, 100);
+
+    // The 12x16 region of 8 f16 features is 16 bytes a sample, so 12 * 16 * 16 = 3,072 bytes a map. The
+    // padded last layer writes 64 bytes a sample into conv0, so 12 * 16 * 64 = 12,288 bytes.
+    assert_eq!(sizes.map_bytes, 3_072);
+    assert_eq!(sizes.conv0_bytes, 12_288);
+}
+
+#[test]
+fn conv0_is_one_map_on_the_im2col_path() {
+    let sizes = haloed_scratch(8, 3, Precision::F16, BodyPath::Im2col, 10, 12, 100);
+
+    assert_eq!(sizes.conv0_bytes, sizes.map_bytes);
+}
+
+#[test]
+fn a_network_32_wide_needs_no_wider_conv0() {
+    let sizes = haloed_scratch(32, 3, Precision::F16, BodyPath::Convolution, 10, 12, 100);
+
+    // 32 f16 features are already the padded last layer's 64 bytes a sample.
+    assert_eq!(sizes.conv0_bytes, sizes.map_bytes);
+}
+
+#[test]
+fn the_tile_side_counts_the_widened_conv0() {
+    // 8 f16 features on the convolution path hold three maps of 16 bytes and a conv0 of 64, so 112 bytes a
+    // sample. 2^20 / 112 = 9362 samples, and sqrt(9362) = 96 a side haloed, so the centre is 96 - 2 * 3 = 90.
+    let side = tile_side(8, 3, Precision::F16, BodyPath::Convolution, 1 << 20, usize::MAX);
+
+    assert_eq!(side, 90);
+}
+
+#[test]
+fn the_allocation_limit_bounds_the_widened_conv0() {
+    // conv0's 64 bytes a sample is the largest buffer. 2^16 / 64 = 1024 samples, and sqrt(1024) = 32 a side
+    // haloed, so the centre is 32 - 2 * 3 = 26.
+    let side = tile_side(8, 3, Precision::F16, BodyPath::Convolution, TILE_BUDGET, 1 << 16);
+
+    assert_eq!(side, 26);
+}
+
+#[test]
 #[should_panic(expected = "a tile must be at least one sample on a side")]
 fn tiles_refuse_a_tile_of_zero() {
     tiles(10, 10, 0, 3);

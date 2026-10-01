@@ -1,5 +1,6 @@
 use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
 
+use super::network::conv0_sample_bytes;
 use crate::artcnn::{ArtcnnError, BodyPath, Maps, Network, Precision, Region, run_region};
 use crate::{DevicePlane, Dispatch};
 
@@ -9,8 +10,11 @@ pub const TILE_BUDGET: usize = 1 << 30;
 /// The scratch buffers one tile needs, in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScratchSizes {
-    /// The size of each of the four feature maps.
+    /// The size of the `first`, `second` and `third` feature maps.
     pub map_bytes: usize,
+    /// The size of `conv0`, which the last layer also writes into on
+    /// [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution).
+    pub conv0_bytes: usize,
     /// The size of the im2col columns, or 0 on [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution).
     pub column_bytes: usize,
 }
@@ -18,23 +22,24 @@ pub struct ScratchSizes {
 /// The bytes one sample of a haloed tile needs, across the four maps and, on the im2col path, the columns.
 fn bytes_per_sample(features: u32, precision: Precision, path: BodyPath) -> usize {
     let value_bytes = precision.bytes();
-    let map_bytes = 4 * features as usize * value_bytes;
+    let map_bytes = 3 * features as usize * value_bytes;
+    let conv0_bytes = conv0_sample_bytes(features, precision, path);
     let column_bytes = match path {
         BodyPath::Convolution => 0,
         BodyPath::Im2col => 9 * features as usize * value_bytes,
     };
 
-    map_bytes + column_bytes
+    map_bytes + conv0_bytes + column_bytes
 }
 
 /// The bytes one sample of a haloed tile needs in its largest buffer.
 ///
-/// That is the columns on the im2col path, and one map otherwise.
+/// That is the columns on the im2col path, and `conv0` otherwise.
 fn largest_buffer_bytes_per_sample(features: u32, precision: Precision, path: BodyPath) -> usize {
     let map_bytes = features as usize * precision.bytes();
 
     match path {
-        BodyPath::Convolution => map_bytes,
+        BodyPath::Convolution => conv0_sample_bytes(features, precision, path),
         BodyPath::Im2col => 9 * map_bytes,
     }
 }
@@ -89,6 +94,7 @@ pub(crate) fn haloed_scratch(
     let samples = region_width * region_height;
     let value_bytes = precision.bytes();
     let map_bytes = samples * features as usize * value_bytes;
+    let conv0_bytes = samples * conv0_sample_bytes(features, precision, path);
     let column_bytes = match path {
         BodyPath::Convolution => 0,
         BodyPath::Im2col => map_bytes * 9,
@@ -96,6 +102,7 @@ pub(crate) fn haloed_scratch(
 
     ScratchSizes {
         map_bytes,
+        conv0_bytes,
         column_bytes,
     }
 }
@@ -165,13 +172,19 @@ pub fn artcnn<R: Runtime>(
 
     let sizes = scratch_sizes(network, path, tile, width, height);
     let map_bytes = sizes.map_bytes as u64;
-    let every_map = [maps.conv0, maps.first, maps.second, maps.third];
+    let conv0_bytes = sizes.conv0_bytes as u64;
+    let every_map = [maps.first, maps.second, maps.third];
     for map in every_map {
         assert!(
             map.size_in_used() >= map_bytes,
             "a map is smaller than the tile's scratch"
         );
     }
+
+    assert!(
+        maps.conv0.size_in_used() >= conv0_bytes,
+        "conv0 is smaller than the tile's scratch"
+    );
 
     if let Some(columns) = maps.columns {
         let column_bytes = sizes.column_bytes as u64;

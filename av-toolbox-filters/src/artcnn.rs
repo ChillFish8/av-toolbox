@@ -245,7 +245,7 @@ impl MapBuffers {
         height: u32,
     ) -> Self {
         let sizes = scratch_sizes(network, path, tile, width, height);
-        let conv0 = context.scratch(sizes.map_bytes);
+        let conv0 = context.scratch(sizes.conv0_bytes);
         let first = context.scratch(sizes.map_bytes);
         let second = context.scratch(sizes.map_bytes);
         let third = context.scratch(sizes.map_bytes);

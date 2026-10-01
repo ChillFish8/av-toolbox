@@ -45,7 +45,7 @@ impl BuildTask for Tiled {
 
         let input = upload_f32(client, &scaled);
         let output = upload_f32(client, &untouched);
-        let conv0 = empty(client, sizes.map_bytes);
+        let conv0 = empty(client, sizes.conv0_bytes);
         let first = empty(client, sizes.map_bytes);
         let second = empty(client, sizes.map_bytes);
         let third = empty(client, sizes.map_bytes);
@@ -103,7 +103,7 @@ impl BuildTask for WarmUp {
         let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
         let sizes = scratch_sizes(&network, self.path, self.tile, self.width, self.height);
 
-        let conv0 = empty(client, sizes.map_bytes);
+        let conv0 = empty(client, sizes.conv0_bytes);
         let first = empty(client, sizes.map_bytes);
         let second = empty(client, sizes.map_bytes);
         let third = empty(client, sizes.map_bytes);
@@ -132,46 +132,65 @@ impl BuildTask for WarmUp {
     }
 }
 
-/// Runs the network into an output two samples wider than the doubled input.
-struct WiderOutput {
-    weights: Weights,
+/// How much of the scratch sizes' `conv0` a [SmallFrame] gives it.
+enum Conv0Size {
+    /// What the scratch sizes ask for.
+    Scratch,
+    /// One feature map, which is too small on a narrow convolution path.
+    OneMap,
 }
 
-impl BuildTask for WiderOutput {
+/// Runs the network over a 6x5 plane of zeros at a tile of 8, into an output `output_width` by
+/// `output_height`.
+struct SmallFrame {
+    weights: Weights,
+    path: BodyPath,
+    precision: Precision,
+    output_width: u32,
+    output_height: u32,
+    conv0: Conv0Size,
+    with_columns: bool,
+}
+
+impl BuildTask for SmallFrame {
     type Output = Result<(), ArtcnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
-        let path = BodyPath::Im2col;
-        let network = Network::upload(client, &self.weights, Precision::F32).expect("the weights are valid");
-        let sizes = scratch_sizes(&network, path, 8, 6, 5);
+        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
+        let sizes = scratch_sizes(&network, self.path, 8, 6, 5);
         let zeros = vec![0.0f32; 30];
+        let output_bytes = (self.output_width * self.output_height) as usize * size_of::<f32>();
+        let conv0_bytes = match self.conv0 {
+            Conv0Size::Scratch => sizes.conv0_bytes,
+            Conv0Size::OneMap => sizes.map_bytes,
+        };
 
         let input = upload_f32(client, &zeros);
-        let output = empty(client, 14 * 10 * size_of::<f32>());
-        let conv0 = empty(client, sizes.map_bytes);
+        let output = empty(client, output_bytes);
+        let conv0 = empty(client, conv0_bytes);
         let first = empty(client, sizes.map_bytes);
         let second = empty(client, sizes.map_bytes);
         let third = empty(client, sizes.map_bytes);
-        let columns = empty(client, sizes.column_bytes);
+        let columns = self.with_columns.then(|| empty(client, sizes.column_bytes));
 
         let input_plane = plane(&input, 6, 5);
-        let output_plane = plane(&output, 14, 10);
+        let output_plane = plane(&output, self.output_width, self.output_height);
         let maps = Maps {
             conv0: &conv0,
             first: &first,
             second: &second,
             third: &third,
-            columns: Some(&columns),
+            columns: columns.as_ref(),
         };
 
         let ran = artcnn(
             client,
             &sizing,
             &network,
-            path,
+            self.path,
             input_plane,
             PEAK,
             8,
@@ -260,7 +279,7 @@ fn r8f64_tiled_matches_the_reference() {
             // Measured 8.06e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.5x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 2.96e-4 on the convolution path and 3.27e-4 on im2col, which is 0.083 of an 8-bit
+            // Measured 2.20e-4 on the convolution path and 3.27e-4 on im2col, which is 0.083 of an 8-bit
             // code, so 3x headroom.
             Precision::F16 => 1e-3,
         };
@@ -308,7 +327,8 @@ fn a_production_sized_plane_matches_the_reference() {
             // Measured 7.83e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.6x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 5.80e-4 on both paths, which is 0.148 of an 8-bit code, so 3.4x headroom.
+            // Measured 6.36e-4 on the convolution path and 5.80e-4 on im2col, which is 0.162 of an 8-bit
+            // code, so 3.1x headroom.
             Precision::F16 => 2e-3,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
@@ -345,9 +365,37 @@ fn the_warm_up_refuses_an_unsupported_convolution() {
 #[should_panic(expected = "the output is not twice the input on each side")]
 fn a_tiled_run_refuses_an_output_of_another_size() {
     let weights = synthetic_weights(8, 1, 8);
-    let task = WiderOutput { weights };
+    // The output is two samples wider than the doubled input.
+    let task = SmallFrame {
+        weights,
+        path: BodyPath::Im2col,
+        precision: Precision::F32,
+        output_width: 14,
+        output_height: 10,
+        conv0: Conv0Size::Scratch,
+        with_columns: true,
+    };
 
     let ran = backend().build(task);
 
     println!("wider output: {ran:?}");
+}
+
+#[test]
+#[should_panic(expected = "conv0 is smaller than the tile's scratch")]
+fn a_tiled_run_refuses_a_conv0_of_one_map_on_a_narrow_convolution_path() {
+    let weights = synthetic_weights(8, 1, 8);
+    let task = SmallFrame {
+        weights,
+        path: BodyPath::Convolution,
+        precision: Precision::F16,
+        output_width: 12,
+        output_height: 10,
+        conv0: Conv0Size::OneMap,
+        with_columns: false,
+    };
+
+    let ran = backend().build(task);
+
+    println!("one map conv0: {ran:?}");
 }

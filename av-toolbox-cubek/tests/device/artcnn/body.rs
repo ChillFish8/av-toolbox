@@ -1,4 +1,5 @@
 use av_toolbox_cubek::artcnn::{
+    Activation,
     ArtcnnError,
     BodyPath,
     Maps,
@@ -8,12 +9,16 @@ use av_toolbox_cubek::artcnn::{
     Region,
     Weights,
     convolve_with_blueprint,
+    convolve_without_bias,
+    epilogue,
     offers_cmma_16,
     run_region,
+    scratch_sizes,
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask, ElementType};
 use cubecl::prelude::Runtime;
+use half::f16;
 
 use super::{read_maps, synced, textured, upload_maps};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -86,63 +91,89 @@ impl BuildTask for Forward {
     type Output = Result<Vec<f32>, ArtcnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
-        let client = build.client();
-        let frame_context = build.frame_context();
-        let sizing = Sizing(frame_context);
-        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
-        let region = Region {
-            x: 0,
-            y: 0,
-            width: self.width,
-            height: self.height,
-        };
-        let map_count = (region.samples() * network.features()) as usize;
-        let map_bytes = map_count * self.precision.bytes();
-        let output_samples = (region.samples() * 4) as usize;
-        let untouched = vec![UNTOUCHED; output_samples];
-        let scaled: Vec<f32> = self.plane.iter().map(|value| value * PEAK).collect();
-
-        let input = upload_f32(client, &scaled);
-        let output = upload_f32(client, &untouched);
-        let conv0 = empty(client, map_bytes);
-        let first = empty(client, map_bytes);
-        let second = empty(client, map_bytes);
-        let third = empty(client, map_bytes);
-        let columns = match self.path {
-            BodyPath::Convolution => None,
-            BodyPath::Im2col => Some(empty(client, map_bytes * 9)),
-        };
-
-        let input_plane = plane(&input, self.width, self.height);
-        let output_plane = plane(&output, self.width * 2, self.height * 2);
-        let maps = Maps {
-            conv0: &conv0,
-            first: &first,
-            second: &second,
-            third: &third,
-            columns: columns.as_ref(),
-        };
-
-        let ran = run_region(
-            client,
-            &sizing,
-            &network,
-            self.path,
-            input_plane,
-            PEAK,
-            region,
-            region,
-            maps,
-            output_plane,
-        );
-        synced(client);
-        ran?;
-
-        let codes = read_f32(client, &output);
-        let values = codes.iter().map(|code| code / PEAK).collect();
-
-        Ok(values)
+        run_forward(self, build, None)
     }
+}
+
+/// The same as [Forward], with `conv0` holding `conv0_bytes` rather than what the scratch sizes ask for.
+struct ForwardWithConv0 {
+    forward: Forward,
+    conv0_bytes: usize,
+}
+
+impl BuildTask for ForwardWithConv0 {
+    type Output = Result<Vec<f32>, ArtcnnError>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        run_forward(self.forward, build, Some(self.conv0_bytes))
+    }
+}
+
+/// Runs `task`, with `conv0` holding `conv0_bytes` if given and otherwise what the scratch sizes ask for.
+fn run_forward<R: Runtime>(
+    task: Forward,
+    build: &BuildContext<R>,
+    conv0_bytes: Option<usize>,
+) -> Result<Vec<f32>, ArtcnnError> {
+    let client = build.client();
+    let frame_context = build.frame_context();
+    let sizing = Sizing(frame_context);
+    let network = Network::upload(client, &task.weights, task.precision).expect("the weights are valid");
+    let region = Region {
+        x: 0,
+        y: 0,
+        width: task.width,
+        height: task.height,
+    };
+    let map_count = (region.samples() * network.features()) as usize;
+    let map_bytes = map_count * task.precision.bytes();
+    let side = task.width.max(task.height);
+    let sizes = scratch_sizes(&network, task.path, side, task.width, task.height);
+    let conv0_size = conv0_bytes.unwrap_or(sizes.conv0_bytes);
+    let output_samples = (region.samples() * 4) as usize;
+    let untouched = vec![UNTOUCHED; output_samples];
+    let scaled: Vec<f32> = task.plane.iter().map(|value| value * PEAK).collect();
+
+    let input = upload_f32(client, &scaled);
+    let output = upload_f32(client, &untouched);
+    let conv0 = empty(client, conv0_size);
+    let first = empty(client, map_bytes);
+    let second = empty(client, map_bytes);
+    let third = empty(client, map_bytes);
+    let columns = match task.path {
+        BodyPath::Convolution => None,
+        BodyPath::Im2col => Some(empty(client, map_bytes * 9)),
+    };
+
+    let input_plane = plane(&input, task.width, task.height);
+    let output_plane = plane(&output, task.width * 2, task.height * 2);
+    let maps = Maps {
+        conv0: &conv0,
+        first: &first,
+        second: &second,
+        third: &third,
+        columns: columns.as_ref(),
+    };
+
+    let ran = run_region(
+        client,
+        &sizing,
+        &network,
+        task.path,
+        input_plane,
+        PEAK,
+        region,
+        region,
+        maps,
+        output_plane,
+    );
+    synced(client);
+    ran?;
+
+    let codes = read_f32(client, &output);
+    let values = codes.iter().map(|code| code / PEAK).collect();
+
+    Ok(values)
 }
 
 pub(super) fn largest_error(actual: &[f32], expected: &[f64]) -> f64 {
@@ -248,7 +279,7 @@ fn odd_sizes_match_the_reference() {
             // Measured 7.66e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.6x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 3.43e-4 on both paths, so 2.9x headroom.
+            // Measured 3.14e-4 on the convolution path and 3.43e-4 on im2col, so 2.9x headroom.
             Precision::F16 => 1e-3,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
@@ -267,7 +298,7 @@ fn sixteen_blocks_keep_every_buffer_live() {
             // Measured 7.55e-6 on im2col, so 2.6x headroom. Rounding to 16-bit codes alone gives up to
             // 7.63e-6.
             Precision::F32 => 2e-5,
-            // Measured 2.95e-4 on the convolution path and 3.38e-4 on im2col, so 3x headroom.
+            // Measured 4.03e-4 on the convolution path and 3.38e-4 on im2col, so 2.5x headroom.
             Precision::F16 => 1e-3,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
@@ -286,7 +317,7 @@ fn a_width_of_96_matches_the_reference() {
             // Measured 7.89e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.5x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 1.67e-4 on the convolution path and 1.97e-4 on im2col, so 2.5x headroom.
+            // Measured 2.10e-4 on the convolution path and 1.97e-4 on im2col, so 2.4x headroom.
             Precision::F16 => 5e-4,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
@@ -305,8 +336,8 @@ fn r8f64_matches_the_reference() {
             // Measured 8.19e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.4x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 1.45e-4 on the convolution path and 1.85e-4 on im2col, which is 0.047 of an 8-bit
-            // code, so 2.7x headroom.
+            // Measured 2.10e-4 on the convolution path and 1.85e-4 on im2col, which is 0.053 of an 8-bit
+            // code, so 2.4x headroom.
             Precision::F16 => 5e-4,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
@@ -334,7 +365,7 @@ fn r8f64_stays_finite_on_flat_extremes() {
             assert!((0.0..=1.0).contains(value), "{value} lies outside 0..=1");
         }
 
-        // Measured 2.21e-5 on the flat zeros and 2.14e-4 on the flat ones, so 2.3x headroom.
+        // Measured 2.36e-5 on the flat zeros and 1.94e-4 on the flat ones, so 2.6x headroom.
         assert!(error <= 5e-4, "{error:e}");
     }
 }
@@ -501,6 +532,190 @@ fn the_forced_blueprint_matches_the_inferred_one_exactly() {
     }
 }
 
-fn bits_differ((forced, inferred): (&f32, &f32)) -> bool {
+pub(super) fn bits_differ((forced, inferred): (&f32, &f32)) -> bool {
     forced.to_bits() != inferred.to_bits()
+}
+
+/// One body convolution of the same maps with the bias inside it, and without it before a separate bias add.
+struct BiasPlacement {
+    weights: Weights,
+    maps: Vec<f32>,
+    region: Region,
+}
+
+struct BiasOutputs {
+    fused: Vec<f32>,
+    unbiased: Vec<f32>,
+    separate: Vec<f32>,
+}
+
+impl BuildTask for BiasPlacement {
+    type Output = BiasOutputs;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let precision = Precision::F16;
+        let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
+        let map_bytes = self.maps.len() * precision.bytes();
+        let samples = self.region.samples();
+
+        let input = upload_maps(client, &self.maps, precision);
+        let fused_output = empty(client, map_bytes);
+        let separate_output = empty(client, map_bytes);
+
+        let fused_ran = convolve_with_blueprint(
+            client,
+            &sizing,
+            &network,
+            1,
+            &input,
+            &fused_output,
+            self.region,
+            true,
+        );
+        let unbiased_ran = convolve_without_bias(client, &network, 1, &input, &separate_output, self.region);
+        synced(client);
+
+        fused_ran.expect("the fused convolution runs");
+        unbiased_ran.expect("the unbiased convolution runs");
+        let unbiased = read_maps(client, &separate_output, precision);
+
+        epilogue(
+            client,
+            &sizing,
+            &network,
+            &separate_output,
+            1,
+            samples,
+            Activation::None,
+            None,
+        );
+        synced(client);
+
+        let fused = read_maps(client, &fused_output, precision);
+        let separate = read_maps(client, &separate_output, precision);
+
+        BiasOutputs {
+            fused,
+            unbiased,
+            separate,
+        }
+    }
+}
+
+/// The spacing of f16 values at `magnitude`.
+fn f16_step(magnitude: f32) -> f32 {
+    let bits = f16::from_f32(magnitude.abs()).to_bits();
+    let exponent = i32::from(bits >> 10);
+
+    match exponent {
+        0 => 2.0f32.powi(-24),
+        _ => 2.0f32.powi(exponent - 25),
+    }
+}
+
+#[test]
+fn the_fused_bias_matches_a_separate_bias_add_within_one_f16_step() {
+    let precision = Precision::F16;
+    if !supports(BodyPath::Convolution, precision) {
+        println!("fused bias: no f16 cooperative matrix, so there is nothing to compare");
+        return;
+    }
+
+    let region = Region {
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 120,
+    };
+    let values = (region.samples() * 64) as usize;
+    let maps: Vec<f32> = (0..values)
+        .map(|index| (index as f32 * 0.37).sin() * 2.0)
+        .collect();
+    let task = BiasPlacement {
+        weights: synthetic_weights(64, 1, 5),
+        maps,
+        region,
+    };
+
+    let outputs = backend().build(task);
+
+    let mut differing = 0;
+    let mut largest_share = 0.0f32;
+    for index in 0..values {
+        let fused = outputs.fused[index];
+        let separate = outputs.separate[index];
+        let unbiased = outputs.unbiased[index];
+        // The separate add rounds the convolution to f16 before adding the bias, so the step is taken at the
+        // largest of the fused, separate and unbiased values.
+        let magnitude = fused.abs().max(separate.abs()).max(unbiased.abs());
+        let step = f16_step(magnitude);
+        let share = (fused - separate).abs() / step;
+
+        largest_share = largest_share.max(share);
+        if fused != separate {
+            differing += 1;
+        }
+    }
+
+    println!("fused bias: {differing} of {values} values differ, largest {largest_share} f16 steps");
+    // Measured 398,720 values differing, by at most one step, from the separate add's extra rounding.
+    assert!(largest_share <= 1.0, "{largest_share} f16 steps");
+}
+
+#[test]
+fn a_network_narrower_than_32_runs_with_conv0_widened() {
+    let weights = synthetic_weights(8, 1, 9);
+    let plane = textured(11, 9);
+    let expected = reference_artcnn(&plane, 11, 9, &weights);
+    let precision = Precision::F16;
+    let path = BodyPath::Convolution;
+    if !supports(path, precision) {
+        println!("narrow width: no f16 cooperative matrix, so the convolution path cannot run");
+        return;
+    }
+
+    // Eight f16 features are 16 bytes a sample, so `conv0` alone holds the padded last layer's 64.
+    let task = ForwardWithConv0 {
+        forward: Forward {
+            weights,
+            plane,
+            width: 11,
+            height: 9,
+            path,
+            precision,
+        },
+        conv0_bytes: 11 * 9 * 64,
+    };
+
+    let ran = backend().build(task);
+    let actual = ran.expect("a supported path runs");
+
+    let error = largest_error(&actual, &expected);
+    println!("narrow width: largest error {error:e}");
+    // The same bound as the other 8 wide f16 runs, whose measurements peak at 3.43e-4.
+    assert!(error <= 1e-3, "{error:e}");
+}
+
+#[test]
+#[should_panic(expected = "conv0 is smaller than the region's last layer needs")]
+fn a_conv0_of_one_map_is_refused_on_a_narrow_convolution_path() {
+    let weights = synthetic_weights(8, 1, 9);
+    let plane = textured(11, 9);
+    let task = ForwardWithConv0 {
+        forward: Forward {
+            weights,
+            plane,
+            width: 11,
+            height: 9,
+            path: BodyPath::Convolution,
+            precision: Precision::F16,
+        },
+        conv0_bytes: 11 * 9 * 8 * 2,
+    };
+
+    let ran = backend().build(task);
+
+    println!("narrow conv0: {ran:?}");
 }

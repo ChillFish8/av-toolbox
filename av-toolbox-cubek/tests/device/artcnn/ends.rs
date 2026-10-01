@@ -1,5 +1,6 @@
 use av_toolbox_cubek::artcnn::{
     Activation,
+    BodyPath,
     Network,
     Precision,
     Region,
@@ -7,6 +8,10 @@ use av_toolbox_cubek::artcnn::{
     epilogue,
     first_layer,
     last_layer,
+    offers_cmma_16,
+    padded_last_layer,
+    padded_last_layer_with_blueprint,
+    shuffle,
 };
 use av_toolbox_cubek::testing::{
     reference_conv3x3,
@@ -18,6 +23,7 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 use half::f16;
 
+use super::body::{bits_differ, supports};
 use super::{read_maps, synced, textured, upload_maps};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
@@ -470,4 +476,280 @@ fn the_epilogue_refuses_a_layer_that_does_not_map_the_features_to_themselves() {
     };
 
     backend().build(task);
+}
+
+/// The last layer over the same maps both directly and as the padded convolution and shuffle.
+struct PaddedAgainstDirect {
+    weights: Weights,
+    maps: Vec<f32>,
+    region: Region,
+    core: Region,
+    output_width: u32,
+    output_height: u32,
+    peak: f32,
+}
+
+struct LastLayerOutputs {
+    direct: Vec<f32>,
+    padded: Vec<f32>,
+}
+
+impl BuildTask for PaddedAgainstDirect {
+    type Output = LastLayerOutputs;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let precision = Precision::F16;
+        let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
+        let output_samples = (self.output_width * self.output_height) as usize;
+        let untouched = vec![UNTOUCHED; output_samples];
+        let scratch_bytes = self.region.samples() as usize * 16 * size_of::<f32>();
+
+        let input = upload_maps(client, &self.maps, precision);
+        let scratch = empty(client, scratch_bytes);
+        let direct_output = upload_f32(client, &untouched);
+        let padded_output = upload_f32(client, &untouched);
+        let direct_plane = plane(&direct_output, self.output_width, self.output_height);
+        let padded_plane = plane(&padded_output, self.output_width, self.output_height);
+
+        last_layer(
+            client,
+            &sizing,
+            &network,
+            &input,
+            self.region,
+            self.core,
+            self.peak,
+            direct_plane,
+        );
+        let ran = padded_last_layer(client, &network, &input, self.region, &scratch);
+        shuffle(
+            client,
+            &sizing,
+            &scratch,
+            self.region,
+            self.core,
+            self.peak,
+            padded_plane,
+        );
+        synced(client);
+        ran.expect("the padded last layer runs");
+
+        let direct = read_f32(client, &direct_output);
+        let padded = read_f32(client, &padded_output);
+
+        LastLayerOutputs { direct, padded }
+    }
+}
+
+/// A 200x120 region offset in a 210x130 plane, with a core that touches its left, right and bottom edges.
+fn large_region_and_core() -> (Region, Region) {
+    let region = Region {
+        x: 4,
+        y: 3,
+        width: 200,
+        height: 120,
+    };
+    let core = Region {
+        x: 4,
+        y: 10,
+        width: 200,
+        height: 113,
+    };
+
+    (region, core)
+}
+
+/// Runs the padded last layer against the direct one at `peak`, and gives how many output samples differ.
+///
+/// It fails if any sample differs by more than one code, or if fewer than a quarter of the core's samples lie
+/// strictly between the clamps.
+fn padded_samples_differing(peak: f32) -> usize {
+    let (region, core) = large_region_and_core();
+    let output_width = 210 * 2;
+    let output_height = 130 * 2;
+    let map_count = (region.samples() * 64) as usize;
+    let task = PaddedAgainstDirect {
+        weights: synthetic_weights(64, 1, 12),
+        maps: signed_values(map_count, 13, 1.0),
+        region,
+        core,
+        output_width,
+        output_height,
+        peak,
+    };
+
+    let outputs = backend().build(task);
+    assert_eq!(outputs.direct.len(), outputs.padded.len());
+
+    let pairs = outputs.direct.iter().zip(&outputs.padded);
+    let differing = pairs.clone().filter(|(direct, padded)| direct != padded).count();
+    let largest = pairs
+        .clone()
+        .map(|(direct, padded)| (direct - padded).abs())
+        .fold(0.0f32, f32::max);
+    let unclamped = outputs
+        .direct
+        .iter()
+        .filter(|code| **code > 0.0 && **code < peak)
+        .count();
+    let core_samples = (core.samples() * 4) as usize;
+    let share = differing as f64 / core_samples as f64 * 100.0;
+    println!(
+        "padded last layer at peak {peak}: {differing} of {core_samples} samples differ ({share:.4} %), \
+         largest {largest} codes, {unclamped} unclamped"
+    );
+
+    assert!(largest <= 1.0, "a sample differs by {largest} codes");
+    assert!(
+        unclamped * 4 >= core_samples,
+        "only {unclamped} of {core_samples} samples lie between the clamps"
+    );
+
+    differing
+}
+
+#[test]
+fn the_padded_last_layer_matches_the_direct_one_at_8_bits() {
+    if !supports(BodyPath::Convolution, Precision::F16) {
+        println!("padded last layer: no f16 cooperative matrix, so there is nothing to compare");
+        return;
+    }
+
+    let differing = padded_samples_differing(255.0);
+
+    let (_, core) = large_region_and_core();
+    let core_samples = (core.samples() * 4) as usize;
+    // The two sum in another order, so a sample right on a rounding boundary may move by one code. Measured 2
+    // of 90,400 samples, against the 9 the bound allows.
+    assert!(
+        differing * 10_000 <= core_samples,
+        "{differing} of {core_samples} samples differ"
+    );
+}
+
+#[test]
+fn the_padded_last_layer_matches_the_direct_one_at_16_bits() {
+    if !supports(BodyPath::Convolution, Precision::F16) {
+        println!("padded last layer: no f16 cooperative matrix, so there is nothing to compare");
+        return;
+    }
+
+    let differing = padded_samples_differing(65535.0);
+
+    let (_, core) = large_region_and_core();
+    let core_samples = (core.samples() * 4) as usize;
+    // At 16 bits a code is 257 times finer, so more samples sit close enough to a rounding boundary to move.
+    // Measured 434 of 90,400 samples, so 2x headroom.
+    assert!(
+        differing * 100 <= core_samples,
+        "{differing} of {core_samples} samples differ"
+    );
+}
+
+/// The padded last layer over the same maps with the forced blueprint allowed, and with the inferred one.
+struct PaddedBlueprints {
+    weights: Weights,
+    maps: Vec<f32>,
+    region: Region,
+}
+
+struct PaddedBlueprintOutputs {
+    forced: Vec<f32>,
+    inferred: Vec<f32>,
+    forced_ran: bool,
+    eligible: bool,
+}
+
+impl BuildTask for PaddedBlueprints {
+    type Output = PaddedBlueprintOutputs;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let plane_size_max = client.properties().hardware.plane_size_max;
+        let offers_matrix = offers_cmma_16(client);
+        let eligible = plane_size_max == 64 && offers_matrix;
+        let precision = Precision::F16;
+        let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
+        let scratch_bytes = self.region.samples() as usize * 16 * size_of::<f32>();
+
+        let input = upload_maps(client, &self.maps, precision);
+        let forced_output = empty(client, scratch_bytes);
+        let inferred_output = empty(client, scratch_bytes);
+
+        let forced_ran =
+            padded_last_layer_with_blueprint(client, &network, &input, self.region, &forced_output, true);
+        let inferred_ran =
+            padded_last_layer_with_blueprint(client, &network, &input, self.region, &inferred_output, false);
+        synced(client);
+
+        let forced_ran = forced_ran.expect("the forced padded last layer runs");
+        let inferred_forced = inferred_ran.expect("the inferred padded last layer runs");
+        assert!(!inferred_forced, "the inferred run took the forced blueprint");
+
+        let forced = read_f32(client, &forced_output);
+        let inferred = read_f32(client, &inferred_output);
+
+        PaddedBlueprintOutputs {
+            forced,
+            inferred,
+            forced_ran,
+            eligible,
+        }
+    }
+}
+
+#[test]
+fn the_padded_last_layer_forced_blueprint_matches_the_inferred_one_exactly() {
+    if !supports(BodyPath::Convolution, Precision::F16) {
+        println!("padded blueprint: no f16 cooperative matrix, so there is nothing to compare");
+        return;
+    }
+
+    let region = Region {
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 120,
+    };
+    let map_count = (region.samples() * 64) as usize;
+    let task = PaddedBlueprints {
+        weights: synthetic_weights(64, 1, 12),
+        maps: signed_values(map_count, 14, 1.0),
+        region,
+    };
+
+    let outputs = backend().build(task);
+
+    println!(
+        "padded blueprint: ran {}, eligible {}",
+        outputs.forced_ran, outputs.eligible
+    );
+    if !outputs.eligible {
+        assert!(
+            !outputs.forced_ran,
+            "the forced blueprint ran on an ineligible device"
+        );
+        return;
+    }
+
+    assert!(
+        outputs.forced_ran,
+        "a large region on an eligible device kept the inferred blueprint"
+    );
+    assert_eq!(outputs.forced.len(), outputs.inferred.len());
+
+    let pairs = outputs.forced.iter().zip(&outputs.inferred);
+    let differing = pairs.clone().filter(|pair| bits_differ(*pair)).count();
+    let first = pairs.clone().position(bits_differ);
+
+    if let Some(index) = first {
+        let forced = outputs.forced[index];
+        let inferred = outputs.inferred[index];
+        let values = outputs.forced.len();
+        panic!(
+            "{differing} of {values} values differ, first at {index}: forced {forced}, inferred {inferred}"
+        );
+    }
 }

@@ -1,8 +1,11 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than by name.
 use cubecl::prelude::*;
 use cubecl::server::Handle;
+use cubek_matmul::definition::MatmulGlobalElems;
 
-use crate::artcnn::{Network, Precision};
+use super::body::{Operands, convolve_on_tiles, storage_type};
+use super::network::PADDED_CHANNELS;
+use crate::artcnn::{ArtcnnError, Network, Precision};
 use crate::{DevicePlane, Dispatch};
 
 /// A rectangle of a plane, in samples.
@@ -72,6 +75,38 @@ fn first_layer_kernel<F: Float>(
     output[ABSOLUTE_POS] = F::cast_from(sum);
 }
 
+/// The plane sample and output channel of one unit of a core's doubled output, four units a sample.
+#[derive(CubeType)]
+struct CoreUnit {
+    plane_column: u32,
+    plane_row: u32,
+    channel: u32,
+}
+
+#[cube]
+impl CoreUnit {
+    fn new(position: u32, core_x: u32, core_y: u32, core_width: u32) -> CoreUnit {
+        let sample = position / 4;
+
+        CoreUnit {
+            plane_column: core_x + sample % core_width,
+            plane_row: core_y + sample / core_width,
+            channel: position % 4,
+        }
+    }
+}
+
+/// Clamps `value` to `0..=1`, scales it by `peak`, rounds it and writes it to `unit`'s place in the doubled
+/// output.
+#[cube]
+fn write_doubled(output: &mut Array<f32>, output_width: u32, unit: &CoreUnit, value: f32, peak: f32) {
+    let clamped = f32::clamp(value, 0.0, 1.0);
+    let rounded = f32::floor(clamped * peak + 0.5);
+    let out_row = unit.plane_row * 2 + unit.channel / 2;
+    let out_column = unit.plane_column * 2 + unit.channel % 2;
+    output[(out_row * output_width + out_column) as usize] = rounded;
+}
+
 #[cube(launch_unchecked)]
 fn last_layer_kernel<F: Float>(
     input: &Array<F>,
@@ -95,12 +130,10 @@ fn last_layer_kernel<F: Float>(
     }
 
     let position = ABSOLUTE_POS as u32;
-    let channel = position % 4;
-    let sample = position / 4;
-    let plane_column = core_x + sample % core_width;
-    let plane_row = core_y + sample / core_width;
-    let column = (plane_column - region_x) as i32;
-    let row = (plane_row - region_y) as i32;
+    let unit = CoreUnit::new(position, core_x, core_y, core_width);
+    let channel = unit.channel;
+    let column = (unit.plane_column - region_x) as i32;
+    let row = (unit.plane_row - region_y) as i32;
     let mut sum = f32::cast_from(bias[channel as usize]);
 
     for tap in 0..9u32 {
@@ -123,11 +156,36 @@ fn last_layer_kernel<F: Float>(
         }
     }
 
-    let clamped = f32::clamp(sum, 0.0, 1.0);
-    let rounded = f32::floor(clamped * peak + 0.5);
-    let out_row = plane_row * 2 + channel / 2;
-    let out_column = plane_column * 2 + channel % 2;
-    output[(out_row * output_width + out_column) as usize] = rounded;
+    write_doubled(output, output_width, &unit, sum, peak);
+}
+
+#[cube(launch_unchecked)]
+fn shuffle_kernel(
+    scratch: &Array<f32>,
+    output: &mut Array<f32>,
+    output_width: u32,
+    region_x: u32,
+    region_y: u32,
+    region_width: u32,
+    core_x: u32,
+    core_y: u32,
+    core_width: u32,
+    core_samples: u32,
+    channels: u32,
+    peak: f32,
+) {
+    if ABSOLUTE_POS >= (core_samples * 4) as usize {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let unit = CoreUnit::new(position, core_x, core_y, core_width);
+    let column = unit.plane_column - region_x;
+    let row = unit.plane_row - region_y;
+    let source = (row * region_width + column) * channels + unit.channel;
+    let value = scratch[source as usize];
+
+    write_doubled(output, output_width, &unit, value, peak);
 }
 
 /// Runs the network's first layer over `region` of `input`, divided by `peak`, into NHWC maps in `output`.
@@ -232,23 +290,11 @@ pub fn last_layer<R: Runtime>(
     peak: f32,
     output: DevicePlane<'_>,
 ) {
-    assert!(region.contains(&core), "the core lies outside the region");
-    assert!(
-        (core.x + core.width) * 2 <= output.width(),
-        "the doubled core runs past the output's right edge"
-    );
-    assert!(
-        (core.y + core.height) * 2 <= output.height(),
-        "the doubled core runs past the output's bottom edge"
-    );
+    check_core(region, core, output);
+    check_last_layer(network);
 
     let layer = network.last_layer();
     let features = network.features();
-    assert!(
-        layer.in_channels == features && layer.out_channels == 4,
-        "the last layer does not map the features to four channels"
-    );
-
     let output_width = output.width();
     let core_samples = core.samples();
     let units = (core_samples * 4) as usize;
@@ -314,5 +360,142 @@ pub fn last_layer<R: Runtime>(
                 peak,
             ),
         }
+    }
+}
+
+/// Asserts that the network's last layer maps the features to four channels.
+fn check_last_layer(network: &Network) {
+    let layer = network.last_layer();
+    let features = network.features();
+    assert!(
+        layer.in_channels == features && layer.out_channels == 4,
+        "the last layer does not map the features to four channels"
+    );
+}
+
+/// Asserts that `core` lies inside `region`, and that the doubled core lies inside `output`.
+fn check_core(region: Region, core: Region, output: DevicePlane<'_>) {
+    assert!(region.contains(&core), "the core lies outside the region");
+    assert!(
+        (core.x + core.width) * 2 <= output.width(),
+        "the doubled core runs past the output's right edge"
+    );
+    assert!(
+        (core.y + core.height) * 2 <= output.height(),
+        "the doubled core runs past the output's bottom edge"
+    );
+}
+
+/// Runs the network's last layer over the NHWC maps of `region` in `input` on cooperative-matrix tiles,
+/// into `scratch` as NHWC maps of 16 f32 channels. Gives whether the forced blueprint ran.
+///
+/// The first four channels are the last layer's, and the other twelve are zero.
+pub fn padded_last_layer<R: Runtime>(
+    client: &ComputeClient<R>,
+    network: &Network,
+    input: &Handle,
+    region: Region,
+    scratch: &Handle,
+) -> Result<bool, ArtcnnError> {
+    let operands = padded_operands(network);
+
+    convolve_on_tiles(client, &operands, input, scratch, region, true)
+}
+
+/// The same as [padded_last_layer](crate::artcnn::padded_last_layer), keeping the inferred blueprint unless
+/// `allow_forced` is set.
+#[cfg(any(test, feature = "test-support"))]
+pub fn padded_last_layer_with_blueprint<R: Runtime>(
+    client: &ComputeClient<R>,
+    network: &Network,
+    input: &Handle,
+    region: Region,
+    scratch: &Handle,
+    allow_forced: bool,
+) -> Result<bool, ArtcnnError> {
+    if allow_forced {
+        return padded_last_layer(client, network, input, region, scratch);
+    }
+
+    let operands = padded_operands(network);
+
+    convolve_on_tiles(client, &operands, input, scratch, region, false)
+}
+
+/// The operands of the last layer padded to 16 output channels, writing f32.
+fn padded_operands(network: &Network) -> Operands<'_> {
+    check_last_layer(network);
+
+    let features = network.features();
+    let padded = network.padded_last_layer();
+    let dtype = storage_type(network.precision());
+    let float_type = storage_type(Precision::F32);
+    let globals = MatmulGlobalElems {
+        lhs: dtype,
+        rhs: dtype,
+        out: float_type,
+    };
+
+    Operands {
+        weights: &padded.weights,
+        bias: Some(&padded.bias),
+        in_channels: features as usize,
+        out_channels: PADDED_CHANNELS,
+        globals,
+    }
+}
+
+/// Writes `core` of the padded last layer's maps of `region` in `scratch` into the doubled `output`.
+///
+/// Each sample of `core` becomes a 2x2 block of the output from its first four channels, clamped to `0..=1`,
+/// scaled by `peak` and rounded.
+pub fn shuffle<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    scratch: &Handle,
+    region: Region,
+    core: Region,
+    peak: f32,
+    output: DevicePlane<'_>,
+) {
+    check_core(region, core, output);
+
+    let scratch_count = region.samples() as usize * PADDED_CHANNELS;
+    let scratch_bytes = (scratch_count * size_of::<f32>()) as u64;
+    assert!(
+        scratch.size_in_used() >= scratch_bytes,
+        "the scratch is smaller than the region's padded maps"
+    );
+
+    let output_width = output.width();
+    let core_samples = core.samples();
+    let units = (core_samples * 4) as usize;
+    let channels = PADDED_CHANNELS as u32;
+    let output_array = output.array::<R>();
+    let cubes = dispatch.cube_count(units);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the scratch holds the region times 16 values, every read stays inside the region, and every
+    // write lands in the doubled core, which lies inside the output plane.
+    unsafe {
+        let scratch_array = ArrayArg::from_raw_parts(scratch.clone(), scratch_count);
+
+        shuffle_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            scratch_array,
+            output_array,
+            output_width,
+            region.x,
+            region.y,
+            region.width,
+            core.x,
+            core.y,
+            core.width,
+            core_samples,
+            channels,
+            peak,
+        );
     }
 }

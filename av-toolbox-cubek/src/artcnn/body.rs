@@ -75,6 +75,7 @@ fn epilogue_kernel<F: Float>(
     bias: &Array<F>,
     residual: &Array<F>,
     features: u32,
+    add_bias: u32,
     silu: u32,
     add_residual: u32,
 ) {
@@ -82,8 +83,12 @@ fn epilogue_kernel<F: Float>(
         terminate!();
     }
 
-    let channel = ABSOLUTE_POS as u32 % features;
-    let mut value = f32::cast_from(values[ABSOLUTE_POS]) + f32::cast_from(bias[channel as usize]);
+    let mut value = f32::cast_from(values[ABSOLUTE_POS]);
+
+    if add_bias == 1 {
+        let channel = ABSOLUTE_POS as u32 % features;
+        value += f32::cast_from(bias[channel as usize]);
+    }
 
     if silu == 1 {
         value = value / (1.0 + f32::exp(-value));
@@ -115,6 +120,27 @@ pub fn epilogue<R: Runtime>(
     activation: Activation,
     residual: Option<&Handle>,
 ) {
+    run_epilogue(
+        client, dispatch, network, values, layer, samples, activation, residual, true,
+    );
+}
+
+/// The same as [epilogue](crate::artcnn::epilogue), leaving the bias out unless `add_bias` is set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the launch"
+)]
+pub(crate) fn run_epilogue<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    values: &Handle,
+    layer: usize,
+    samples: u32,
+    activation: Activation,
+    residual: Option<&Handle>,
+    add_bias: bool,
+) {
     let buffers = network.layer(layer);
     let features = network.features();
     assert!(
@@ -134,6 +160,7 @@ pub fn epilogue<R: Runtime>(
         "the residual is smaller than the values"
     );
 
+    let bias_flag = u32::from(add_bias);
     let silu = u32::from(activation == Activation::Silu);
     let add_residual = u32::from(residual.is_some());
     let cubes = dispatch.cube_count(units);
@@ -155,6 +182,7 @@ pub fn epilogue<R: Runtime>(
                 bias,
                 residual_array,
                 features,
+                bias_flag,
                 silu,
                 add_residual,
             ),
@@ -166,6 +194,7 @@ pub fn epilogue<R: Runtime>(
                 bias,
                 residual_array,
                 features,
+                bias_flag,
                 silu,
                 add_residual,
             ),
@@ -199,11 +228,12 @@ fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32
     columns[ABSOLUTE_POS] = value;
 }
 
-/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights, into `output` without
-/// the bias. Gives whether the forced blueprint ran.
+/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights, into `output`. Gives
+/// whether the forced blueprint ran.
 ///
-/// The [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) path stages the maps in `columns`, which holds
-/// nine times as many values as a map.
+/// The [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution) path adds the bias inside the
+/// convolution. The [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) path leaves the bias out, and stages
+/// the maps in `columns`, which holds nine times as many values as a map.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
@@ -223,12 +253,9 @@ pub(crate) fn convolve<R: Runtime>(
 
     match path {
         BodyPath::Convolution => {
-            let blueprint = body_blueprint(client, network, region);
-            let forced = blueprint.is_some();
+            let operands = body_operands(network, layer, true);
 
-            convolve_directly(client, network, layer, input, output, region, blueprint.as_ref())?;
-
-            Ok(forced)
+            convolve_on_tiles(client, &operands, input, output, region, true)
         },
         BodyPath::Im2col => {
             let columns = columns.ok_or(ArtcnnError::MissingColumns)?;
@@ -252,8 +279,8 @@ pub(crate) fn convolve<R: Runtime>(
     }
 }
 
-/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights on cooperative-matrix
-/// tiles, into `output` without the bias. Gives whether the forced blueprint ran.
+/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights and bias on
+/// cooperative-matrix tiles, into `output`. Gives whether the forced blueprint ran.
 ///
 /// With `allow_forced` the convolution picks its blueprint as a forward pass does, and otherwise it keeps
 /// the inferred blueprint.
@@ -281,9 +308,28 @@ pub fn convolve_with_blueprint<R: Runtime>(
     }
 
     check_layer_maps(network, layer, input, output, region);
-    convolve_directly(client, network, layer, input, output, region, None)?;
 
-    Ok(false)
+    let operands = body_operands(network, layer, true);
+
+    convolve_on_tiles(client, &operands, input, output, region, false)
+}
+
+/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights on cooperative-matrix
+/// tiles, into `output` without the bias. Gives whether the forced blueprint ran.
+#[cfg(any(test, feature = "test-support"))]
+pub fn convolve_without_bias<R: Runtime>(
+    client: &ComputeClient<R>,
+    network: &Network,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+) -> Result<bool, ArtcnnError> {
+    check_layer_maps(network, layer, input, output, region);
+
+    let operands = body_operands(network, layer, false);
+
+    convolve_on_tiles(client, &operands, input, output, region, true)
 }
 
 /// Asserts that `layer` maps the features to themselves, and that `input` and `output` each hold the
@@ -316,12 +362,15 @@ const FORCED_PLANE_SIZE: u32 = 64;
 /// The side of the cooperative-matrix tiles the forced blueprint multiplies.
 const FORCED_TILE: u32 = 16;
 
-/// The NHWC map and OHWI weight shapes of a 3x3 convolution over `region`, with their contiguous strides.
+/// The NHWC input, OHWI weight and NHWC output shapes of a 3x3 convolution over `region`, with their
+/// contiguous strides.
 struct ConvolutionShapes {
     map_shape: [usize; 4],
     map_strides: Vec<usize>,
     weight_shape: [usize; 4],
     weight_strides: Vec<usize>,
+    out_shape: [usize; 4],
+    out_strides: Vec<usize>,
 }
 
 fn convolution_shapes(region: Region, in_channels: usize, out_channels: usize) -> ConvolutionShapes {
@@ -329,14 +378,18 @@ fn convolution_shapes(region: Region, in_channels: usize, out_channels: usize) -
     let width = region.width as usize;
     let map_shape = [1, height, width, in_channels];
     let weight_shape = [out_channels, 3, 3, in_channels];
+    let out_shape = [1, height, width, out_channels];
     let map_strides = contiguous(&map_shape);
     let weight_strides = contiguous(&weight_shape);
+    let out_strides = contiguous(&out_shape);
 
     ConvolutionShapes {
         map_shape,
         map_strides,
         weight_shape,
         weight_strides,
+        out_shape,
+        out_strides,
     }
 }
 
@@ -451,23 +504,18 @@ pub(crate) fn offers_cmma_16_in(configs: &BTreeSet<MmaConfig>) -> bool {
     configs.contains(&config)
 }
 
-/// The blueprint the body's convolutions over `region` take, or `None` to infer one.
-fn body_blueprint<R: Runtime>(
+/// The blueprint a convolution solving `problem` takes on the client's device, or `None` to infer one.
+fn chosen_blueprint<R: Runtime>(
     client: &ComputeClient<R>,
-    network: &Network,
-    region: Region,
+    problem: &ConvolutionProblem,
 ) -> Option<ConvBlueprint> {
-    let features = network.features() as usize;
-    let dtype = storage_type(network.precision());
-    let globals = uniform_globals(dtype);
-    let problem = convolution_problem(region, features, features, globals);
     let plane_size_max = client.properties().hardware.plane_size_max;
     let offers_cmma = offers_cmma_16(client);
 
-    forced_blueprint(&problem, plane_size_max, offers_cmma)
+    forced_blueprint(problem, plane_size_max, offers_cmma)
 }
 
-fn storage_type(precision: Precision) -> StorageType {
+pub(crate) fn storage_type(precision: Precision) -> StorageType {
     match precision {
         Precision::F16 => half::f16::as_type_native_unchecked().storage_type(),
         Precision::F32 => f32::as_type_native_unchecked().storage_type(),
@@ -515,38 +563,90 @@ fn matmul_failed(error: MatmulSetupError) -> ArtcnnError {
     ArtcnnError::Matmul(error.to_string())
 }
 
-/// Convolves on cooperative-matrix tiles with `blueprint`, or an inferred blueprint when it is `None`.
-fn convolve_directly<R: Runtime>(
-    client: &ComputeClient<R>,
-    network: &Network,
-    layer: usize,
-    input: &Handle,
-    output: &Handle,
-    region: Region,
-    blueprint: Option<&ConvBlueprint>,
-) -> Result<(), ArtcnnError> {
+/// The weights and bias of one 3x3 convolution on the device, with its global types.
+///
+/// The bias is in the output type, which is how cubek-convolution reads it.
+pub(crate) struct Operands<'a> {
+    pub(crate) weights: &'a Handle,
+    pub(crate) bias: Option<&'a Handle>,
+    pub(crate) in_channels: usize,
+    pub(crate) out_channels: usize,
+    pub(crate) globals: MatmulGlobalElems,
+}
+
+/// The operands of `layer`, a body convolution, with its bias if `with_bias` is set.
+fn body_operands(network: &Network, layer: usize, with_bias: bool) -> Operands<'_> {
     let buffers = network.layer(layer);
     let features = network.features() as usize;
     let dtype = storage_type(network.precision());
+    let bias = with_bias.then_some(&buffers.bias);
+    let globals = uniform_globals(dtype);
+
+    Operands {
+        weights: &buffers.weights,
+        bias,
+        in_channels: features,
+        out_channels: features,
+        globals,
+    }
+}
+
+/// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles, into NHWC maps
+/// of the output channels in `output`. Gives whether the forced blueprint ran.
+///
+/// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
+/// `cubek-convolution` infers one.
+pub(crate) fn convolve_on_tiles<R: Runtime>(
+    client: &ComputeClient<R>,
+    operands: &Operands<'_>,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+    allow_forced: bool,
+) -> Result<bool, ArtcnnError> {
+    check_operand_sizes(operands, input, output, region);
+
+    let globals = &operands.globals;
+    let in_channels = operands.in_channels;
+    let out_channels = operands.out_channels;
+    let problem = convolution_problem(region, in_channels, out_channels, globals.clone());
+    let blueprint = if allow_forced {
+        chosen_blueprint(client, &problem)
+    } else {
+        None
+    };
+    let forced = blueprint.is_some();
 
     let ConvolutionShapes {
         map_shape,
         map_strides,
         weight_shape,
         weight_strides,
-    } = convolution_shapes(region, features, features);
-    // Safety: the input and output hold the region's `1 x H x W x F` maps contiguously, as every caller
-    // checks through `check_layer_maps`.
+        out_shape,
+        out_strides,
+    } = convolution_shapes(region, in_channels, out_channels);
+    let bias_shape = [out_channels];
+    let bias_strides = [1];
+    // Safety: the input holds the region's `1 x H x W x in` maps contiguously, as `check_operand_sizes`
+    // asserts.
     let input_tensor = unsafe { tensor::<R>(input, &map_shape, &map_strides) };
-    // Safety: the layer maps `F -> F`, so its weights hold `F x 3 x 3 x F` values contiguously.
-    let weight_tensor = unsafe { tensor::<R>(&buffers.weights, &weight_shape, &weight_strides) };
-    // Safety: as for the input.
-    let output_tensor = unsafe { tensor::<R>(output, &map_shape, &map_strides) };
+    // Safety: the weights hold `out x 3 x 3 x in` values contiguously, as `check_operand_sizes` asserts.
+    let weight_tensor = unsafe { tensor::<R>(operands.weights, &weight_shape, &weight_strides) };
+    // Safety: the output holds the region's `1 x H x W x out` maps contiguously, as `check_operand_sizes`
+    // asserts.
+    let output_tensor = unsafe { tensor::<R>(output, &out_shape, &out_strides) };
+    // Safety: the bias holds `out` values contiguously, as `check_operand_sizes` asserts.
+    let bias_tensor = operands
+        .bias
+        .map(|bias| unsafe { tensor::<R>(bias, &bias_shape, &bias_strides) });
 
+    let input_binding = InputBinding::new(input_tensor, globals.lhs);
+    let weight_binding = InputBinding::new(weight_tensor, globals.rhs);
+    let bias_binding = bias_tensor.map(|tensor| InputBinding::new(tensor, globals.out));
     let inputs = ConvolutionInputs::Forward {
-        input: InputBinding::new(input_tensor, dtype),
-        weight: InputBinding::new(weight_tensor, dtype),
-        bias: None,
+        input: input_binding,
+        weight: weight_binding,
+        bias: bias_binding,
         out: output_tensor,
     };
     let arguments = ConvolutionArgs::<2> {
@@ -554,12 +654,45 @@ fn convolve_directly<R: Runtime>(
         padding: [1, 1],
         dilation: [1, 1],
     };
-    let strategy = convolution_strategy(blueprint);
-    let globals = uniform_globals(dtype);
-    let dtypes = MatmulElems::from_globals(&globals);
+    let strategy = convolution_strategy(blueprint.as_ref());
+    let dtypes = MatmulElems::from_globals(globals);
     let launched = cubek_convolution::launch_ref::<R, 2>(&strategy, client, inputs, arguments, dtypes);
 
-    launched.map_err(convolution_failed)
+    launched.map_err(convolution_failed)?;
+
+    Ok(forced)
+}
+
+/// Asserts that `input`, `output` and the operands each hold every value a convolution of `region` reads or
+/// writes through them.
+fn check_operand_sizes(operands: &Operands<'_>, input: &Handle, output: &Handle, region: Region) {
+    let globals = &operands.globals;
+    let samples = region.samples() as usize;
+    let in_channels = operands.in_channels;
+    let out_channels = operands.out_channels;
+    let input_bytes = samples * in_channels * globals.lhs.size();
+    let weight_bytes = out_channels * 9 * in_channels * globals.rhs.size();
+    let output_bytes = samples * out_channels * globals.out.size();
+    let bias_bytes = out_channels * globals.out.size();
+    assert!(
+        input.size_in_used() >= input_bytes as u64,
+        "the input is smaller than the region's maps"
+    );
+    assert!(
+        operands.weights.size_in_used() >= weight_bytes as u64,
+        "the weights are smaller than the convolution's"
+    );
+    assert!(
+        output.size_in_used() >= output_bytes as u64,
+        "the output is smaller than the region's maps"
+    );
+
+    if let Some(bias) = operands.bias {
+        assert!(
+            bias.size_in_used() >= bias_bytes as u64,
+            "the bias is smaller than the output channels"
+        );
+    }
 }
 
 fn convolution_strategy(blueprint: Option<&ConvBlueprint>) -> Strategy {

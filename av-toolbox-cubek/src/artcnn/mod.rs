@@ -9,8 +9,10 @@ mod tests;
 
 pub use self::body::{Activation, ArtcnnError, BodyPath, epilogue};
 #[cfg(any(test, feature = "test-support"))]
-pub use self::body::{convolve_with_blueprint, offers_cmma_16};
-pub use self::ends::{Region, first_layer, last_layer};
+pub use self::body::{convolve_with_blueprint, convolve_without_bias, offers_cmma_16};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::ends::padded_last_layer_with_blueprint;
+pub use self::ends::{Region, first_layer, last_layer, padded_last_layer, shuffle};
 pub use self::network::{Maps, Network, Precision, run_region};
 pub use self::tiling::{ScratchSizes, TILE_BUDGET, artcnn, scratch_sizes, tile_side, tiles, warm_up};
 pub use self::weights::{Layer, Model, Weights, WeightsError, layer_shapes};

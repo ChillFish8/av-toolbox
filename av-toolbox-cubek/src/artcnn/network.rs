@@ -2,19 +2,27 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use half::f16;
 
-use super::body::convolve;
+use super::body::{convolve, run_epilogue};
 use crate::artcnn::{
     Activation,
     ArtcnnError,
     BodyPath,
+    Layer,
     Region,
     Weights,
     WeightsError,
-    epilogue,
     first_layer,
     last_layer,
+    padded_last_layer,
+    shuffle,
 };
 use crate::{DevicePlane, Dispatch};
+
+/// How many output channels the last layer is padded to on the convolution path.
+pub(crate) const PADDED_CHANNELS: usize = 16;
+
+/// The bytes one sample of the padded last layer's f32 output takes.
+const PADDED_SAMPLE_BYTES: usize = PADDED_CHANNELS * size_of::<f32>();
 
 /// The type feature maps are held in. Accumulation is f32 either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,12 +48,22 @@ pub(crate) struct LayerBuffers {
     pub(crate) in_channels: u32,
 }
 
+/// The last layer padded to 16 output channels, for the convolution path.
+///
+/// The weights are in the feature maps' type with output channels 4 to 15 zero. The bias is 16 f32 values,
+/// since the padded layer writes f32, with the last 12 zero.
+pub(crate) struct PaddedLastLayer {
+    pub(crate) weights: Handle,
+    pub(crate) bias: Handle,
+}
+
 /// An ArtCNN network's weights on the device, in the feature maps' type.
 pub struct Network {
     features: u32,
     blocks: u32,
     precision: Precision,
     layers: Vec<LayerBuffers>,
+    padded_last: PaddedLastLayer,
 }
 
 impl Network {
@@ -73,11 +91,27 @@ impl Network {
             });
         }
 
+        let last = weights
+            .layers
+            .last()
+            .expect("validated weights have a last layer");
+        let padded_weights = padded_weights(last);
+        let padded_bias = padded_bias(last);
+        let weight_bytes = encode(&padded_weights, precision);
+        let bias_bytes = f32::as_bytes(&padded_bias);
+        let padded_weights_handle = client.create_from_slice(&weight_bytes);
+        let padded_bias_handle = client.create_from_slice(bias_bytes);
+        let padded_last = PaddedLastLayer {
+            weights: padded_weights_handle,
+            bias: padded_bias_handle,
+        };
+
         Ok(Self {
             features: weights.features,
             blocks: weights.blocks,
             precision,
             layers,
+            padded_last,
         })
     }
 
@@ -107,6 +141,27 @@ impl Network {
 
         &self.layers[last_index]
     }
+
+    pub(crate) fn padded_last_layer(&self) -> &PaddedLastLayer {
+        &self.padded_last
+    }
+}
+
+/// The weights of `layer`, followed by zeros up to 16 output channels.
+fn padded_weights(layer: &Layer) -> Vec<f16> {
+    let in_channels = layer.in_channels as usize;
+    let mut padded = layer.weights.clone();
+    padded.resize(PADDED_CHANNELS * 9 * in_channels, f16::ZERO);
+
+    padded
+}
+
+/// The bias of `layer` in f32, followed by zeros up to 16 output channels.
+fn padded_bias(layer: &Layer) -> Vec<f32> {
+    let mut padded: Vec<f32> = layer.bias.iter().map(|value| value.to_f32()).collect();
+    padded.resize(PADDED_CHANNELS, 0.0);
+
+    padded
 }
 
 /// Little-endian bytes of `values` in `precision`'s type.
@@ -123,8 +178,9 @@ fn encode(values: &[f16], precision: Precision) -> Vec<u8> {
 /// The device buffers one region's forward pass works in.
 ///
 /// The four maps must be distinct buffers, each holding at least the region's samples times `F` values of the
-/// precision's type. `columns` holds nine times that, and is needed on
-/// [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) only.
+/// precision's type. On [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution) the last layer
+/// writes 16 f32 values a sample into `conv0`, so it holds at least 64 bytes a sample. `columns` holds nine
+/// times a map, and is needed on [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) only.
 ///
 /// A layer reads one map while writing another, so two maps sharing a buffer give wrong results. Only a
 /// handle passed twice is caught, and only in debug builds.
@@ -168,6 +224,12 @@ pub fn run_region<R: Runtime>(
         );
     }
 
+    let conv0_bytes = conv0_bytes(network, path, region);
+    assert!(
+        maps.conv0.size_in_used() >= conv0_bytes,
+        "conv0 is smaller than the region's last layer needs"
+    );
+
     if path == BodyPath::Im2col {
         let columns = maps.columns.ok_or(ArtcnnError::MissingColumns)?;
         assert!(
@@ -178,6 +240,8 @@ pub fn run_region<R: Runtime>(
 
     first_layer(client, dispatch, network, input, peak, region, maps.conv0);
 
+    // The convolution path adds the bias inside each convolution, and im2col adds it in the epilogue.
+    let add_bias = path == BodyPath::Im2col;
     let spare = [maps.first, maps.second, maps.third];
     let mut state = maps.conv0;
     let mut layer = 1;
@@ -196,7 +260,7 @@ pub fn run_region<R: Runtime>(
             maps.columns,
             region,
         )?;
-        epilogue(
+        run_epilogue(
             client,
             dispatch,
             network,
@@ -205,6 +269,7 @@ pub fn run_region<R: Runtime>(
             samples,
             Activation::Silu,
             None,
+            add_bias,
         );
 
         convolve(
@@ -218,7 +283,7 @@ pub fn run_region<R: Runtime>(
             maps.columns,
             region,
         )?;
-        epilogue(
+        run_epilogue(
             client,
             dispatch,
             network,
@@ -227,6 +292,7 @@ pub fn run_region<R: Runtime>(
             samples,
             Activation::Silu,
             None,
+            add_bias,
         );
 
         convolve(
@@ -240,7 +306,7 @@ pub fn run_region<R: Runtime>(
             maps.columns,
             region,
         )?;
-        epilogue(
+        run_epilogue(
             client,
             dispatch,
             network,
@@ -249,6 +315,7 @@ pub fn run_region<R: Runtime>(
             samples,
             Activation::None,
             Some(state),
+            add_bias,
         );
 
         state = first;
@@ -267,7 +334,7 @@ pub fn run_region<R: Runtime>(
         maps.columns,
         region,
     )?;
-    epilogue(
+    run_epilogue(
         client,
         dispatch,
         network,
@@ -276,9 +343,17 @@ pub fn run_region<R: Runtime>(
         samples,
         Activation::None,
         Some(maps.conv0),
+        add_bias,
     );
 
-    last_layer(client, dispatch, network, joined, region, core, peak, output);
+    match path {
+        BodyPath::Convolution => {
+            // `conv0` is dead once the join has read it, so the padded last layer writes into it.
+            padded_last_layer(client, network, joined, region, maps.conv0)?;
+            shuffle(client, dispatch, maps.conv0, region, core, peak, output);
+        },
+        BodyPath::Im2col => last_layer(client, dispatch, network, joined, region, core, peak, output),
+    }
 
     Ok(())
 }
@@ -288,6 +363,28 @@ pub(crate) fn map_bytes(network: &Network, region: Region) -> u64 {
     let map_count = u64::from(region.samples()) * u64::from(network.features());
 
     map_count * network.precision().bytes() as u64
+}
+
+/// The bytes `conv0` needs for `region` on `path`.
+fn conv0_bytes(network: &Network, path: BodyPath, region: Region) -> u64 {
+    let features = network.features();
+    let precision = network.precision();
+    let sample_bytes = conv0_sample_bytes(features, precision, path);
+
+    u64::from(region.samples()) * sample_bytes as u64
+}
+
+/// The bytes one sample of `conv0` needs on `path`.
+///
+/// That is one map's sample, widened on [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution) to the
+/// 64 bytes of the padded last layer's 16 f32 values.
+pub(crate) fn conv0_sample_bytes(features: u32, precision: Precision, path: BodyPath) -> usize {
+    let map_sample_bytes = features as usize * precision.bytes();
+
+    match path {
+        BodyPath::Convolution => map_sample_bytes.max(PADDED_SAMPLE_BYTES),
+        BodyPath::Im2col => map_sample_bytes,
+    }
 }
 
 /// The first two of `spare` that are not `state`.
