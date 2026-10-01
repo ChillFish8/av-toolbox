@@ -8,6 +8,8 @@ mod weights;
 mod tests;
 
 pub use self::body::{Activation, ArtcnnError, BodyPath, epilogue};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::body::{convolve_with_blueprint, offers_cmma_16};
 pub use self::ends::{Region, first_layer, last_layer};
 pub use self::network::{Maps, Network, Precision, run_region};
 pub use self::tiling::{ScratchSizes, TILE_BUDGET, artcnn, scratch_sizes, tile_side, tiles, warm_up};

@@ -7,13 +7,15 @@ use av_toolbox_cubek::artcnn::{
     Precision,
     Region,
     Weights,
+    convolve_with_blueprint,
+    offers_cmma_16,
     run_region,
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask, ElementType};
 use cubecl::prelude::Runtime;
 
-use super::{synced, textured};
+use super::{read_maps, synced, textured, upload_maps};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 const PATHS: [BodyPath; 2] = [BodyPath::Convolution, BodyPath::Im2col];
@@ -370,4 +372,135 @@ fn an_unsupported_convolution_is_refused() {
 
     println!("refusal: {ran:?}");
     assert!(matches!(ran, Err(ArtcnnError::Convolution(_))), "{ran:?}");
+}
+
+/// One body convolution of the same maps with the forced blueprint allowed, and with the inferred one.
+struct Blueprints {
+    weights: Weights,
+    maps: Vec<f32>,
+    region: Region,
+}
+
+struct BlueprintOutputs {
+    forced: Vec<f32>,
+    inferred: Vec<f32>,
+    forced_ran: bool,
+    eligible: bool,
+}
+
+impl BuildTask for Blueprints {
+    type Output = BlueprintOutputs;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let plane_size_max = client.properties().hardware.plane_size_max;
+        let offers_matrix = offers_cmma_16(client);
+        let eligible = plane_size_max == 64 && offers_matrix;
+        let precision = Precision::F16;
+        let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
+        let map_bytes = self.maps.len() * precision.bytes();
+
+        let input = upload_maps(client, &self.maps, precision);
+        let forced_output = empty(client, map_bytes);
+        let inferred_output = empty(client, map_bytes);
+
+        let forced_ran = convolve_with_blueprint(
+            client,
+            &sizing,
+            &network,
+            1,
+            &input,
+            &forced_output,
+            self.region,
+            true,
+        );
+        let inferred_ran = convolve_with_blueprint(
+            client,
+            &sizing,
+            &network,
+            1,
+            &input,
+            &inferred_output,
+            self.region,
+            false,
+        );
+        synced(client);
+
+        let forced_ran = forced_ran.expect("the forced convolution runs");
+        let inferred_forced = inferred_ran.expect("the inferred convolution runs");
+        assert!(!inferred_forced, "the inferred run took the forced blueprint");
+
+        let forced = read_maps(client, &forced_output, precision);
+        let inferred = read_maps(client, &inferred_output, precision);
+
+        BlueprintOutputs {
+            forced,
+            inferred,
+            forced_ran,
+            eligible,
+        }
+    }
+}
+
+#[test]
+fn the_forced_blueprint_matches_the_inferred_one_exactly() {
+    let precision = Precision::F16;
+    if !supports(BodyPath::Convolution, precision) {
+        println!("forced blueprint: no f16 cooperative matrix, so there is nothing to compare");
+        return;
+    }
+
+    let region = Region {
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 120,
+    };
+    let values = (region.samples() * 64) as usize;
+    let maps: Vec<f32> = (0..values)
+        .map(|index| (index as f32 * 0.37).sin() * 2.0)
+        .collect();
+    let task = Blueprints {
+        weights: synthetic_weights(64, 1, 5),
+        maps,
+        region,
+    };
+
+    let outputs = backend().build(task);
+
+    println!(
+        "forced blueprint: ran {}, eligible {}",
+        outputs.forced_ran, outputs.eligible
+    );
+    if !outputs.eligible {
+        assert!(
+            !outputs.forced_ran,
+            "the forced blueprint ran on an ineligible device"
+        );
+        return;
+    }
+
+    assert!(
+        outputs.forced_ran,
+        "a large region on an eligible device kept the inferred blueprint"
+    );
+
+    assert_eq!(outputs.forced.len(), outputs.inferred.len());
+
+    let pairs = outputs.forced.iter().zip(&outputs.inferred);
+    let differing = pairs.clone().filter(|pair| bits_differ(*pair)).count();
+    let first = pairs.clone().position(bits_differ);
+
+    if let Some(index) = first {
+        let forced = outputs.forced[index];
+        let inferred = outputs.inferred[index];
+        panic!(
+            "{differing} of {values} values differ, first at {index}: forced {forced}, inferred {inferred}"
+        );
+    }
+}
+
+fn bits_differ((forced, inferred): (&f32, &f32)) -> bool {
+    forced.to_bits() != inferred.to_bits()
 }

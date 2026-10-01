@@ -1,3 +1,5 @@
+mod body;
+
 use cubecl::backtrace::BackTrace;
 use cubecl::server::ServerError;
 use half::f16;

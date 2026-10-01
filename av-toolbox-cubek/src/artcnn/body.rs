@@ -1,12 +1,31 @@
+use std::collections::BTreeSet;
+
+use cubecl::features::MmaConfig;
+use cubecl::ir::{AddressType, StorageType};
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than by name.
 use cubecl::prelude::*;
 use cubecl::server::{Handle, ServerError};
 use cubecl::zspace::{Shape, Strides};
-use cubek_convolution::components::ConvSetupError;
+use cubek_convolution::components::{
+    ConvSetupError,
+    ConvolutionOperation,
+    ConvolutionProblem,
+    Dimensionality,
+};
+use cubek_convolution::definition::{ConvBlueprint, ForwardBlueprint};
 use cubek_convolution::{AcceleratedTileKind, ConvAlgorithm, ConvolutionArgs, ConvolutionInputs, Strategy};
-use cubek_matmul::definition::{MatmulElems, MatmulGlobalElems, MatmulSetupError};
+use cubek_matmul::components::stage::PartitionBuffering;
+use cubek_matmul::components::tile::TileMatmulKind;
+use cubek_matmul::definition::{
+    MatmulElems,
+    MatmulGlobalElems,
+    MatmulSetupError,
+    TilingBlueprint,
+    TilingScheme,
+};
 use cubek_matmul::launch::Strategy as MatmulStrategy;
-use cubek_std::InputBinding;
+use cubek_std::cube_count::{CubeCountStrategy, GlobalOrder, HypercubeBlueprint};
+use cubek_std::{InputBinding, MatrixLayout};
 
 use super::network::map_bytes;
 use crate::Dispatch;
@@ -181,7 +200,7 @@ fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights, into `output` without
-/// the bias.
+/// the bias. Gives whether the forced blueprint ran.
 ///
 /// The [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) path stages the maps in `columns`, which holds
 /// nine times as many values as a map.
@@ -199,7 +218,77 @@ pub(crate) fn convolve<R: Runtime>(
     output: &Handle,
     columns: Option<&Handle>,
     region: Region,
-) -> Result<(), ArtcnnError> {
+) -> Result<bool, ArtcnnError> {
+    check_layer_maps(network, layer, input, output, region);
+
+    match path {
+        BodyPath::Convolution => {
+            let blueprint = body_blueprint(client, network, region);
+            let forced = blueprint.is_some();
+
+            convolve_directly(client, network, layer, input, output, region, blueprint.as_ref())?;
+
+            Ok(forced)
+        },
+        BodyPath::Im2col => {
+            let columns = columns.ok_or(ArtcnnError::MissingColumns)?;
+            let bytes = map_bytes(network, region);
+            assert!(
+                columns.size_in_used() >= bytes * 9,
+                "the columns are smaller than nine of the region's maps"
+            );
+
+            match network.precision() {
+                Precision::F16 => convolve_by_columns::<R, half::f16>(
+                    client, dispatch, network, layer, input, output, columns, region,
+                )?,
+                Precision::F32 => convolve_by_columns::<R, f32>(
+                    client, dispatch, network, layer, input, output, columns, region,
+                )?,
+            }
+
+            Ok(false)
+        },
+    }
+}
+
+/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights on cooperative-matrix
+/// tiles, into `output` without the bias. Gives whether the forced blueprint ran.
+///
+/// With `allow_forced` the convolution picks its blueprint as a forward pass does, and otherwise it keeps
+/// the inferred blueprint.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the launch"
+)]
+pub fn convolve_with_blueprint<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+    allow_forced: bool,
+) -> Result<bool, ArtcnnError> {
+    if allow_forced {
+        let path = BodyPath::Convolution;
+
+        return convolve(
+            client, dispatch, network, path, layer, input, output, None, region,
+        );
+    }
+
+    check_layer_maps(network, layer, input, output, region);
+    convolve_directly(client, network, layer, input, output, region, None)?;
+
+    Ok(false)
+}
+
+/// Asserts that `layer` maps the features to themselves, and that `input` and `output` each hold the
+/// region's maps.
+fn check_layer_maps(network: &Network, layer: usize, input: &Handle, output: &Handle, region: Region) {
     let buffers = network.layer(layer);
     let features = network.features();
     assert!(
@@ -216,30 +305,181 @@ pub(crate) fn convolve<R: Runtime>(
         output.size_in_used() >= bytes,
         "the output is smaller than the region's maps"
     );
+}
 
-    match path {
-        BodyPath::Convolution => match network.precision() {
-            Precision::F16 => {
-                convolve_directly::<R, half::f16>(client, network, layer, input, output, region)
-            },
-            Precision::F32 => convolve_directly::<R, f32>(client, network, layer, input, output, region),
-        },
-        BodyPath::Im2col => {
-            let columns = columns.ok_or(ArtcnnError::MissingColumns)?;
-            assert!(
-                columns.size_in_used() >= bytes * 9,
-                "the columns are smaller than nine of the region's maps"
-            );
+/// The fewest samples a region needs for the forced blueprint to beat the inferred one.
+const FORCED_SAMPLES: usize = 8192;
 
-            match network.precision() {
-                Precision::F16 => convolve_by_columns::<R, half::f16>(
-                    client, dispatch, network, layer, input, output, columns, region,
-                ),
-                Precision::F32 => convolve_by_columns::<R, f32>(
-                    client, dispatch, network, layer, input, output, columns, region,
-                ),
-            }
-        },
+/// The one plane width the forced blueprint is known to give correct results on.
+const FORCED_PLANE_SIZE: u32 = 64;
+
+/// The side of the cooperative-matrix tiles the forced blueprint multiplies.
+const FORCED_TILE: u32 = 16;
+
+/// The NHWC map and OHWI weight shapes of a 3x3 convolution over `region`, with their contiguous strides.
+struct ConvolutionShapes {
+    map_shape: [usize; 4],
+    map_strides: Vec<usize>,
+    weight_shape: [usize; 4],
+    weight_strides: Vec<usize>,
+}
+
+fn convolution_shapes(region: Region, in_channels: usize, out_channels: usize) -> ConvolutionShapes {
+    let height = region.height as usize;
+    let width = region.width as usize;
+    let map_shape = [1, height, width, in_channels];
+    let weight_shape = [out_channels, 3, 3, in_channels];
+    let map_strides = contiguous(&map_shape);
+    let weight_strides = contiguous(&weight_shape);
+
+    ConvolutionShapes {
+        map_shape,
+        map_strides,
+        weight_shape,
+        weight_strides,
+    }
+}
+
+/// The problem `cubek-convolution` solves for a 3x3 convolution of `region`'s NHWC maps, with one sample
+/// of zero padding, from `in_channels` to `out_channels`.
+pub(crate) fn convolution_problem(
+    region: Region,
+    in_channels: usize,
+    out_channels: usize,
+    globals: MatmulGlobalElems,
+) -> ConvolutionProblem {
+    let height = region.height as usize;
+    let width = region.width as usize;
+    let shapes = convolution_shapes(region, in_channels, out_channels);
+
+    ConvolutionProblem {
+        m: height * width,
+        n: out_channels,
+        k: 9 * in_channels,
+        lhs_strides: Strides::from(shapes.map_strides),
+        rhs_strides: Strides::from(shapes.weight_strides),
+        lhs_layout: MatrixLayout::RowMajor,
+        rhs_layout: MatrixLayout::ColMajor,
+        kernel_size: vec![3, 3],
+        stride: vec![1, 1],
+        padding: vec![1, 1],
+        dilation: vec![1, 1],
+        batches: 1,
+        channels: in_channels,
+        out_channels,
+        in_shape: Shape::from(vec![height, width]),
+        out_shape: Shape::from(vec![height, width]),
+        padded_channels: in_channels,
+        operation: ConvolutionOperation::Forward,
+        dimensionality: Dimensionality::Dim2,
+        global_dtypes: globals,
+        address_type: AddressType::U32,
+    }
+}
+
+/// A blueprint of 16x16x16 cooperative-matrix tiles for `problem`, or `None` to let `cubek-convolution`
+/// infer one.
+///
+/// Each workgroup computes a block of 256 samples by `n` channels in four planes. The blueprint
+/// is only given where it is faster and known to be exact. That needs f16 operands, a device offering a
+/// 16x16x16 f16 cooperative matrix accumulating in f32 (`offers_cmma_16`), 64 lanes per plane, `n` a
+/// multiple of 16 and at least 8192 samples.
+pub(crate) fn forced_blueprint(
+    problem: &ConvolutionProblem,
+    plane_size_max: u32,
+    offers_cmma_16: bool,
+) -> Option<ConvBlueprint> {
+    let half_type = storage_type(Precision::F16);
+    let operands_are_half = problem.global_dtypes.lhs == half_type && problem.global_dtypes.rhs == half_type;
+    let tiled_channels = problem.n.is_multiple_of(FORCED_TILE as usize);
+    let large = problem.m >= FORCED_SAMPLES;
+
+    if !operands_are_half || !offers_cmma_16 || plane_size_max != FORCED_PLANE_SIZE {
+        return None;
+    }
+
+    if !tiled_channels || !large {
+        return None;
+    }
+
+    let channel_tiles = problem.n as u32 / FORCED_TILE;
+    let scheme = TilingScheme::builder()
+        .with_tile_size((FORCED_TILE, FORCED_TILE, FORCED_TILE).into())
+        .with_partition_size((4, channel_tiles, 2).into())
+        .with_stage_size((4, 1, 1).into())
+        .build()
+        .expect("every size of the scheme is set");
+    let hypercube = HypercubeBlueprint::builder()
+        .global_order(GlobalOrder::SwizzleRow(4))
+        .cube_count_strategy(CubeCountStrategy::FromProblem)
+        .build();
+
+    let matmul_problem = problem.as_matmul_problem();
+    let matmul = TilingBlueprint::builder(TileMatmulKind::Cmma, scheme, plane_size_max, &matmul_problem)
+        .partition_buffering(PartitionBuffering::Single)
+        .hypercube_blueprint(hypercube)
+        .build();
+    let forward = ForwardBlueprint {
+        matmul,
+        dimensionality: Dimensionality::Dim2,
+        has_bias: true,
+    };
+
+    Some(ConvBlueprint::Forward(forward))
+}
+
+/// Whether the device offers a 16x16x16 f16 cooperative matrix accumulating in f32.
+pub fn offers_cmma_16<R: Runtime>(client: &ComputeClient<R>) -> bool {
+    let configs = &client.properties().features.matmul.cmma;
+
+    offers_cmma_16_in(configs)
+}
+
+/// Whether `configs` holds a 16x16x16 f16 cooperative matrix accumulating in f32.
+pub(crate) fn offers_cmma_16_in(configs: &BTreeSet<MmaConfig>) -> bool {
+    let half_type = storage_type(Precision::F16);
+    let float_type = storage_type(Precision::F32);
+    let config = MmaConfig {
+        a_type: half_type,
+        b_type: half_type,
+        cd_type: float_type,
+        m: FORCED_TILE,
+        n: FORCED_TILE,
+        k: FORCED_TILE,
+    };
+
+    configs.contains(&config)
+}
+
+/// The blueprint the body's convolutions over `region` take, or `None` to infer one.
+fn body_blueprint<R: Runtime>(
+    client: &ComputeClient<R>,
+    network: &Network,
+    region: Region,
+) -> Option<ConvBlueprint> {
+    let features = network.features() as usize;
+    let dtype = storage_type(network.precision());
+    let globals = uniform_globals(dtype);
+    let problem = convolution_problem(region, features, features, globals);
+    let plane_size_max = client.properties().hardware.plane_size_max;
+    let offers_cmma = offers_cmma_16(client);
+
+    forced_blueprint(&problem, plane_size_max, offers_cmma)
+}
+
+fn storage_type(precision: Precision) -> StorageType {
+    match precision {
+        Precision::F16 => half::f16::as_type_native_unchecked().storage_type(),
+        Precision::F32 => f32::as_type_native_unchecked().storage_type(),
+    }
+}
+
+/// Global types with `dtype` for both operands and the output.
+fn uniform_globals(dtype: StorageType) -> MatmulGlobalElems {
+    MatmulGlobalElems {
+        lhs: dtype,
+        rhs: dtype,
+        out: dtype,
     }
 }
 
@@ -275,25 +515,28 @@ fn matmul_failed(error: MatmulSetupError) -> ArtcnnError {
     ArtcnnError::Matmul(error.to_string())
 }
 
-fn convolve_directly<R: Runtime, F: Float>(
+/// Convolves on cooperative-matrix tiles with `blueprint`, or an inferred blueprint when it is `None`.
+fn convolve_directly<R: Runtime>(
     client: &ComputeClient<R>,
     network: &Network,
     layer: usize,
     input: &Handle,
     output: &Handle,
     region: Region,
+    blueprint: Option<&ConvBlueprint>,
 ) -> Result<(), ArtcnnError> {
     let buffers = network.layer(layer);
     let features = network.features() as usize;
-    let height = region.height as usize;
-    let width = region.width as usize;
-    let dtype = F::as_type_native_unchecked().storage_type();
+    let dtype = storage_type(network.precision());
 
-    let map_shape = [1, height, width, features];
-    let weight_shape = [features, 3, 3, features];
-    let map_strides = contiguous(&map_shape);
-    let weight_strides = contiguous(&weight_shape);
-    // Safety: the input and output hold the region's `1 x H x W x F` maps contiguously, as `convolve` checks.
+    let ConvolutionShapes {
+        map_shape,
+        map_strides,
+        weight_shape,
+        weight_strides,
+    } = convolution_shapes(region, features, features);
+    // Safety: the input and output hold the region's `1 x H x W x F` maps contiguously, as every caller
+    // checks through `check_layer_maps`.
     let input_tensor = unsafe { tensor::<R>(input, &map_shape, &map_strides) };
     // Safety: the layer maps `F -> F`, so its weights hold `F x 3 x 3 x F` values contiguously.
     let weight_tensor = unsafe { tensor::<R>(&buffers.weights, &weight_shape, &weight_strides) };
@@ -311,19 +554,27 @@ fn convolve_directly<R: Runtime, F: Float>(
         padding: [1, 1],
         dilation: [1, 1],
     };
-    let strategy = Strategy::Inferred {
-        algorithm: ConvAlgorithm::SimpleSyncCyclic,
-        tile_kind: AcceleratedTileKind::Cmma,
-    };
-    let globals = MatmulGlobalElems {
-        lhs: dtype,
-        rhs: dtype,
-        out: dtype,
-    };
+    let strategy = convolution_strategy(blueprint);
+    let globals = uniform_globals(dtype);
     let dtypes = MatmulElems::from_globals(&globals);
     let launched = cubek_convolution::launch_ref::<R, 2>(&strategy, client, inputs, arguments, dtypes);
 
     launched.map_err(convolution_failed)
+}
+
+fn convolution_strategy(blueprint: Option<&ConvBlueprint>) -> Strategy {
+    let algorithm = ConvAlgorithm::SimpleSyncCyclic;
+
+    match blueprint {
+        Some(forced) => Strategy::Forced {
+            algorithm,
+            blueprint: forced.clone(),
+        },
+        None => Strategy::Inferred {
+            algorithm,
+            tile_kind: AcceleratedTileKind::Cmma,
+        },
+    }
 }
 
 #[expect(
@@ -385,11 +636,7 @@ fn convolve_by_columns<R: Runtime, F: Float>(
     let out_tensor = unsafe { tensor::<R>(output, &out_shape, &out_strides) };
     let lhs = InputBinding::new(lhs_tensor, dtype);
     let rhs = InputBinding::new(rhs_tensor, dtype);
-    let globals = MatmulGlobalElems {
-        lhs: dtype,
-        rhs: dtype,
-        out: dtype,
-    };
+    let globals = uniform_globals(dtype);
     let mut dtypes = MatmulElems::from_globals(&globals);
     // `DoubleUnit` gives wrong results when the depth of `9 * F` is 8 more than a multiple of 16.
     let strategy = MatmulStrategy::SimpleUnit(Default::default());
