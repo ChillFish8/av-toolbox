@@ -1,18 +1,14 @@
 use av_toolbox_cubek::aa::{sangnom_aaf, sangnom_max};
-use av_toolbox_cubek::testing::{reference_narrow, reference_sangnom_antialias};
+use av_toolbox_cubek::testing::{
+    assert_same_plane,
+    reference_narrow,
+    reference_sangnom_antialias,
+    transposed_plane,
+};
 use av_toolbox_gpu::{FrameFormat, SampleFormat};
 use serde_json::json;
 
-use super::{
-    assert_exact,
-    bits_of,
-    decoded,
-    grey,
-    largest_vertical_step,
-    one_sample_diagonal,
-    transposed,
-    yuv420,
-};
+use super::{bits_of, decoded, grey, largest_vertical_step, one_sample_diagonal, yuv420};
 use crate::support::{encoded, peak_of, run_masked, run_once, shared_planes, ten_bit, uniform_mask};
 
 const STAGE: &str = "aa/sangnom";
@@ -78,10 +74,10 @@ fn vertical_reference(values: &[f32], width: u32, height: u32, sample: SampleFor
 }
 
 fn horizontal_reference(values: &[f32], width: u32, height: u32, sample: SampleFormat, aa: u32) -> Vec<f32> {
-    let swapped = transposed(values, width, height);
+    let swapped = transposed_plane(values, width, height);
     let filtered = vertical_reference(&swapped, height, width, sample, aa);
 
-    transposed(&filtered, height, width)
+    transposed_plane(&filtered, height, width)
 }
 
 /// The reference's answer along `direction`, before narrowing.
@@ -127,7 +123,7 @@ fn assert_grey_matches(values: &[u16], sample: SampleFormat, aa: u32, direction:
 
     let label = format!("{sample} {direction}");
     assert!(changed > 0, "{label} leaves the clip unchanged");
-    assert_exact(&found[0], &expected, WIDTH, &label);
+    assert_same_plane(&found[0], &expected, WIDTH, &label);
 }
 
 #[test]
@@ -234,7 +230,7 @@ fn a_full_mask_hands_back_the_filtered_plane() {
         let peak = peak_of(sample) as f32;
         let expected = reference_narrow(&reference, peak);
         let label = format!("{sample} full mask");
-        assert_exact(&found[0], &expected, WIDTH, &label);
+        assert_same_plane(&found[0], &expected, WIDTH, &label);
         assert_eq!(found[1..], values[1..], "{label} changed the chroma");
     }
 }
@@ -280,7 +276,7 @@ fn every_plane_of_a_subsampled_clip_matches_at_its_own_size() {
 
         let label = format!("{channel:?} at {width}x{height}");
         assert_ne!(expected, values[index], "{label} leaves the plane unchanged");
-        assert_exact(&found[index], &expected, width, &label);
+        assert_same_plane(&found[index], &expected, width, &label);
     }
 }
 

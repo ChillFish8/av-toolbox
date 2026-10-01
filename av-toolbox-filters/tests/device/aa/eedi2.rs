@@ -1,17 +1,21 @@
-use av_toolbox_cubek::testing::{Eedi2Parameters, reference_eedi2_antialias, reference_narrow};
+use av_toolbox_cubek::testing::{
+    Eedi2Parameters,
+    assert_same_plane,
+    reference_eedi2_antialias,
+    reference_narrow,
+    transposed_plane,
+};
 use av_toolbox_gpu::{Channel, Depth, FrameFormat, FrameLayout, SampleFormat};
 use serde_json::json;
 
 use super::{
     DIRECTIONS,
-    assert_exact,
     bits_of,
     decoded,
     grey,
     largest_vertical_step,
     noisy_diagonals,
     one_sample_diagonal,
-    transposed,
     yuv420,
     yuv422,
 };
@@ -169,10 +173,10 @@ fn horizontal_reference(
     base: &Eedi2Parameters,
     ssw: u32,
 ) -> Vec<f32> {
-    let swapped = transposed(values, width, height);
+    let swapped = transposed_plane(values, width, height);
     let filtered = vertical_reference(&swapped, height, width, base, ssw);
 
-    transposed(&filtered, height, width)
+    transposed_plane(&filtered, height, width)
 }
 
 /// The reference's answer along `direction` with the arguments of `base`, before narrowing.
@@ -232,7 +236,7 @@ fn assert_grey_matches(values: &[u16], sample: SampleFormat, direction: &str) {
 
     let label = format!("{sample} {direction}");
     assert!(changed > 0, "{label} leaves the clip unchanged");
-    assert_exact(&found[0], &expected, WIDTH, &label);
+    assert_same_plane(&found[0], &expected, WIDTH, &label);
 }
 
 /// Every plane of `format`, each holding aliased lines at its own size.
@@ -273,7 +277,7 @@ fn assert_every_plane_matches(format: FrameFormat, direction: &str, wrong: Shift
             assert_ne!(expected, misread, "{label} reads the same with the wrong shifts");
         }
 
-        assert_exact(&found[index], &expected, width, &label);
+        assert_same_plane(&found[index], &expected, width, &label);
     }
 }
 
@@ -341,7 +345,7 @@ fn every_argument_reaches_the_device() {
 
         let label = format!("custom arguments {direction}");
         assert_ne!(expected, with_defaults, "{label} read the same as the defaults");
-        assert_exact(&found[0], &expected, WIDTH, &label);
+        assert_same_plane(&found[0], &expected, WIDTH, &label);
     }
 }
 
@@ -397,7 +401,7 @@ fn sensitive_plane_along(width: u32, height: u32, direction: &str) -> Vec<u16> {
 
     let turned = sensitive_plane(height, width);
     let widened: Vec<f32> = turned.iter().map(|value| f32::from(*value)).collect();
-    let swapped = transposed(&widened, height, width);
+    let swapped = transposed_plane(&widened, height, width);
 
     swapped.iter().map(|value| *value as u16).collect()
 }
@@ -425,7 +429,7 @@ fn each_argument_alone_reaches_the_device() {
         let base = expected_plane(&values, width, height, &SENSITIVITY_BASE, UNSHIFTED, direction);
         let found = run_grey(&values, format, &SENSITIVITY_BASE, direction);
         let label = format!("the base {direction}");
-        assert_exact(&found, &base, width, &label);
+        assert_same_plane(&found, &base, width, &label);
 
         for (name, parameters) in moved_arguments() {
             let expected = expected_plane(&values, width, height, &parameters, UNSHIFTED, direction);
@@ -433,7 +437,7 @@ fn each_argument_alone_reaches_the_device() {
 
             let label = format!("{name} moved {direction}");
             assert_ne!(expected, base, "{label} reads the same as the base");
-            assert_exact(&found, &expected, width, &label);
+            assert_same_plane(&found, &expected, width, &label);
         }
     }
 }

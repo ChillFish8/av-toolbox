@@ -135,13 +135,21 @@ impl CloseDecisionTally {
 
     /// Panics when more than 2 % of the compared samples are touched or more than 0.05 % differ.
     pub fn assert_bounds(&self, label: &str) {
-        let too_many_touched = self.touched * TOUCHED_BOUND.1 > self.compared * TOUCHED_BOUND.0;
+        self.assert_touched_within(label, TOUCHED_BOUND);
+    }
+
+    /// Panics when more than `touched_bound` of the compared samples are touched or more than 0.05 % differ.
+    ///
+    /// `touched_bound` is a fraction `numerator / denominator`.
+    pub fn assert_touched_within(&self, label: &str, touched_bound: (usize, usize)) {
+        let too_many_touched = self.touched * touched_bound.1 > self.compared * touched_bound.0;
         let too_many_differing = self.differing * DIFFERING_BOUND.1 > self.compared * DIFFERING_BOUND.0;
+        let touched_percent = 100.0 * touched_bound.0 as f64 / touched_bound.1 as f64;
 
         assert!(
             !too_many_touched && !too_many_differing,
-            "{label}: {} of {} compared samples are touched and {} differ, past the 2 % touched or 0.05 % \
-             differing allowed",
+            "{label}: {} of {} compared samples are touched and {} differ, past the \
+             {touched_percent} % touched or 0.05 % differing allowed",
             self.touched,
             self.compared,
             self.differing

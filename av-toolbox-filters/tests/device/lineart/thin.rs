@@ -16,6 +16,7 @@ use crate::support::{
     ten_bit,
     to_bytes,
     uniform_mask,
+    widened,
 };
 
 const THIN: &str = "lineart/thin";
@@ -56,10 +57,6 @@ fn thin_settings_for(
         radius,
         peak: peak_of(sample) as f32,
     }
-}
-
-fn widened(values: &[u16]) -> Vec<f32> {
-    values.iter().map(|value| f32::from(*value)).collect()
 }
 
 /// The reference's answer for one plane as codes, and how close it sits to a rounding boundary.

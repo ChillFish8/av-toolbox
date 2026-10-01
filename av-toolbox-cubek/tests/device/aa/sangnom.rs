@@ -1,5 +1,5 @@
 use av_toolbox_cubek::aa::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_max, sangnom_scratch};
-use av_toolbox_cubek::testing::{SANGNOM_FIXTURES, reference_sangnom_field};
+use av_toolbox_cubek::testing::{SANGNOM_FIXTURES, assert_same_plane, reference_sangnom_field};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -55,18 +55,6 @@ fn on_device(input: &[f32], width: u32, height: u32, aaf: f32, max: f32) -> [Vec
     backend().build(task)
 }
 
-/// Fails at the first sample that differs, naming its row and column.
-fn assert_exact(actual: &[f32], expected: &[f32], width: u32, label: &str) {
-    assert_eq!(actual.len(), expected.len(), "{label}: the plane sizes differ");
-
-    let width = width as usize;
-    for (index, (got, want)) in actual.iter().zip(expected).enumerate() {
-        let row = index / width;
-        let column = index % width;
-        assert_eq!(got, want, "{label}: row {row}, column {column}");
-    }
-}
-
 /// A deterministic hash of a sample's position, for noise.
 fn scramble(column: u32, row: u32) -> u32 {
     let mut state = column.wrapping_mul(0x9e37_79b1) ^ row.wrapping_mul(0x85eb_ca77);
@@ -84,8 +72,8 @@ fn assert_matches_reference(input: &[f32], width: u32, height: u32, aaf: f32, ma
 
     let label_pass0 = format!("{label} at offset 0");
     let label_pass1 = format!("{label} at offset 1");
-    assert_exact(&pass0, &expected_pass0, width, &label_pass0);
-    assert_exact(&pass1, &expected_pass1, width, &label_pass1);
+    assert_same_plane(&pass0, &expected_pass0, width, &label_pass0);
+    assert_same_plane(&pass1, &expected_pass1, width, &label_pass1);
 }
 
 #[test]
@@ -105,8 +93,8 @@ fn every_fixture_matches_on_the_device() {
 
         let label_pass0 = format!("{} at offset 0", fixture.name);
         let label_pass1 = format!("{} at offset 1", fixture.name);
-        assert_exact(&pass0, &expected_pass0, width, &label_pass0);
-        assert_exact(&pass1, &expected_pass1, width, &label_pass1);
+        assert_same_plane(&pass0, &expected_pass0, width, &label_pass0);
+        assert_same_plane(&pass1, &expected_pass1, width, &label_pass1);
     }
 }
 
@@ -155,8 +143,8 @@ fn a_ten_bit_pass_may_exceed_the_peak() {
         .filter(|value| **value > 1023.0)
         .count();
 
-    assert_exact(&pass0, &expected_pass0, width, "10-bit at offset 0");
-    assert_exact(&pass1, &expected_pass1, width, "10-bit at offset 1");
+    assert_same_plane(&pass0, &expected_pass0, width, "10-bit at offset 0");
+    assert_same_plane(&pass1, &expected_pass1, width, "10-bit at offset 1");
     assert!(
         above_peak > 0,
         "the plane should push some samples above the peak"

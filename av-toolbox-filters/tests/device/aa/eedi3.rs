@@ -7,6 +7,7 @@ use av_toolbox_cubek::testing::{
     SplitMix,
     random_eedi3_plane,
     reference_eedi3_antialias,
+    transposed_plane,
 };
 use av_toolbox_gpu::{Depth, FrameFormat, SampleFormat};
 use serde_json::json;
@@ -20,10 +21,9 @@ use super::{
     noisy_diagonals,
     one_sample_diagonal,
     scramble,
-    transposed,
     yuv420,
 };
-use crate::support::{encoded, run_masked, run_once, shared_planes, ten_bit, uniform_mask};
+use crate::support::{encoded, run_masked, run_once, shared_planes, ten_bit, uniform_mask, widened};
 
 const STAGE: &str = "aa/eedi3";
 
@@ -70,10 +70,6 @@ fn line_planes(format: &FrameFormat) -> Vec<Vec<u16>> {
             aliased_lines(width, height, format.sample)
         })
         .collect()
-}
-
-fn widened(values: &[u16]) -> Vec<f32> {
-    values.iter().map(|value| f32::from(*value)).collect()
 }
 
 /// The default arguments at `sample`'s depth.
@@ -131,21 +127,6 @@ fn vertical_reference(
     reference_eedi3_antialias(values, width, height, parameters, clips)
 }
 
-/// Swaps the axes of a `width` by `height` plane of flags, giving a `height` by `width` one.
-fn transposed_flags(flags: &[bool], width: u32, height: u32) -> Vec<bool> {
-    let width = width as usize;
-    let height = height as usize;
-    let mut output = vec![false; flags.len()];
-
-    for row in 0..height {
-        for column in 0..width {
-            output[column * height + row] = flags[row * width + column];
-        }
-    }
-
-    output
-}
-
 /// The reference run on the transposed plane, with its output and touched samples transposed back.
 fn horizontal_reference(
     values: &[f32],
@@ -153,11 +134,11 @@ fn horizontal_reference(
     height: u32,
     parameters: &Eedi3Parameters,
 ) -> Eedi3Antialias {
-    let swapped = transposed(values, width, height);
+    let swapped = transposed_plane(values, width, height);
     let filtered = vertical_reference(&swapped, height, width, parameters);
 
-    let output = transposed(&filtered.output, height, width);
-    let touched = transposed_flags(&filtered.touched, height, width);
+    let output = transposed_plane(&filtered.output, height, width);
+    let touched = transposed_plane(&filtered.touched, height, width);
 
     Eedi3Antialias { output, touched }
 }
@@ -432,7 +413,7 @@ fn sensitive_plane_along(width: u32, height: u32, direction: &str) -> Vec<u16> {
 
     let turned = sensitive_plane(height, width);
     let widened_values = widened(&turned);
-    let swapped = transposed(&widened_values, height, width);
+    let swapped = transposed_plane(&widened_values, height, width);
 
     swapped.iter().map(|value| *value as u16).collect()
 }

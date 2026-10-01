@@ -1,0 +1,30 @@
+# Anti-aliases a clip's luma with aa/based, a port of vs-jetpack's based_aa.
+#
+# ArtCNN doubles the luma, EEDI3 smooths the doubled plane's jagged edges, and the result is halved and merged
+# back through an edge mask. Chroma is handed through.
+#
+# Set args.precision to "f32" for full-precision feature maps, and args.direction to "vertical" or
+# "horizontal" to smooth along one axis only.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "y4m/pipe"
+args.path = "{{ input }}"
+
+[filter.antialiased]
+type = "aa/based"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["antialiased"]
+args.path = "{{ output }}"

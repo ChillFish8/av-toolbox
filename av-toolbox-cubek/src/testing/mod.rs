@@ -29,10 +29,13 @@ pub use self::artcnn::{
     synthetic_weights,
 };
 pub use self::based::{
+    BasedFinish,
     BasedParameters,
     BasedStages,
     Direction,
     reference_based_aa,
+    reference_based_finish,
+    reference_based_mask,
     reference_binarize_prewitt,
     reference_box_halve,
     reference_double_mclip,
@@ -572,4 +575,57 @@ pub fn assert_same_plane<T: PartialEq + Display>(found: &[T], expected: &[T], wi
             found[index], expected[index],
         );
     }
+}
+
+/// Panics at the first sample of a `width` wide plane where `found` is further than `tolerance` from
+/// `expected`.
+pub fn assert_plane_within(found: &[f32], expected: &[f32], tolerance: f32, width: u32, label: &str) {
+    assert_eq!(found.len(), expected.len(), "{label} has the wrong sample count");
+
+    let differing = found
+        .iter()
+        .zip(expected)
+        .position(|(actual, wanted)| (actual - wanted).abs() > tolerance);
+    if let Some(index) = differing {
+        let column = index as u32 % width;
+        let row = index as u32 / width;
+        panic!(
+            "{label} differs first at {column},{row}: found {}, expected {}",
+            found[index], expected[index],
+        );
+    }
+}
+
+/// Panics where the codes `found` and `expected` of a `width` wide plane differ, unless they differ by one
+/// code and `merged`, the value before rounding, lies within `window` of a half code. Gives how many samples
+/// differ.
+pub fn assert_close_roundings(
+    found: &[f32],
+    expected: &[f32],
+    merged: &[f32],
+    window: f32,
+    width: u32,
+    label: &str,
+) -> usize {
+    assert_eq!(found.len(), expected.len(), "{label} has the wrong sample count");
+
+    let mut differing = 0;
+    for (index, (actual, wanted)) in found.iter().zip(expected).enumerate() {
+        if actual == wanted {
+            continue;
+        }
+
+        let column = index as u32 % width;
+        let row = index as u32 / width;
+        let fraction = merged[index] - merged[index].floor();
+        let distance = (fraction - 0.5).abs();
+        assert!(
+            (actual - wanted).abs() == 1.0 && distance <= window,
+            "{label} differs at {column},{row}: found {actual}, expected {wanted}, merged {}",
+            merged[index],
+        );
+        differing += 1;
+    }
+
+    differing
 }

@@ -534,3 +534,70 @@ fn the_artcnn_example_doubles_the_clip() {
         );
     }
 }
+
+/// The field and the line of `staircase_luma`.
+const STAIRCASE_FIELD: u8 = 40;
+
+const STAIRCASE_LINE: u8 = 220;
+
+/// The row the staircase's line starts on, and how many columns each of its runs lasts.
+const STAIRCASE_TOP: usize = 16;
+
+const STAIRCASE_RUN: usize = 6;
+
+/// The luma of a dark field with a light one-sample line falling one row every `STAIRCASE_RUN` columns,
+/// drawn as a staircase of flat runs.
+fn staircase_luma() -> Vec<u8> {
+    (0..SIZE * SIZE)
+        .map(|index| {
+            let column = index % SIZE;
+            let row = index / SIZE;
+            let line_row = STAIRCASE_TOP + column / STAIRCASE_RUN;
+
+            if row == line_row {
+                STAIRCASE_LINE
+            } else {
+                STAIRCASE_FIELD
+            }
+        })
+        .collect()
+}
+
+/// The largest difference between two vertically adjacent samples in `columns` of `plane`.
+fn largest_vertical_step(plane: &[u8], columns: std::ops::Range<usize>) -> u8 {
+    let rows: Vec<&[u8]> = plane.chunks(SIZE).collect();
+
+    rows.windows(2)
+        .flat_map(|pair| {
+            columns
+                .clone()
+                .map(move |column| pair[0][column].abs_diff(pair[1][column]))
+        })
+        .max()
+        .expect("the plane has rows")
+}
+
+#[test]
+fn the_anti_aliasing_example_softens_a_staircase() {
+    let luma = staircase_luma();
+    let clip = clip_with_luma(&luma);
+    let decoded = run_example_on("anti-aliasing.toml", &[], &clip);
+
+    // The line's first and last runs keep their full step at the plane's sides, so only the middle counts.
+    let middle = 8..(SIZE - 8);
+    let input_step = largest_vertical_step(&luma, middle.clone());
+    let far_rows = 0..(STAIRCASE_TOP - 6) * SIZE;
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+
+    for frame in &decoded.frames {
+        let step = largest_vertical_step(&frame.luma, middle.clone());
+        println!("largest step in the middle: {input_step} to {step}");
+        assert!(step < input_step, "the step went from {input_step} to {step}");
+
+        assert_eq!(frame.luma[far_rows.clone()], luma[far_rows.clone()]);
+        assert!(frame.u_plane.iter().all(|sample| *sample == FLAT_U));
+        assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
+    }
+}

@@ -13,6 +13,7 @@ use crate::testing::{
     BasedParameters,
     BasedStages,
     Eedi3Parameters,
+    assert_close_roundings,
     assert_same_plane,
     reference_supersample,
     transposed_plane,
@@ -167,26 +168,6 @@ impl BasedFixture {
 /// How far a merged value may lie from a half code and still round either way.
 const CLOSE_ROUNDING: f32 = 1e-4;
 
-/// Panics where `found` and `expected` differ by more than a code, or where `merged` is not close to a half
-/// code.
-fn assert_close_roundings(found: &[f32], expected: &[f32], merged: &[f32], width: u32, label: &str) {
-    for (index, (actual, wanted)) in found.iter().zip(expected).enumerate() {
-        if actual == wanted {
-            continue;
-        }
-
-        let column = index as u32 % width;
-        let row = index as u32 / width;
-        let fraction = merged[index] - merged[index].floor();
-        let distance = (fraction - 0.5).abs();
-        assert!(
-            (actual - wanted).abs() == 1.0 && distance <= CLOSE_ROUNDING,
-            "{label} differs at {column},{row}: found {actual}, expected {wanted}, merged {}",
-            merged[index],
-        );
-    }
-}
-
 #[test]
 fn the_composed_reference_matches_the_model() {
     for fixture in &BASED_FIXTURES {
@@ -212,7 +193,14 @@ fn the_composed_reference_matches_the_model() {
         );
 
         let label = format!("{name} output");
-        assert_close_roundings(&stages.output, &output, &stages.merged, width, &label);
+        assert_close_roundings(
+            &stages.output,
+            &output,
+            &stages.merged,
+            CLOSE_ROUNDING,
+            width,
+            &label,
+        );
     }
 }
 

@@ -12,6 +12,7 @@ use av_toolbox_cubek::testing::{
     EEDI2_FIXTURES,
     Eedi2Parameters,
     Eedi2Stages,
+    assert_same_plane,
     reference_eedi2_field,
     reference_eedi2_field_stages,
     reference_fill_round,
@@ -170,18 +171,6 @@ fn expected_stage(stages: &Eedi2Stages, stage: Eedi2Stage) -> &[f32] {
     }
 }
 
-/// Fails at the first sample that differs, naming its row and column.
-fn assert_exact(actual: &[f32], expected: &[f32], width: u32, label: &str) {
-    assert_eq!(actual.len(), expected.len(), "{label}: the sizes differ");
-
-    let width = width as usize;
-    for (index, (got, want)) in actual.iter().zip(expected).enumerate() {
-        let row = index / width;
-        let column = index % width;
-        assert_eq!(got, want, "{label}: row {row}, column {column}");
-    }
-}
-
 fn assert_matches_reference(
     input: &[f32],
     width: u32,
@@ -196,7 +185,7 @@ fn assert_matches_reference(
         for (stage, actual) in STAGES.iter().zip(&outputs) {
             let expected_values = expected_stage(&expected, *stage);
             let stage_label = format!("{label} at offset {offset}, {stage:?}");
-            assert_exact(actual, expected_values, width, &stage_label);
+            assert_same_plane(actual, expected_values, width, &stage_label);
         }
     }
 }
@@ -429,7 +418,7 @@ fn assert_fields_match_reference(
     for (offset, actual) in outputs.iter().enumerate() {
         let expected = reference_eedi2_field(input, width, height, offset as u32, parameters);
         let offset_label = format!("{label} at offset {offset}");
-        assert_exact(actual, &expected, width, &offset_label);
+        assert_same_plane(actual, &expected, width, &offset_label);
     }
 }
 
@@ -446,7 +435,7 @@ fn every_fixture_matches_on_the_device() {
 
         for (offset, (actual, wanted)) in outputs.iter().zip(&expected).enumerate() {
             let label = format!("{} at offset {offset}", fixture.name);
-            assert_exact(actual, wanted, width, &label);
+            assert_same_plane(actual, wanted, width, &label);
         }
     }
 }
@@ -521,7 +510,7 @@ fn the_lattice_intermediates_match_for_each_pp() {
             for (stage, actual) in stages.iter().zip(&outputs) {
                 let expected_values = expected_stage(&expected, *stage);
                 let stage_label = format!("{} at offset {offset}, {stage:?}", fixture.name);
-                assert_exact(actual, expected_values, width, &stage_label);
+                assert_same_plane(actual, expected_values, width, &stage_label);
             }
         }
     }

@@ -857,6 +857,11 @@ pub(crate) fn peak_of(sample: SampleFormat) -> u32 {
     }
 }
 
+/// Code values as f32 samples.
+pub(crate) fn widened(values: &[u16]) -> Vec<f32> {
+    values.iter().map(|value| f32::from(*value)).collect()
+}
+
 pub(crate) fn encoded(format: &FrameFormat, values: &[Vec<u16>]) -> Vec<Vec<u8>> {
     let element = element_of(format.sample);
 

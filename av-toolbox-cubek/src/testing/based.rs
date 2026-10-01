@@ -285,7 +285,7 @@ pub(super) fn composed(
 
     let (mask, mask_peak) = match mask {
         Some(bound) => (bound.to_vec(), BOUND_MASK_PEAK),
-        None if parameters.edge_mask => (built_mask(luma, width, height, parameters), peak),
+        None if parameters.edge_mask => (reference_based_mask(luma, width, height, parameters), peak),
         None => (Vec::new(), peak),
     };
 
@@ -307,32 +307,13 @@ pub(super) fn composed(
     };
     let antialiased = antialias(&doubled, &eedi3, parameters.direction, horizontal_sclip);
 
-    let halved = reference_box_halve(&antialiased.output, doubled_width, doubled_height);
-    let blended = if parameters.pscale == 1.0 {
-        halved
-    } else {
-        let down = reference_box_halve(supersampled, doubled_width, doubled_height);
-        let keep = 1.0 - parameters.pscale;
-        reference_pscale_blend(&halved, luma, &down, keep)
+    let finish = BasedFinish {
+        luma,
+        supersampled,
+        antialiased: &antialiased.output,
+        mask: parameters.edge_mask.then_some((mask.as_slice(), mask_peak)),
     };
-
-    let filtered = if parameters.postfilter {
-        let settings = BilateralSettings {
-            sigma_s: SIGMA_S,
-            sigma_r: SIGMA_R,
-            peak,
-        };
-        let smoothed = reference_bilateral(&blended, luma, width, height, settings);
-        reference_median_of_three(&blended, luma, &smoothed)
-    } else {
-        blended
-    };
-
-    let merged = if parameters.edge_mask {
-        reference_clamped_merge(luma, &filtered, &mask, mask_peak, peak)
-    } else {
-        filtered
-    };
+    let merged = reference_based_finish(&finish, width, height, parameters);
 
     let narrowed = reference_narrow(&merged, peak);
     let output = narrowed.iter().map(|code| f32::from(*code)).collect();
@@ -356,8 +337,8 @@ pub(super) fn composed(
     }
 }
 
-/// Builds the mask from `luma`: a Prewitt binarize, a 3x3 maximum and a 3x3 box.
-fn built_mask(luma: &[f32], width: u32, height: u32, parameters: &BasedParameters) -> Vec<f32> {
+/// Builds the mask of `aa/based` from `luma` on the CPU: a Prewitt binarize, a 3x3 maximum and a 3x3 box.
+pub fn reference_based_mask(luma: &[f32], width: u32, height: u32, parameters: &BasedParameters) -> Vec<f32> {
     let peak = peak_of(parameters.bits);
     let scaled = parameters.mask_thr << (parameters.bits - 8);
     let threshold = scaled * scaled;
@@ -366,6 +347,58 @@ fn built_mask(luma: &[f32], width: u32, height: u32, parameters: &BasedParameter
     let widened = reference_extreme(&binarized, width, height, Extreme::Maximum, Shape::Square);
 
     reference_smooth(&widened, width, height, Smooth::Box)
+}
+
+/// The planes the steps of `aa/based` after EEDI3 read, each in code values.
+///
+/// `luma` is the luma's size, and `supersampled` and `antialiased` are twice it. `mask` holds the mask
+/// and its peak, and is given exactly when `edge_mask` is set.
+#[derive(Debug, Clone, Copy)]
+pub struct BasedFinish<'a> {
+    pub luma: &'a [f32],
+    pub supersampled: &'a [f32],
+    pub antialiased: &'a [f32],
+    pub mask: Option<(&'a [f32], f32)>,
+}
+
+/// Runs the steps of `aa/based` after EEDI3 on the CPU, giving the merged plane before its one rounding.
+///
+/// The steps are the box halving, the blend, the postfilter and the merge.
+pub fn reference_based_finish(
+    planes: &BasedFinish<'_>,
+    width: u32,
+    height: u32,
+    parameters: &BasedParameters,
+) -> Vec<f32> {
+    let peak = peak_of(parameters.bits);
+    let doubled_width = 2 * width;
+    let doubled_height = 2 * height;
+
+    let halved = reference_box_halve(planes.antialiased, doubled_width, doubled_height);
+    let blended = if parameters.pscale == 1.0 {
+        halved
+    } else {
+        let down = reference_box_halve(planes.supersampled, doubled_width, doubled_height);
+        let keep = 1.0 - parameters.pscale;
+        reference_pscale_blend(&halved, planes.luma, &down, keep)
+    };
+
+    let filtered = if parameters.postfilter {
+        let settings = BilateralSettings {
+            sigma_s: SIGMA_S,
+            sigma_r: SIGMA_R,
+            peak,
+        };
+        let smoothed = reference_bilateral(&blended, planes.luma, width, height, settings);
+        reference_median_of_three(&blended, planes.luma, &smoothed)
+    } else {
+        blended
+    };
+
+    match planes.mask {
+        Some((mask, mask_peak)) => reference_clamped_merge(planes.luma, &filtered, mask, mask_peak, peak),
+        None => filtered,
+    }
 }
 
 /// The doubled planes EEDI3 reads.
