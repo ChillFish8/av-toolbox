@@ -63,6 +63,19 @@ pub const EEDI3_FIXTURES: [Eedi3Fixture; 13] = [
     eedi3_fixture!("close_path"),
 ];
 
+/// An edge between 40 and 200 that moves two columns per row, the plane of the `worked` fixture at any size.
+pub fn worked_edge_plane(width: u32, height: u32) -> Vec<f32> {
+    let mut plane = Vec::new();
+    for row in 0..height {
+        for column in 0..width {
+            let value = if column > 2 * row { 200.0 } else { 40.0 };
+            plane.push(value);
+        }
+    }
+
+    plane
+}
+
 fn sample_pairs(bytes: &[u8]) -> &[[u8; 2]] {
     let (pairs, remainder) = bytes.as_chunks::<2>();
     assert!(
@@ -108,6 +121,14 @@ fn metadata_text<'a>(metadata: &'a str, key: &str) -> &'a str {
 }
 
 impl Eedi3Fixture {
+    /// The fixture called `name`.
+    pub fn named(name: &str) -> &'static Self {
+        EEDI3_FIXTURES
+            .iter()
+            .find(|fixture| fixture.name == name)
+            .expect("the fixture exists")
+    }
+
     /// The integer value of `key` in the metadata.
     pub fn setting(&self, key: &str) -> u32 {
         let text = metadata_text(self.metadata, key);

@@ -7,7 +7,7 @@ mod tests;
 mod touched;
 
 use self::check::{PassPlanes, interpolate_row, reliability_check};
-pub use self::fixtures::{EEDI3_FIXTURES, Eedi3Fixture};
+pub use self::fixtures::{EEDI3_FIXTURES, Eedi3Fixture, worked_edge_plane};
 use self::path::{Grid, Mask, Weights, search_row};
 pub use self::random::{
     Eedi3PlaneKind,

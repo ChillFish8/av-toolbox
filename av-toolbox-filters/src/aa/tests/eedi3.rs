@@ -1,4 +1,5 @@
 use av_toolbox_core::{FilterDefinition, StageError};
+use av_toolbox_cubek::aa::Eedi3Settings;
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -17,7 +18,7 @@ use serde_json::json;
 
 use crate::aa::Eedi3;
 use crate::aa::direction::Direction;
-use crate::aa::eedi3::Eedi3Args;
+use crate::aa::eedi3::{Eedi3Args, checked_arguments};
 
 const STAGE: &str = "aa/eedi3";
 
@@ -208,10 +209,8 @@ fn a_vthresh_of_the_wrong_length_is_refused() {
     assert!(message.ends_with("got 2"), "{message}");
 }
 
-/// `0.25 + 0.750000001` passes 1 in f64 but is exactly 1 in f32.
-#[test]
-fn the_range_bounds_are_accepted() {
-    let cases = [
+fn range_bounds() -> [serde_json::Value; 12] {
+    [
         json!({ "alpha": 0 }),
         json!({ "alpha": 1, "beta": 0 }),
         json!({ "alpha": 0.5, "beta": 0.5 }),
@@ -224,13 +223,31 @@ fn the_range_bounds_are_accepted() {
         json!({ "nrad": 0, "vcheck": 0 }),
         json!({ "nrad": 3, "vcheck": 3 }),
         json!({ "vthresh": [1e-30, 1e-30, 1e-30] }),
-    ];
+    ]
+}
+
+/// `0.25 + 0.750000001` passes 1 in f64 but is exactly 1 in f32.
+#[test]
+fn the_range_bounds_are_accepted() {
+    let cases = range_bounds();
 
     for value in cases {
         let input = grey(16, 16);
         let accepted = produces(value.clone(), input);
 
         assert!(accepted.is_ok(), "{value}");
+    }
+}
+
+#[test]
+fn the_range_bounds_build_settings_at_every_depth() {
+    for value in range_bounds() {
+        let parsed = args(value);
+        let arguments = checked_arguments(&parsed).expect("the bounds are accepted");
+
+        for bits in [8, 16] {
+            Eedi3Settings::new(&arguments, bits);
+        }
     }
 }
 

@@ -224,7 +224,7 @@ fn checked_threshold(index: usize, value: f64) -> Result<f32, StageError> {
 /// The arguments the device pass takes, once `args` are rounded to f32 and checked.
 ///
 /// `alpha + beta` is checked in f32.
-fn checked_arguments(args: &Eedi3Args) -> Result<Eedi3Arguments, StageError> {
+pub(crate) fn checked_arguments(args: &Eedi3Args) -> Result<Eedi3Arguments, StageError> {
     let alpha = checked_weight("alpha", args.alpha)?;
     let beta = checked_weight("beta", args.beta)?;
     let sum = alpha + beta;
@@ -409,12 +409,12 @@ impl FilterDefinition for Eedi3 {
 }
 
 /// One EEDI3 field pass, which runs the same on every plane and in either direction.
-struct Eedi3Pass<'a, R: Runtime> {
+struct Eedi3FieldPass<'a, R: Runtime> {
     client: &'a ComputeClient<R>,
     settings: Eedi3Settings,
 }
 
-impl<R: Runtime> FieldPass for Eedi3Pass<'_, R> {
+impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32) {
         let mdis = self.settings.mdis();
         let sizes = eedi3_scratch(input.width(), input.height(), mdis);
@@ -460,7 +460,7 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
         input: DevicePlane<'_>,
         output: DevicePlane<'_>,
     ) -> Result<(), StageError> {
-        let pass = Eedi3Pass {
+        let pass = Eedi3FieldPass {
             client: &self.client,
             settings: self.settings,
         };

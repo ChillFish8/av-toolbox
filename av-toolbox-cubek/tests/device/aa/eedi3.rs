@@ -23,6 +23,7 @@ use av_toolbox_cubek::testing::{
     random_eedi3_plane,
     reference_eedi3_field,
     reference_eedi3_field_variant,
+    worked_edge_plane,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -295,13 +296,6 @@ fn diagonal_bands(width: u32, height: u32, bands: &Bands) -> Vec<f32> {
     input
 }
 
-fn fixture_named(name: &str) -> &'static Eedi3Fixture {
-    EEDI3_FIXTURES
-        .iter()
-        .find(|fixture| fixture.name == name)
-        .expect("the fixture exists")
-}
-
 #[test]
 fn every_fixture_matches_on_the_device() {
     let mut tally = CloseDecisionTally::new();
@@ -317,24 +311,11 @@ fn every_fixture_matches_on_the_device() {
     assert_tally(&tally, "every fixture");
 }
 
-/// An edge between 40 and 200 that moves two columns per row, as in the worked example.
-fn worked_edge(width: u32, height: u32) -> Vec<f32> {
-    let mut input = Vec::new();
-    for row in 0..height {
-        for column in 0..width {
-            let value = if column > 2 * row { 200.0 } else { 40.0 };
-            input.push(value);
-        }
-    }
-
-    input
-}
-
 /// The worked example's plane is too small for the tally's bounds on its own, so the same edge on a larger
 /// plane counts toward them too.
 #[test]
 fn the_worked_example_matches_on_the_device() {
-    let fixture = fixture_named("worked");
+    let fixture = Eedi3Fixture::named("worked");
     let case = PlaneCase::of_fixture(fixture);
     let passes = on_device(&case);
 
@@ -342,7 +323,7 @@ fn the_worked_example_matches_on_the_device() {
     let path = [0, -1, -2, -2, -2, -2, -2, -2, -2, -2, -1, 0];
     assert_eq!(passes[0].directions[36..48], path);
 
-    let larger_input = worked_edge(480, 64);
+    let larger_input = worked_edge_plane(480, 64);
     let larger = PlaneCase::new("the worked edge", 480, 64, case.parameters, larger_input);
 
     let mut tally = CloseDecisionTally::new();
@@ -483,11 +464,11 @@ fn flat_planes_with_hard_edges_match() {
     assert_tally(&tally, "flat planes");
 }
 
-/// The `sclip` fixture is too small for the tally's bounds on its own, so a larger plane with `sclip` and
-/// the same arguments counts toward them too.
+/// The `sclip` fixture's blends are often close at these arguments, so a larger plane with `sclip` and the
+/// same arguments counts toward the tally's bounds too.
 #[test]
 fn sclip_replaces_the_cubic_fallback() {
-    let fixture = fixture_named("based");
+    let fixture = Eedi3Fixture::named("based");
     let mut case = PlaneCase::of_fixture(fixture);
     let without_sclip: Vec<Eedi3Pass> = (0..2).map(|offset| case.reference(offset)).collect();
     case.sclip = fixture.sclip_plane();
@@ -634,8 +615,8 @@ fn larger_masked_case(parameters: Eedi3Parameters) -> PlaneCase {
     case
 }
 
-/// The `mclip` fixtures are too small for the tally's bounds on their own, so a larger plane with the same
-/// arguments and both clips counts toward them too.
+/// The `mclip` fixtures' blends are often close at these arguments, so a larger plane with the same
+/// arguments and both clips counts toward the tally's bounds too.
 #[test]
 fn every_mclip_fixture_matches_on_the_device() {
     let masked_fixtures: Vec<&Eedi3Fixture> = EEDI3_FIXTURES

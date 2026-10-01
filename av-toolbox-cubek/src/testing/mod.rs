@@ -65,6 +65,7 @@ pub use self::eedi3::{
     reference_eedi3_antialias,
     reference_eedi3_field,
     reference_eedi3_field_variant,
+    worked_edge_plane,
 };
 pub use self::hysteresis::reference_hysteresis;
 pub use self::lineart::{

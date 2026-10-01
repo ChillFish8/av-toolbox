@@ -24,23 +24,11 @@ use super::{
     reference_eedi3_antialias,
     reference_eedi3_field,
     reference_eedi3_field_variant,
+    worked_edge_plane,
 };
 
 const WORKED_WIDTH: usize = 12;
 const WORKED_HEIGHT: usize = 8;
-
-/// An edge between 40 and 200 that moves two columns per row.
-fn worked_plane() -> Vec<f32> {
-    let mut plane = Vec::with_capacity(WORKED_WIDTH * WORKED_HEIGHT);
-    for row in 0..WORKED_HEIGHT {
-        for column in 0..WORKED_WIDTH {
-            let value = if column > 2 * row { 200.0 } else { 40.0 };
-            plane.push(value);
-        }
-    }
-
-    plane
-}
 
 fn worked_parameters() -> Eedi3Parameters {
     Eedi3Parameters {
@@ -56,7 +44,7 @@ fn plane_of(rows: &[[u16; WORKED_WIDTH]; WORKED_HEIGHT]) -> Vec<f32> {
 
 #[test]
 fn the_worked_example_matches_by_hand() {
-    let plane = worked_plane();
+    let plane = worked_edge_plane(WORKED_WIDTH as u32, WORKED_HEIGHT as u32);
     let parameters = worked_parameters();
     let plugin = Eedi3Variant::default();
     let settings = Settings::new(&parameters, plugin);
@@ -165,13 +153,6 @@ impl PlaneInputs {
     }
 }
 
-fn fixture_named(name: &str) -> &'static Eedi3Fixture {
-    EEDI3_FIXTURES
-        .iter()
-        .find(|fixture| fixture.name == name)
-        .expect("the fixture exists")
-}
-
 /// Runs pass `offset` of `fixture` under `variant`, with the fixture's clips.
 fn run_fixture(fixture: &Eedi3Fixture, offset: u32, variant: &Eedi3Variant) -> Eedi3Pass {
     let inputs = PlaneInputs::of_fixture(fixture);
@@ -238,7 +219,7 @@ fn every_fixture_matches_the_plugin() {
 
 #[test]
 fn the_check_reads_the_checked_row_above() {
-    let fixture = fixture_named("check_order");
+    let fixture = Eedi3Fixture::named("check_order");
     let plugin = Eedi3Variant::default();
     let unchecked_above = Eedi3Variant {
         check_order: CheckOrder::UncheckedAbove,
@@ -254,7 +235,7 @@ fn the_check_reads_the_checked_row_above() {
 
 #[test]
 fn lent_costs_matter_under_mclip() {
-    let fixture = fixture_named("based");
+    let fixture = Eedi3Fixture::named("based");
     let plugin = Eedi3Variant::default();
     let without_lending = Eedi3Variant {
         lending: Lending::Off,
@@ -271,7 +252,7 @@ fn lent_costs_matter_under_mclip() {
 
 #[test]
 fn a_tie_goes_to_the_smallest_direction() {
-    let fixture = fixture_named("flat");
+    let fixture = Eedi3Fixture::named("flat");
     let smallest = Eedi3Variant::default();
     let largest = Eedi3Variant {
         ties: TieOrder::LargestDirection,

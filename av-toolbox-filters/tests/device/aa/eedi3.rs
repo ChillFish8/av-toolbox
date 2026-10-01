@@ -253,7 +253,14 @@ fn assert_grey_matches(sample: SampleFormat, directions: &[&str]) {
     }
 
     let label = format!("{sample} {directions:?}");
-    tally.assert_bounds(&label);
+    assert_tally(&tally, &label);
+}
+
+/// Prints the tally's counts, then asserts its bounds.
+fn assert_tally(tally: &CloseDecisionTally, label: &str) {
+    println!("{label}: {tally:?}");
+
+    tally.assert_bounds(label);
 }
 
 #[test]
@@ -298,7 +305,7 @@ fn every_plane_of_a_420_clip_matches_at_its_own_size() {
         tally_run(&mut tally, format, &values, &parameters, direction);
     }
 
-    tally.assert_bounds("every plane of a 4:2:0 clip");
+    assert_tally(&tally, "every plane of a 4:2:0 clip");
 }
 
 /// The settings `based_aa` runs EEDI3 with, at `bits` per sample.
@@ -354,7 +361,7 @@ fn based_aa_settings_match_the_reference() {
         }
     }
 
-    tally.assert_bounds("based_aa settings");
+    assert_tally(&tally, "based_aa settings");
 }
 
 /// The arguments the sensitivity test moves off one at a time.
@@ -471,7 +478,7 @@ fn each_argument_alone_reaches_the_device() {
         }
     }
 
-    tally.assert_bounds("each argument alone");
+    assert_tally(&tally, "each argument alone");
 }
 
 #[test]
