@@ -79,7 +79,7 @@ pub struct Eedi3Antialias {
     pub touched: Vec<bool>,
 }
 
-/// How the multiplies that a compiler may fuse are rounded.
+/// How the connection cost's multiplies, which a compiler may fuse, are rounded.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Contraction {
     /// Every multiply and add rounded on its own, as the plugin does.
@@ -280,15 +280,7 @@ pub fn reference_eedi3_antialias(
     let even_kept = reference_eedi3_field(plane, width, height, 0, parameters, clips);
     let odd_kept = reference_eedi3_field(plane, width, height, 1, parameters, clips);
 
-    let output = even_kept
-        .output
-        .iter()
-        .zip(&odd_kept.output)
-        .map(|(first, second)| {
-            let merged = (*first as i32 + *second as i32 + 1) >> 1;
-            merged as f32
-        })
-        .collect();
+    let output = merge_eedi3_fields(&even_kept.output, &odd_kept.output);
     let touched = even_kept
         .touched
         .iter()
@@ -297,4 +289,26 @@ pub fn reference_eedi3_antialias(
         .collect();
 
     Eedi3Antialias { output, touched }
+}
+
+/// Two field passes merged, `floor((first + second + 1) / 2)` per sample.
+pub fn merge_eedi3_fields(first: &[f32], second: &[f32]) -> Vec<f32> {
+    first
+        .iter()
+        .zip(second)
+        .map(|(first, second)| {
+            let merged = (*first as i32 + *second as i32 + 1) >> 1;
+            merged as f32
+        })
+        .collect()
+}
+
+/// The rows the reliability check rewrites in a plane `height` rows tall, whose first rebuilt row is
+/// `first_rebuilt`.
+///
+/// These are the rebuilt rows with a rebuilt row two above and two below.
+pub fn eedi3_checked_rows(first_rebuilt: u32, height: u32) -> impl Iterator<Item = u32> {
+    (first_rebuilt..height)
+        .step_by(2)
+        .filter(move |row| *row >= 2 && *row + 3 <= height)
 }

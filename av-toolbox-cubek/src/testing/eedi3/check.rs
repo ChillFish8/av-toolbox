@@ -1,6 +1,5 @@
 use super::path::Grid;
-use super::touched::blend_is_close;
-use super::{CheckOrder, Contraction, Settings};
+use super::{CheckOrder, Settings, eedi3_checked_rows};
 
 /// The planes of one field pass as it is built, each at the input's size.
 pub(super) struct PassPlanes {
@@ -81,26 +80,14 @@ fn combine(first: i32, second: i32, vcheck: u32) -> i32 {
     }
 }
 
-/// `keep * sample + weight * fallback`, with the add fused into a multiply as `contraction` picks.
-fn blend(keep: f32, sample: i32, weight: f32, fallback: i32, contraction: Contraction) -> f32 {
+/// `keep * sample + weight * fallback`, each operation rounded on its own.
+fn blend(keep: f32, sample: i32, weight: f32, fallback: i32) -> f32 {
     let sample = sample as f32;
     let fallback = fallback as f32;
+    let kept_part = keep * sample;
+    let fallback_part = weight * fallback;
 
-    match contraction {
-        Contraction::Plain => {
-            let kept_part = keep * sample;
-            let fallback_part = weight * fallback;
-            kept_part + fallback_part
-        },
-        Contraction::FuseLater => {
-            let kept_part = keep * sample;
-            weight.mul_add(fallback, kept_part)
-        },
-        Contraction::FuseEarlier => {
-            let fallback_part = weight * fallback;
-            keep.mul_add(sample, fallback_part)
-        },
-    }
+    kept_part + fallback_part
 }
 
 /// The planes one checked sample reads, by row and column.
@@ -212,18 +199,17 @@ fn check_sample(
     let strongest = offset_weight.max(change_weight).max(lean_weight);
     let weight = strongest.min(1.0);
     let keep = 1.0 - weight;
-    let blended = blend(keep, here, weight, fallback, settings.variant.contraction);
+    let blended = blend(keep, here, weight, fallback);
 
     let reads_touched = reads.touched(row - 2, ahead)
         || reads.touched(row, behind)
         || reads.touched(row, ahead)
         || reads.touched(row + 2, behind)
         || reads.touched(row, column);
-    let close = blend_is_close(keep, here, weight, fallback);
 
     Checked {
         value: blended as i32,
-        touched: path_touched || close || reads_touched,
+        touched: path_touched || reads_touched,
     }
 }
 
@@ -240,11 +226,9 @@ pub(super) fn reliability_check(
     let unchecked = planes.output.clone();
     let width = grid.width as usize;
 
-    for row in (first_rebuilt..grid.height).step_by(2) {
-        if row < 2 || row > grid.height - 3 {
-            continue;
-        }
-
+    let rows = eedi3_checked_rows(first_rebuilt as u32, grid.height as u32);
+    for checked_row in rows {
+        let row = checked_row as i32;
         let above = match settings.variant.check_order {
             CheckOrder::CheckedAbove => &planes.output,
             CheckOrder::UncheckedAbove => &unchecked,

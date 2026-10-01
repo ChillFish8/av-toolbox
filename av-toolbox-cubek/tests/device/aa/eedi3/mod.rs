@@ -1,3 +1,5 @@
+mod exact;
+
 use av_toolbox_cubek::aa::{
     Eedi3Arguments,
     Eedi3DeviceClips,
@@ -18,6 +20,8 @@ use av_toolbox_cubek::testing::{
     Lending,
     SplitMix,
     TieOrder,
+    eedi3_checked_rows,
+    merge_eedi3_fields,
     random_eedi3_mask,
     random_eedi3_parameters,
     random_eedi3_plane,
@@ -28,6 +32,7 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
+use crate::aa::transposed_plane;
 use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32};
 
 fn arguments_for(parameters: &Eedi3Parameters) -> Eedi3Arguments {
@@ -231,6 +236,11 @@ fn on_device(case: &PlaneCase) -> Vec<DevicePass> {
 fn compare_case(tally: &mut CloseDecisionTally, case: &PlaneCase) {
     let passes = on_device(case);
 
+    compare_passes(tally, case, &passes);
+}
+
+/// Adds both field passes the device computed for `case` to `tally`, against the reference's.
+fn compare_passes(tally: &mut CloseDecisionTally, case: &PlaneCase, passes: &[DevicePass]) {
     for (offset, found) in passes.iter().enumerate() {
         let expected = case.reference(offset as u32);
         let label = format!("{} at offset {offset}", case.label);
@@ -464,8 +474,8 @@ fn flat_planes_with_hard_edges_match() {
     assert_tally(&tally, "flat planes");
 }
 
-/// The `sclip` fixture's blends are often close at these arguments, so a larger plane with `sclip` and the
-/// same arguments counts toward the tally's bounds too.
+/// The `sclip` fixture is too small for the tally's bounds on its own, so a larger plane with `sclip` and
+/// the same arguments counts toward them too.
 #[test]
 fn sclip_replaces_the_cubic_fallback() {
     let fixture = Eedi3Fixture::named("based");
@@ -615,8 +625,8 @@ fn larger_masked_case(parameters: Eedi3Parameters) -> PlaneCase {
     case
 }
 
-/// The `mclip` fixtures' blends are often close at these arguments, so a larger plane with the same
-/// arguments and both clips counts toward the tally's bounds too.
+/// The `mclip` fixtures are too small for the tally's bounds on their own, so a larger plane with the same
+/// arguments and both clips counts toward them too.
 #[test]
 fn every_mclip_fixture_matches_on_the_device() {
     let masked_fixtures: Vec<&Eedi3Fixture> = EEDI3_FIXTURES
@@ -798,4 +808,163 @@ fn seeded_random_masks_match() {
     }
 
     assert_tally(&tally, "seeded random masks");
+}
+
+/// Asserts that the device's checked rows of `case` equal the reference's at every untouched sample,
+/// handing back how many samples it compared.
+fn assert_checked_rows_match(case: &PlaneCase) -> usize {
+    let passes = on_device(case);
+    let columns = case.width as usize;
+
+    let mut compared = 0;
+    for (offset, found) in passes.iter().enumerate() {
+        let expected = case.reference(offset as u32);
+        let first_rebuilt = 1 - offset as u32;
+        let rows = eedi3_checked_rows(first_rebuilt, case.height);
+        for row in rows {
+            let start = row as usize * columns;
+            for index in start..start + columns {
+                if expected.touched[index] {
+                    continue;
+                }
+
+                let column = index - start;
+                assert_eq!(
+                    found.output[index], expected.output[index],
+                    "{} at offset {offset}: row {row}, column {column} differs",
+                    case.label
+                );
+                compared += 1;
+            }
+        }
+    }
+
+    compared
+}
+
+/// A random plane at `based_aa`'s `vthresh`, of 8 to 16 bits, 8 to 200 columns and 4 to 40 rows.
+fn random_based_case(seed: u64) -> PlaneCase {
+    let mut random = SplitMix(seed);
+    let bits = 8 + random.below(9);
+    let width = 8 + random.below(193);
+    let height = 4 + 2 * random.below(19);
+    let drawn = random_eedi3_parameters(&mut random, bits);
+    let kinds = [
+        Eedi3PlaneKind::Edge,
+        Eedi3PlaneKind::NoisyEdge,
+        Eedi3PlaneKind::Noise,
+    ];
+    let input = random_eedi3_plane(&mut random, width, height, bits, &kinds);
+    let sclip = random_eedi3_plane(&mut random, width, height, bits, &kinds);
+    let parameters = Eedi3Parameters {
+        vcheck: 1 + (seed % 3) as u32,
+        vthresh: [12.0, 24.0, 4.0],
+        ..drawn
+    };
+
+    let label = format!("seed {seed}");
+    let mut case = PlaneCase::new(&label, width, height, parameters, input);
+    if seed % 2 == 1 {
+        case.sclip = Some(sclip);
+    }
+
+    case
+}
+
+#[test]
+fn the_blend_is_exact_on_the_device() {
+    let fixture = Eedi3Fixture::named("based");
+    let mut based = PlaneCase::of_fixture(fixture);
+    based.sclip = fixture.sclip_plane();
+    based.mclip = fixture.mclip_plane();
+    assert_eq!(based.parameters.vthresh, [12.0, 24.0, 4.0]);
+
+    let mut compared = assert_checked_rows_match(&based);
+    for seed in 0..100 {
+        let case = random_based_case(seed);
+        compared += assert_checked_rows_match(&case);
+    }
+
+    assert!(
+        compared > 100_000,
+        "only {compared} checked samples were compared"
+    );
+}
+
+/// `based_aa`'s EEDI3 arguments on a plane of `bits` per sample.
+fn based_parameters(bits: u32) -> Eedi3Parameters {
+    Eedi3Parameters {
+        alpha: 0.125,
+        gamma: 40.0,
+        vthresh: [12.0, 24.0, 4.0],
+        bits,
+        ..Eedi3Parameters::default()
+    }
+}
+
+/// Lines 3 samples wide at 235 on 16, on the 8-bit scale, repeating every 16 columns and moving `slope`
+/// columns per row.
+fn periodic_diagonals(width: u32, height: u32, slope: u32, bits: u32) -> Vec<f32> {
+    let unit = 1 << (bits - 8);
+
+    let mut plane = Vec::new();
+    for row in 0..height {
+        for column in 0..width {
+            let on_line = (column + slope * row) % 16 < 3;
+            let level = if on_line { 235 } else { 16 };
+            let value = level * unit;
+            plane.push(value as f32);
+        }
+    }
+
+    plane
+}
+
+/// Checks one direction of `case` through a tally of its own, handing back the device's merged output.
+fn check_direction(case: &PlaneCase, tallied: bool) -> Vec<f32> {
+    let passes = on_device(case);
+
+    if tallied {
+        let mut tally = CloseDecisionTally::new();
+        compare_passes(&mut tally, case, &passes);
+        assert_tally(&tally, &case.label);
+    }
+
+    merge_eedi3_fields(&passes[0].output, &passes[1].output)
+}
+
+/// Checks periodic diagonals of `slope` on `bits` per sample, vertically, horizontally and both, each
+/// through a tally of its own.
+fn check_diagonals(bits: u32, slope: u32) {
+    let width = 640;
+    let height = 360;
+    let parameters = based_parameters(bits);
+    let input = periodic_diagonals(width, height, slope, bits);
+    let turned = transposed_plane(&input, width, height);
+
+    // Slope 2 ties exactly along every vertical path, which touches 16 % of samples.
+    let vertical_label = format!("{bits}-bit slope {slope} vertical");
+    let vertical = PlaneCase::new(&vertical_label, width, height, parameters, input);
+    let vertical_output = check_direction(&vertical, slope != 2);
+
+    let horizontal_label = format!("{bits}-bit slope {slope} horizontal");
+    let horizontal = PlaneCase::new(&horizontal_label, height, width, parameters, turned);
+    check_direction(&horizontal, true);
+
+    let both_input = transposed_plane(&vertical_output, width, height);
+    let both_label = format!("{bits}-bit slope {slope} both");
+    let both = PlaneCase::new(&both_label, height, width, parameters, both_input);
+    check_direction(&both, true);
+}
+
+#[test]
+fn periodic_diagonals_match_at_based_settings() {
+    // Each plane takes about six seconds on the reference, so they run side by side.
+    std::thread::scope(|scope| {
+        for bits in [8, 10] {
+            for slope in 2..=5 {
+                scope.spawn(move || check_diagonals(bits, slope));
+            }
+        }
+    });
 }

@@ -1,4 +1,5 @@
 mod check;
+mod exact;
 mod interpolate;
 mod mask;
 mod path;
@@ -8,6 +9,8 @@ mod path;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use self::exact::eedi3_mul_exact;
 use crate::{DevicePlane, Dispatch};
 
 /// The widest `mdis`, which sizes the path kernel's shared memory.

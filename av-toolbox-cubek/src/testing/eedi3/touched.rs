@@ -61,29 +61,6 @@ pub(super) fn close_directions(tables: &PathTables, active: &[bool], width: i32,
     touched
 }
 
-/// Whether `value` is not exactly an f32.
-fn inexact(value: f64) -> bool {
-    let rounded = value as f32;
-
-    f64::from(rounded) != value
-}
-
-/// Whether fusing the blend `keep * sample + weight * fallback` can move its truncation to another
-/// integer.
-///
-/// When both products are exact in f32, fusing cannot change the sum.
-pub(super) fn blend_is_close(keep: f32, sample: i32, weight: f32, fallback: i32) -> bool {
-    let kept_part = f64::from(keep) * f64::from(sample);
-    let fallback_part = f64::from(weight) * f64::from(fallback);
-    if !inexact(kept_part) && !inexact(fallback_part) {
-        return false;
-    }
-
-    let value = kept_part + fallback_part;
-    let distance = (value - value.round()).abs();
-    distance <= CLOSE_MARGIN * value.max(1.0)
-}
-
 /// Counts how the planes a port computed compare with the reference's, over any number of planes.
 ///
 /// Every sample that differs must be one the reference marks as touched. Over everything compared, at

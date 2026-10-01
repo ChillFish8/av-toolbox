@@ -2,6 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
+use super::exact::mul_exact;
 use super::interpolate::clamped_sixteenth;
 use super::{FieldPass, plane_row, row_start, sample_at};
 use crate::Dispatch;
@@ -104,8 +105,12 @@ fn blend_check(
     let strongest = f32::max(stronger, lean_weight);
     let weight = f32::min(strongest, 1.0);
     let keep = 1.0 - weight;
-    let kept_part = keep * reads.here as f32;
-    let fallback_part = weight * fallback as f32;
+    let here_sample = reads.here as f32;
+    let fallback_sample = fallback as f32;
+
+    // Both products are exact, so no multiply can fuse into the sum and it rounds as the plugin's does.
+    let kept_part = mul_exact(keep, here_sample);
+    let fallback_part = mul_exact(weight, fallback_sample);
     let blended = kept_part + fallback_part;
 
     blended as i32

@@ -59,6 +59,8 @@ pub use self::eedi3::{
     Lending,
     SplitMix,
     TieOrder,
+    eedi3_checked_rows,
+    merge_eedi3_fields,
     random_eedi3_mask,
     random_eedi3_parameters,
     random_eedi3_plane,

@@ -17,6 +17,8 @@ pub use self::eedi2::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use self::eedi2::{Eedi2Stage, eedi2_fill_round, eedi2_passes_through};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::eedi3::eedi3_mul_exact;
 pub use self::eedi3::{
     Eedi3Arguments,
     Eedi3DeviceClips,

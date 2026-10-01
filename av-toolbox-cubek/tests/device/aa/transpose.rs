@@ -2,6 +2,7 @@ use av_toolbox_cubek::aa::transpose;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
+use crate::aa::transposed_plane;
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 struct Transpose {
@@ -44,17 +45,6 @@ fn on_device(input: &[f32], width: u32, height: u32) -> (Vec<f32>, Vec<f32>) {
     backend().build(task)
 }
 
-fn expected_transpose(input: &[f32], width: usize, height: usize) -> Vec<f32> {
-    let mut output = vec![0.0; input.len()];
-    for y in 0..height {
-        for x in 0..width {
-            output[x * height + y] = input[y * width + x];
-        }
-    }
-
-    output
-}
-
 #[test]
 fn transpose_swaps_axes() {
     let width = 7;
@@ -68,7 +58,7 @@ fn transpose_swaps_axes() {
 
     let (transposed, round_trip) = on_device(&input, width as u32, height as u32);
 
-    let expected = expected_transpose(&input, width, height);
+    let expected = transposed_plane(&input, width as u32, height as u32);
     assert_eq!(transposed, expected);
     assert_eq!(round_trip, input);
 }
