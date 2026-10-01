@@ -15,6 +15,7 @@ use crate::artcnn::{
     TILE_BUDGET,
     Weights,
     WeightsError,
+    fits_whole,
     layer_shapes,
     tile_side,
     tiles,
@@ -504,6 +505,121 @@ fn the_allocation_limit_bounds_the_widened_conv0() {
     let side = tile_side(8, 3, Precision::F16, BodyPath::Convolution, TILE_BUDGET, 1 << 16);
 
     assert_eq!(side, 26);
+}
+
+#[test]
+fn an_f16_frame_of_1920x1092_runs_whole_and_one_row_more_does_not() {
+    // 4 maps of 64 f16 values are 512 bytes a sample, so the 1 GiB budget holds 2,097,152 samples.
+    // 1920x1092 is 2,096,640 samples and 1920x1093 is 2,098,560.
+    let fits = fits_whole(
+        64,
+        Precision::F16,
+        BodyPath::Convolution,
+        1920,
+        1092,
+        TILE_BUDGET,
+        usize::MAX,
+    );
+    let taller = fits_whole(
+        64,
+        Precision::F16,
+        BodyPath::Convolution,
+        1920,
+        1093,
+        TILE_BUDGET,
+        usize::MAX,
+    );
+
+    assert!(fits);
+    assert!(!taller);
+}
+
+#[test]
+fn a_frame_using_exactly_the_budget_runs_whole() {
+    // 2048x1024 is 2,097,152 samples of 512 bytes, exactly 1 GiB.
+    let fits = fits_whole(
+        64,
+        Precision::F16,
+        BodyPath::Convolution,
+        2048,
+        1024,
+        TILE_BUDGET,
+        usize::MAX,
+    );
+
+    assert!(fits);
+}
+
+#[test]
+fn an_f32_1080p_frame_never_runs_whole_on_the_im2col_path() {
+    // 3328 bytes a sample over 1920x1080 samples is 6.9 GB.
+    let fits = fits_whole(
+        64,
+        Precision::F32,
+        BodyPath::Im2col,
+        1920,
+        1080,
+        TILE_BUDGET,
+        usize::MAX,
+    );
+
+    assert!(!fits);
+}
+
+#[test]
+fn the_largest_buffer_must_fit_the_allocation_limit_to_run_whole() {
+    // At f16 on the convolution path, conv0 is the largest buffer, 128 bytes a sample, so a 1920x1080
+    // frame needs 1920 * 1080 * 128 = 265,420,800 bytes in one buffer.
+    let limit = 265_420_800;
+    let fits = fits_whole(
+        64,
+        Precision::F16,
+        BodyPath::Convolution,
+        1920,
+        1080,
+        TILE_BUDGET,
+        limit,
+    );
+    let short = fits_whole(
+        64,
+        Precision::F16,
+        BodyPath::Convolution,
+        1920,
+        1080,
+        TILE_BUDGET,
+        limit - 1,
+    );
+
+    assert!(fits);
+    assert!(!short);
+}
+
+#[test]
+fn running_whole_counts_the_widened_conv0() {
+    // 8 f16 features on the convolution path hold three maps of 16 bytes and a conv0 of 64, so a 10x10
+    // frame needs 100 * 112 = 11,200 bytes, and conv0 alone 100 * 64 = 6,400.
+    let fits = fits_whole(8, Precision::F16, BodyPath::Convolution, 10, 10, 11_200, 6_400);
+    let over_budget = fits_whole(8, Precision::F16, BodyPath::Convolution, 10, 10, 11_199, 6_400);
+    let over_allocation = fits_whole(8, Precision::F16, BodyPath::Convolution, 10, 10, 11_200, 6_399);
+
+    assert!(fits);
+    assert!(!over_budget);
+    assert!(!over_allocation);
+}
+
+#[test]
+fn a_frame_whose_bytes_overflow_does_not_run_whole() {
+    let fits = fits_whole(
+        64,
+        Precision::F16,
+        BodyPath::Convolution,
+        u32::MAX,
+        u32::MAX,
+        usize::MAX,
+        usize::MAX,
+    );
+
+    assert!(!fits);
 }
 
 #[test]

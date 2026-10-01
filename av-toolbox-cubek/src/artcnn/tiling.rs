@@ -67,6 +67,30 @@ pub fn tile_side(
     centre.max(1)
 }
 
+/// Whether a `width` by `height` frame runs as one tile within `budget` bytes of scratch.
+///
+/// `max_allocation` is the device's largest single buffer, which the frame's largest buffer must also fit.
+pub fn fits_whole(
+    features: u32,
+    precision: Precision,
+    path: BodyPath,
+    width: u32,
+    height: u32,
+    budget: usize,
+    max_allocation: usize,
+) -> bool {
+    let samples = width as usize * height as usize;
+    let per_sample = bytes_per_sample(features, precision, path);
+    let largest_per_sample = largest_buffer_bytes_per_sample(features, precision, path);
+    let scratch_bytes = samples.checked_mul(per_sample);
+    let largest_bytes = samples.checked_mul(largest_per_sample);
+
+    match (scratch_bytes, largest_bytes) {
+        (Some(scratch), Some(largest)) => scratch <= budget && largest <= max_allocation,
+        _ => false,
+    }
+}
+
 /// The scratch the largest region of a `width` by `height` frame needs, split into tiles of `tile`.
 ///
 /// A region is at most `tile + 2 * halo` on a side, and never larger than the frame.

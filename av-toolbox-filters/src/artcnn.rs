@@ -13,6 +13,7 @@ use av_toolbox_cubek::artcnn::{
     Weights,
     WeightsError,
     artcnn,
+    fits_whole,
     scratch_sizes,
     tile_side,
     warm_up,
@@ -216,13 +217,34 @@ fn load_network<R: Runtime>(
     }
 }
 
-/// The largest tile the scratch budget and the device's largest buffer allow on `path`.
-fn tile_for(network: &Network, path: BodyPath, cap: usize) -> u32 {
+/// The tile side a `width` by `height` frame runs at on `path`.
+///
+/// That is the frame's longer side, one tile, when the whole frame fits the scratch budget and `cap`, the
+/// device's largest buffer. Otherwise it is the largest square tile they allow.
+pub(crate) fn frame_tile(
+    features: u32,
+    halo: u32,
+    precision: Precision,
+    path: BodyPath,
+    cap: usize,
+    width: u32,
+    height: u32,
+) -> u32 {
+    let whole = fits_whole(features, precision, path, width, height, TILE_BUDGET, cap);
+
+    if whole {
+        return width.max(height);
+    }
+
+    tile_side(features, halo, precision, path, TILE_BUDGET, cap)
+}
+
+fn tile_for(network: &Network, path: BodyPath, cap: usize, width: u32, height: u32) -> u32 {
     let features = network.features();
     let halo = network.halo();
     let precision = network.precision();
 
-    tile_side(features, halo, precision, path, TILE_BUDGET, cap)
+    frame_tile(features, halo, precision, path, cap, width, height)
 }
 
 /// The four feature maps and, on the im2col path, the columns that a frame's tiles work in.
@@ -286,7 +308,7 @@ fn warm_up_on<R: Runtime>(
     width: u32,
     height: u32,
 ) -> Result<u32, ArtcnnError> {
-    let tile = tile_for(network, path, cap);
+    let tile = tile_for(network, path, cap, width, height);
     let buffers = MapBuffers::new(context, network, path, tile, width, height);
     let maps = buffers.maps();
     let sizing = Sizing(context);
@@ -387,9 +409,20 @@ impl Supersampler {
         })
     }
 
+    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    pub(crate) fn path(&self) -> BodyPath {
+        self.path
+    }
+
+    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    pub(crate) fn tile(&self) -> u32 {
+        self.tile
+    }
+
     /// Doubles `input` into `output`, both f32 code values up to `peak`.
     ///
-    /// The output is rounded to code values.
+    /// The output is rounded to code values. `input` must be the size given to
+    /// [Supersampler::load](crate::artcnn::Supersampler::load), since the tile is chosen there.
     pub(crate) fn run<R: Runtime>(
         &self,
         client: &ComputeClient<R>,

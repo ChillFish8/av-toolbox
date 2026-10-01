@@ -26,6 +26,7 @@ use crate::upscale::artcnn::{
     allocation_cap,
     body_path,
     failed_both_paths,
+    frame_tile,
     locate,
 };
 
@@ -313,4 +314,121 @@ fn an_unset_allocation_limit_is_no_cap() {
 
     assert_eq!(allocation_cap(&unset), usize::MAX);
     assert_eq!(allocation_cap(&limited), 1 << 20);
+}
+
+#[test]
+fn an_f16_frame_that_fits_runs_as_one_tile_of_its_longer_side() {
+    let wide = frame_tile(
+        64,
+        27,
+        Precision::F16,
+        BodyPath::Convolution,
+        usize::MAX,
+        1920,
+        1092,
+    );
+    let tall = frame_tile(
+        64,
+        27,
+        Precision::F16,
+        BodyPath::Convolution,
+        usize::MAX,
+        1092,
+        1920,
+    );
+
+    assert_eq!(wide, 1920);
+    assert_eq!(tall, 1920);
+}
+
+#[test]
+fn an_f16_frame_one_row_too_tall_splits_into_square_tiles() {
+    let tile = frame_tile(
+        64,
+        27,
+        Precision::F16,
+        BodyPath::Convolution,
+        usize::MAX,
+        1920,
+        1093,
+    );
+
+    assert_eq!(tile, 1394);
+}
+
+#[test]
+fn an_f32_1080p_frame_on_the_im2col_path_splits_into_square_tiles() {
+    let tile = frame_tile(64, 27, Precision::F32, BodyPath::Im2col, usize::MAX, 1920, 1080);
+
+    assert_eq!(tile, 514);
+}
+
+#[test]
+fn a_frame_too_large_for_the_allocation_limit_splits_into_square_tiles() {
+    // conv0's 128 bytes a sample over 1920x1080 samples is one byte more than this limit.
+    let limit = 265_420_799;
+    let tile = frame_tile(64, 27, Precision::F16, BodyPath::Convolution, limit, 1920, 1080);
+
+    // 265,420,799 / 128 = 2,073,599 samples, and sqrt(2,073,599) = 1439 a side haloed, so 1439 - 54.
+    assert_eq!(tile, 1385);
+}
+
+#[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+mod device_tests {
+    use av_toolbox_gpu::{Backend, BuildContext, BuildTask, Runtime, test_device};
+
+    use super::*;
+    use crate::artcnn::Supersampler;
+
+    /// Loads R8F64 at f16 for a `width` by `height` plane, giving the path and tile it chose.
+    struct Loaded {
+        width: u32,
+        height: u32,
+    }
+
+    impl BuildTask for Loaded {
+        type Output = (BodyPath, u32);
+
+        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+            let loaded = Supersampler::load(
+                STAGE,
+                build,
+                ModelName::R8f64,
+                PrecisionName::F16,
+                self.width,
+                self.height,
+            );
+            let supersampler = loaded.expect("R8F64 loads");
+
+            (supersampler.path(), supersampler.tile())
+        }
+    }
+
+    fn loaded_tile(width: u32, height: u32) -> Option<u32> {
+        let backend = Backend::open_default(test_device()).expect("a backend should open");
+        let task = Loaded { width, height };
+
+        let (path, tile) = backend.build(task);
+        println!("{width}x{height}: {path:?} at tile {tile}");
+
+        (path == BodyPath::Convolution).then_some(tile)
+    }
+
+    #[test]
+    fn the_loaded_supersampler_runs_a_1080p_frame_as_one_tile() {
+        let Some(tile) = loaded_tile(1920, 1080) else {
+            return;
+        };
+
+        assert_eq!(tile, 1920);
+    }
+
+    #[test]
+    fn the_loaded_supersampler_splits_a_frame_one_row_too_tall() {
+        let Some(tile) = loaded_tile(1920, 1093) else {
+            return;
+        };
+
+        assert_eq!(tile, 1394);
+    }
 }

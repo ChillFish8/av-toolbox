@@ -44,7 +44,7 @@ use serde::Deserialize;
 pub(crate) use crate::artcnn::{ModelName, PrecisionName};
 use crate::artcnn::{Supersampler, checked_precision};
 #[cfg(test)]
-pub(crate) use crate::artcnn::{allocation_cap, body_path};
+pub(crate) use crate::artcnn::{allocation_cap, body_path, frame_tile};
 use crate::bits::bits_of;
 use crate::resize::{Tables, Window, geometry, resize_plane, samples_for};
 use crate::scratch::Scratch;

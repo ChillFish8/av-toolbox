@@ -4,8 +4,10 @@ use av_toolbox_cubek::artcnn::{
     Maps,
     Network,
     Precision,
+    TILE_BUDGET,
     Weights,
     artcnn,
+    fits_whole,
     scratch_sizes,
     warm_up,
 };
@@ -225,6 +227,31 @@ fn run_tiled(
     backend().build(task)
 }
 
+/// Asserts a tiled run wrote every sample and matches `untiled` exactly.
+fn assert_identical(tiled: &[f32], untiled: &[f32], path: BodyPath, precision: Precision) {
+    let difference = tiled
+        .iter()
+        .zip(untiled)
+        .map(|(left, right)| (left - right).abs())
+        .fold(0.0f32, f32::max);
+    let differing = tiled
+        .iter()
+        .zip(untiled)
+        .filter(|(left, right)| left != right)
+        .count();
+    println!("tiled {path:?} at {precision:?}: largest difference from untiled {difference:e}");
+
+    assert_eq!(tiled.len(), untiled.len());
+    assert!(
+        tiled.iter().all(|value| *value >= 0.0),
+        "a sample was never written"
+    );
+    assert_eq!(
+        differing, 0,
+        "{path:?} at {precision:?}: {differing} samples differ"
+    );
+}
+
 #[test]
 fn a_tiled_run_matches_an_untiled_run_exactly() {
     let weights = synthetic_weights(8, 2, 6);
@@ -235,27 +262,29 @@ fn a_tiled_run_matches_an_untiled_run_exactly() {
         let tiled = run_tiled(&weights, &plane, 40, 33, path, precision, 8);
         let untiled = run_tiled(&weights, &plane, 40, 33, path, precision, 64);
 
-        let difference = tiled
-            .iter()
-            .zip(&untiled)
-            .map(|(left, right)| (left - right).abs())
-            .fold(0.0f32, f32::max);
-        let differing = tiled
-            .iter()
-            .zip(&untiled)
-            .filter(|(left, right)| left != right)
-            .count();
-        println!("tiled {path:?} at {precision:?}: largest difference from untiled {difference:e}");
+        assert_identical(&tiled, &untiled, path, precision);
+    }
+}
 
-        assert_eq!(tiled.len(), untiled.len());
-        assert!(
-            tiled.iter().all(|value| *value >= 0.0),
-            "a sample was never written"
-        );
-        assert_eq!(
-            differing, 0,
-            "{path:?} at {precision:?}: {differing} samples differ"
-        );
+#[test]
+fn a_whole_frame_run_matches_a_small_tile_run_exactly_on_the_convolution_path() {
+    // At 64 features the whole 200x120 frame is one region of 24,000 samples, which at f16 takes the forced
+    // blueprint. Tiles of 24 with a halo of 6 are regions of at most 36x36, 1,296 samples, which take the
+    // inferred one.
+    let weights = synthetic_weights(64, 1, 9);
+    let plane = textured(200, 120);
+    let runs = supported_runs()
+        .into_iter()
+        .filter(|(path, _)| *path == BodyPath::Convolution);
+
+    for (path, precision) in runs {
+        let fits = fits_whole(64, precision, path, 200, 120, TILE_BUDGET, usize::MAX);
+        assert!(fits, "a 200x120 frame at {precision:?} runs whole");
+
+        let small = run_tiled(&weights, &plane, 200, 120, path, precision, 24);
+        let whole = run_tiled(&weights, &plane, 200, 120, path, precision, 200);
+
+        assert_identical(&small, &whole, path, precision);
     }
 }
 
