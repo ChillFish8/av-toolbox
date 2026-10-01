@@ -1,5 +1,7 @@
 //! Filters that change the frames of a stream
 //!
+//! - `aa/based` anti-aliases luma by running EEDI3 on an ArtCNN supersample and merging the result
+//!   back through an edge mask, the way vs-jetpack's based_aa does.
 //! - `aa/eedi2` anti-aliases by re-interpolating each field along a smoothed map of edge directions, the
 //!   way EEDI2 does.
 //! - `aa/eedi3` anti-aliases by re-interpolating each field along the cheapest path of edge directions
@@ -27,6 +29,7 @@
 //! - `warp/awarpsharp` sharpens by pulling samples toward nearby edges, the way aWarpSharp2 does.
 
 mod aa;
+mod artcnn;
 mod bits;
 mod blend;
 mod checks;
@@ -43,6 +46,8 @@ mod resize;
 mod scratch;
 mod selection;
 mod sizing;
+#[cfg(feature = "test-support")]
+pub mod testing;
 mod upscale;
 mod warp;
 
@@ -53,6 +58,7 @@ use self::resize::{Bicubic, Bilinear, Lanczos, Point, Resize, Spline16, Spline36
 
 /// Registers every filter this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
+    registry.register_filter::<aa::Based>()?;
     registry.register_filter::<aa::Eedi2>()?;
     registry.register_filter::<aa::Eedi3>()?;
     registry.register_filter::<aa::Sangnom>()?;
@@ -101,6 +107,7 @@ mod tests {
 
     #[test]
     fn every_filter_is_registered() {
+        assert!(registered("aa/based"));
         assert!(registered("aa/eedi2"));
         assert!(registered("aa/eedi3"));
         assert!(registered("aa/sangnom"));

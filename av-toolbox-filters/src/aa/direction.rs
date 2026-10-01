@@ -24,11 +24,11 @@ pub(crate) enum Direction {
 }
 
 impl Direction {
-    fn runs_vertically(self) -> bool {
+    pub(crate) fn runs_vertically(self) -> bool {
         matches!(self, Self::Both | Self::Vertical)
     }
 
-    fn runs_horizontally(self) -> bool {
+    pub(crate) fn runs_horizontally(self) -> bool {
         matches!(self, Self::Both | Self::Horizontal)
     }
 }

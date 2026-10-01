@@ -81,7 +81,7 @@ fn default_alpha() -> f64 {
     0.2
 }
 
-fn default_beta() -> f64 {
+pub(crate) fn default_beta() -> f64 {
     0.25
 }
 
@@ -89,15 +89,15 @@ fn default_gamma() -> f64 {
     20.0
 }
 
-fn default_nrad() -> u32 {
+pub(crate) fn default_nrad() -> u32 {
     2
 }
 
-fn default_mdis() -> u32 {
+pub(crate) fn default_mdis() -> u32 {
     20
 }
 
-fn default_vcheck() -> u32 {
+pub(crate) fn default_vcheck() -> u32 {
     2
 }
 
@@ -142,44 +142,63 @@ pub(crate) struct Eedi3Args {
     pub(crate) direction: Direction,
 }
 
-fn wrong_threshold_count(count: usize) -> String {
-    format!("{STAGE} needs vthresh of 3 numbers, got {count}")
+/// EEDI3's settings as a stage's arguments give them, before they are checked.
+pub(crate) struct Eedi3Tuning {
+    pub(crate) alpha: f64,
+    pub(crate) beta: f64,
+    pub(crate) gamma: f64,
+    pub(crate) nrad: u32,
+    pub(crate) mdis: u32,
+    pub(crate) vcheck: u32,
+    pub(crate) vthresh: [f64; 3],
+}
+
+fn wrong_threshold_count(stage: &str, count: usize) -> String {
+    format!("{stage} needs vthresh of 3 numbers, got {count}")
 }
 
 /// Reads `vthresh`, refusing a list of any length but 3 by naming its length.
 fn three_thresholds<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[f64; 3], D::Error> {
+    thresholds_for(STAGE, deserializer)
+}
+
+/// Reads `vthresh` for `stage`, refusing a list of any length but 3 by naming its length.
+pub(crate) fn thresholds_for<'de, D: Deserializer<'de>>(
+    stage: &str,
+    deserializer: D,
+) -> Result<[f64; 3], D::Error> {
     let values = Vec::<f64>::deserialize(deserializer)?;
     let count = values.len();
 
     match <[f64; 3]>::try_from(values) {
         Ok(thresholds) => Ok(thresholds),
         Err(_) => {
-            let message = wrong_threshold_count(count);
+            let message = wrong_threshold_count(stage, count);
             Err(serde::de::Error::custom(message))
         },
     }
 }
 
-fn not_a_weight(name: &str, value: f32) -> StageError {
-    let message = format!("{STAGE} needs {name} of 0 or between 1e-30 and 1, got {value:?}");
+fn not_a_weight(stage: &str, name: &str, value: f32) -> StageError {
+    let message = format!("{stage} needs {name} of 0 or between 1e-30 and 1, got {value:?}");
 
     StageError::msg(message)
 }
 
-fn weights_past_one(sum: f32) -> StageError {
-    let message = format!("{STAGE} needs alpha and beta to add up to at most 1, got {sum:?}");
+fn weights_past_one(stage: &str, sum: f32) -> StageError {
+    let message = format!("{stage} needs alpha and beta to add up to at most 1, got {sum:?}");
 
     StageError::msg(message)
 }
 
-fn gamma_out_of_range(value: f32) -> StageError {
-    let message = format!("{STAGE} needs gamma between 0 and 1e30, got {value:?}");
+fn gamma_out_of_range(stage: &str, value: f32) -> StageError {
+    let message = format!("{stage} needs gamma between 0 and 1e30, got {value:?}");
 
     StageError::msg(message)
 }
 
-fn threshold_too_small(index: usize, value: f32) -> StageError {
-    let message = format!("{STAGE} needs a finite vthresh[{index}] of at least 1e-30, got {value:?}");
+fn threshold_too_small(stage: &str, index: usize, value: f32) -> StageError {
+    let message = format!("{stage} needs a finite vthresh[{index}] of at least 1e-30, got {value:?}");
 
     StageError::msg(message)
 }
@@ -202,64 +221,79 @@ fn too_large(channel: Channel, direction: Direction, mdis: u32, width: u32, heig
 }
 
 /// Rounds the weight `name` to f32, refusing it unless it is 0 or between 1e-30 and 1.
-fn checked_weight(name: &str, value: f64) -> Result<f32, StageError> {
+fn checked_weight(stage: &str, name: &str, value: f64) -> Result<f32, StageError> {
     let rounded = value as f32;
     if rounded == 0.0 || (MIN_POSITIVE..=1.0).contains(&rounded) {
         return Ok(rounded);
     }
 
-    Err(not_a_weight(name, rounded))
+    Err(not_a_weight(stage, name, rounded))
 }
 
 /// Rounds the threshold `vthresh[index]` to f32, refusing it unless it is finite and at least 1e-30.
-fn checked_threshold(index: usize, value: f64) -> Result<f32, StageError> {
+fn checked_threshold(stage: &str, index: usize, value: f64) -> Result<f32, StageError> {
     let rounded = value as f32;
     if rounded.is_finite() && rounded >= MIN_POSITIVE {
         return Ok(rounded);
     }
 
-    Err(threshold_too_small(index, rounded))
+    Err(threshold_too_small(stage, index, rounded))
 }
 
 /// The arguments the device pass takes, once `args` are rounded to f32 and checked.
+pub(crate) fn checked_arguments(args: &Eedi3Args) -> Result<Eedi3Arguments, StageError> {
+    let tuning = Eedi3Tuning {
+        alpha: args.alpha,
+        beta: args.beta,
+        gamma: args.gamma,
+        nrad: args.nrad,
+        mdis: args.mdis,
+        vcheck: args.vcheck,
+        vthresh: args.vthresh,
+    };
+
+    checked_tuning(STAGE, &tuning)
+}
+
+/// The arguments the device pass takes, once `tuning` is rounded to f32 and checked for `stage`.
 ///
 /// `alpha + beta` is checked in f32.
-pub(crate) fn checked_arguments(args: &Eedi3Args) -> Result<Eedi3Arguments, StageError> {
-    let alpha = checked_weight("alpha", args.alpha)?;
-    let beta = checked_weight("beta", args.beta)?;
+pub(crate) fn checked_tuning(stage: &str, tuning: &Eedi3Tuning) -> Result<Eedi3Arguments, StageError> {
+    let alpha = checked_weight(stage, "alpha", tuning.alpha)?;
+    let beta = checked_weight(stage, "beta", tuning.beta)?;
     let sum = alpha + beta;
     if sum > 1.0 {
-        return Err(weights_past_one(sum));
+        return Err(weights_past_one(stage, sum));
     }
 
-    let gamma = args.gamma as f32;
+    let gamma = tuning.gamma as f32;
     if !(0.0..=MAX_GAMMA).contains(&gamma) {
-        return Err(gamma_out_of_range(gamma));
+        return Err(gamma_out_of_range(stage, gamma));
     }
 
-    between_u32(STAGE, "nrad", args.nrad, 0, MAX_NRAD)?;
-    between_u32(STAGE, "mdis", args.mdis, MIN_MDIS, MAX_MDIS)?;
-    between_u32(STAGE, "vcheck", args.vcheck, 0, MAX_VCHECK)?;
+    between_u32(stage, "nrad", tuning.nrad, 0, MAX_NRAD)?;
+    between_u32(stage, "mdis", tuning.mdis, MIN_MDIS, MAX_MDIS)?;
+    between_u32(stage, "vcheck", tuning.vcheck, 0, MAX_VCHECK)?;
 
     let mut vthresh = [0.0; 3];
-    for (index, value) in args.vthresh.iter().enumerate() {
-        vthresh[index] = checked_threshold(index, *value)?;
+    for (index, value) in tuning.vthresh.iter().enumerate() {
+        vthresh[index] = checked_threshold(stage, index, *value)?;
     }
 
     Ok(Eedi3Arguments {
         alpha,
         beta,
         gamma,
-        nrad: args.nrad,
-        mdis: args.mdis,
-        vcheck: args.vcheck,
+        nrad: tuning.nrad,
+        mdis: tuning.mdis,
+        vcheck: tuning.vcheck,
         vthresh,
     })
 }
 
 /// Whether a field pass over a `width` by `height` plane indexes every sample and backpointer word in a
 /// `u32`.
-fn indexable(width: u32, height: u32, mdis: u32) -> bool {
+pub(crate) fn indexable(width: u32, height: u32, mdis: u32) -> bool {
     let samples = width as usize * height as usize;
     let sizes = eedi3_scratch(width, height, mdis);
     let words = sizes.backpointers / size_of::<u32>();
@@ -408,10 +442,11 @@ impl FilterDefinition for Eedi3 {
     }
 }
 
-/// One EEDI3 field pass, which runs the same on every plane and in either direction.
-struct Eedi3FieldPass<'a, R: Runtime> {
-    client: &'a ComputeClient<R>,
-    settings: Eedi3Settings,
+/// One EEDI3 field pass, reading `clips` beside its input.
+pub(crate) struct Eedi3FieldPass<'a, R: Runtime> {
+    pub(crate) client: &'a ComputeClient<R>,
+    pub(crate) settings: Eedi3Settings,
+    pub(crate) clips: Eedi3DeviceClips<'a>,
 }
 
 impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
@@ -430,7 +465,6 @@ impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
         };
 
         let sizing = Sizing(context);
-        let clips = Eedi3DeviceClips::default();
         eedi3_field(
             self.client,
             &sizing,
@@ -439,7 +473,7 @@ impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
             scratch,
             offset,
             &self.settings,
-            clips,
+            self.clips,
         );
     }
 }
@@ -463,6 +497,7 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
         let pass = Eedi3FieldPass {
             client: &self.client,
             settings: self.settings,
+            clips: Eedi3DeviceClips::default(),
         };
 
         run_direction(&self.client, context, &pass, &pass, input, output, self.direction);

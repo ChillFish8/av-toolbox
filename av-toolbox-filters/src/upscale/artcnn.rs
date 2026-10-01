@@ -1,5 +1,3 @@
-use std::io;
-
 use av_toolbox_core::{
     BoundInputs,
     Filter,
@@ -14,21 +12,8 @@ use av_toolbox_core::{
     StreamType,
 };
 use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::artcnn::{
-    ArtcnnError,
-    BodyPath,
-    Maps,
-    Model,
-    Network,
-    Precision,
-    TILE_BUDGET,
-    Weights,
-    WeightsError,
-    artcnn,
-    scratch_sizes,
-    tile_side,
-    warm_up,
-};
+#[cfg(test)]
+use av_toolbox_cubek::artcnn::ArtcnnError;
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::resize::{Kernel, Samples};
 use av_toolbox_cubek::values::{narrow, widen};
@@ -38,7 +23,6 @@ use av_toolbox_gpu::{
     Channel,
     ComputeClient,
     DeviceSide,
-    ElementType,
     FormatSet,
     Frame,
     FrameContext,
@@ -47,17 +31,20 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     Plane,
-    PlaneBuffer,
     ResolvedFormats,
     Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
-use av_toolbox_models::{Located, MissingModel, Store};
+use av_toolbox_models::{Located, Store};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+pub(crate) use crate::artcnn::{ModelName, PrecisionName};
+use crate::artcnn::{Supersampler, checked_precision};
+#[cfg(test)]
+pub(crate) use crate::artcnn::{allocation_cap, body_path};
 use crate::bits::bits_of;
 use crate::resize::{Tables, Window, geometry, resize_plane, samples_for};
 use crate::scratch::Scratch;
@@ -79,47 +66,6 @@ pub(crate) struct ArtcnnArgs {
     /// The feature maps' precision: `f16`, or the slower and more exact `f32`.
     #[serde(default)]
     pub(crate) precision: PrecisionName,
-}
-
-#[derive(Debug, Default, Deserialize, JsonSchema, Copy, Clone, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum ModelName {
-    #[default]
-    R8f64,
-    R16f96,
-}
-
-#[derive(Debug, Default, Deserialize, JsonSchema, Copy, Clone, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum PrecisionName {
-    #[default]
-    F16,
-    F32,
-}
-
-impl ModelName {
-    pub(crate) fn model(self) -> Model {
-        match self {
-            Self::R8f64 => Model::R8F64,
-            Self::R16f96 => Model::R16F96,
-        }
-    }
-
-    fn argument(self) -> &'static str {
-        match self {
-            Self::R8f64 => "r8f64",
-            Self::R16f96 => "r16f96",
-        }
-    }
-}
-
-impl PrecisionName {
-    pub(crate) fn precision(self) -> Precision {
-        match self {
-            Self::F16 => Precision::F16,
-            Self::F32 => Precision::F32,
-        }
-    }
 }
 
 fn upscalable_layout(layout: FrameLayout) -> bool {
@@ -154,63 +100,6 @@ fn unusable_sample(sample: SampleFormat) -> StageError {
     StageError::msg(message)
 }
 
-fn model_missing(name: ModelName, missing: MissingModel) -> StageError {
-    let argument = name.argument();
-    let message = format!("{STAGE} cannot find the weights for model = \"{argument}\". {missing}");
-
-    StageError::msg(message)
-}
-
-fn no_f16_arithmetic() -> StageError {
-    let message = format!(
-        "{STAGE} uses precision f16 by default, which needs f16 arithmetic this device lacks. \
-         Use precision = \"f32\"",
-    );
-
-    StageError::msg(message)
-}
-
-fn unreadable_model(file: &str, error: io::Error) -> StageError {
-    let message = format!("{STAGE} could not read its model {file}: {error}");
-
-    StageError::msg(message)
-}
-
-fn broken_model(file: &str, error: WeightsError) -> StageError {
-    let message = format!("{STAGE} could not load its model {file}: {error}");
-
-    StageError::msg(message)
-}
-
-fn path_name(path: BodyPath) -> &'static str {
-    match path {
-        BodyPath::Convolution => "convolution",
-        BodyPath::Im2col => "im2col",
-    }
-}
-
-fn failed_warm_up(path: BodyPath, error: ArtcnnError) -> StageError {
-    let name = path_name(path);
-    let message = format!("{STAGE} could not warm up on the {name} path: {error}");
-
-    StageError::msg(message)
-}
-
-fn failed_run(path: BodyPath, error: ArtcnnError) -> StageError {
-    let name = path_name(path);
-    let message = format!("{STAGE} could not run on the {name} path: {error}");
-
-    StageError::msg(message)
-}
-
-pub(crate) fn failed_both_paths(convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
-    let message = format!(
-        "{STAGE} could not warm up on the convolution path ({convolution}) or on the im2col path ({im2col})",
-    );
-
-    StageError::msg(message)
-}
-
 fn missing_frame() -> StageError {
     let message = format!("{STAGE} expected a frame in slot 0");
 
@@ -225,13 +114,12 @@ fn missing_channel(channel: Channel) -> StageError {
 
 /// Finds `name`'s weight file in `store`, or the copy built into the binary.
 pub(crate) fn locate(store: &Store, name: ModelName) -> Result<Located, StageError> {
-    let model = name.model();
-    let found = store.find("artcnn", model.file_name());
+    crate::artcnn::locate(STAGE, store, name)
+}
 
-    match found {
-        Ok(located) => Ok(located),
-        Err(missing) => Err(model_missing(name, missing)),
-    }
+#[cfg(test)]
+pub(crate) fn failed_both_paths(convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
+    crate::artcnn::failed_both_paths(STAGE, convolution, im2col)
 }
 
 /// The input format, once it is known to be U8 or U16 frames in a grey or YUV layout.
@@ -277,190 +165,6 @@ pub(crate) fn doubled(input: &FrameFormat) -> FrameFormat {
         width: input.width * 2,
         height: input.height * 2,
         ..*input
-    }
-}
-
-/// The feature maps' precision, refusing f16 on a device without f16 arithmetic.
-pub(crate) fn checked_precision(
-    capabilities: &Capabilities,
-    precision: PrecisionName,
-) -> Result<Precision, StageError> {
-    let computes_f16 = capabilities.can_compute(ElementType::F16);
-
-    if precision == PrecisionName::F16 && !computes_f16 {
-        return Err(no_f16_arithmetic());
-    }
-
-    let chosen = precision.precision();
-    Ok(chosen)
-}
-
-/// The body path for `precision`, taking the convolution path when the device has cooperative matrices
-/// for it.
-pub(crate) fn body_path(capabilities: &Capabilities, precision: Precision) -> BodyPath {
-    let operands = match precision {
-        Precision::F16 => ElementType::F16,
-        Precision::F32 => ElementType::F32,
-    };
-    let offered = capabilities.has_cooperative_matrix(operands, ElementType::F32);
-
-    if offered {
-        BodyPath::Convolution
-    } else {
-        BodyPath::Im2col
-    }
-}
-
-/// The device's largest single buffer, treating an unset limit of 0 as no cap.
-pub(crate) fn allocation_cap(capabilities: &Capabilities) -> usize {
-    let limit = capabilities.max_allocation;
-
-    if limit == 0 {
-        return usize::MAX;
-    }
-
-    usize::try_from(limit).unwrap_or(usize::MAX)
-}
-
-/// Reads, parses and uploads `name`'s weights in `precision`'s type.
-fn load_network<R: Runtime>(
-    client: &ComputeClient<R>,
-    store: &Store,
-    name: ModelName,
-    precision: Precision,
-) -> Result<Network, StageError> {
-    let model = name.model();
-    let file = model.file_name();
-    let located = locate(store, name)?;
-    let read = located.read();
-    let bytes = match read {
-        Ok(bytes) => bytes,
-        Err(error) => return Err(unreadable_model(file, error)),
-    };
-
-    let parsed = Weights::parse(&bytes, model.features(), model.blocks());
-    let weights = match parsed {
-        Ok(weights) => weights,
-        Err(error) => return Err(broken_model(file, error)),
-    };
-
-    let uploaded = Network::upload(client, &weights, precision);
-    match uploaded {
-        Ok(network) => Ok(network),
-        Err(error) => Err(broken_model(file, error)),
-    }
-}
-
-/// The largest tile the scratch budget and the device's largest buffer allow on `path`.
-fn tile_for(network: &Network, path: BodyPath, cap: usize) -> u32 {
-    let features = network.features();
-    let halo = network.halo();
-    let precision = network.precision();
-
-    tile_side(features, halo, precision, path, TILE_BUDGET, cap)
-}
-
-/// The four feature maps and, on the im2col path, the columns that a frame's tiles work in.
-struct MapBuffers {
-    conv0: PlaneBuffer,
-    first: PlaneBuffer,
-    second: PlaneBuffer,
-    third: PlaneBuffer,
-    columns: Option<PlaneBuffer>,
-}
-
-impl MapBuffers {
-    /// Takes scratch for a `width` by `height` frame split into tiles of `tile`.
-    fn new(
-        context: &FrameContext,
-        network: &Network,
-        path: BodyPath,
-        tile: u32,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        let sizes = scratch_sizes(network, path, tile, width, height);
-        let conv0 = context.scratch(sizes.map_bytes);
-        let first = context.scratch(sizes.map_bytes);
-        let second = context.scratch(sizes.map_bytes);
-        let third = context.scratch(sizes.map_bytes);
-        let columns = match path {
-            BodyPath::Convolution => None,
-            BodyPath::Im2col => Some(context.scratch(sizes.column_bytes)),
-        };
-
-        Self {
-            conv0,
-            first,
-            second,
-            third,
-            columns,
-        }
-    }
-
-    fn maps(&self) -> Maps<'_> {
-        let columns = self.columns.as_ref().map(PlaneBuffer::handle);
-
-        Maps {
-            conv0: self.conv0.handle(),
-            first: self.first.handle(),
-            second: self.second.handle(),
-            third: self.third.handle(),
-            columns,
-        }
-    }
-}
-
-/// Warms the network up on `path` at the frame's size, giving the tile side it used.
-fn warm_up_on<R: Runtime>(
-    client: &ComputeClient<R>,
-    context: &FrameContext,
-    network: &Network,
-    path: BodyPath,
-    cap: usize,
-    width: u32,
-    height: u32,
-) -> Result<u32, ArtcnnError> {
-    let tile = tile_for(network, path, cap);
-    let buffers = MapBuffers::new(context, network, path, tile, width, height);
-    let maps = buffers.maps();
-    let sizing = Sizing(context);
-
-    warm_up(client, &sizing, network, path, width, height, tile, maps)?;
-
-    Ok(tile)
-}
-
-/// Warms the network up on `path`, giving the path that ran and its tile side.
-///
-/// When the convolution path fails to launch or to run on this device, it falls back to im2col.
-fn warmed_path<R: Runtime>(
-    client: &ComputeClient<R>,
-    context: &FrameContext,
-    network: &Network,
-    path: BodyPath,
-    cap: usize,
-    input: &FrameFormat,
-) -> Result<(BodyPath, u32), StageError> {
-    let warmed = warm_up_on(client, context, network, path, cap, input.width, input.height);
-
-    let convolution_error = match warmed {
-        Ok(tile) => return Ok((path, tile)),
-        Err(error) if path == BodyPath::Convolution => error,
-        Err(error) => return Err(failed_warm_up(path, error)),
-    };
-
-    tracing::warn!(
-        stage = STAGE,
-        reason = %convolution_error,
-        "the convolution path could not warm up, so the stage falls back to im2col",
-    );
-
-    let fallback = BodyPath::Im2col;
-    let rewarmed = warm_up_on(client, context, network, fallback, cap, input.width, input.height);
-    match rewarmed {
-        Ok(tile) => Ok((fallback, tile)),
-        Err(error) => Err(failed_both_paths(convolution_error, error)),
     }
 }
 
@@ -534,7 +238,7 @@ impl FilterDefinition for Artcnn {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(chosen)?;
-        checked_precision(capabilities, args.precision)?;
+        checked_precision(STAGE, capabilities, args.precision)?;
 
         let store = Store::from_environment();
         locate(&store, args.model)?;
@@ -556,18 +260,16 @@ impl FilterDefinition for Artcnn {
     ) -> Result<Box<dyn Filter>, StageError> {
         let inputs = formats.inputs();
         let input = checked_input(inputs)?;
-        let capabilities = context.capabilities();
-        let precision = checked_precision(capabilities, args.precision)?;
+        let supersampler = Supersampler::load(
+            STAGE,
+            context,
+            args.model,
+            args.precision,
+            input.width,
+            input.height,
+        )?;
 
         let client = context.client().clone();
-        let store = Store::from_environment();
-        let network = load_network(&client, &store, args.model, precision)?;
-
-        let frame_context = context.frame_context();
-        let chosen = body_path(capabilities, precision);
-        let cap = allocation_cap(capabilities);
-        let (path, tile) = warmed_path(&client, &frame_context, &network, chosen, cap, &input)?;
-
         let chroma = chroma_tables(&client, &input);
         let bits = bits_of(input.sample);
         let element = if bits == 8 { Element::U8 } else { Element::U16 };
@@ -576,9 +278,7 @@ impl FilterDefinition for Artcnn {
 
         let upscaler = Upscaler {
             client,
-            network,
-            path,
-            tile,
+            supersampler,
             output: doubled(&input),
             chroma,
             element,
@@ -590,12 +290,10 @@ impl FilterDefinition for Artcnn {
     }
 }
 
-/// Runs `upscale/artcnn` on every frame, with the network, tables and tile chosen at build.
+/// Runs `upscale/artcnn` on every frame, with the network and tables chosen at build.
 struct Upscaler<R: Runtime> {
     client: ComputeClient<R>,
-    network: Network,
-    path: BodyPath,
-    tile: u32,
+    supersampler: Supersampler,
     output: FrameFormat,
     chroma: Option<Tables>,
     element: Element,
@@ -612,10 +310,8 @@ impl<R: Runtime> Upscaler<R> {
 
         let input_values = Scratch::new::<f32>(context, width, height);
         let output_values = Scratch::new::<f32>(context, doubled_width, doubled_height);
-        let buffers = MapBuffers::new(context, &self.network, self.path, self.tile, width, height);
         let input_plane = input_values.plane();
         let output_plane = output_values.plane();
-        let maps = buffers.maps();
 
         let source_handle = input.buffer().handle();
         let target_handle = output.buffer().handle();
@@ -628,20 +324,8 @@ impl<R: Runtime> Upscaler<R> {
 
         widen(&self.client, &sizing, source_plane, input_plane, self.element);
 
-        let ran = artcnn(
-            &self.client,
-            &sizing,
-            &self.network,
-            self.path,
-            input_plane,
-            self.peak,
-            self.tile,
-            maps,
-            output_plane,
-        );
-        if let Err(error) = ran {
-            return Err(failed_run(self.path, error));
-        }
+        self.supersampler
+            .run(&self.client, context, input_plane, self.peak, output_plane)?;
 
         narrow(
             &self.client,

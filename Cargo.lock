@@ -264,6 +264,7 @@ version = "0.1.0"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-cubek",
+ "av-toolbox-filters",
  "av-toolbox-gpu",
  "av-toolbox-models",
  "cubecl",

@@ -27,7 +27,7 @@ pub(crate) const INPUT: usize = 0;
 pub(crate) const MASK: usize = 1;
 
 /// The largest value a mask sample holds.
-const MASK_PEAK: f32 = 255.0;
+pub(crate) const MASK_PEAK: f32 = 255.0;
 
 /// The inputs of a masked stage, a required `input` and an optional `mask` carrying planes to
 /// match it.
@@ -180,6 +180,46 @@ fn missing_mask_plane(stage: &str, channel: Channel) -> StageError {
     StageError::msg(message)
 }
 
+/// The plane of `mask` that serves plane `channel` of a `format` frame, widened to f32 weights.
+///
+/// The mask's full plane serves a full size plane and its chroma plane a subsampled one. A mask plane
+/// that is not `plane_size` is refused.
+pub(crate) fn mask_weights<R: Runtime>(
+    client: &ComputeClient<R>,
+    context: &FrameContext,
+    stage: &str,
+    format: &FrameFormat,
+    mask: &Mask,
+    channel: Channel,
+    plane_size: (u32, u32),
+) -> Result<Scratch, StageError> {
+    let Some(mask_plane) = mask.plane_for(channel, format) else {
+        return Err(missing_mask_plane(stage, channel));
+    };
+
+    let (width, height) = mask_plane.dimensions();
+    if (width, height) != plane_size {
+        return Err(mask_plane_of_another_size(
+            stage,
+            channel,
+            (width, height),
+            plane_size,
+        ));
+    }
+
+    let sizing = Sizing(context);
+    let mask_handle = mask_plane.buffer().handle();
+
+    // Safety: a mask's plane holds exactly `width * height` U8 samples.
+    let mask_samples = unsafe { DevicePlane::new(mask_handle, width, height) };
+
+    let weight = Scratch::new::<f32>(context, width, height);
+    let weight_plane = weight.plane();
+    widen(client, &sizing, mask_samples, weight_plane, Element::U8);
+
+    Ok(weight)
+}
+
 /// Runs `inner` on a plane, then moves the input toward its output by the frame's mask.
 ///
 /// Each plane becomes `input + (filtered - input) * mask / 255`, with `filtered` first held to
@@ -219,31 +259,19 @@ impl<R: Runtime, F: PlaneFilter> PlaneFilter for MaskedFilter<'_, R, F> {
             return Err(missing_channel(self.stage, plane_index));
         };
 
-        let Some(mask_plane) = mask.plane_for(channel, self.format) else {
-            return Err(missing_mask_plane(self.stage, channel));
-        };
-
-        let (width, height) = mask_plane.dimensions();
         let plane_size = (input.width(), input.height());
-        if (width, height) != plane_size {
-            return Err(mask_plane_of_another_size(
-                self.stage,
-                channel,
-                (width, height),
-                plane_size,
-            ));
-        }
+        let weight = mask_weights(
+            self.client,
+            context,
+            self.stage,
+            self.format,
+            mask,
+            channel,
+            plane_size,
+        )?;
+        let weight_plane = weight.plane();
 
         let sizing = Sizing(context);
-        let mask_handle = mask_plane.buffer().handle();
-
-        // Safety: a mask's plane holds exactly `width * height` U8 samples.
-        let mask_samples = unsafe { DevicePlane::new(mask_handle, width, height) };
-
-        let weight = Scratch::new::<f32>(context, width, height);
-        let weight_plane = weight.plane();
-        widen(self.client, &sizing, mask_samples, weight_plane, Element::U8);
-
         let planes = MergePlanes {
             input,
             filtered: output,

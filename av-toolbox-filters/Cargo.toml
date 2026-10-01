@@ -16,6 +16,7 @@ serde = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+av-toolbox-filters = { path = ".", features = ["test-support"] }
 av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }
@@ -27,3 +28,5 @@ metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-cubek/meta
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda", "av-toolbox-cubek/cuda"]
 rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-cubek/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+# Exposes internals for tests in this crate's tests/device suite.
+test-support = []
