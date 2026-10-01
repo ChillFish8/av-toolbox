@@ -11,6 +11,7 @@ use cubecl::server::Handle;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use self::exact::eedi3_mul_exact;
+use crate::plane::{assert_holds, assert_plane};
 use crate::{DevicePlane, Dispatch};
 
 /// The widest `mdis`, which sizes the path kernel's shared memory.
@@ -226,30 +227,6 @@ pub fn eedi3_scratch(width: u32, height: u32, mdis: u32) -> Eedi3ScratchSizes {
 pub struct Eedi3DeviceClips<'a> {
     pub sclip: Option<DevicePlane<'a>>,
     pub mclip: Option<DevicePlane<'a>>,
-}
-
-/// Asserts that `handle` holds at least `bytes`, naming the buffer `name`.
-fn assert_holds(handle: &Handle, bytes: usize, name: &str) {
-    let held = handle.size_in_used();
-
-    assert!(
-        held >= bytes as u64,
-        "the {name} holds {held} bytes, expected {bytes}"
-    );
-}
-
-/// Asserts that `plane` is `width` by `height` and its buffer holds it, naming it `name`.
-fn assert_plane(plane: &DevicePlane<'_>, width: u32, height: u32, name: &str) {
-    assert!(
-        plane.width() == width && plane.height() == height,
-        "the {name} plane is {}x{}, expected {width}x{height}",
-        plane.width(),
-        plane.height(),
-    );
-
-    let bytes = plane.samples() * size_of::<f32>();
-    let label = format!("{name} plane");
-    assert_holds(plane.handle(), bytes, &label);
 }
 
 /// The plane row of the rebuilt row `field_row`, as the kernels count them.

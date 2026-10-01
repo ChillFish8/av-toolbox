@@ -1,3 +1,4 @@
+mod based;
 mod eedi2;
 mod eedi3;
 mod merge;
@@ -6,6 +7,7 @@ mod transpose;
 
 use cubecl::prelude::{CubeCount, CubeDim};
 
+pub use self::based::{binarize_prewitt, double_mclip, pscale_blend};
 pub use self::eedi2::{
     EEDI2_MAX_WIDTH,
     Eedi2Arguments,

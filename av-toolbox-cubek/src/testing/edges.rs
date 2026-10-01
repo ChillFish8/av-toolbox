@@ -24,7 +24,8 @@ fn ring(input: &[f32], width: u32, height: u32, x: i32, y: i32) -> [f32; 8] {
     ]
 }
 
-fn prewitt_magnitude(input: &[f32], width: u32, height: u32, x: i32, y: i32) -> f32 {
+/// The Prewitt gradients across and down the window around `x`, `y`.
+pub(super) fn prewitt_gradients(input: &[f32], width: u32, height: u32, x: i32, y: i32) -> (f32, f32) {
     let top_left = read_reflected(input, width, height, x - 1, y - 1);
     let top = read_reflected(input, width, height, x, y - 1);
     let top_right = read_reflected(input, width, height, x + 1, y - 1);
@@ -36,6 +37,12 @@ fn prewitt_magnitude(input: &[f32], width: u32, height: u32, x: i32, y: i32) -> 
 
     let gx = top_left + left + bottom_left - top_right - right - bottom_right;
     let gy = top_left + top + top_right - bottom_left - bottom - bottom_right;
+
+    (gx, gy)
+}
+
+fn prewitt_magnitude(input: &[f32], width: u32, height: u32, x: i32, y: i32) -> f32 {
+    let (gx, gy) = prewitt_gradients(input, width, height, x, y);
 
     (gx * gx + gy * gy).sqrt()
 }

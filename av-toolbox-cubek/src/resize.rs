@@ -23,12 +23,15 @@ pub enum Kernel {
     Spline16,
     Spline36,
     Spline64,
+    /// Every input sample within half a sample weighs the same, so a downscale averages the samples it
+    /// covers.
+    Box,
 }
 
 impl Kernel {
     /// The weight of an input sample `distance` input samples from the output sample.
     pub fn weight(&self, distance: f32) -> f32 {
-        if let Self::Point = self {
+        if let Self::Point | Self::Box = self {
             return point(distance);
         }
 
@@ -38,7 +41,7 @@ impl Kernel {
         }
 
         match self {
-            Self::Point => point(distance),
+            Self::Point | Self::Box => point(distance),
             Self::Bilinear => 1.0 - x,
             Self::Bicubic { b, c } => bicubic(x, *b, *c),
             Self::Lanczos { taps } => lanczos(x, *taps as f32),
@@ -51,7 +54,7 @@ impl Kernel {
     /// How far this kernel reaches either side, in input samples, before a downscale widens it.
     pub fn support(&self) -> f32 {
         match self {
-            Self::Point => 0.5,
+            Self::Point | Self::Box => 0.5,
             Self::Bilinear => 1.0,
             Self::Bicubic { .. } | Self::Spline16 => 2.0,
             Self::Lanczos { taps } => *taps as f32,
@@ -542,7 +545,7 @@ mod tests {
         Kernel::Spline64,
     ];
 
-    const EVERY: [Kernel; 9] = [
+    const EVERY: [Kernel; 10] = [
         Kernel::Point,
         Kernel::Bilinear,
         Kernel::Bicubic {
@@ -555,6 +558,7 @@ mod tests {
         Kernel::Spline16,
         Kernel::Spline36,
         Kernel::Spline64,
+        Kernel::Box,
     ];
 
     /// The non-zero taps of output sample `index`, as input index and weight.
@@ -656,6 +660,36 @@ mod tests {
             nonzero(&table, 2),
             vec![(3, 0.125), (4, 0.375), (5, 0.375), (6, 0.125)]
         );
+    }
+
+    #[test]
+    fn a_centred_box_halving_averages_each_pair() {
+        let table = centred_taps(6, 3, &Kernel::Box);
+
+        for index in 0..3 {
+            let first = 2 * index as i32;
+            let expected = vec![(first, 0.5), (first + 1, 0.5)];
+
+            assert_eq!(nonzero(&table, index), expected);
+        }
+    }
+
+    #[test]
+    fn a_box_halving_weighs_taps_past_the_edge_at_zero() {
+        let table = centred_taps(6, 3, &Kernel::Box);
+
+        assert_eq!(table.starts[0], -1);
+        assert_eq!(table.weights[0], 0.0);
+    }
+
+    #[test]
+    fn a_left_aligned_box_doubling_weighs_one() {
+        let table = taps(8, 0.5, 0.0, &Kernel::Box);
+
+        for row in table.weights.chunks(table.count as usize) {
+            let total: f32 = row.iter().sum();
+            assert_near(total, 1.0);
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use cubecl::prelude::*;
 
 use super::{NeighbourPlanes, Smooth, median, smooth};
+use crate::plane::assert_plane;
 use crate::{DevicePlane, Dispatch};
 
 /// The planes one MinBlur reads, passes through and writes, all f32 and one size.
@@ -117,16 +118,51 @@ pub fn min_blur<R: Runtime>(
     };
     median(client, dispatch, median_planes, radius);
 
-    let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let blurred = planes.blurred.array::<R>();
-    let middle = planes.median.array::<R>();
-    let output = planes.output.array::<R>();
+    median_of_three(
+        client,
+        dispatch,
+        planes.input,
+        planes.blurred,
+        planes.median,
+        planes.output,
+    );
+}
+
+/// Writes the median of `first`, `second` and `third` at each sample.
+pub fn median_of_three<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    first: DevicePlane<'_>,
+    second: DevicePlane<'_>,
+    third: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+) {
+    let width = output.width();
+    let height = output.height();
+
+    assert_plane(&first, width, height, "first");
+    assert_plane(&second, width, height, "second");
+    assert_plane(&third, width, height, "third");
+    assert_plane(&output, width, height, "output");
+
+    let samples = output.samples();
+    let first_array = first.array::<R>();
+    let second_array = second.array::<R>();
+    let third_array = third.array::<R>();
+    let output_array = output.array::<R>();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: every plane holds `samples` f32 values.
+    // Safety: the asserted sizes make every plane hold `samples` f32 values.
     unsafe {
-        pick_kernel::launch_unchecked::<R>(client, cubes, unit, input, blurred, middle, output);
+        pick_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            first_array,
+            second_array,
+            third_array,
+            output_array,
+        );
     }
 }

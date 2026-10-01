@@ -1,4 +1,5 @@
 mod artcnn;
+mod based;
 mod bilateral;
 mod dehalo;
 mod dering;
@@ -22,6 +23,13 @@ pub use self::artcnn::{
     reference_depth_to_space,
     reference_silu,
     synthetic_weights,
+};
+pub use self::based::{
+    reference_binarize_prewitt,
+    reference_box_halve,
+    reference_double_mclip,
+    reference_median_of_three,
+    reference_pscale_blend,
 };
 pub use self::bilateral::{reference_bilateral, reference_range_weight};
 pub use self::dehalo::{

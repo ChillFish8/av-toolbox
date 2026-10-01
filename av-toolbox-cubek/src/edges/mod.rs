@@ -52,12 +52,38 @@ impl EdgeLimits {
 }
 
 #[cube]
-fn tap(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f32 {
+pub(crate) fn tap(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f32 {
     let x = reflect(column, width as i32);
     let y = reflect(row, height as i32);
     let index = y as u32 * width + x as u32;
 
     input[index as usize]
+}
+
+/// The Prewitt gradient across a 3x3 window, its left column less its right column.
+#[cube]
+pub(crate) fn prewitt_across(
+    top_left: f32,
+    left: f32,
+    bottom_left: f32,
+    top_right: f32,
+    right: f32,
+    bottom_right: f32,
+) -> f32 {
+    top_left + left + bottom_left - top_right - right - bottom_right
+}
+
+/// The Prewitt gradient down a 3x3 window, its top row less its bottom row.
+#[cube]
+pub(crate) fn prewitt_down(
+    top_left: f32,
+    top: f32,
+    top_right: f32,
+    bottom_left: f32,
+    bottom: f32,
+    bottom_right: f32,
+) -> f32 {
+    top_left + top + top_right - bottom_left - bottom - bottom_right
 }
 
 /// The neighbour `slot` steps clockwise from the top left, among the 8 already read taps.
@@ -185,8 +211,8 @@ fn edges_kernel(
     let bottom_right = tap(input, width, height, x + 1, y + 1);
 
     let magnitude = if operator == 0u32 {
-        let gx = top_left + left + bottom_left - top_right - right - bottom_right;
-        let gy = top_left + top + top_right - bottom_left - bottom - bottom_right;
+        let gx = prewitt_across(top_left, left, bottom_left, top_right, right, bottom_right);
+        let gy = prewitt_down(top_left, top, top_right, bottom_left, bottom, bottom_right);
         f32::sqrt(gx * gx + gy * gy)
     } else if operator == 1u32 {
         let gx = top_left + 2.0 * left + bottom_left - top_right - 2.0 * right - bottom_right;
