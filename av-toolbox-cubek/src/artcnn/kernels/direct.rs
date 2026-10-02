@@ -69,8 +69,7 @@ pub struct DirectVariant {
     pub plane_width: u32,
 }
 
-/// The fastest variant at both model widths on an AMD R9700, at 1.5 to 1.7 ms a 1080p convolution at
-/// width 64.
+/// The fastest variant at both model widths on an AMD R9700.
 impl Default for DirectVariant {
     fn default() -> Self {
         Self {
@@ -182,6 +181,7 @@ impl DirectVariant {
             planes_m: self.planes_m,
             planes_n: self.planes_n,
             weights: self.weights,
+            plane_width: self.plane_width,
             silu: activation == Activation::Silu,
             residual,
         })
@@ -198,6 +198,7 @@ pub(crate) struct DirectShape {
     planes_m: u32,
     planes_n: u32,
     weights: WeightStaging,
+    plane_width: u32,
     silu: bool,
     residual: bool,
 }
@@ -205,6 +206,10 @@ pub(crate) struct DirectShape {
 impl DirectShape {
     fn planes(&self) -> u32 {
         self.planes_m * self.planes_n
+    }
+
+    fn units(&self) -> u32 {
+        self.plane_width * self.planes()
     }
 
     /// The halves between one sample and the next in shared memory.
@@ -280,7 +285,9 @@ fn plane_spot(#[comptime] shape: DirectShape) -> PlaneSpot {
 
 /// Loads the block of input samples the workgroup convolves, with its one-sample border, into `block`.
 ///
-/// Samples outside the frame load as zero, the network's padding.
+/// Samples outside the frame load as zero, the network's padding. Each unit issues all of its global loads
+/// before it stores any, so the loads are in flight together. Every load reads an address inside the frame,
+/// and the samples outside it are swapped for zero afterwards, so the loads need no branch.
 #[cube]
 fn load_block(
     input: &Array<Load>,
@@ -295,25 +302,42 @@ fn load_block(
     let stride_loads = comptime!(shape.sample_stride() / LOAD_WIDTH);
     let bordered_columns = comptime!(shape.columns + 2);
     let total = comptime!((shape.rows + 2) * (shape.columns + 2) * shape.features / LOAD_WIDTH);
+    let units = comptime!(shape.units());
+    let rounds = comptime!(total.div_ceil(units) as usize);
+    let last = comptime!(total - 1);
     let zero = Load::new(f16::new(0.0f32));
+    let mut values = Sequence::<Load>::new();
 
-    let mut index = UNIT_POS;
-    while index < total {
+    #[unroll]
+    for round in 0..rounds {
+        // Units past the block's end repeat its last load, and never store it.
+        let index = min(UNIT_POS + comptime!(round as u32 * units), last);
         let sample = index / sample_loads;
         let part = index % sample_loads;
         let column = block_x + sample % bordered_columns;
         let row = block_y + sample / bordered_columns;
         // The border starts one sample before the block, so `column` and `row` are one past the frame's.
         let inside = column >= 1 && row >= 1 && column <= width && row <= height;
-        let mut value = zero;
+        let row_from_top = max(row, 1u32);
+        let column_from_left = max(column, 1u32);
+        let frame_row = min(row_from_top, height) - 1;
+        let frame_column = min(column_from_left, width) - 1;
+        let source = (frame_row * width + frame_column) * sample_loads + part;
+        let loaded = input[source as usize];
 
-        if inside {
-            let source = ((row - 1) * width + column - 1) * sample_loads + part;
-            value = input[source as usize];
+        values.push(select(inside, loaded, zero));
+    }
+
+    #[unroll]
+    for round in 0..rounds {
+        let index = UNIT_POS + comptime!(round as u32 * units);
+
+        if index < total {
+            let sample = index / sample_loads;
+            let part = index % sample_loads;
+
+            block[(sample * stride_loads + part) as usize] = *values.index(round);
         }
-
-        block[(sample * stride_loads + part) as usize] = value;
-        index += CUBE_DIM;
     }
 }
 
@@ -770,8 +794,9 @@ pub(crate) fn run_direct<R: Runtime>(
 
     // Safety: `check` asserts the input, output and residual hold `width * height * F` halves, the weights
     // `F * 9 * F` and the bias `F`, and the assert above keeps every map index inside a u32.
-    // - Input reads are guarded to samples inside the frame. Output writes and residual reads are guarded to
-    //   samples inside the frame, at a channel below `F`.
+    // - Input reads are clamped to samples inside the frame, which holds at least one sample whenever a
+    //   workgroup runs, since the grid is empty when `width` or `height` is 0. Output writes and residual
+    //   reads are guarded to samples inside the frame, at a channel below `F`.
     // - Bias reads take the workgroup's channels, which `shape` keeps below `F`.
     // - A weight fragment's last value is at `((channel + 15) * 9 + tap) * F + chunk * 16 + 15`, below
     //   `9 * F * F`, and its slice ends at most at the weights' end.
