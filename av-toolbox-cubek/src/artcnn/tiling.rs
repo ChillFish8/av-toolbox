@@ -12,10 +12,9 @@ pub const TILE_BUDGET: usize = 1 << 30;
 pub struct ScratchSizes {
     /// The size of the `first`, `second` and `third` feature maps.
     pub map_bytes: usize,
-    /// The size of `conv0`, which the last layer also writes into on
-    /// [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution).
+    /// The size of `conv0`, which the last layer also writes into on the convolution paths.
     pub conv0_bytes: usize,
-    /// The size of the im2col columns, or 0 on [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution).
+    /// The size of the im2col columns, or 0 on the convolution paths.
     pub column_bytes: usize,
 }
 
@@ -25,7 +24,7 @@ fn bytes_per_sample(features: u32, precision: Precision, path: BodyPath) -> usiz
     let map_bytes = 3 * features as usize * value_bytes;
     let conv0_bytes = conv0_sample_bytes(features, precision, path);
     let column_bytes = match path {
-        BodyPath::Convolution => 0,
+        BodyPath::Convolution | BodyPath::UnfusedConvolution => 0,
         BodyPath::Im2col => 9 * features as usize * value_bytes,
     };
 
@@ -39,7 +38,7 @@ fn largest_buffer_bytes_per_sample(features: u32, precision: Precision, path: Bo
     let map_bytes = features as usize * precision.bytes();
 
     match path {
-        BodyPath::Convolution => conv0_sample_bytes(features, precision, path),
+        BodyPath::Convolution | BodyPath::UnfusedConvolution => conv0_sample_bytes(features, precision, path),
         BodyPath::Im2col => 9 * map_bytes,
     }
 }
@@ -120,7 +119,7 @@ pub(crate) fn haloed_scratch(
     let map_bytes = samples * features as usize * value_bytes;
     let conv0_bytes = samples * conv0_sample_bytes(features, precision, path);
     let column_bytes = match path {
-        BodyPath::Convolution => 0,
+        BodyPath::Convolution | BodyPath::UnfusedConvolution => 0,
         BodyPath::Im2col => map_bytes * 9,
     };
 

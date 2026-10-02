@@ -1,5 +1,6 @@
 mod body;
 mod ends;
+mod fused;
 mod tiling;
 
 use av_toolbox_cubek::artcnn::Precision;

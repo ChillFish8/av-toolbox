@@ -26,8 +26,10 @@ use crate::upscale::artcnn::{
     allocation_cap,
     body_path,
     failed_both_paths,
+    fallbacks,
     frame_tile,
     locate,
+    warmed_path,
 };
 
 const STAGE: &str = "upscale/artcnn";
@@ -373,6 +375,118 @@ fn a_frame_too_large_for_the_allocation_limit_splits_into_square_tiles() {
     assert_eq!(tile, 1385);
 }
 
+/// Warms up from `chosen` with every path in `failing` failing, giving the outcome and the paths tried in
+/// turn.
+fn warm_up_failing(
+    chosen: BodyPath,
+    failing: &[BodyPath],
+) -> (Result<(BodyPath, u32), StageError>, Vec<BodyPath>) {
+    let mut tried = Vec::new();
+
+    let warmed = warmed_path(STAGE, chosen, |path| {
+        tried.push(path);
+
+        if failing.contains(&path) {
+            let name = format!("{path:?} failed");
+            return Err(ArtcnnError::Device(name));
+        }
+
+        Ok(100)
+    });
+
+    (warmed, tried)
+}
+
+#[test]
+fn the_fused_convolution_falls_back_to_the_unfused_convolution_then_im2col() {
+    let from_fused = fallbacks(BodyPath::Convolution);
+    let from_unfused = fallbacks(BodyPath::UnfusedConvolution);
+    let from_im2col = fallbacks(BodyPath::Im2col);
+
+    let fused_ladder = [
+        BodyPath::Convolution,
+        BodyPath::UnfusedConvolution,
+        BodyPath::Im2col,
+    ];
+    assert_eq!(from_fused, fused_ladder);
+    assert_eq!(from_unfused, [BodyPath::UnfusedConvolution, BodyPath::Im2col]);
+    assert_eq!(from_im2col, [BodyPath::Im2col]);
+}
+
+#[test]
+fn a_fused_warm_up_that_succeeds_tries_no_other_path() {
+    let (warmed, tried) = warm_up_failing(BodyPath::Convolution, &[]);
+
+    let chosen = warmed.expect("the fused path warms up");
+    assert_eq!(chosen, (BodyPath::Convolution, 100));
+    assert_eq!(tried, [BodyPath::Convolution]);
+}
+
+#[test]
+fn a_failed_fused_warm_up_falls_back_to_the_unfused_convolution() {
+    let (warmed, tried) = warm_up_failing(BodyPath::Convolution, &[BodyPath::Convolution]);
+
+    let chosen = warmed.expect("the unfused path warms up");
+    assert_eq!(chosen, (BodyPath::UnfusedConvolution, 100));
+    assert_eq!(tried, [BodyPath::Convolution, BodyPath::UnfusedConvolution]);
+}
+
+#[test]
+fn failed_warm_ups_on_both_convolution_paths_fall_back_to_im2col() {
+    let failing = [BodyPath::Convolution, BodyPath::UnfusedConvolution];
+
+    let (warmed, tried) = warm_up_failing(BodyPath::Convolution, &failing);
+
+    let chosen = warmed.expect("the im2col path warms up");
+    let ladder = [
+        BodyPath::Convolution,
+        BodyPath::UnfusedConvolution,
+        BodyPath::Im2col,
+    ];
+    assert_eq!(chosen, (BodyPath::Im2col, 100));
+    assert_eq!(tried, ladder);
+}
+
+#[test]
+fn a_warm_up_failing_on_every_path_names_each_cause() {
+    let failing = [
+        BodyPath::Convolution,
+        BodyPath::UnfusedConvolution,
+        BodyPath::Im2col,
+    ];
+
+    let (warmed, tried) = warm_up_failing(BodyPath::Convolution, &failing);
+
+    let error = warmed.expect_err("no path warms up");
+    let message = error.to_string();
+    assert_eq!(tried, failing);
+    assert!(message.contains(STAGE), "{message}");
+    assert!(message.contains("on the fused convolution path ("), "{message}");
+    assert!(
+        message.contains(": Convolution failed), on the unfused"),
+        "{message}"
+    );
+    assert!(
+        message.contains(": UnfusedConvolution failed) or on the im2col"),
+        "{message}"
+    );
+    assert!(message.contains(": Im2col failed)"), "{message}");
+}
+
+#[test]
+fn a_failed_im2col_warm_up_names_its_one_cause() {
+    let (warmed, tried) = warm_up_failing(BodyPath::Im2col, &[BodyPath::Im2col]);
+
+    let error = warmed.expect_err("im2col does not warm up");
+    let message = error.to_string();
+    assert_eq!(tried, [BodyPath::Im2col]);
+    assert!(
+        message.contains("could not warm up on the im2col path"),
+        "{message}"
+    );
+    assert!(message.contains("Im2col failed"), "{message}");
+}
+
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device_tests {
     use av_toolbox_gpu::{Backend, BuildContext, BuildTask, Runtime, test_device};
@@ -404,6 +518,21 @@ mod device_tests {
         }
     }
 
+    /// Loads R8F64 at f16 for a 1080p plane, giving the path the device offers and the path that warmed up.
+    struct LoadedPath;
+
+    impl BuildTask for LoadedPath {
+        type Output = (BodyPath, BodyPath);
+
+        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+            let offered = body_path(build.capabilities(), Precision::F16);
+            let loaded = Supersampler::load(STAGE, build, ModelName::R8f64, PrecisionName::F16, 1920, 1080);
+            let supersampler = loaded.expect("R8F64 loads");
+
+            (offered, supersampler.path())
+        }
+    }
+
     fn loaded_tile(width: u32, height: u32) -> Option<u32> {
         let backend = Backend::open_default(test_device()).expect("a backend should open");
         let task = Loaded { width, height };
@@ -430,5 +559,19 @@ mod device_tests {
         };
 
         assert_eq!(tile, 1394);
+    }
+
+    #[test]
+    fn the_loaded_supersampler_takes_the_fused_path_where_the_device_offers_it() {
+        let backend = Backend::open_default(test_device()).expect("a backend should open");
+
+        let (offered, loaded) = backend.build(LoadedPath);
+
+        println!("offered {offered:?}, loaded {loaded:?}");
+        if offered != BodyPath::Convolution {
+            return;
+        }
+
+        assert_eq!(loaded, BodyPath::Convolution);
     }
 }

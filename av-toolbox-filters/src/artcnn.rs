@@ -106,7 +106,8 @@ fn broken_model(stage: &str, file: &str, error: WeightsError) -> StageError {
 
 fn path_name(path: BodyPath) -> &'static str {
     match path {
-        BodyPath::Convolution => "convolution",
+        BodyPath::Convolution => "fused convolution",
+        BodyPath::UnfusedConvolution => "unfused convolution",
         BodyPath::Im2col => "im2col",
     }
 }
@@ -125,12 +126,37 @@ fn failed_run(stage: &str, path: BodyPath, error: ArtcnnError) -> StageError {
     StageError::msg(message)
 }
 
-pub(crate) fn failed_both_paths(stage: &str, convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
-    let message = format!(
-        "{stage} could not warm up on the convolution path ({convolution}) or on the im2col path ({im2col})",
-    );
+/// The error for a warm-up that failed on every path it tried, naming each path and its cause in turn.
+pub(crate) fn failed_every_path(stage: &str, failures: Vec<(BodyPath, ArtcnnError)>) -> StageError {
+    let mut causes: Vec<String> = failures
+        .iter()
+        .map(|(path, error)| {
+            let name = path_name(*path);
+
+            format!("on the {name} path ({error})")
+        })
+        .collect();
+    let last = causes.pop().unwrap_or_default();
+    let earlier = causes.join(", ");
+    let message = match causes.is_empty() {
+        true => format!("{stage} could not warm up {last}"),
+        false => format!("{stage} could not warm up {earlier} or {last}"),
+    };
 
     StageError::msg(message)
+}
+
+/// The paths a warm-up tries in turn from `chosen`, each falling back to the next.
+pub(crate) fn fallbacks(chosen: BodyPath) -> &'static [BodyPath] {
+    match chosen {
+        BodyPath::Convolution => &[
+            BodyPath::Convolution,
+            BodyPath::UnfusedConvolution,
+            BodyPath::Im2col,
+        ],
+        BodyPath::UnfusedConvolution => &[BodyPath::UnfusedConvolution, BodyPath::Im2col],
+        BodyPath::Im2col => &[BodyPath::Im2col],
+    }
 }
 
 /// Finds `name`'s weight file in `store`, or the copy built into the binary.
@@ -272,7 +298,7 @@ impl MapBuffers {
         let second = context.scratch(sizes.map_bytes);
         let third = context.scratch(sizes.map_bytes);
         let columns = match path {
-            BodyPath::Convolution => None,
+            BodyPath::Convolution | BodyPath::UnfusedConvolution => None,
             BodyPath::Im2col => Some(context.scratch(sizes.column_bytes)),
         };
 
@@ -318,44 +344,44 @@ fn warm_up_on<R: Runtime>(
     Ok(tile)
 }
 
-/// Warms the network up on `path` for a `width` by `height` plane, giving the path that ran and its tile
-/// side.
-///
-/// When the convolution path fails to launch or to run on this device, it falls back to im2col.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a distinct input of the warm-up"
-)]
-fn warmed_path<R: Runtime>(
+/// Warms up on each of [fallbacks](crate::artcnn::fallbacks) from `chosen` in turn with `warm`, giving the
+/// first path that succeeds and its tile side.
+pub(crate) fn warmed_path(
     stage: &'static str,
-    client: &ComputeClient<R>,
-    context: &FrameContext,
-    network: &Network,
-    path: BodyPath,
-    cap: usize,
-    width: u32,
-    height: u32,
+    chosen: BodyPath,
+    mut warm: impl FnMut(BodyPath) -> Result<u32, ArtcnnError>,
 ) -> Result<(BodyPath, u32), StageError> {
-    let warmed = warm_up_on(client, context, network, path, cap, width, height);
+    let ladder = fallbacks(chosen);
+    let mut failures = Vec::new();
 
-    let convolution_error = match warmed {
-        Ok(tile) => return Ok((path, tile)),
-        Err(error) if path == BodyPath::Convolution => error,
-        Err(error) => return Err(failed_warm_up(stage, path, error)),
-    };
+    for (index, path) in ladder.iter().copied().enumerate() {
+        let warmed = warm(path);
 
-    tracing::warn!(
-        stage = stage,
-        reason = %convolution_error,
-        "the convolution path could not warm up, so the stage falls back to im2col",
-    );
+        let error = match warmed {
+            Ok(tile) => return Ok((path, tile)),
+            Err(error) => error,
+        };
 
-    let fallback = BodyPath::Im2col;
-    let rewarmed = warm_up_on(client, context, network, fallback, cap, width, height);
-    match rewarmed {
-        Ok(tile) => Ok((fallback, tile)),
-        Err(error) => Err(failed_both_paths(stage, convolution_error, error)),
+        if let Some(next) = ladder.get(index + 1) {
+            let name = path_name(path);
+            let next_name = path_name(*next);
+            tracing::warn!(
+                stage = stage,
+                reason = %error,
+                "the {name} path could not warm up, so the stage falls back to the {next_name} path",
+            );
+        }
+
+        failures.push((path, error));
     }
+
+    if failures.len() == 1 {
+        let (path, error) = failures.remove(0);
+
+        return Err(failed_warm_up(stage, path, error));
+    }
+
+    Err(failed_every_path(stage, failures))
 }
 
 /// ArtCNN, read, uploaded and warmed up for planes of one size.
@@ -369,8 +395,8 @@ pub(crate) struct Supersampler {
 impl Supersampler {
     /// Finds and reads `model` at `precision`, then warms it up on a `width` by `height` plane.
     ///
-    /// The convolution path is taken when the device offers it, falling back to im2col when it cannot
-    /// run there.
+    /// The fused convolution path is taken when the device offers it, falling back to the unfused
+    /// convolution and then to im2col when it cannot run there.
     pub(crate) fn load<R: Runtime>(
         stage: &'static str,
         context: &BuildContext<R>,
@@ -389,16 +415,9 @@ impl Supersampler {
         let frame_context = context.frame_context();
         let chosen = body_path(capabilities, precision);
         let cap = allocation_cap(capabilities);
-        let warmed = warmed_path(
-            stage,
-            client,
-            &frame_context,
-            &network,
-            chosen,
-            cap,
-            width,
-            height,
-        )?;
+        let warmed = warmed_path(stage, chosen, |path| {
+            warm_up_on(client, &frame_context, &network, path, cap, width, height)
+        })?;
         let (path, tile) = warmed;
 
         Ok(Self {

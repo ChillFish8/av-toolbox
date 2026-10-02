@@ -2,7 +2,7 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use half::f16;
 
-use super::body::{convolve, run_epilogue};
+use super::body::{Finish, body_layer};
 use crate::artcnn::{
     Activation,
     ArtcnnError,
@@ -178,9 +178,9 @@ fn encode(values: &[f16], precision: Precision) -> Vec<u8> {
 /// The device buffers one region's forward pass works in.
 ///
 /// The four maps must be distinct buffers, each holding at least the region's samples times `F` values of the
-/// precision's type. On [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution) the last layer
-/// writes 16 f32 values a sample into `conv0`, so it holds at least 64 bytes a sample. `columns` holds nine
-/// times a map, and is needed on [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) only.
+/// precision's type. On the convolution paths the last layer writes 16 f32 values a sample into `conv0`, so
+/// it holds at least 64 bytes a sample. `columns` holds nine times a map, and is needed on
+/// [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) only.
 ///
 /// A layer reads one map while writing another, so two maps sharing a buffer give wrong results. Only a
 /// handle passed twice is caught, and only in debug builds.
@@ -215,7 +215,6 @@ pub fn run_region<R: Runtime>(
     let every_map = [maps.conv0, maps.first, maps.second, maps.third];
     debug_assert!(are_distinct(&every_map), "two of the maps are the same buffer");
 
-    let samples = region.samples();
     let bytes = map_bytes(network, region);
     for map in every_map {
         assert!(
@@ -240,16 +239,22 @@ pub fn run_region<R: Runtime>(
 
     first_layer(client, dispatch, network, input, peak, region, maps.conv0);
 
-    // The convolution path adds the bias inside each convolution, and im2col adds it in the epilogue.
-    let add_bias = path == BodyPath::Im2col;
     let spare = [maps.first, maps.second, maps.third];
     let mut state = maps.conv0;
     let mut layer = 1;
+    let activated = Finish {
+        activation: Activation::Silu,
+        residual: None,
+    };
 
     for _ in 0..network.blocks() {
         let [first, second] = two_others(&spare, state);
+        let joined = Finish {
+            activation: Activation::None,
+            residual: Some(state),
+        };
 
-        convolve(
+        body_layer(
             client,
             dispatch,
             network,
@@ -259,20 +264,9 @@ pub fn run_region<R: Runtime>(
             first,
             maps.columns,
             region,
+            activated,
         )?;
-        run_epilogue(
-            client,
-            dispatch,
-            network,
-            first,
-            layer,
-            samples,
-            Activation::Silu,
-            None,
-            add_bias,
-        );
-
-        convolve(
+        body_layer(
             client,
             dispatch,
             network,
@@ -282,20 +276,9 @@ pub fn run_region<R: Runtime>(
             second,
             maps.columns,
             region,
+            activated,
         )?;
-        run_epilogue(
-            client,
-            dispatch,
-            network,
-            second,
-            layer + 1,
-            samples,
-            Activation::Silu,
-            None,
-            add_bias,
-        );
-
-        convolve(
+        body_layer(
             client,
             dispatch,
             network,
@@ -305,25 +288,19 @@ pub fn run_region<R: Runtime>(
             first,
             maps.columns,
             region,
+            joined,
         )?;
-        run_epilogue(
-            client,
-            dispatch,
-            network,
-            first,
-            layer + 2,
-            samples,
-            Activation::None,
-            Some(state),
-            add_bias,
-        );
 
         state = first;
         layer += 3;
     }
 
     let [joined, _] = two_others(&spare, state);
-    convolve(
+    let skipped = Finish {
+        activation: Activation::None,
+        residual: Some(maps.conv0),
+    };
+    body_layer(
         client,
         dispatch,
         network,
@@ -333,21 +310,11 @@ pub fn run_region<R: Runtime>(
         joined,
         maps.columns,
         region,
+        skipped,
     )?;
-    run_epilogue(
-        client,
-        dispatch,
-        network,
-        joined,
-        layer,
-        samples,
-        Activation::None,
-        Some(maps.conv0),
-        add_bias,
-    );
 
     match path {
-        BodyPath::Convolution => {
+        BodyPath::Convolution | BodyPath::UnfusedConvolution => {
             // `conv0` is dead once the join has read it, so the padded last layer writes into it.
             padded_last_layer(client, network, joined, region, maps.conv0)?;
             shuffle(client, dispatch, maps.conv0, region, core, peak, output);
@@ -376,13 +343,13 @@ fn conv0_bytes(network: &Network, path: BodyPath, region: Region) -> u64 {
 
 /// The bytes one sample of `conv0` needs on `path`.
 ///
-/// That is one map's sample, widened on [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution) to the
-/// 64 bytes of the padded last layer's 16 f32 values.
+/// That is one map's sample, widened on the convolution paths to the 64 bytes of the padded last layer's 16
+/// f32 values.
 pub(crate) fn conv0_sample_bytes(features: u32, precision: Precision, path: BodyPath) -> usize {
     let map_sample_bytes = features as usize * precision.bytes();
 
     match path {
-        BodyPath::Convolution => map_sample_bytes.max(PADDED_SAMPLE_BYTES),
+        BodyPath::Convolution | BodyPath::UnfusedConvolution => map_sample_bytes.max(PADDED_SAMPLE_BYTES),
         BodyPath::Im2col => map_sample_bytes,
     }
 }

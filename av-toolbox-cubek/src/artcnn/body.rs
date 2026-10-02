@@ -27,6 +27,7 @@ use cubek_matmul::launch::Strategy as MatmulStrategy;
 use cubek_std::cube_count::{CubeCountStrategy, GlobalOrder, HypercubeBlueprint};
 use cubek_std::{InputBinding, MatrixLayout};
 
+use super::fused::launch_fused;
 use super::network::map_bytes;
 use crate::Dispatch;
 use crate::artcnn::{Network, Precision, Region};
@@ -34,8 +35,11 @@ use crate::artcnn::{Network, Precision, Region};
 /// How the body's `F -> F` convolutions run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyPath {
-    /// `cubek-convolution` on cooperative-matrix tiles.
+    /// `cubek-convolution` on cooperative-matrix tiles, applying each layer's SiLU and residual as it writes.
     Convolution,
+    /// `cubek-convolution` on cooperative-matrix tiles, with each layer's SiLU and residual in a separate
+    /// pass.
+    UnfusedConvolution,
     /// An im2col copy of the maps, then a `cubek-matmul` unit matmul.
     Im2col,
 }
@@ -231,9 +235,9 @@ fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32
 /// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights, into `output`. Gives
 /// whether the forced blueprint ran.
 ///
-/// The [BodyPath::Convolution](crate::artcnn::BodyPath::Convolution) path adds the bias inside the
-/// convolution. The [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) path leaves the bias out, and stages
-/// the maps in `columns`, which holds nine times as many values as a map.
+/// The convolution paths add the bias inside the convolution. The
+/// [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) path leaves the bias out, and stages the maps in
+/// `columns`, which holds nine times as many values as a map.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
@@ -252,7 +256,7 @@ pub(crate) fn convolve<R: Runtime>(
     check_layer_maps(network, layer, input, output, region);
 
     match path {
-        BodyPath::Convolution => {
+        BodyPath::Convolution | BodyPath::UnfusedConvolution => {
             let operands = body_operands(network, layer, true);
 
             convolve_on_tiles(client, &operands, input, output, region, true)
@@ -555,7 +559,7 @@ fn contiguous(shape: &[usize]) -> Vec<usize> {
 }
 
 /// Describes a convolution setup failure with `Debug`, since `ConvSetupError` has no `Display`.
-fn convolution_failed(error: ConvSetupError) -> ArtcnnError {
+pub(crate) fn convolution_failed(error: ConvSetupError) -> ArtcnnError {
     ArtcnnError::Convolution(format!("{error:?}"))
 }
 
@@ -591,19 +595,29 @@ fn body_operands(network: &Network, layer: usize, with_bias: bool) -> Operands<'
     }
 }
 
-/// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles, into NHWC maps
-/// of the output channels in `output`. Gives whether the forced blueprint ran.
+/// One 3x3 convolution's tensors bound for `cubek-convolution`, with its problem and the blueprint it takes.
+pub(crate) struct BoundConvolution<R: Runtime> {
+    pub(crate) problem: ConvolutionProblem,
+    pub(crate) blueprint: Option<ConvBlueprint>,
+    pub(crate) input: InputBinding<R>,
+    pub(crate) weight: InputBinding<R>,
+    pub(crate) bias: Option<InputBinding<R>>,
+    pub(crate) output: TensorBinding<R>,
+}
+
+/// Binds a convolution of the NHWC maps of `region` in `input` with `operands`, into NHWC maps of the output
+/// channels in `output`.
 ///
 /// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
 /// `cubek-convolution` infers one.
-pub(crate) fn convolve_on_tiles<R: Runtime>(
+fn bind_convolution<R: Runtime>(
     client: &ComputeClient<R>,
     operands: &Operands<'_>,
     input: &Handle,
     output: &Handle,
     region: Region,
     allow_forced: bool,
-) -> Result<bool, ArtcnnError> {
+) -> BoundConvolution<R> {
     check_operand_sizes(operands, input, output, region);
 
     let globals = &operands.globals;
@@ -615,7 +629,6 @@ pub(crate) fn convolve_on_tiles<R: Runtime>(
     } else {
         None
     };
-    let forced = blueprint.is_some();
 
     let ConvolutionShapes {
         map_shape,
@@ -643,24 +656,209 @@ pub(crate) fn convolve_on_tiles<R: Runtime>(
     let input_binding = InputBinding::new(input_tensor, globals.lhs);
     let weight_binding = InputBinding::new(weight_tensor, globals.rhs);
     let bias_binding = bias_tensor.map(|tensor| InputBinding::new(tensor, globals.out));
-    let inputs = ConvolutionInputs::Forward {
+
+    BoundConvolution {
+        problem,
+        blueprint,
         input: input_binding,
         weight: weight_binding,
         bias: bias_binding,
-        out: output_tensor,
+        output: output_tensor,
+    }
+}
+
+/// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles, into NHWC maps
+/// of the output channels in `output`. Gives whether the forced blueprint ran.
+///
+/// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
+/// `cubek-convolution` infers one.
+pub(crate) fn convolve_on_tiles<R: Runtime>(
+    client: &ComputeClient<R>,
+    operands: &Operands<'_>,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+    allow_forced: bool,
+) -> Result<bool, ArtcnnError> {
+    let bound = bind_convolution::<R>(client, operands, input, output, region, allow_forced);
+    let forced = bound.blueprint.is_some();
+
+    let inputs = ConvolutionInputs::Forward {
+        input: bound.input,
+        weight: bound.weight,
+        bias: bound.bias,
+        out: bound.output,
     };
     let arguments = ConvolutionArgs::<2> {
         stride: [1, 1],
         padding: [1, 1],
         dilation: [1, 1],
     };
-    let strategy = convolution_strategy(blueprint.as_ref());
-    let dtypes = MatmulElems::from_globals(globals);
+    let strategy = convolution_strategy(bound.blueprint.as_ref());
+    let dtypes = MatmulElems::from_globals(&operands.globals);
     let launched = cubek_convolution::launch_ref::<R, 2>(&strategy, client, inputs, arguments, dtypes);
 
     launched.map_err(convolution_failed)?;
 
     Ok(forced)
+}
+
+/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights and bias on
+/// cooperative-matrix tiles into `output`, applying `finish` as each value is written. Gives whether the
+/// forced blueprint ran.
+///
+/// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
+/// `cubek-convolution` infers one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the launch"
+)]
+fn convolve_fused<R: Runtime>(
+    client: &ComputeClient<R>,
+    network: &Network,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+    finish: Finish<'_>,
+    allow_forced: bool,
+) -> Result<bool, ArtcnnError> {
+    check_layer_maps(network, layer, input, output, region);
+
+    let operands = body_operands(network, layer, true);
+    let bound = bind_convolution::<R>(client, &operands, input, output, region, allow_forced);
+    let forced = bound.blueprint.is_some();
+
+    let features = network.features() as usize;
+    let shapes = convolution_shapes(region, features, features);
+    let residual = finish.residual.map(|handle| {
+        assert!(
+            handle.size_in_used() >= map_bytes(network, region),
+            "the residual is smaller than the region's maps"
+        );
+
+        // Safety: the residual holds the region's `1 x H x W x F` maps contiguously, as just asserted.
+        unsafe { tensor::<R>(handle, &shapes.out_shape, &shapes.out_strides) }
+    });
+
+    launch_fused(client, bound, residual, finish.activation)?;
+
+    Ok(forced)
+}
+
+/// What a body layer applies after its convolution and bias.
+#[derive(Debug, Clone, Copy)]
+pub struct Finish<'a> {
+    pub activation: Activation,
+    /// The maps added last, laid out as the layer's output.
+    pub residual: Option<&'a Handle>,
+}
+
+/// Runs body layer `layer` over the NHWC maps of `region` in `input` on `path`, into `output`. That is its
+/// convolution and bias, then `finish`, and it gives whether the forced blueprint ran.
+///
+/// [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) stages the maps in `columns`, which holds nine times
+/// as many values as a map.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the layer"
+)]
+pub(crate) fn body_layer<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    path: BodyPath,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    columns: Option<&Handle>,
+    region: Region,
+    finish: Finish<'_>,
+) -> Result<bool, ArtcnnError> {
+    if path == BodyPath::Convolution {
+        return convolve_fused(client, network, layer, input, output, region, finish, true);
+    }
+
+    let forced = convolve(
+        client, dispatch, network, path, layer, input, output, columns, region,
+    )?;
+
+    // The unfused convolution adds the bias inside the convolution, and im2col adds it here.
+    let add_bias = path == BodyPath::Im2col;
+    finish_separately(client, dispatch, network, layer, output, region, finish, add_bias);
+
+    Ok(forced)
+}
+
+/// Runs body layer `layer` on `path` as a forward pass does, keeping the inferred blueprint unless
+/// `allow_forced` is set. Gives whether the forced blueprint ran.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the layer"
+)]
+pub fn body_layer_with_blueprint<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    path: BodyPath,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+    finish: Finish<'_>,
+    allow_forced: bool,
+) -> Result<bool, ArtcnnError> {
+    assert!(
+        path != BodyPath::Im2col,
+        "only the convolution paths choose a blueprint"
+    );
+
+    if allow_forced {
+        return body_layer(
+            client, dispatch, network, path, layer, input, output, None, region, finish,
+        );
+    }
+
+    if path == BodyPath::Convolution {
+        return convolve_fused(client, network, layer, input, output, region, finish, false);
+    }
+
+    convolve_with_blueprint(client, dispatch, network, layer, input, output, region, false)?;
+    finish_separately(client, dispatch, network, layer, output, region, finish, false);
+
+    Ok(false)
+}
+
+/// Applies `finish` to `layer`'s maps of `region` in `output` in a separate pass, adding the bias first if
+/// `add_bias` is set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the pass"
+)]
+fn finish_separately<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    layer: usize,
+    output: &Handle,
+    region: Region,
+    finish: Finish<'_>,
+    add_bias: bool,
+) {
+    let samples = region.samples();
+
+    run_epilogue(
+        client,
+        dispatch,
+        network,
+        output,
+        layer,
+        samples,
+        finish.activation,
+        finish.residual,
+        add_bias,
+    );
 }
 
 /// Asserts that `input`, `output` and the operands each hold every value a convolution of `region` reads or

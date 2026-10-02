@@ -13,7 +13,7 @@ use av_toolbox_core::{
 };
 use av_toolbox_cubek::DevicePlane;
 #[cfg(test)]
-use av_toolbox_cubek::artcnn::ArtcnnError;
+use av_toolbox_cubek::artcnn::{ArtcnnError, BodyPath};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::resize::{Kernel, Samples};
 use av_toolbox_cubek::values::{narrow, widen};
@@ -44,7 +44,7 @@ use serde::Deserialize;
 pub(crate) use crate::artcnn::{ModelName, PrecisionName};
 use crate::artcnn::{Supersampler, checked_precision};
 #[cfg(test)]
-pub(crate) use crate::artcnn::{allocation_cap, body_path, frame_tile};
+pub(crate) use crate::artcnn::{allocation_cap, body_path, fallbacks, frame_tile, warmed_path};
 use crate::bits::bits_of;
 use crate::resize::{Tables, Window, geometry, resize_plane, samples_for};
 use crate::scratch::Scratch;
@@ -119,7 +119,9 @@ pub(crate) fn locate(store: &Store, name: ModelName) -> Result<Located, StageErr
 
 #[cfg(test)]
 pub(crate) fn failed_both_paths(convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
-    crate::artcnn::failed_both_paths(STAGE, convolution, im2col)
+    let failures = vec![(BodyPath::Convolution, convolution), (BodyPath::Im2col, im2col)];
+
+    crate::artcnn::failed_every_path(STAGE, failures)
 }
 
 /// The input format, once it is known to be U8 or U16 frames in a grey or YUV layout.

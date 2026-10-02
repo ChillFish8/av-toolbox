@@ -48,7 +48,9 @@ impl BuildTask for Supported {
         };
 
         match self.path {
-            BodyPath::Convolution => capabilities.has_cooperative_matrix(operands, ElementType::F32),
+            BodyPath::Convolution | BodyPath::UnfusedConvolution => {
+                capabilities.has_cooperative_matrix(operands, ElementType::F32)
+            },
             BodyPath::Im2col => true,
         }
     }
@@ -141,7 +143,7 @@ fn run_forward<R: Runtime>(
     let second = empty(client, map_bytes);
     let third = empty(client, map_bytes);
     let columns = match task.path {
-        BodyPath::Convolution => None,
+        BodyPath::Convolution | BodyPath::UnfusedConvolution => None,
         BodyPath::Im2col => Some(empty(client, map_bytes * 9)),
     };
 
@@ -336,12 +338,58 @@ fn r8f64_matches_the_reference() {
             // Measured 8.19e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.4x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 2.10e-4 on the convolution path and 1.85e-4 on im2col, which is 0.053 of an 8-bit
-            // code, so 2.4x headroom.
+            // Measured 2.55e-4 on the convolution path and 1.85e-4 on im2col, which is 0.065 of an 8-bit
+            // code, so 1.96x headroom. The fused write-out rounds each layer once, and its error runs higher
+            // here than the separate passes' 2.10e-4.
             Precision::F16 => 5e-4,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
     }
+}
+
+#[test]
+fn only_the_convolution_path_fuses_its_epilogues() {
+    let precision = Precision::F16;
+    if !supports(BodyPath::Convolution, precision) {
+        println!("fused epilogues: no f16 cooperative matrix, so the convolution paths cannot run");
+        return;
+    }
+
+    let weights = r8f64();
+    let plane = textured(24, 20);
+    let expected = reference_artcnn(&plane, 24, 20, &weights);
+    let fused_path = BodyPath::Convolution;
+    let unfused_path = BodyPath::UnfusedConvolution;
+
+    let (fused, _) = measure(
+        "R8F64", &weights, &plane, 24, 20, fused_path, precision, &expected,
+    );
+    let (unfused, error) = measure(
+        "R8F64",
+        &weights,
+        &plane,
+        24,
+        20,
+        unfused_path,
+        precision,
+        &expected,
+    );
+
+    let pairs = fused.iter().zip(&unfused);
+    let differing = pairs.filter(|pair| bits_differ(*pair)).count();
+    println!(
+        "fused epilogues: {differing} of {} codes differ from the unfused path",
+        fused.len()
+    );
+
+    // Measured 2.10e-4, so 2.4x headroom.
+    assert!(error <= 5e-4, "{error:e}");
+    // The fused write-out rounds once where the separate passes round twice, so a convolution path running
+    // the separate passes would match the unfused path exactly.
+    assert!(
+        differing > 0,
+        "the convolution path matches the unfused path exactly"
+    );
 }
 
 #[test]
@@ -605,7 +653,7 @@ impl BuildTask for BiasPlacement {
 }
 
 /// The spacing of f16 values at `magnitude`.
-fn f16_step(magnitude: f32) -> f32 {
+pub(super) fn f16_step(magnitude: f32) -> f32 {
     let bits = f16::from_f32(magnitude.abs()).to_bits();
     let exponent = i32::from(bits >> 10);
 

@@ -52,7 +52,7 @@ impl BuildTask for Tiled {
         let second = empty(client, sizes.map_bytes);
         let third = empty(client, sizes.map_bytes);
         let columns = match self.path {
-            BodyPath::Convolution => None,
+            BodyPath::Convolution | BodyPath::UnfusedConvolution => None,
             BodyPath::Im2col => Some(empty(client, sizes.column_bytes)),
         };
 
@@ -110,7 +110,7 @@ impl BuildTask for WarmUp {
         let second = empty(client, sizes.map_bytes);
         let third = empty(client, sizes.map_bytes);
         let columns = match self.path {
-            BodyPath::Convolution => None,
+            BodyPath::Convolution | BodyPath::UnfusedConvolution => None,
             BodyPath::Im2col => Some(empty(client, sizes.column_bytes)),
         };
         let maps = Maps {
