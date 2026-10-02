@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use cubecl::features::MmaConfig;
-use cubecl::ir::StorageType;
+use cubecl::ir::{AddressType, StorageType};
 use cubecl::prelude::CubePrimitive;
 use cubek_convolution::components::{ConvolutionProblem, Dimensionality};
 use cubek_convolution::definition::ConvBlueprint;
@@ -35,7 +35,7 @@ fn typed_problem(width: u32, height: u32, out_channels: usize, dtype: StorageTyp
         out: dtype,
     };
 
-    convolution_problem(region, 64, out_channels, globals)
+    convolution_problem(region, 64, out_channels, globals, AddressType::U32)
 }
 
 #[test]

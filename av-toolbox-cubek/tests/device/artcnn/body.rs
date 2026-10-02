@@ -2,16 +2,18 @@ use av_toolbox_cubek::artcnn::{
     Activation,
     ArtcnnError,
     BodyPath,
+    Finish,
+    LayerRun,
     Maps,
     Model,
     Network,
     Precision,
     Region,
     Weights,
+    body_layer_with_blueprint,
     convolve_with_blueprint,
     convolve_without_bias,
     epilogue,
-    offers_cmma_16,
     run_region,
     scratch_sizes,
 };
@@ -20,10 +22,14 @@ use av_toolbox_gpu::{BuildContext, BuildTask, ElementType};
 use cubecl::prelude::Runtime;
 use half::f16;
 
-use super::{read_maps, synced, textured, upload_maps};
+use super::{BlueprintRuns, forced_eligible, read_maps, synced, textured, upload_maps, wavy_maps};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
-const PATHS: [BodyPath; 2] = [BodyPath::Convolution, BodyPath::Im2col];
+const PATHS: [BodyPath; 3] = [
+    BodyPath::Convolution,
+    BodyPath::UnfusedConvolution,
+    BodyPath::Im2col,
+];
 
 const PRECISIONS: [Precision; 2] = [Precision::F32, Precision::F16];
 
@@ -338,12 +344,49 @@ fn r8f64_matches_the_reference() {
             // Measured 8.19e-6 on im2col, of which up to 7.63e-6 is rounding to 16-bit codes, so 2.4x
             // headroom.
             Precision::F32 => 2e-5,
-            // Measured 2.55e-4 on the convolution path and 1.85e-4 on im2col, which is 0.065 of an 8-bit
-            // code, so 1.96x headroom. The fused write-out rounds each layer once, and its error runs higher
-            // here than the separate passes' 2.10e-4.
+            // Measured 2.55e-4 on the convolution path, 2.10e-4 on the unfused convolution path and 1.85e-4
+            // on im2col. The largest is 0.065 of an 8-bit code, so 1.96x headroom.
             Precision::F16 => 5e-4,
         };
         assert!(error <= bound, "{path:?} at {precision:?}: {error:e}");
+    }
+}
+
+/// Runs R8F64's first body layer over a small region on `path`, as a forward pass does.
+struct OneLayer {
+    path: BodyPath,
+}
+
+impl BuildTask for OneLayer {
+    type Output = LayerRun;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let precision = Precision::F16;
+        let network = Network::upload(client, &r8f64(), precision).expect("the weights are valid");
+        let region = Region {
+            x: 0,
+            y: 0,
+            width: 24,
+            height: 20,
+        };
+        let values = (region.samples() * network.features()) as usize;
+        let maps = wavy_maps(values);
+        let finish = Finish {
+            activation: Activation::Silu,
+            residual: None,
+        };
+
+        let input = upload_maps(client, &maps, precision);
+        let output = empty(client, values * precision.bytes());
+
+        let ran = body_layer_with_blueprint(
+            client, &sizing, &network, self.path, 1, &input, &output, region, finish, true,
+        );
+        synced(client);
+
+        ran.expect("a supported path runs")
     }
 }
 
@@ -358,13 +401,9 @@ fn only_the_convolution_path_fuses_its_epilogues() {
     let weights = r8f64();
     let plane = textured(24, 20);
     let expected = reference_artcnn(&plane, 24, 20, &weights);
-    let fused_path = BodyPath::Convolution;
     let unfused_path = BodyPath::UnfusedConvolution;
 
-    let (fused, _) = measure(
-        "R8F64", &weights, &plane, 24, 20, fused_path, precision, &expected,
-    );
-    let (unfused, error) = measure(
+    let (_, error) = measure(
         "R8F64",
         &weights,
         &plane,
@@ -374,21 +413,21 @@ fn only_the_convolution_path_fuses_its_epilogues() {
         precision,
         &expected,
     );
+    let fused_run = backend().build(OneLayer {
+        path: BodyPath::Convolution,
+    });
+    let unfused_run = backend().build(OneLayer { path: unfused_path });
 
-    let pairs = fused.iter().zip(&unfused);
-    let differing = pairs.filter(|pair| bits_differ(*pair)).count();
-    println!(
-        "fused epilogues: {differing} of {} codes differ from the unfused path",
-        fused.len()
-    );
-
+    println!("fused epilogues: convolution {fused_run:?}, unfused convolution {unfused_run:?}");
     // Measured 2.10e-4, so 2.4x headroom.
     assert!(error <= 5e-4, "{error:e}");
-    // The fused write-out rounds once where the separate passes round twice, so a convolution path running
-    // the separate passes would match the unfused path exactly.
     assert!(
-        differing > 0,
-        "the convolution path matches the unfused path exactly"
+        fused_run.fused,
+        "the convolution path ran its epilogues in a separate pass"
+    );
+    assert!(
+        !unfused_run.fused,
+        "the unfused convolution path fused its epilogues"
     );
 }
 
@@ -460,22 +499,13 @@ struct Blueprints {
     region: Region,
 }
 
-struct BlueprintOutputs {
-    forced: Vec<f32>,
-    inferred: Vec<f32>,
-    forced_ran: bool,
-    eligible: bool,
-}
-
 impl BuildTask for Blueprints {
-    type Output = BlueprintOutputs;
+    type Output = BlueprintRuns;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
-        let plane_size_max = client.properties().hardware.plane_size_max;
-        let offers_matrix = offers_cmma_16(client);
-        let eligible = plane_size_max == 64 && offers_matrix;
+        let eligible = forced_eligible(client);
         let precision = Precision::F16;
         let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
         let map_bytes = self.maps.len() * precision.bytes();
@@ -513,7 +543,7 @@ impl BuildTask for Blueprints {
         let forced = read_maps(client, &forced_output, precision);
         let inferred = read_maps(client, &inferred_output, precision);
 
-        BlueprintOutputs {
+        BlueprintRuns {
             forced,
             inferred,
             forced_ran,
@@ -537,51 +567,15 @@ fn the_forced_blueprint_matches_the_inferred_one_exactly() {
         height: 120,
     };
     let values = (region.samples() * 64) as usize;
-    let maps: Vec<f32> = (0..values)
-        .map(|index| (index as f32 * 0.37).sin() * 2.0)
-        .collect();
     let task = Blueprints {
         weights: synthetic_weights(64, 1, 5),
-        maps,
+        maps: wavy_maps(values),
         region,
     };
 
     let outputs = backend().build(task);
 
-    println!(
-        "forced blueprint: ran {}, eligible {}",
-        outputs.forced_ran, outputs.eligible
-    );
-    if !outputs.eligible {
-        assert!(
-            !outputs.forced_ran,
-            "the forced blueprint ran on an ineligible device"
-        );
-        return;
-    }
-
-    assert!(
-        outputs.forced_ran,
-        "a large region on an eligible device kept the inferred blueprint"
-    );
-
-    assert_eq!(outputs.forced.len(), outputs.inferred.len());
-
-    let pairs = outputs.forced.iter().zip(&outputs.inferred);
-    let differing = pairs.clone().filter(|pair| bits_differ(*pair)).count();
-    let first = pairs.clone().position(bits_differ);
-
-    if let Some(index) = first {
-        let forced = outputs.forced[index];
-        let inferred = outputs.inferred[index];
-        panic!(
-            "{differing} of {values} values differ, first at {index}: forced {forced}, inferred {inferred}"
-        );
-    }
-}
-
-pub(super) fn bits_differ((forced, inferred): (&f32, &f32)) -> bool {
-    forced.to_bits() != inferred.to_bits()
+    outputs.assert_forced_matches_inferred("forced blueprint");
 }
 
 /// One body convolution of the same maps with the bias inside it, and without it before a separate bias add.
@@ -678,12 +672,9 @@ fn the_fused_bias_matches_a_separate_bias_add_within_one_f16_step() {
         height: 120,
     };
     let values = (region.samples() * 64) as usize;
-    let maps: Vec<f32> = (0..values)
-        .map(|index| (index as f32 * 0.37).sin() * 2.0)
-        .collect();
     let task = BiasPlacement {
         weights: synthetic_weights(64, 1, 5),
-        maps,
+        maps: wavy_maps(values),
         region,
     };
 

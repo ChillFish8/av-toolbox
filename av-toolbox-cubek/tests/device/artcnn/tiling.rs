@@ -9,6 +9,8 @@ use av_toolbox_cubek::artcnn::{
     artcnn,
     fits_whole,
     scratch_sizes,
+    takes_forced_blueprint,
+    tiles,
     warm_up,
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
@@ -16,7 +18,7 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
 use super::body::{PEAK, UNTOUCHED, largest_error, r8f64, supported_runs, supports};
-use super::{synced, textured};
+use super::{forced_eligible, synced, textured};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 /// Runs the network over a plane in `0..=1` one tile at a time.
@@ -205,6 +207,56 @@ impl BuildTask for SmallFrame {
     }
 }
 
+/// Whether each region a tiled run of a `width` by `height` frame at `tile` convolves takes the forced
+/// blueprint, and whether the device is eligible for it.
+struct ForcedRegions {
+    weights: Weights,
+    precision: Precision,
+    width: u32,
+    height: u32,
+    tile: u32,
+}
+
+impl BuildTask for ForcedRegions {
+    type Output = (Vec<bool>, bool);
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
+        let halo = network.halo();
+        let eligible = forced_eligible(client);
+
+        let regions = tiles(self.width, self.height, self.tile, halo);
+        let forced = regions
+            .iter()
+            .map(|(region, _)| takes_forced_blueprint(client, &network, *region))
+            .collect();
+
+        (forced, eligible)
+    }
+}
+
+/// Asserts every region of a 200x120 run at `tile` takes the forced blueprint if `large` is set and the run
+/// is at f16 on an eligible device, and that none does otherwise.
+fn assert_forced_regions(weights: &Weights, precision: Precision, tile: u32, large: bool) {
+    let task = ForcedRegions {
+        weights: weights.clone(),
+        precision,
+        width: 200,
+        height: 120,
+        tile,
+    };
+
+    let (regions, eligible) = backend().build(task);
+
+    let forced = large && eligible && precision == Precision::F16;
+    println!("tile {tile} at {precision:?}: eligible {eligible}, regions forced {regions:?}");
+    assert!(
+        regions.iter().all(|region| *region == forced),
+        "tile {tile} at {precision:?}: expected every region forced {forced}"
+    );
+}
+
 fn run_tiled(
     weights: &Weights,
     plane: &[f32],
@@ -269,8 +321,8 @@ fn a_tiled_run_matches_an_untiled_run_exactly() {
 #[test]
 fn a_whole_frame_run_matches_a_small_tile_run_exactly_on_the_convolution_path() {
     // At 64 features the whole 200x120 frame is one region of 24,000 samples, which at f16 takes the forced
-    // blueprint. Tiles of 24 with a halo of 6 are regions of at most 36x36, 1,296 samples, which take the
-    // inferred one.
+    // blueprint on an eligible device. Tiles of 24 with a halo of 6 are regions of at most 36x36, 1,296
+    // samples, which take the inferred one.
     let weights = synthetic_weights(64, 1, 9);
     let plane = textured(200, 120);
     let runs = supported_runs()
@@ -280,6 +332,9 @@ fn a_whole_frame_run_matches_a_small_tile_run_exactly_on_the_convolution_path() 
     for (path, precision) in runs {
         let fits = fits_whole(64, precision, path, 200, 120, TILE_BUDGET, usize::MAX);
         assert!(fits, "a 200x120 frame at {precision:?} runs whole");
+
+        assert_forced_regions(&weights, precision, 200, true);
+        assert_forced_regions(&weights, precision, 24, false);
 
         let small = run_tiled(&weights, &plane, 200, 120, path, precision, 24);
         let whole = run_tiled(&weights, &plane, 200, 120, path, precision, 200);

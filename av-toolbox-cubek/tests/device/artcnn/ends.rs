@@ -8,7 +8,6 @@ use av_toolbox_cubek::artcnn::{
     epilogue,
     first_layer,
     last_layer,
-    offers_cmma_16,
     padded_last_layer,
     padded_last_layer_with_blueprint,
     shuffle,
@@ -23,8 +22,8 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 use half::f16;
 
-use super::body::{bits_differ, supports};
-use super::{read_maps, synced, textured, upload_maps};
+use super::body::supports;
+use super::{BlueprintRuns, forced_eligible, read_maps, synced, textured, upload_maps};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 const PRECISIONS: [Precision; 2] = [Precision::F32, Precision::F16];
@@ -655,21 +654,12 @@ struct PaddedBlueprints {
     region: Region,
 }
 
-struct PaddedBlueprintOutputs {
-    forced: Vec<f32>,
-    inferred: Vec<f32>,
-    forced_ran: bool,
-    eligible: bool,
-}
-
 impl BuildTask for PaddedBlueprints {
-    type Output = PaddedBlueprintOutputs;
+    type Output = BlueprintRuns;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
-        let plane_size_max = client.properties().hardware.plane_size_max;
-        let offers_matrix = offers_cmma_16(client);
-        let eligible = plane_size_max == 64 && offers_matrix;
+        let eligible = forced_eligible(client);
         let precision = Precision::F16;
         let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
         let scratch_bytes = self.region.samples() as usize * 16 * size_of::<f32>();
@@ -691,7 +681,7 @@ impl BuildTask for PaddedBlueprints {
         let forced = read_f32(client, &forced_output);
         let inferred = read_f32(client, &inferred_output);
 
-        PaddedBlueprintOutputs {
+        BlueprintRuns {
             forced,
             inferred,
             forced_ran,
@@ -722,34 +712,5 @@ fn the_padded_last_layer_forced_blueprint_matches_the_inferred_one_exactly() {
 
     let outputs = backend().build(task);
 
-    println!(
-        "padded blueprint: ran {}, eligible {}",
-        outputs.forced_ran, outputs.eligible
-    );
-    if !outputs.eligible {
-        assert!(
-            !outputs.forced_ran,
-            "the forced blueprint ran on an ineligible device"
-        );
-        return;
-    }
-
-    assert!(
-        outputs.forced_ran,
-        "a large region on an eligible device kept the inferred blueprint"
-    );
-    assert_eq!(outputs.forced.len(), outputs.inferred.len());
-
-    let pairs = outputs.forced.iter().zip(&outputs.inferred);
-    let differing = pairs.clone().filter(|pair| bits_differ(*pair)).count();
-    let first = pairs.clone().position(bits_differ);
-
-    if let Some(index) = first {
-        let forced = outputs.forced[index];
-        let inferred = outputs.inferred[index];
-        let values = outputs.forced.len();
-        panic!(
-            "{differing} of {values} values differ, first at {index}: forced {forced}, inferred {inferred}"
-        );
-    }
+    outputs.assert_forced_matches_inferred("padded blueprint");
 }

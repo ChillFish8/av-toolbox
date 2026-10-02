@@ -8,14 +8,13 @@ use av_toolbox_cubek::artcnn::{
     Weights,
     body_layer_with_blueprint,
     convolve_with_blueprint,
-    offers_cmma_16,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 use cubecl::server::Handle;
 
-use super::body::{bits_differ, f16_step, r8f64, supports};
-use super::{read_maps, synced, upload_maps};
+use super::body::{f16_step, r8f64, supports};
+use super::{BlueprintRuns, forced_eligible, read_maps, synced, upload_maps, wavy_maps};
 use crate::support::{Sizing, backend, empty};
 
 /// The region every fused write-out test convolves, large enough for the forced blueprint.
@@ -46,12 +45,11 @@ struct FusedLayer {
 }
 
 struct FusedOutputs {
-    forced: Vec<f32>,
-    inferred: Vec<f32>,
+    blueprints: BlueprintRuns,
     separate: Vec<f32>,
     convolved: Vec<f32>,
-    forced_ran: bool,
-    eligible: bool,
+    forced_fused: bool,
+    inferred_fused: bool,
 }
 
 impl BuildTask for FusedLayer {
@@ -60,9 +58,7 @@ impl BuildTask for FusedLayer {
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
-        let plane_size_max = client.properties().hardware.plane_size_max;
-        let offers_matrix = offers_cmma_16(client);
-        let eligible = plane_size_max == 64 && offers_matrix;
+        let eligible = forced_eligible(client);
         let precision = Precision::F16;
         let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
         let map_bytes = self.maps.len() * precision.bytes();
@@ -105,19 +101,25 @@ impl BuildTask for FusedLayer {
         );
         synced(client);
 
-        let forced_ran = forced_ran.expect("the forced fused layer runs");
-        let inferred_forced = inferred_ran.expect("the inferred fused layer runs");
+        let forced_run = forced_ran.expect("the forced fused layer runs");
+        let inferred_run = inferred_ran.expect("the inferred fused layer runs");
         separate_ran.expect("the separate passes run");
         convolved_ran.expect("the bare convolution runs");
-        assert!(!inferred_forced, "the inferred run took the forced blueprint");
+        assert!(!inferred_run.forced, "the inferred run took the forced blueprint");
 
-        FusedOutputs {
+        let blueprints = BlueprintRuns {
             forced: read_maps(client, &forced_output, precision),
             inferred: read_maps(client, &inferred_output, precision),
+            forced_ran: forced_run.forced,
+            eligible,
+        };
+
+        FusedOutputs {
+            blueprints,
             separate: read_maps(client, &separate_output, precision),
             convolved: read_maps(client, &convolved_output, precision),
-            forced_ran,
-            eligible,
+            forced_fused: forced_run.fused,
+            inferred_fused: inferred_run.fused,
         }
     }
 }
@@ -144,9 +146,7 @@ fn run_fused_layer(epilogue: Epilogue) -> Option<FusedOutputs> {
     }
 
     let values = (REGION.samples() * 64) as usize;
-    let maps: Vec<f32> = (0..values)
-        .map(|index| (index as f32 * 0.37).sin() * 2.0)
-        .collect();
+    let maps = wavy_maps(values);
     let residual: Vec<f32> = (0..values)
         .map(|index| (index as f32 * 0.11).cos() * 3.0)
         .collect();
@@ -162,30 +162,34 @@ fn run_fused_layer(epilogue: Epilogue) -> Option<FusedOutputs> {
     Some(outputs)
 }
 
-/// Asserts the fused write-outs, forced and inferred, lie within one f16 step of the separate passes and
-/// differ from them somewhere.
+/// Asserts the fused write-outs, forced and inferred, ran fused and lie within one f16 step of the separate
+/// passes.
 fn assert_within_one_step(outputs: &FusedOutputs, epilogue: Epilogue) {
-    let runs = [("forced", &outputs.forced), ("inferred", &outputs.inferred)];
+    let blueprints = &outputs.blueprints;
+    let runs = [
+        ("forced", &blueprints.forced, outputs.forced_fused),
+        ("inferred", &blueprints.inferred, outputs.inferred_fused),
+    ];
 
-    for (name, fused) in runs {
+    for (name, fused, fused_ran) in runs {
         let (differing, largest_share) = steps_from_separate(fused, outputs);
         let values = fused.len();
         let shown = format!("{differing} of {values} values differ, largest {largest_share} f16 steps");
         println!("fused {epilogue:?} {name}: {shown}");
 
+        assert!(fused_ran, "{name}: the layer ran its epilogue in a separate pass");
+        // The convolution reaches the fused write-out already cast to f16, so the two compute the same. A
+        // driver may fold away that cast and its widening back to f32, which rounds the value once rather
+        // than twice. Measured on RADV, 25.6 % of values with SiLU and 26.8 % with the residual lie one step
+        // apart.
         assert!(largest_share <= 1.0, "{name}: {largest_share} f16 steps");
-        // A write-out that ran the separate passes would match them exactly.
-        assert!(
-            differing > 0,
-            "{name}: the fused write-out matches the separate passes exactly"
-        );
     }
 }
 
 /// How many of `fused` differ from the separate passes, and the largest difference in f16 steps.
 ///
-/// The separate passes round the convolution to f16 before the epilogue and the fused write-out does not, so
-/// the step is taken at the largest of the fused, separate and convolved values.
+/// The fused write-out may apply the epilogue before the convolution is rounded to f16, so the step is taken
+/// at the largest of the fused, separate and convolved values.
 fn steps_from_separate(fused: &[f32], outputs: &FusedOutputs) -> (usize, f32) {
     let mut differing = 0;
     let mut largest_share = 0.0f32;
@@ -204,40 +208,6 @@ fn steps_from_separate(fused: &[f32], outputs: &FusedOutputs) -> (usize, f32) {
     }
 
     (differing, largest_share)
-}
-
-/// Asserts the forced blueprint ran exactly where the device is eligible, and matches the inferred one bit
-/// for bit there.
-fn assert_forced_matches_inferred(outputs: &FusedOutputs, epilogue: Epilogue) {
-    println!(
-        "fused {epilogue:?}: forced ran {}, eligible {}",
-        outputs.forced_ran, outputs.eligible
-    );
-    if !outputs.eligible {
-        assert!(
-            !outputs.forced_ran,
-            "the forced blueprint ran on an ineligible device"
-        );
-        return;
-    }
-
-    assert!(
-        outputs.forced_ran,
-        "a large region on an eligible device kept the inferred blueprint"
-    );
-
-    let values = outputs.forced.len();
-    let pairs = outputs.forced.iter().zip(&outputs.inferred);
-    let differing = pairs.clone().filter(|pair| bits_differ(*pair)).count();
-    let first = pairs.clone().position(bits_differ);
-
-    if let Some(index) = first {
-        let forced = outputs.forced[index];
-        let inferred = outputs.inferred[index];
-        panic!(
-            "{differing} of {values} values differ, first at {index}: forced {forced}, inferred {inferred}"
-        );
-    }
 }
 
 #[test]
@@ -264,7 +234,7 @@ fn fused_silu_with_the_forced_blueprint_matches_the_inferred_one_exactly() {
         return;
     };
 
-    assert_forced_matches_inferred(&outputs, Epilogue::Silu);
+    outputs.blueprints.assert_forced_matches_inferred("fused Silu");
 }
 
 #[test]
@@ -273,5 +243,7 @@ fn a_fused_residual_with_the_forced_blueprint_matches_the_inferred_one_exactly()
         return;
     };
 
-    assert_forced_matches_inferred(&outputs, Epilogue::Residual);
+    outputs
+        .blueprints
+        .assert_forced_matches_inferred("fused Residual");
 }

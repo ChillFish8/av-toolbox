@@ -118,7 +118,7 @@ pub(crate) fn locate(store: &Store, name: ModelName) -> Result<Located, StageErr
 }
 
 #[cfg(test)]
-pub(crate) fn failed_both_paths(convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
+pub(crate) fn failed_convolution_and_im2col(convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
     let failures = vec![(BodyPath::Convolution, convolution), (BodyPath::Im2col, im2col)];
 
     crate::artcnn::failed_every_path(STAGE, failures)

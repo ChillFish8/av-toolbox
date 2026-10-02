@@ -8,14 +8,17 @@ mod weights;
 #[cfg(test)]
 mod tests;
 
-pub use self::body::{Activation, ArtcnnError, BodyPath, epilogue};
+pub use self::body::{Activation, ArtcnnError, BodyPath};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::body::{
     Finish,
+    LayerRun,
     body_layer_with_blueprint,
     convolve_with_blueprint,
     convolve_without_bias,
+    epilogue,
     offers_cmma_16,
+    takes_forced_blueprint,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use self::ends::padded_last_layer_with_blueprint;

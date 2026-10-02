@@ -3,7 +3,7 @@ mod ends;
 mod fused;
 mod tiling;
 
-use av_toolbox_cubek::artcnn::Precision;
+use av_toolbox_cubek::artcnn::{Precision, offers_cmma_16};
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
@@ -44,4 +44,69 @@ pub fn textured(width: u32, height: u32) -> Vec<f32> {
     }
 
     plane
+}
+
+/// Whether the device takes the forced blueprint on a large f16 region.
+pub fn forced_eligible<R: Runtime>(client: &ComputeClient<R>) -> bool {
+    let plane_size_max = client.properties().hardware.plane_size_max;
+    let offers_matrix = offers_cmma_16(client);
+
+    plane_size_max == 64 && offers_matrix
+}
+
+/// `values` map values between -2 and 2, varying from each value to the next.
+pub fn wavy_maps(values: usize) -> Vec<f32> {
+    (0..values)
+        .map(|index| (index as f32 * 0.37).sin() * 2.0)
+        .collect()
+}
+
+pub fn bits_differ((forced, inferred): (&f32, &f32)) -> bool {
+    forced.to_bits() != inferred.to_bits()
+}
+
+/// One convolution of the same maps with the forced blueprint allowed, and with the inferred one.
+pub struct BlueprintRuns {
+    pub forced: Vec<f32>,
+    pub inferred: Vec<f32>,
+    pub forced_ran: bool,
+    pub eligible: bool,
+}
+
+impl BlueprintRuns {
+    /// Asserts the forced blueprint ran exactly where the device is eligible, and matches the inferred one
+    /// bit for bit there.
+    pub fn assert_forced_matches_inferred(&self, name: &str) {
+        println!(
+            "{name}: forced ran {}, eligible {}",
+            self.forced_ran, self.eligible
+        );
+        if !self.eligible {
+            assert!(
+                !self.forced_ran,
+                "{name}: the forced blueprint ran on an ineligible device"
+            );
+            return;
+        }
+
+        assert!(
+            self.forced_ran,
+            "{name}: a large region on an eligible device kept the inferred blueprint"
+        );
+        assert_eq!(self.forced.len(), self.inferred.len());
+
+        let values = self.forced.len();
+        let pairs = self.forced.iter().zip(&self.inferred);
+        let differing = pairs.clone().filter(|pair| bits_differ(*pair)).count();
+        let first = pairs.clone().position(bits_differ);
+
+        if let Some(index) = first {
+            let forced = self.forced[index];
+            let inferred = self.inferred[index];
+            panic!(
+                "{name}: {differing} of {values} values differ, first at {index}: forced {forced}, inferred \
+                 {inferred}"
+            );
+        }
+    }
 }

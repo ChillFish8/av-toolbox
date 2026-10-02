@@ -25,7 +25,7 @@ use crate::upscale::artcnn::{
     PrecisionName,
     allocation_cap,
     body_path,
-    failed_both_paths,
+    failed_convolution_and_im2col,
     fallbacks,
     frame_tile,
     locate,
@@ -141,7 +141,7 @@ fn failing_on_both_paths_names_both_causes() {
     let convolution = ArtcnnError::Device("sync lost".to_string());
     let im2col = ArtcnnError::Matmul("no kernel".to_string());
 
-    let error = failed_both_paths(convolution, im2col);
+    let error = failed_convolution_and_im2col(convolution, im2col);
     let message = error.to_string();
 
     assert!(message.contains(STAGE), "{message}");
@@ -504,15 +504,7 @@ mod device_tests {
         type Output = (BodyPath, u32);
 
         fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
-            let loaded = Supersampler::load(
-                STAGE,
-                build,
-                ModelName::R8f64,
-                PrecisionName::F16,
-                self.width,
-                self.height,
-            );
-            let supersampler = loaded.expect("R8F64 loads");
+            let supersampler = load_r8f64(build, self.width, self.height);
 
             (supersampler.path(), supersampler.tile())
         }
@@ -526,11 +518,16 @@ mod device_tests {
 
         fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
             let offered = body_path(build.capabilities(), Precision::F16);
-            let loaded = Supersampler::load(STAGE, build, ModelName::R8f64, PrecisionName::F16, 1920, 1080);
-            let supersampler = loaded.expect("R8F64 loads");
+            let supersampler = load_r8f64(build, 1920, 1080);
 
             (offered, supersampler.path())
         }
+    }
+
+    fn load_r8f64<R: Runtime>(build: &BuildContext<R>, width: u32, height: u32) -> Supersampler {
+        let loaded = Supersampler::load(STAGE, build, ModelName::R8f64, PrecisionName::F16, width, height);
+
+        loaded.expect("R8F64 loads")
     }
 
     fn loaded_tile(width: u32, height: u32) -> Option<u32> {

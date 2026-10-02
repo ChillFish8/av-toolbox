@@ -110,6 +110,7 @@ fn epilogue_kernel<F: Float>(
 ///
 /// The maps hold `samples` samples of the network's features, and are updated in place. The layer must map
 /// the features to themselves.
+#[cfg(any(test, feature = "test-support"))]
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
@@ -129,7 +130,11 @@ pub fn epilogue<R: Runtime>(
     );
 }
 
-/// The same as [epilogue](crate::artcnn::epilogue), leaving the bias out unless `add_bias` is set.
+/// Adds `layer`'s bias to the NHWC maps in `values` if `add_bias` is set, then applies `activation`, then
+/// adds `residual` if given.
+///
+/// The maps hold `samples` samples of the network's features, and are updated in place. The layer must map
+/// the features to themselves.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
@@ -404,6 +409,7 @@ pub(crate) fn convolution_problem(
     in_channels: usize,
     out_channels: usize,
     globals: MatmulGlobalElems,
+    address_type: AddressType,
 ) -> ConvolutionProblem {
     let height = region.height as usize;
     let width = region.width as usize;
@@ -430,7 +436,7 @@ pub(crate) fn convolution_problem(
         operation: ConvolutionOperation::Forward,
         dimensionality: Dimensionality::Dim2,
         global_dtypes: globals,
-        address_type: AddressType::U32,
+        address_type,
     }
 }
 
@@ -517,6 +523,24 @@ fn chosen_blueprint<R: Runtime>(
     let offers_cmma = offers_cmma_16(client);
 
     forced_blueprint(problem, plane_size_max, offers_cmma)
+}
+
+/// Whether a body convolution of `region` takes the forced blueprint on the client's device.
+#[cfg(any(test, feature = "test-support"))]
+pub fn takes_forced_blueprint<R: Runtime>(
+    client: &ComputeClient<R>,
+    network: &Network,
+    region: Region,
+) -> bool {
+    let features = network.features() as usize;
+    let dtype = storage_type(network.precision());
+    let globals = uniform_globals(dtype);
+    let map_values = region.samples() as usize * features;
+    let address_type = AddressType::from_len(map_values);
+    let problem = convolution_problem(region, features, features, globals, address_type);
+    let blueprint = chosen_blueprint(client, &problem);
+
+    blueprint.is_some()
 }
 
 pub(crate) fn storage_type(precision: Precision) -> StorageType {
@@ -623,12 +647,6 @@ fn bind_convolution<R: Runtime>(
     let globals = &operands.globals;
     let in_channels = operands.in_channels;
     let out_channels = operands.out_channels;
-    let problem = convolution_problem(region, in_channels, out_channels, globals.clone());
-    let blueprint = if allow_forced {
-        chosen_blueprint(client, &problem)
-    } else {
-        None
-    };
 
     let ConvolutionShapes {
         map_shape,
@@ -657,6 +675,20 @@ fn bind_convolution<R: Runtime>(
     let weight_binding = InputBinding::new(weight_tensor, globals.rhs);
     let bias_binding = bias_tensor.map(|tensor| InputBinding::new(tensor, globals.out));
 
+    let address_type = required_address_type(
+        &input_binding,
+        &weight_binding,
+        bias_binding.as_ref(),
+        &output_tensor,
+        globals.out,
+    );
+    let problem = convolution_problem(region, in_channels, out_channels, globals.clone(), address_type);
+    let blueprint = if allow_forced {
+        chosen_blueprint(client, &problem)
+    } else {
+        None
+    };
+
     BoundConvolution {
         problem,
         blueprint,
@@ -665,6 +697,26 @@ fn bind_convolution<R: Runtime>(
         bias: bias_binding,
         output: output_tensor,
     }
+}
+
+/// The address type `cubek-convolution`'s forward launch picks for these buffers, wide enough to index the
+/// largest of them.
+fn required_address_type<R: Runtime>(
+    input: &InputBinding<R>,
+    weight: &InputBinding<R>,
+    bias: Option<&InputBinding<R>>,
+    output: &TensorBinding<R>,
+    out_type: StorageType,
+) -> AddressType {
+    let input_address = input.required_address_type();
+    let weight_address = weight.required_address_type();
+    let bias_address = bias.map(InputBinding::required_address_type).unwrap_or_default();
+    let output_address = output.required_address_type(out_type.size());
+
+    input_address
+        .max(weight_address)
+        .max(bias_address)
+        .max(output_address)
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles, into NHWC maps
@@ -704,8 +756,7 @@ pub(crate) fn convolve_on_tiles<R: Runtime>(
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights and bias on
-/// cooperative-matrix tiles into `output`, applying `finish` as each value is written. Gives whether the
-/// forced blueprint ran.
+/// cooperative-matrix tiles into `output`, applying `finish` as each value is written.
 ///
 /// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
 /// `cubek-convolution` infers one.
@@ -722,7 +773,7 @@ fn convolve_fused<R: Runtime>(
     region: Region,
     finish: Finish<'_>,
     allow_forced: bool,
-) -> Result<bool, ArtcnnError> {
+) -> Result<LayerRun, ArtcnnError> {
     check_layer_maps(network, layer, input, output, region);
 
     let operands = body_operands(network, layer, true);
@@ -731,9 +782,10 @@ fn convolve_fused<R: Runtime>(
 
     let features = network.features() as usize;
     let shapes = convolution_shapes(region, features, features);
+    let bytes = map_bytes(network, region);
     let residual = finish.residual.map(|handle| {
         assert!(
-            handle.size_in_used() >= map_bytes(network, region),
+            handle.size_in_used() >= bytes,
             "the residual is smaller than the region's maps"
         );
 
@@ -743,7 +795,17 @@ fn convolve_fused<R: Runtime>(
 
     launch_fused(client, bound, residual, finish.activation)?;
 
-    Ok(forced)
+    Ok(LayerRun { forced, fused: true })
+}
+
+/// How a body layer's convolution ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerRun {
+    /// Whether the convolution took the forced blueprint.
+    pub forced: bool,
+    /// Whether the layer's SiLU and residual were applied as the convolution wrote, rather than in a
+    /// separate pass.
+    pub fused: bool,
 }
 
 /// What a body layer applies after its convolution and bias.
@@ -755,7 +817,7 @@ pub struct Finish<'a> {
 }
 
 /// Runs body layer `layer` over the NHWC maps of `region` in `input` on `path`, into `output`. That is its
-/// convolution and bias, then `finish`, and it gives whether the forced blueprint ran.
+/// convolution and bias, then `finish`.
 ///
 /// [BodyPath::Im2col](crate::artcnn::BodyPath::Im2col) stages the maps in `columns`, which holds nine times
 /// as many values as a map.
@@ -774,7 +836,7 @@ pub(crate) fn body_layer<R: Runtime>(
     columns: Option<&Handle>,
     region: Region,
     finish: Finish<'_>,
-) -> Result<bool, ArtcnnError> {
+) -> Result<LayerRun, ArtcnnError> {
     if path == BodyPath::Convolution {
         return convolve_fused(client, network, layer, input, output, region, finish, true);
     }
@@ -787,11 +849,11 @@ pub(crate) fn body_layer<R: Runtime>(
     let add_bias = path == BodyPath::Im2col;
     finish_separately(client, dispatch, network, layer, output, region, finish, add_bias);
 
-    Ok(forced)
+    Ok(LayerRun { forced, fused: false })
 }
 
 /// Runs body layer `layer` on `path` as a forward pass does, keeping the inferred blueprint unless
-/// `allow_forced` is set. Gives whether the forced blueprint ran.
+/// `allow_forced` is set.
 #[cfg(any(test, feature = "test-support"))]
 #[expect(
     clippy::too_many_arguments,
@@ -808,7 +870,7 @@ pub fn body_layer_with_blueprint<R: Runtime>(
     region: Region,
     finish: Finish<'_>,
     allow_forced: bool,
-) -> Result<bool, ArtcnnError> {
+) -> Result<LayerRun, ArtcnnError> {
     assert!(
         path != BodyPath::Im2col,
         "only the convolution paths choose a blueprint"
@@ -827,7 +889,10 @@ pub fn body_layer_with_blueprint<R: Runtime>(
     convolve_with_blueprint(client, dispatch, network, layer, input, output, region, false)?;
     finish_separately(client, dispatch, network, layer, output, region, finish, false);
 
-    Ok(false)
+    Ok(LayerRun {
+        forced: false,
+        fused: false,
+    })
 }
 
 /// Applies `finish` to `layer`'s maps of `region` in `output` in a separate pass, adding the bias first if
