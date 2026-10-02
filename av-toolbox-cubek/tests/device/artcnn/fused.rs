@@ -13,8 +13,8 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 use cubecl::server::Handle;
 
-use super::body::{f16_step, r8f64, supports};
-use super::{BlueprintRuns, forced_eligible, read_maps, synced, upload_maps, wavy_maps};
+use super::body::{r8f64, supports};
+use super::{BlueprintRuns, forced_eligible, read_maps, steps_from_separate, synced, upload_maps, wavy_maps};
 use crate::support::{Sizing, backend, empty};
 
 /// The region every fused write-out test convolves, large enough for the forced blueprint.
@@ -172,7 +172,7 @@ fn assert_within_one_step(outputs: &FusedOutputs, epilogue: Epilogue) {
     ];
 
     for (name, fused, fused_ran) in runs {
-        let (differing, largest_share) = steps_from_separate(fused, outputs);
+        let (differing, largest_share) = steps_from_separate(fused, &outputs.separate, &outputs.convolved);
         let values = fused.len();
         let shown = format!("{differing} of {values} values differ, largest {largest_share} f16 steps");
         println!("fused {epilogue:?} {name}: {shown}");
@@ -184,30 +184,6 @@ fn assert_within_one_step(outputs: &FusedOutputs, epilogue: Epilogue) {
         // apart.
         assert!(largest_share <= 1.0, "{name}: {largest_share} f16 steps");
     }
-}
-
-/// How many of `fused` differ from the separate passes, and the largest difference in f16 steps.
-///
-/// The fused write-out may apply the epilogue before the convolution is rounded to f16, so the step is taken
-/// at the largest of the fused, separate and convolved values.
-fn steps_from_separate(fused: &[f32], outputs: &FusedOutputs) -> (usize, f32) {
-    let mut differing = 0;
-    let mut largest_share = 0.0f32;
-
-    for (index, fused_value) in fused.iter().copied().enumerate() {
-        let separate = outputs.separate[index];
-        let convolved = outputs.convolved[index];
-        let magnitude = fused_value.abs().max(separate.abs()).max(convolved.abs());
-        let step = f16_step(magnitude);
-        let share = (fused_value - separate).abs() / step;
-
-        largest_share = largest_share.max(share);
-        if fused_value != separate {
-            differing += 1;
-        }
-    }
-
-    (differing, largest_share)
 }
 
 #[test]

@@ -1,6 +1,7 @@
 mod body;
 mod ends;
 mod fused;
+mod kernels;
 mod network;
 mod tiling;
 mod weights;
@@ -23,6 +24,11 @@ pub use self::body::{
 #[cfg(any(test, feature = "test-support"))]
 pub use self::ends::padded_last_layer_with_blueprint;
 pub use self::ends::{Region, first_layer, last_layer, padded_last_layer, shuffle};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::kernels::run_candidate;
+pub use self::kernels::{BodyConvolution, Candidate, DirectVariant, WeightStaging};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::network::run_region_with_candidate;
 pub use self::network::{Maps, Network, Precision, run_region};
 pub use self::tiling::{
     ScratchSizes,

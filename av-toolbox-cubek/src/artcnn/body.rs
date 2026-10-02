@@ -602,21 +602,34 @@ pub(crate) struct Operands<'a> {
     pub(crate) globals: MatmulGlobalElems,
 }
 
+impl<'a> Operands<'a> {
+    /// The operands of an `F -> F` body convolution with `weights` and `bias` in `precision`'s type.
+    pub(crate) fn body(weights: &'a Handle, bias: &'a Handle, features: usize, precision: Precision) -> Self {
+        let dtype = storage_type(precision);
+        let globals = uniform_globals(dtype);
+
+        Operands {
+            weights,
+            bias: Some(bias),
+            in_channels: features,
+            out_channels: features,
+            globals,
+        }
+    }
+}
+
 /// The operands of `layer`, a body convolution, with its bias if `with_bias` is set.
-fn body_operands(network: &Network, layer: usize, with_bias: bool) -> Operands<'_> {
+pub(crate) fn body_operands(network: &Network, layer: usize, with_bias: bool) -> Operands<'_> {
     let buffers = network.layer(layer);
     let features = network.features() as usize;
-    let dtype = storage_type(network.precision());
-    let bias = with_bias.then_some(&buffers.bias);
-    let globals = uniform_globals(dtype);
+    let precision = network.precision();
+    let mut operands = Operands::body(&buffers.weights, &buffers.bias, features, precision);
 
-    Operands {
-        weights: &buffers.weights,
-        bias,
-        in_channels: features,
-        out_channels: features,
-        globals,
+    if !with_bias {
+        operands.bias = None;
     }
+
+    operands
 }
 
 /// One 3x3 convolution's tensors bound for `cubek-convolution`, with its problem and the blueprint it takes.
@@ -777,25 +790,45 @@ fn convolve_fused<R: Runtime>(
     check_layer_maps(network, layer, input, output, region);
 
     let operands = body_operands(network, layer, true);
-    let bound = bind_convolution::<R>(client, &operands, input, output, region, allow_forced);
+    let forced = launch_fused_convolution(client, &operands, input, output, region, finish, allow_forced)?;
+
+    Ok(LayerRun { forced, fused: true })
+}
+
+/// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles into `output`,
+/// applying `finish` as each value is written. Gives whether the forced blueprint ran.
+///
+/// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
+/// `cubek-convolution` infers one.
+pub(crate) fn launch_fused_convolution<R: Runtime>(
+    client: &ComputeClient<R>,
+    operands: &Operands<'_>,
+    input: &Handle,
+    output: &Handle,
+    region: Region,
+    finish: Finish<'_>,
+    allow_forced: bool,
+) -> Result<bool, ArtcnnError> {
+    let bound = bind_convolution::<R>(client, operands, input, output, region, allow_forced);
     let forced = bound.blueprint.is_some();
 
-    let features = network.features() as usize;
-    let shapes = convolution_shapes(region, features, features);
-    let bytes = map_bytes(network, region);
+    let out_channels = operands.out_channels;
+    let shapes = convolution_shapes(region, operands.in_channels, out_channels);
+    let samples = region.samples() as usize;
+    let bytes = samples * out_channels * operands.globals.out.size();
     let residual = finish.residual.map(|handle| {
         assert!(
-            handle.size_in_used() >= bytes,
+            handle.size_in_used() >= bytes as u64,
             "the residual is smaller than the region's maps"
         );
 
-        // Safety: the residual holds the region's `1 x H x W x F` maps contiguously, as just asserted.
+        // Safety: the residual holds the region's `1 x H x W x out` maps contiguously, as just asserted.
         unsafe { tensor::<R>(handle, &shapes.out_shape, &shapes.out_strides) }
     });
 
     launch_fused(client, bound, residual, finish.activation)?;
 
-    Ok(LayerRun { forced, fused: true })
+    Ok(forced)
 }
 
 /// How a body layer's convolution ran.

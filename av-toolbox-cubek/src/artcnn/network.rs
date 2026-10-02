@@ -3,6 +3,7 @@ use cubecl::server::Handle;
 use half::f16;
 
 use super::body::{Finish, body_layer};
+use super::kernels::{BodyConvolution, Candidate, run_candidate};
 use crate::artcnn::{
     Activation,
     ArtcnnError,
@@ -212,6 +213,69 @@ pub fn run_region<R: Runtime>(
     maps: Maps<'_>,
     output: DevicePlane<'_>,
 ) -> Result<(), ArtcnnError> {
+    let body = Body {
+        path,
+        candidate: None,
+    };
+
+    run_region_on(
+        client, dispatch, network, body, input, peak, region, core, maps, output,
+    )
+}
+
+/// The same as [run_region](crate::artcnn::run_region) on the convolution path, with every body convolution
+/// run by `candidate`.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the pass"
+)]
+pub fn run_region_with_candidate<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    candidate: Candidate,
+    input: DevicePlane<'_>,
+    peak: f32,
+    region: Region,
+    core: Region,
+    maps: Maps<'_>,
+    output: DevicePlane<'_>,
+) -> Result<(), ArtcnnError> {
+    let body = Body {
+        path: BodyPath::Convolution,
+        candidate: Some(candidate),
+    };
+
+    run_region_on(
+        client, dispatch, network, body, input, peak, region, core, maps, output,
+    )
+}
+
+/// How a region's body layers run. They run on `path`, or by `candidate` when one is given.
+#[derive(Clone, Copy)]
+struct Body {
+    path: BodyPath,
+    candidate: Option<Candidate>,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the pass"
+)]
+fn run_region_on<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    body: Body,
+    input: DevicePlane<'_>,
+    peak: f32,
+    region: Region,
+    core: Region,
+    maps: Maps<'_>,
+    output: DevicePlane<'_>,
+) -> Result<(), ArtcnnError> {
+    let path = body.path;
     let every_map = [maps.conv0, maps.first, maps.second, maps.third];
     debug_assert!(are_distinct(&every_map), "two of the maps are the same buffer");
 
@@ -254,11 +318,11 @@ pub fn run_region<R: Runtime>(
             residual: Some(state),
         };
 
-        body_layer(
+        run_body_layer(
             client,
             dispatch,
             network,
-            path,
+            body,
             layer,
             state,
             first,
@@ -266,11 +330,11 @@ pub fn run_region<R: Runtime>(
             region,
             activated,
         )?;
-        body_layer(
+        run_body_layer(
             client,
             dispatch,
             network,
-            path,
+            body,
             layer + 1,
             first,
             second,
@@ -278,11 +342,11 @@ pub fn run_region<R: Runtime>(
             region,
             activated,
         )?;
-        body_layer(
+        run_body_layer(
             client,
             dispatch,
             network,
-            path,
+            body,
             layer + 2,
             second,
             first,
@@ -300,11 +364,11 @@ pub fn run_region<R: Runtime>(
         activation: Activation::None,
         residual: Some(maps.conv0),
     };
-    body_layer(
+    run_body_layer(
         client,
         dispatch,
         network,
-        path,
+        body,
         layer,
         state,
         joined,
@@ -323,6 +387,36 @@ pub fn run_region<R: Runtime>(
     }
 
     Ok(())
+}
+
+/// Runs body layer `layer` as `body` says, over the maps of `region` in `input`, into `output`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the layer"
+)]
+fn run_body_layer<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    body: Body,
+    layer: usize,
+    input: &Handle,
+    output: &Handle,
+    columns: Option<&Handle>,
+    region: Region,
+    finish: Finish<'_>,
+) -> Result<(), ArtcnnError> {
+    let Some(candidate) = body.candidate else {
+        body_layer(
+            client, dispatch, network, body.path, layer, input, output, columns, region, finish,
+        )?;
+
+        return Ok(());
+    };
+
+    let convolution = BodyConvolution::of_layer(network, layer, input, output, region, finish);
+
+    run_candidate(client, candidate, &convolution)
 }
 
 /// The bytes one feature map of `region` takes in the network's precision.

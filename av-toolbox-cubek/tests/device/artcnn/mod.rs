@@ -1,12 +1,14 @@
 mod body;
 mod ends;
 mod fused;
+mod kernels;
 mod tiling;
 
 use av_toolbox_cubek::artcnn::{Precision, offers_cmma_16};
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
+use self::body::f16_step;
 use crate::support::{read_f16, read_f32, upload_f16, upload_f32};
 
 /// Waits for the device and fails the test if a kernel did not compile.
@@ -109,4 +111,28 @@ impl BlueprintRuns {
             );
         }
     }
+}
+
+/// How many of `values` differ from the separate passes, and the largest difference in f16 steps.
+///
+/// A fused write-out may apply the epilogue before the convolution is rounded to f16, so the step is taken at
+/// the largest of the value, the separate passes' value and the bare convolution's.
+pub fn steps_from_separate(values: &[f32], separate: &[f32], convolved: &[f32]) -> (usize, f32) {
+    let mut differing = 0;
+    let mut largest_share = 0.0f32;
+
+    for (index, value) in values.iter().copied().enumerate() {
+        let separate_value = separate[index];
+        let convolved_value = convolved[index];
+        let magnitude = value.abs().max(separate_value.abs()).max(convolved_value.abs());
+        let step = f16_step(magnitude);
+        let share = (value - separate_value).abs() / step;
+
+        largest_share = largest_share.max(share);
+        if value != separate_value {
+            differing += 1;
+        }
+    }
+
+    (differing, largest_share)
 }

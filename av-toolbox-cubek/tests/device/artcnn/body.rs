@@ -2,6 +2,7 @@ use av_toolbox_cubek::artcnn::{
     Activation,
     ArtcnnError,
     BodyPath,
+    Candidate,
     Finish,
     LayerRun,
     Maps,
@@ -15,6 +16,7 @@ use av_toolbox_cubek::artcnn::{
     convolve_without_bias,
     epilogue,
     run_region,
+    run_region_with_candidate,
     scratch_sizes,
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
@@ -86,20 +88,34 @@ pub(super) fn supported_runs() -> Vec<(BodyPath, Precision)> {
 }
 
 /// Runs the network over the whole of a plane in `0..=1`, and gives the doubled output divided by the peak.
-struct Forward {
-    weights: Weights,
-    plane: Vec<f32>,
-    width: u32,
-    height: u32,
-    path: BodyPath,
-    precision: Precision,
+pub(super) struct Forward {
+    pub(super) weights: Weights,
+    pub(super) plane: Vec<f32>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) path: BodyPath,
+    pub(super) precision: Precision,
 }
 
 impl BuildTask for Forward {
     type Output = Result<Vec<f32>, ArtcnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
-        run_forward(self, build, None)
+        run_forward(self, build, None, None)
+    }
+}
+
+/// The same as [Forward] on the convolution path, with every body convolution run by `candidate`.
+pub(super) struct CandidateForward {
+    pub(super) forward: Forward,
+    pub(super) candidate: Candidate,
+}
+
+impl BuildTask for CandidateForward {
+    type Output = Result<Vec<f32>, ArtcnnError>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        run_forward(self.forward, build, None, Some(self.candidate))
     }
 }
 
@@ -113,15 +129,17 @@ impl BuildTask for ForwardWithConv0 {
     type Output = Result<Vec<f32>, ArtcnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
-        run_forward(self.forward, build, Some(self.conv0_bytes))
+        run_forward(self.forward, build, Some(self.conv0_bytes), None)
     }
 }
 
-/// Runs `task`, with `conv0` holding `conv0_bytes` if given and otherwise what the scratch sizes ask for.
+/// Runs `task`, with `conv0` holding `conv0_bytes` if given and otherwise what the scratch sizes ask for, and
+/// every body convolution run by `candidate` if given.
 fn run_forward<R: Runtime>(
     task: Forward,
     build: &BuildContext<R>,
     conv0_bytes: Option<usize>,
+    candidate: Option<Candidate>,
 ) -> Result<Vec<f32>, ArtcnnError> {
     let client = build.client();
     let frame_context = build.frame_context();
@@ -163,18 +181,32 @@ fn run_forward<R: Runtime>(
         columns: columns.as_ref(),
     };
 
-    let ran = run_region(
-        client,
-        &sizing,
-        &network,
-        task.path,
-        input_plane,
-        PEAK,
-        region,
-        region,
-        maps,
-        output_plane,
-    );
+    let ran = match candidate {
+        Some(candidate) => run_region_with_candidate(
+            client,
+            &sizing,
+            &network,
+            candidate,
+            input_plane,
+            PEAK,
+            region,
+            region,
+            maps,
+            output_plane,
+        ),
+        None => run_region(
+            client,
+            &sizing,
+            &network,
+            task.path,
+            input_plane,
+            PEAK,
+            region,
+            region,
+            maps,
+            output_plane,
+        ),
+    };
     synced(client);
     ran?;
 
