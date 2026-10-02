@@ -28,6 +28,7 @@ use cubek_std::cube_count::{CubeCountStrategy, GlobalOrder, HypercubeBlueprint};
 use cubek_std::{InputBinding, MatrixLayout};
 
 use super::fused::launch_fused;
+use super::kernels::Candidate;
 use super::network::map_bytes;
 use crate::Dispatch;
 use crate::artcnn::{Network, Precision, Region};
@@ -792,7 +793,11 @@ fn convolve_fused<R: Runtime>(
     let operands = body_operands(network, layer, true);
     let forced = launch_fused_convolution(client, &operands, input, output, region, finish, allow_forced)?;
 
-    Ok(LayerRun { forced, fused: true })
+    Ok(LayerRun {
+        forced,
+        fused: true,
+        candidate: None,
+    })
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles into `output`,
@@ -839,6 +844,8 @@ pub struct LayerRun {
     /// Whether the layer's SiLU and residual were applied as the convolution wrote, rather than in a
     /// separate pass.
     pub fused: bool,
+    /// The candidate that ran the convolution, if one was chosen for it.
+    pub candidate: Option<Candidate>,
 }
 
 /// What a body layer applies after its convolution and bias.
@@ -882,7 +889,11 @@ pub(crate) fn body_layer<R: Runtime>(
     let add_bias = path == BodyPath::Im2col;
     finish_separately(client, dispatch, network, layer, output, region, finish, add_bias);
 
-    Ok(LayerRun { forced, fused: false })
+    Ok(LayerRun {
+        forced,
+        fused: false,
+        candidate: None,
+    })
 }
 
 /// Runs body layer `layer` on `path` as a forward pass does, keeping the inferred blueprint unless
@@ -925,6 +936,7 @@ pub fn body_layer_with_blueprint<R: Runtime>(
     Ok(LayerRun {
         forced: false,
         fused: false,
+        candidate: None,
     })
 }
 

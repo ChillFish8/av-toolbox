@@ -41,10 +41,18 @@ use av_toolbox_models::{Located, Store};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+#[cfg(test)]
+pub(crate) use crate::artcnn::{
+    KERNEL_ENV,
+    allocation_cap,
+    body_path,
+    fallbacks,
+    frame_tile,
+    kernels_from_value,
+    warmed_path,
+};
 pub(crate) use crate::artcnn::{ModelName, PrecisionName};
 use crate::artcnn::{Supersampler, checked_precision};
-#[cfg(test)]
-pub(crate) use crate::artcnn::{allocation_cap, body_path, fallbacks, frame_tile, warmed_path};
 use crate::bits::bits_of;
 use crate::resize::{Tables, Window, geometry, resize_plane, samples_for};
 use crate::scratch::Scratch;

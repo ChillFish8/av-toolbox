@@ -11,6 +11,7 @@ cubek-convolution = { workspace = true }
 cubek-matmul = { workspace = true }
 cubek-std = { workspace = true }
 half = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

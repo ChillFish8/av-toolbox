@@ -1,10 +1,11 @@
 use cubecl::cmma;
+use cubecl::ir::DeviceProperties;
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than by name.
 use cubecl::prelude::*;
 use half::f16;
 
 use super::BodyConvolution;
-use crate::artcnn::body::offers_cmma_16;
+use crate::artcnn::body::offers_cmma_16_in;
 use crate::artcnn::{Activation, ArtcnnError};
 
 /// The side of the cooperative-matrix tiles the kernel multiplies.
@@ -56,7 +57,7 @@ impl WeightStaging {
 ///
 /// A workgroup computes a block of `rows` by `columns` output samples for `F / channel_groups` output
 /// channels. Its planes form a grid of `planes_m` by `planes_n`, splitting the block's samples and channels
-/// between them.
+/// between them. Each plane is a row of `plane_width` units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DirectVariant {
     pub rows: u32,
@@ -65,6 +66,7 @@ pub struct DirectVariant {
     pub planes_m: u32,
     pub planes_n: u32,
     pub weights: WeightStaging,
+    pub plane_width: u32,
 }
 
 /// The fastest variant at both model widths on an AMD R9700, at 1.5 to 1.7 ms a 1080p convolution at
@@ -78,13 +80,53 @@ impl Default for DirectVariant {
             planes_m: 1,
             planes_n: 2,
             weights: WeightStaging::Global,
+            plane_width: 64,
         }
+    }
+}
+
+/// The block shapes, plane grids and weight staging the direct convolution is offered in, before the plane
+/// width is chosen.
+const LAYOUTS: [DirectVariant; 8] = [
+    layout(4, 16, 1, 2, WeightStaging::Global),
+    layout(8, 16, 2, 2, WeightStaging::Global),
+    layout(2, 32, 1, 2, WeightStaging::Global),
+    layout(4, 16, 2, 2, WeightStaging::Global),
+    layout(8, 16, 4, 1, WeightStaging::Global),
+    layout(6, 16, 1, 2, WeightStaging::Global),
+    layout(8, 16, 4, 2, WeightStaging::Single),
+    layout(8, 16, 4, 2, WeightStaging::Double),
+];
+
+/// The plane widths the layouts are offered at.
+const PLANE_WIDTHS: [u32; 2] = [32, 64];
+
+const fn layout(
+    rows: u32,
+    columns: u32,
+    planes_m: u32,
+    planes_n: u32,
+    weights: WeightStaging,
+) -> DirectVariant {
+    DirectVariant {
+        rows,
+        columns,
+        channel_groups: 1,
+        planes_m,
+        planes_n,
+        weights,
+        plane_width: 64,
     }
 }
 
 impl DirectVariant {
     pub fn planes(&self) -> u32 {
         self.planes_m * self.planes_n
+    }
+
+    /// The units one workgroup holds.
+    pub fn units(&self) -> u32 {
+        self.plane_width * self.planes()
     }
 
     /// The shape the kernel compiles for this variant on maps of `features` channels.
@@ -542,8 +584,12 @@ fn write_out(
 
             sync_cube();
 
-            let mut tile_slice = scratch.slice_mut(start, start + tile_quads as usize);
-            cmma::store(&mut tile_slice, accumulator, TILE, cmma::MatrixLayout::RowMajor);
+            // A plane may hold several subgroups that each computed the same accumulator, so only the
+            // first stores it. The condition is uniform within each subgroup.
+            if UNIT_POS_X < PLANE_DIM {
+                let mut tile_slice = scratch.slice_mut(start, start + tile_quads as usize);
+                cmma::store(&mut tile_slice, accumulator, TILE, cmma::MatrixLayout::RowMajor);
+            }
 
             sync_cube();
 
@@ -573,15 +619,32 @@ fn write_out(
     }
 }
 
-/// Whether the device offers the 16x16x16 f16 cooperative matrix accumulating in f32 the kernel multiplies.
-fn check_device<R: Runtime>(client: &ComputeClient<R>, shape: &DirectShape) -> Result<(), String> {
-    let offers_matrix = offers_cmma_16(client);
-    let hardware = &client.properties().hardware;
+/// Whether a device with `properties` can run `variant` compiled as `shape`.
+///
+/// The device must offer the 16x16x16 f16 cooperative matrix accumulating in f32, and hold the shared memory
+/// and units the variant takes. A plane narrower than the device's widest subgroup is refused, since the
+/// driver may run a subgroup across two planes. A wider plane holds whole subgroups that repeat each other's
+/// work.
+pub(crate) fn check_device(
+    properties: &DeviceProperties,
+    variant: &DirectVariant,
+    shape: &DirectShape,
+) -> Result<(), String> {
+    let offers_matrix = offers_cmma_16_in(&properties.features.matmul.cmma);
+    let hardware = &properties.hardware;
+    let widest = hardware.plane_size_max;
+    let plane_width = variant.plane_width;
     let shared_bytes = shape.shared_bytes();
-    let units = hardware.plane_size_max * shape.planes();
+    let units = variant.units();
 
     if !offers_matrix {
         return Err("the device offers no 16x16x16 f16 cooperative matrix".to_string());
+    }
+
+    if widest == 0 || !plane_width.is_multiple_of(widest) {
+        return Err(format!(
+            "a plane of {plane_width} units does not hold whole subgroups of up to {widest}"
+        ));
     }
 
     if shared_bytes > hardware.max_shared_memory_size {
@@ -599,6 +662,44 @@ fn check_device<R: Runtime>(client: &ComputeClient<R>, shape: &DirectShape) -> R
     Ok(())
 }
 
+/// Whether a device with `properties` can run `variant` on maps of `features` channels.
+pub(crate) fn check_variant(
+    properties: &DeviceProperties,
+    variant: &DirectVariant,
+    features: u32,
+) -> Result<(), String> {
+    let shape = variant.shape(features, Activation::Silu, false)?;
+
+    check_device(properties, variant, &shape)
+}
+
+/// The direct variants offered on a device with `properties` for maps of `features` channels.
+///
+/// A variant is offered when the device can run it and its planes are exactly the device's widest subgroup,
+/// so no subgroup repeats another's work when the driver runs that width.
+pub fn direct_variants(properties: &DeviceProperties, features: u32) -> Vec<DirectVariant> {
+    let plane_width = properties.hardware.plane_size_max;
+    let mut offered = Vec::new();
+
+    if !PLANE_WIDTHS.contains(&plane_width) {
+        return offered;
+    }
+
+    for layout in LAYOUTS {
+        let variant = DirectVariant {
+            plane_width,
+            ..layout
+        };
+        let runs = check_variant(properties, &variant, features);
+
+        if runs.is_ok() {
+            offered.push(variant);
+        }
+    }
+
+    offered
+}
+
 /// Runs `convolution` as `variant` describes.
 pub(crate) fn run_direct<R: Runtime>(
     client: &ComputeClient<R>,
@@ -609,9 +710,11 @@ pub(crate) fn run_direct<R: Runtime>(
 
     let features = convolution.features;
     let residual = convolution.residual.is_some();
+    let properties = client.properties();
     let shape = variant.shape(features, convolution.activation, residual);
     let shape = shape.map_err(ArtcnnError::Convolution)?;
-    check_device(client, &shape).map_err(ArtcnnError::Convolution)?;
+    let fits = check_device(properties, &variant, &shape);
+    fits.map_err(ArtcnnError::Convolution)?;
 
     let width = convolution.width;
     let height = convolution.height;
@@ -626,8 +729,7 @@ pub(crate) fn run_direct<R: Runtime>(
     let row_blocks = height.div_ceil(variant.rows);
     let channel_groups = variant.channel_groups;
     let cubes = CubeCount::Static(column_blocks, row_blocks, channel_groups);
-    let plane_size = client.properties().hardware.plane_size_max;
-    let unit = CubeDim::new_2d(plane_size, variant.planes());
+    let unit = CubeDim::new_2d(variant.plane_width, variant.planes());
     // Without a residual the input stands in for it, and is never read through it.
     let residual = convolution.residual.unwrap_or(convolution.input);
 

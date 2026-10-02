@@ -1,13 +1,21 @@
 mod direct;
+mod tune;
 
 #[cfg(test)]
 mod tests;
 
+use cubecl::ir::DeviceProperties;
 use cubecl::prelude::{ComputeClient, Runtime};
 use cubecl::server::Handle;
 
-use self::direct::run_direct;
+#[cfg(any(test, feature = "test-support"))]
+pub use self::direct::direct_variants;
 pub use self::direct::{DirectVariant, WeightStaging};
+use self::direct::{check_variant, run_direct};
+pub use self::tune::Kernels;
+#[cfg(any(test, feature = "test-support"))]
+pub use self::tune::{Epilogue, TunedRun, fixed_candidate, offered_candidates, run_tuned};
+pub(crate) use self::tune::{run_tuned_layer, takes_tuner};
 use super::body::{Finish, Operands, body_operands, launch_fused_convolution};
 use crate::artcnn::{Activation, ArtcnnError, Network, Precision, Region};
 
@@ -132,18 +140,70 @@ pub enum Candidate {
     FusedCubek,
 }
 
+impl Candidate {
+    /// A short name that tells every candidate apart.
+    pub fn name(&self) -> String {
+        let Candidate::Direct(variant) = self else {
+            return "fused-cubek".to_string();
+        };
+
+        let staging = match variant.weights {
+            WeightStaging::Global => "global",
+            WeightStaging::Single => "single",
+            WeightStaging::Double => "double",
+        };
+
+        format!(
+            "direct-{}x{}-groups{}-planes{}x{}-{staging}-width{}",
+            variant.rows,
+            variant.columns,
+            variant.channel_groups,
+            variant.planes_m,
+            variant.planes_n,
+            variant.plane_width,
+        )
+    }
+
+    /// Whether a device with `properties` can run this candidate on maps of `features` channels, as far as
+    /// is known before it launches.
+    pub(crate) fn check(&self, properties: &DeviceProperties, features: u32) -> Result<(), String> {
+        match self {
+            Candidate::Direct(variant) => check_variant(properties, variant, features),
+            Candidate::FusedCubek => Ok(()),
+        }
+    }
+}
+
 /// Runs `convolution` with `candidate`.
 ///
 /// Gives an error if the candidate cannot run on the device or with this convolution's shape.
+#[cfg(any(test, feature = "test-support"))]
 pub fn run_candidate<R: Runtime>(
     client: &ComputeClient<R>,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
 ) -> Result<(), ArtcnnError> {
+    launch_candidate(client, candidate, convolution)?;
+
+    Ok(())
+}
+
+/// Runs `convolution` with `candidate`, giving whether the forced blueprint ran.
+///
+/// Gives an error if the candidate cannot run on the device or with this convolution's shape.
+pub(crate) fn launch_candidate<R: Runtime>(
+    client: &ComputeClient<R>,
+    candidate: Candidate,
+    convolution: &BodyConvolution<'_>,
+) -> Result<bool, ArtcnnError> {
     convolution.check();
 
     match candidate {
-        Candidate::Direct(variant) => run_direct(client, variant, convolution),
+        Candidate::Direct(variant) => {
+            run_direct(client, variant, convolution)?;
+
+            Ok(false)
+        },
         Candidate::FusedCubek => run_fused_cubek(client, convolution),
     }
 }
@@ -151,7 +211,7 @@ pub fn run_candidate<R: Runtime>(
 fn run_fused_cubek<R: Runtime>(
     client: &ComputeClient<R>,
     convolution: &BodyConvolution<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<bool, ArtcnnError> {
     let features = convolution.features as usize;
     let operands = Operands::body(convolution.weights, convolution.bias, features, Precision::F16);
     let region = convolution.region();
@@ -159,7 +219,5 @@ fn run_fused_cubek<R: Runtime>(
     let input = convolution.input;
     let output = convolution.output;
 
-    launch_fused_convolution(client, &operands, input, output, region, finish, true)?;
-
-    Ok(())
+    launch_fused_convolution(client, &operands, input, output, region, finish, true)
 }

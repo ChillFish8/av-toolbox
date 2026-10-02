@@ -2,6 +2,10 @@
 #
 # Set args.model to "r16f96" after `av-toolbox pull artcnn`.
 # Set args.precision to "f32" for full-precision feature maps.
+#
+# At "f16" the first run at a frame size benchmarks ArtCNN's kernels on this device and keeps the fastest in
+# the kernel cache, so later runs start straight away. Set AVTB_ARTCNN_KERNEL=fixed to run one fixed kernel
+# instead, which gives the same output on every device that offers it.
 
 [variable.input]
 type = "path"

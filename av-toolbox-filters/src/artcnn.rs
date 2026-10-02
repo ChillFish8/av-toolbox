@@ -5,6 +5,8 @@ use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::artcnn::{
     ArtcnnError,
     BodyPath,
+    Kernels,
+    LayerRun,
     Maps,
     Model,
     Network,
@@ -32,6 +34,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::sizing::Sizing;
+
+/// The variable that pins ArtCNN's body convolutions to one fixed kernel.
+pub(crate) const KERNEL_ENV: &str = "AVTB_ARTCNN_KERNEL";
 
 /// An ArtCNN network, as a stage's arguments name it.
 #[derive(Debug, Default, Deserialize, JsonSchema, Copy, Clone, PartialEq, Eq)]
@@ -102,6 +107,30 @@ fn broken_model(stage: &str, file: &str, error: WeightsError) -> StageError {
     let message = format!("{stage} could not load its model {file}: {error}");
 
     StageError::msg(message)
+}
+
+fn unknown_kernel(stage: &str, value: &str) -> StageError {
+    let message = format!(
+        "{stage} does not understand {KERNEL_ENV}=\"{value}\". Set it to \"fixed\" to pin one kernel, or \
+         leave it unset or empty to tune"
+    );
+
+    StageError::msg(message)
+}
+
+/// How the body convolutions choose their kernel, from the value of [KERNEL_ENV].
+///
+/// `fixed` runs one fixed kernel, the same on every device that offers it. Unset or empty, autotune chooses.
+pub(crate) fn kernels_from_value(stage: &str, value: Option<&str>) -> Result<Kernels, StageError> {
+    let Some(text) = value.map(str::trim).filter(|text| !text.is_empty()) else {
+        return Ok(Kernels::Tuned);
+    };
+
+    if text.eq_ignore_ascii_case("fixed") {
+        return Ok(Kernels::Fixed);
+    }
+
+    Err(unknown_kernel(stage, text))
 }
 
 fn path_name(path: BodyPath) -> &'static str {
@@ -324,7 +353,13 @@ impl MapBuffers {
     }
 }
 
-/// Warms the network up on `path` at the frame's size, giving the tile side it used.
+/// What a warm-up chose: the tile side, and how each body layer of each tile ran.
+struct Warmed {
+    tile: u32,
+    layers: Vec<LayerRun>,
+}
+
+/// Warms the network up on `path` at the frame's size.
 fn warm_up_on<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
@@ -333,24 +368,48 @@ fn warm_up_on<R: Runtime>(
     cap: usize,
     width: u32,
     height: u32,
-) -> Result<u32, ArtcnnError> {
+) -> Result<Warmed, ArtcnnError> {
     let tile = tile_for(network, path, cap, width, height);
     let buffers = MapBuffers::new(context, network, path, tile, width, height);
     let maps = buffers.maps();
     let sizing = Sizing(context);
 
-    warm_up(client, &sizing, network, path, width, height, tile, maps)?;
+    let layers = warm_up(client, &sizing, network, path, width, height, tile, maps)?;
 
-    Ok(tile)
+    Ok(Warmed { tile, layers })
+}
+
+/// The kernels `layers` ran on, each named once with how many layers ran on it.
+fn kernel_summary(layers: &[LayerRun]) -> String {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+
+    for layer in layers {
+        let name = match layer.candidate {
+            Some(candidate) => candidate.name(),
+            None => "cubek".to_string(),
+        };
+
+        match counts.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((name, 1)),
+        }
+    }
+
+    let parts: Vec<String> = counts
+        .iter()
+        .map(|(name, count)| format!("{name} x{count}"))
+        .collect();
+
+    parts.join(", ")
 }
 
 /// Warms up on each of [fallbacks](crate::artcnn::fallbacks) from `chosen` in turn with `warm`, giving the
-/// first path that succeeds and its tile side.
-pub(crate) fn warmed_path(
+/// first path that succeeds and what its warm-up gave.
+pub(crate) fn warmed_path<T>(
     stage: &'static str,
     chosen: BodyPath,
-    mut warm: impl FnMut(BodyPath) -> Result<u32, ArtcnnError>,
-) -> Result<(BodyPath, u32), StageError> {
+    mut warm: impl FnMut(BodyPath) -> Result<T, ArtcnnError>,
+) -> Result<(BodyPath, T), StageError> {
     let ladder = fallbacks(chosen);
     let mut failures = Vec::new();
 
@@ -358,7 +417,7 @@ pub(crate) fn warmed_path(
         let warmed = warm(path);
 
         let error = match warmed {
-            Ok(tile) => return Ok((path, tile)),
+            Ok(outcome) => return Ok((path, outcome)),
             Err(error) => error,
         };
 
@@ -390,13 +449,16 @@ pub(crate) struct Supersampler {
     network: Network,
     path: BodyPath,
     tile: u32,
+    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    layers: Vec<LayerRun>,
 }
 
 impl Supersampler {
     /// Finds and reads `model` at `precision`, then warms it up on a `width` by `height` plane.
     ///
     /// The fused convolution path is taken when the device offers it, falling back to the unfused
-    /// convolution and then to im2col when it cannot run there.
+    /// convolution and then to im2col when it cannot run there. Its f16 body convolutions choose their
+    /// kernel by autotune, which benchmarks during the warm-up, unless [KERNEL_ENV] pins one.
     pub(crate) fn load<R: Runtime>(
         stage: &'static str,
         context: &BuildContext<R>,
@@ -405,12 +467,30 @@ impl Supersampler {
         width: u32,
         height: u32,
     ) -> Result<Self, StageError> {
+        let pinned = std::env::var(KERNEL_ENV).ok();
+        let kernels = kernels_from_value(stage, pinned.as_deref())?;
+
+        Self::load_with(stage, context, model, precision, width, height, kernels)
+    }
+
+    /// The same as [Supersampler::load](crate::artcnn::Supersampler::load), with the body convolutions
+    /// choosing their kernel by `kernels`.
+    pub(crate) fn load_with<R: Runtime>(
+        stage: &'static str,
+        context: &BuildContext<R>,
+        model: ModelName,
+        precision: PrecisionName,
+        width: u32,
+        height: u32,
+        kernels: Kernels,
+    ) -> Result<Self, StageError> {
         let capabilities = context.capabilities();
         let precision = checked_precision(stage, capabilities, precision)?;
 
         let client = context.client();
         let store = Store::from_environment();
-        let network = load_network(stage, client, &store, model, precision)?;
+        let uploaded = load_network(stage, client, &store, model, precision)?;
+        let network = uploaded.with_kernels(kernels);
 
         let frame_context = context.frame_context();
         let chosen = body_path(capabilities, precision);
@@ -418,13 +498,22 @@ impl Supersampler {
         let warmed = warmed_path(stage, chosen, |path| {
             warm_up_on(client, &frame_context, &network, path, cap, width, height)
         })?;
-        let (path, tile) = warmed;
+        let (path, outcome) = warmed;
+
+        let path_label = path_name(path);
+        let summary = kernel_summary(&outcome.layers);
+        tracing::info!(
+            stage = stage,
+            "warmed up on the {path_label} path, with the body convolutions on {summary}",
+        );
 
         Ok(Self {
             stage,
             network,
             path,
-            tile,
+            tile: outcome.tile,
+            #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+            layers: outcome.layers,
         })
     }
 
@@ -436,6 +525,18 @@ impl Supersampler {
     #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     pub(crate) fn tile(&self) -> u32 {
         self.tile
+    }
+
+    /// How the body convolutions choose their kernel.
+    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    pub(crate) fn kernels(&self) -> &Kernels {
+        self.network.kernels()
+    }
+
+    /// How each body layer of each tile ran in the warm-up.
+    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    pub(crate) fn layers(&self) -> &[LayerRun] {
+        &self.layers
     }
 
     /// Doubles `input` into `output`, both f32 code values up to `peak`.

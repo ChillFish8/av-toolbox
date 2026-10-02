@@ -123,7 +123,7 @@ impl BuildTask for WarmUp {
             columns: columns.as_ref(),
         };
 
-        warm_up(
+        let warmed = warm_up(
             client,
             &sizing,
             &network,
@@ -132,7 +132,9 @@ impl BuildTask for WarmUp {
             self.height,
             self.tile,
             maps,
-        )
+        );
+
+        warmed.map(|_| ())
     }
 }
 

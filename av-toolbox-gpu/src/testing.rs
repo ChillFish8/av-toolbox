@@ -1,7 +1,11 @@
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
+use std::time::Duration;
 
 use cubecl::bytes::Bytes;
+use cubecl::config::cache::CacheConfig;
+use cubecl::config::{CubeClRuntimeConfig, RuntimeConfig};
 use cubecl::server::Handle;
 use cubecl::stream_id::StreamId;
 
@@ -195,10 +199,89 @@ pub fn flush_counting_context(policy: StreamPolicy) -> (FrameContext, Arc<Atomic
 ///
 /// Falls back to [Device::Default] when the variable is unset or empty. Panics when it is set to
 /// something that is not a device selector.
+///
+/// The first call also keeps CubeCL's autotune results in the workspace's `target/test-autotune`
+/// directory, unless CubeCL's config is already set, and removes the stale ones there.
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_device() -> Device {
+    static TUNE_CACHE: Once = Once::new();
+    TUNE_CACHE.call_once(install_test_tune_cache);
+
     let value = std::env::var("AVTB_DEVICE").ok();
     device_from_value(value.as_deref())
+}
+
+/// Points CubeCL's autotune cache inside the workspace's target directory, leaving a config that is
+/// already set alone.
+///
+/// It first removes the tunings nothing has written for [STALE_TUNINGS], so repeated runs do not pile them
+/// up.
+#[cfg(any(test, feature = "test-support"))]
+fn install_test_tune_cache() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let directory = manifest.join("../target/test-autotune");
+    remove_stale_tunings(&directory);
+
+    let mut config = CubeClRuntimeConfig::from_current_dir().override_from_env();
+    config.autotune.cache = CacheConfig::File(directory);
+
+    let mut state = CubeClRuntimeConfig::storage().lock();
+    if state.is_none() {
+        *state = Some(Arc::new(config));
+    }
+}
+
+/// How long a test tuning lies untouched before a later test process removes it.
+#[cfg(any(test, feature = "test-support"))]
+const STALE_TUNINGS: Duration = Duration::from_secs(60 * 60);
+
+/// Removes each tuner's directory under `root` that nothing has written for [STALE_TUNINGS].
+///
+/// CubeCL keeps a tuner's results in a directory of its own, two levels below `root/autotune`.
+#[cfg(any(test, feature = "test-support"))]
+fn remove_stale_tunings(root: &Path) {
+    let Ok(versions) = std::fs::read_dir(root.join("autotune")) else {
+        return;
+    };
+
+    for version in versions.flatten() {
+        let Ok(tuners) = std::fs::read_dir(version.path()) else {
+            continue;
+        };
+
+        for tuner in tuners.flatten() {
+            let path = tuner.path();
+
+            if is_stale(&path) {
+                // Another test process may be removing it at the same time.
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+}
+
+/// Whether neither `directory` nor anything in it was modified within [STALE_TUNINGS].
+#[cfg(any(test, feature = "test-support"))]
+fn is_stale(directory: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return false;
+    };
+
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.push(directory.to_path_buf());
+
+    paths.iter().all(|path| untouched_for(path, STALE_TUNINGS))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn untouched_for(path: &Path, age: Duration) -> bool {
+    let metadata = std::fs::metadata(path);
+    let Ok(modified) = metadata.and_then(|metadata| metadata.modified()) else {
+        return false;
+    };
+
+    let elapsed = modified.elapsed();
+    elapsed.is_ok_and(|elapsed| elapsed > age)
 }
 
 #[cfg(any(test, feature = "test-support"))]

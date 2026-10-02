@@ -1,7 +1,7 @@
 use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
 
 use super::network::conv0_sample_bytes;
-use crate::artcnn::{ArtcnnError, BodyPath, Maps, Network, Precision, Region, run_region};
+use crate::artcnn::{ArtcnnError, BodyPath, LayerRun, Maps, Network, Precision, Region, run_region};
 use crate::{DevicePlane, Dispatch};
 
 /// How many bytes of scratch a tile may use.
@@ -186,6 +186,27 @@ pub fn artcnn<R: Runtime>(
     maps: Maps<'_>,
     output: DevicePlane<'_>,
 ) -> Result<(), ArtcnnError> {
+    run_tiles(client, dispatch, network, path, input, peak, tile, maps, output)?;
+
+    Ok(())
+}
+
+/// The same as [artcnn](crate::artcnn::artcnn), giving how each body layer of each tile ran, in order.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the pass"
+)]
+fn run_tiles<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    network: &Network,
+    path: BodyPath,
+    input: DevicePlane<'_>,
+    peak: f32,
+    tile: u32,
+    maps: Maps<'_>,
+    output: DevicePlane<'_>,
+) -> Result<Vec<LayerRun>, ArtcnnError> {
     let width = input.width();
     let height = input.height();
     assert!(
@@ -219,6 +240,7 @@ pub fn artcnn<R: Runtime>(
 
     let halo = network.halo();
     let list = tiles(width, height, tile, halo);
+    let mut runs = Vec::new();
 
     for (region, core) in list {
         let tile_maps = Maps {
@@ -229,16 +251,17 @@ pub fn artcnn<R: Runtime>(
             columns: maps.columns,
         };
 
-        run_region(
+        let region_runs = run_region(
             client, dispatch, network, path, input, peak, region, core, tile_maps, output,
         )?;
+        runs.extend(region_runs);
     }
 
-    Ok(())
+    Ok(runs)
 }
 
 /// Runs one frame of zeros at the stage's size and waits for the device, so every kernel a frame uses is
-/// compiled before the first real frame.
+/// compiled and tuned before the first real frame. Gives how each body layer of each tile ran, in order.
 ///
 /// The maps must be sized by [scratch_sizes](crate::artcnn::scratch_sizes) for the same `tile` and frame. The
 /// input and output planes are allocated here.
@@ -255,7 +278,7 @@ pub fn warm_up<R: Runtime>(
     height: u32,
     tile: u32,
     maps: Maps<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<Vec<LayerRun>, ArtcnnError> {
     let samples = width as usize * height as usize;
     let zeros = vec![0.0f32; samples];
     let output_bytes = samples * 4 * size_of::<f32>();
@@ -269,7 +292,7 @@ pub fn warm_up<R: Runtime>(
     // Safety: the output holds four times the input's f32 values, one per sample of the doubled plane.
     let output_plane = unsafe { DevicePlane::new(&output, width * 2, height * 2) };
 
-    artcnn(
+    let runs = run_tiles(
         client,
         dispatch,
         network,
@@ -284,5 +307,5 @@ pub fn warm_up<R: Runtime>(
     let finished = cubecl::future::block_on(client.sync());
     finished?;
 
-    Ok(())
+    Ok(runs)
 }

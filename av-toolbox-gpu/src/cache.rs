@@ -6,7 +6,10 @@ use cubecl::config::cache::CacheConfig;
 use cubecl::config::{CubeClRuntimeConfig, RuntimeConfig};
 use etcetera::base_strategy::{BaseStrategy, choose_base_strategy};
 
-/// The variable that overrides where compiled kernels are cached.
+/// The variable that overrides where compiled kernels and autotune results are cached.
+///
+/// With caching off, CubeCL keeps autotune results in its own default place: `target/` beside the nearest
+/// `Cargo.toml` above the working directory, or `~/.cache/cubecl` when there is none.
 pub const COMPILATION_CACHE_ENV: &str = "AVTB_COMPILATION_CACHE";
 
 /// Where the cache ended up, once something has installed it.
@@ -32,7 +35,8 @@ pub fn default_cache_dir() -> PathBuf {
 
 /// Points CubeCL at the cache directory, honouring [COMPILATION_CACHE_ENV].
 ///
-/// Returns where the cache went, or `None` when the variable turned caching off.
+/// The directory holds compiled kernels and CubeCL's autotune results, which are kept for each runtime and
+/// set of device limits. Returns where the cache went, or `None` when the variable turned caching off.
 ///
 /// This has to run before the first client is opened, because opening one locks CubeCL's global
 /// config.

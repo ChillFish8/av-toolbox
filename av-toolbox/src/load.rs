@@ -81,7 +81,10 @@ pub(crate) fn backend(args: &Args, stderr: &mut dyn WriteColor) -> Option<Backen
     let installed = install_compilation_cache();
     match installed {
         Ok(Some(path)) => tracing::info!(?path, "caching compiled kernels"),
-        Ok(None) => tracing::info!("kernel caching is off, unset {COMPILATION_CACHE_ENV} to turn it back on"),
+        Ok(None) => tracing::info!(
+            "kernel caching is off and autotune results go to CubeCL's default place, unset \
+             {COMPILATION_CACHE_ENV} to turn it back on"
+        ),
         Err(error) => {
             let message = format!("unable to install the kernel cache: {error}");
             report::error_line(stderr, &message);

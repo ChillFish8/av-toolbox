@@ -16,6 +16,7 @@ mod rgvs;
 mod sangnom;
 #[cfg(test)]
 mod tests;
+mod tuning;
 
 use std::fmt::Display;
 
@@ -126,6 +127,7 @@ pub use self::sangnom::{
     reference_sangnom_antialias,
     reference_sangnom_field,
 };
+pub use self::tuning::{failing_kernels, fresh_tune_label};
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 use crate::warp::{BlurKind, WarpParams};

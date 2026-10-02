@@ -1,4 +1,6 @@
-use crate::artcnn::{Activation, DirectVariant, WeightStaging};
+use super::{R9700, TestDevice};
+use crate::artcnn::kernels::direct::check_variant;
+use crate::artcnn::{Activation, DirectVariant, WeightStaging, direct_variants};
 
 #[test]
 fn the_default_variant_splits_both_model_widths() {
@@ -111,4 +113,129 @@ fn a_block_of_no_rows_is_refused() {
     let shape = variant.shape(64, Activation::Silu, false);
 
     assert_eq!(shape, Err("a block of 0 rows is empty".to_string()));
+}
+
+#[test]
+fn direct_variants_drop_a_variant_beyond_the_devices_shared_memory() {
+    let properties = R9700.properties();
+    let staged = DirectVariant {
+        rows: 8,
+        planes_m: 4,
+        weights: WeightStaging::Single,
+        ..DirectVariant::default()
+    };
+    let shape = staged.shape(96, Activation::Silu, false);
+    let staged_bytes = shape.expect("the variant is valid").shared_bytes();
+
+    let at_64 = direct_variants(&properties, 64);
+    let at_96 = direct_variants(&properties, 96);
+
+    // A 10x18 block of 104 halves, a staged tap of 96 channels and eight scratch tiles.
+    assert_eq!(staged_bytes, 10 * 18 * 104 * 2 + 96 * 104 * 2 + 8 * 256 * 4);
+    assert!(staged_bytes > R9700.shared_bytes);
+    assert!(at_64.contains(&staged), "{at_64:?}");
+    assert!(!at_96.contains(&staged), "{at_96:?}");
+}
+
+#[test]
+fn every_offered_variant_fits_a_small_shared_memory() {
+    let device = TestDevice {
+        shared_bytes: 32 * 1024,
+        ..R9700
+    };
+    let properties = device.properties();
+
+    let offered = direct_variants(&properties, 96);
+
+    let default_variant = DirectVariant::default();
+    assert!(offered.contains(&default_variant), "{offered:?}");
+    for variant in &offered {
+        let shape = variant.shape(96, Activation::Silu, false);
+        let bytes = shape.expect("an offered variant is valid").shared_bytes();
+
+        assert!(bytes <= device.shared_bytes, "{variant:?} takes {bytes} bytes");
+    }
+}
+
+#[test]
+fn direct_variants_offer_only_the_devices_widest_subgroup() {
+    let wave32 = TestDevice {
+        plane_size_min: 32,
+        plane_size_max: 32,
+        ..R9700
+    };
+    let wave32_properties = wave32.properties();
+    let wave64_properties = R9700.properties();
+
+    let at_32 = direct_variants(&wave32_properties, 64);
+    let at_64 = direct_variants(&wave64_properties, 64);
+
+    let wide_default = DirectVariant::default();
+    let narrow_default = DirectVariant {
+        plane_width: 32,
+        ..DirectVariant::default()
+    };
+    assert!(at_32.contains(&narrow_default), "{at_32:?}");
+    assert!(!at_32.contains(&wide_default), "{at_32:?}");
+    assert!(at_64.contains(&wide_default), "{at_64:?}");
+    assert!(!at_64.contains(&narrow_default), "{at_64:?}");
+    assert!(at_32.iter().all(|variant| variant.plane_width == 32));
+    assert!(at_64.iter().all(|variant| variant.plane_width == 64));
+}
+
+#[test]
+fn a_plane_narrower_than_the_widest_subgroup_is_refused() {
+    let properties = R9700.properties();
+    let narrow = DirectVariant {
+        plane_width: 32,
+        ..DirectVariant::default()
+    };
+
+    let refused = check_variant(&properties, &narrow, 64);
+
+    let expected = "a plane of 32 units does not hold whole subgroups of up to 64".to_string();
+    assert_eq!(refused, Err(expected));
+}
+
+#[test]
+fn a_plane_wider_than_the_widest_subgroup_still_runs() {
+    let wave32 = TestDevice {
+        plane_size_min: 32,
+        plane_size_max: 32,
+        ..R9700
+    };
+    let properties = wave32.properties();
+    let wide = DirectVariant::default();
+
+    let checked = check_variant(&properties, &wide, 64);
+
+    assert_eq!(checked, Ok(()));
+}
+
+#[test]
+fn direct_variants_drop_a_variant_with_more_units_than_the_device_holds() {
+    let device = TestDevice { units: 128, ..R9700 };
+    let properties = device.properties();
+
+    let offered = direct_variants(&properties, 64);
+
+    assert!(!offered.is_empty());
+    assert!(
+        offered.iter().all(|variant| variant.units() <= 128),
+        "{offered:?}"
+    );
+    assert!(offered.iter().all(|variant| variant.planes() <= 2), "{offered:?}");
+}
+
+#[test]
+fn a_device_without_the_cooperative_matrix_is_offered_no_variant() {
+    let device = TestDevice {
+        offers_matrix: false,
+        ..R9700
+    };
+    let properties = device.properties();
+
+    let offered = direct_variants(&properties, 64);
+
+    assert!(offered.is_empty(), "{offered:?}");
 }

@@ -2,8 +2,8 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use half::f16;
 
-use super::body::{Finish, body_layer};
-use super::kernels::{BodyConvolution, Candidate, run_candidate};
+use super::body::{Finish, LayerRun, body_layer};
+use super::kernels::{BodyConvolution, Candidate, Kernels, launch_candidate, run_tuned_layer, takes_tuner};
 use crate::artcnn::{
     Activation,
     ArtcnnError,
@@ -58,13 +58,15 @@ pub(crate) struct PaddedLastLayer {
     pub(crate) bias: Handle,
 }
 
-/// An ArtCNN network's weights on the device, in the feature maps' type.
+/// An ArtCNN network's weights on the device, in the feature maps' type, and how its body convolutions
+/// choose their kernel.
 pub struct Network {
     features: u32,
     blocks: u32,
     precision: Precision,
     layers: Vec<LayerBuffers>,
     padded_last: PaddedLastLayer,
+    kernels: Kernels,
 }
 
 impl Network {
@@ -113,7 +115,18 @@ impl Network {
             precision,
             layers,
             padded_last,
+            kernels: Kernels::default(),
         })
+    }
+
+    /// The same network, with its f16 body convolutions on the convolution path choosing their kernel by
+    /// `kernels`.
+    pub fn with_kernels(self, kernels: Kernels) -> Self {
+        Self { kernels, ..self }
+    }
+
+    pub fn kernels(&self) -> &Kernels {
+        &self.kernels
     }
 
     pub fn features(&self) -> u32 {
@@ -194,6 +207,7 @@ pub struct Maps<'a> {
 }
 
 /// Runs the network over `region` of `input`, divided by `peak`, and writes the doubled `core` into `output`.
+/// Gives how each body layer ran, in order.
 ///
 /// The region's edge is padded with zero. Each output sample is clamped to `0..=1`, scaled by `peak` and
 /// rounded. The four maps must be distinct buffers, since a layer reads one while writing another.
@@ -212,7 +226,7 @@ pub fn run_region<R: Runtime>(
     core: Region,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<Vec<LayerRun>, ArtcnnError> {
     let body = Body {
         path,
         candidate: None,
@@ -241,7 +255,7 @@ pub fn run_region_with_candidate<R: Runtime>(
     core: Region,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<Vec<LayerRun>, ArtcnnError> {
     let body = Body {
         path: BodyPath::Convolution,
         candidate: Some(candidate),
@@ -274,7 +288,7 @@ fn run_region_on<R: Runtime>(
     core: Region,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<Vec<LayerRun>, ArtcnnError> {
     let path = body.path;
     let every_map = [maps.conv0, maps.first, maps.second, maps.third];
     debug_assert!(are_distinct(&every_map), "two of the maps are the same buffer");
@@ -304,6 +318,7 @@ fn run_region_on<R: Runtime>(
     first_layer(client, dispatch, network, input, peak, region, maps.conv0);
 
     let spare = [maps.first, maps.second, maps.third];
+    let mut runs = Vec::new();
     let mut state = maps.conv0;
     let mut layer = 1;
     let activated = Finish {
@@ -318,7 +333,7 @@ fn run_region_on<R: Runtime>(
             residual: Some(state),
         };
 
-        run_body_layer(
+        let first_run = run_body_layer(
             client,
             dispatch,
             network,
@@ -330,7 +345,7 @@ fn run_region_on<R: Runtime>(
             region,
             activated,
         )?;
-        run_body_layer(
+        let second_run = run_body_layer(
             client,
             dispatch,
             network,
@@ -342,7 +357,7 @@ fn run_region_on<R: Runtime>(
             region,
             activated,
         )?;
-        run_body_layer(
+        let third_run = run_body_layer(
             client,
             dispatch,
             network,
@@ -354,6 +369,7 @@ fn run_region_on<R: Runtime>(
             region,
             joined,
         )?;
+        runs.extend([first_run, second_run, third_run]);
 
         state = first;
         layer += 3;
@@ -364,7 +380,7 @@ fn run_region_on<R: Runtime>(
         activation: Activation::None,
         residual: Some(maps.conv0),
     };
-    run_body_layer(
+    let join_run = run_body_layer(
         client,
         dispatch,
         network,
@@ -376,6 +392,7 @@ fn run_region_on<R: Runtime>(
         region,
         skipped,
     )?;
+    runs.push(join_run);
 
     match path {
         BodyPath::Convolution | BodyPath::UnfusedConvolution => {
@@ -386,10 +403,13 @@ fn run_region_on<R: Runtime>(
         BodyPath::Im2col => last_layer(client, dispatch, network, joined, region, core, peak, output),
     }
 
-    Ok(())
+    Ok(runs)
 }
 
 /// Runs body layer `layer` as `body` says, over the maps of `region` in `input`, into `output`.
+///
+/// On the convolution path with f16 maps whose features are a multiple of 16, the layer runs with the
+/// candidate the network's kernels choose.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
@@ -405,18 +425,25 @@ fn run_body_layer<R: Runtime>(
     columns: Option<&Handle>,
     region: Region,
     finish: Finish<'_>,
-) -> Result<(), ArtcnnError> {
-    let Some(candidate) = body.candidate else {
-        body_layer(
-            client, dispatch, network, body.path, layer, input, output, columns, region, finish,
-        )?;
+) -> Result<LayerRun, ArtcnnError> {
+    if let Some(candidate) = body.candidate {
+        let convolution = BodyConvolution::of_layer(network, layer, input, output, region, finish);
+        let forced = launch_candidate(client, candidate, &convolution)?;
 
-        return Ok(());
-    };
+        return Ok(LayerRun {
+            forced,
+            fused: true,
+            candidate: Some(candidate),
+        });
+    }
 
-    let convolution = BodyConvolution::of_layer(network, layer, input, output, region, finish);
+    if takes_tuner(network, body.path) {
+        return run_tuned_layer(client, network, layer, input, output, region, finish);
+    }
 
-    run_candidate(client, candidate, &convolution)
+    body_layer(
+        client, dispatch, network, body.path, layer, input, output, columns, region, finish,
+    )
 }
 
 /// The bytes one feature map of `region` takes in the network's precision.

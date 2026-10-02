@@ -1,19 +1,24 @@
 use av_toolbox_cubek::artcnn::{
+    self,
     Activation,
     BodyConvolution,
     BodyPath,
     Candidate,
     DirectVariant,
     Finish,
+    Kernels,
     Network,
     Precision,
     Region,
+    TunedRun,
     WeightStaging,
     Weights,
     body_layer_with_blueprint,
     convolve_with_blueprint,
+    direct_variants,
     offers_cmma_16,
     run_candidate,
+    run_tuned,
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask};
@@ -29,7 +34,7 @@ const UNWRITTEN: f32 = -1000.0;
 
 /// What a body convolution applies as it writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Epilogue {
+pub(super) enum Epilogue {
     /// The first convolution of a block, through SiLU.
     Silu,
     /// The last convolution of a block, adding the block's input.
@@ -38,11 +43,11 @@ enum Epilogue {
     Join,
 }
 
-const EPILOGUES: [Epilogue; 3] = [Epilogue::Silu, Epilogue::Residual, Epilogue::Join];
+pub(super) const EPILOGUES: [Epilogue; 3] = [Epilogue::Silu, Epilogue::Residual, Epilogue::Join];
 
 impl Epilogue {
     /// The body layer of `weights` that applies this epilogue in a forward pass.
-    fn layer(self, weights: &Weights) -> usize {
+    pub(super) fn layer(self, weights: &Weights) -> usize {
         match self {
             Self::Silu => 1,
             Self::Residual => 3,
@@ -50,7 +55,16 @@ impl Epilogue {
         }
     }
 
-    fn finish(self, residual: &Handle) -> Finish<'_> {
+    /// The epilogue the tuner keys this one by.
+    pub(super) fn kind(self) -> artcnn::Epilogue {
+        match self {
+            Self::Silu => artcnn::Epilogue::Silu,
+            Self::Residual => artcnn::Epilogue::Residual,
+            Self::Join => artcnn::Epilogue::Join,
+        }
+    }
+
+    pub(super) fn finish(self, residual: &Handle) -> Finish<'_> {
         match self {
             Self::Silu => Finish {
                 activation: Activation::Silu,
@@ -70,19 +84,28 @@ fn direct() -> Candidate {
     Candidate::Direct(variant)
 }
 
-/// One body layer of the same maps run by a candidate, through the separate passes, and as its bare
+/// What runs a body layer: one candidate, or the candidate some kernels choose.
+#[derive(Debug, Clone)]
+pub(super) enum Runner {
+    One(Candidate),
+    Chosen(Kernels),
+}
+
+/// One body layer of the same maps run by a runner, through the separate passes, and as its bare
 /// convolution and bias.
 struct CandidateLayer {
-    candidate: Candidate,
+    runner: Runner,
     weights: Weights,
     region: Region,
     epilogue: Epilogue,
 }
 
-struct CandidateOutputs {
-    candidate: Vec<f32>,
+pub(super) struct CandidateOutputs {
+    pub(super) candidate: Vec<f32>,
     separate: Vec<f32>,
     convolved: Vec<f32>,
+    /// How the chosen candidate ran, when kernels chose it.
+    pub(super) chosen: Option<TunedRun>,
 }
 
 impl BuildTask for CandidateLayer {
@@ -116,7 +139,14 @@ impl BuildTask for CandidateLayer {
         let convolution =
             BodyConvolution::of_layer(&network, layer, &input, &candidate_output, self.region, finish);
 
-        let candidate_ran = run_candidate(client, self.candidate, &convolution);
+        let candidate_ran = match &self.runner {
+            Runner::One(candidate) => run_candidate(client, *candidate, &convolution).map(|()| None),
+            Runner::Chosen(kernels) => {
+                let kind = self.epilogue.kind();
+
+                run_tuned(client, kernels, &convolution, kind).map(Some)
+            },
+        };
         let separate_ran = body_layer_with_blueprint(
             client,
             &sizing,
@@ -141,7 +171,7 @@ impl BuildTask for CandidateLayer {
         );
         synced(client);
 
-        candidate_ran.expect("the candidate runs");
+        let chosen = candidate_ran.expect("the candidate runs");
         separate_ran.expect("the separate passes run");
         convolved_ran.expect("the bare convolution runs");
 
@@ -149,6 +179,7 @@ impl BuildTask for CandidateLayer {
             candidate: read_maps(client, &candidate_output, precision),
             separate: read_maps(client, &separate_output, precision),
             convolved: read_maps(client, &convolved_output, precision),
+            chosen,
         };
 
         Some(outputs)
@@ -156,7 +187,7 @@ impl BuildTask for CandidateLayer {
 }
 
 /// Maps of `region` between -2 and 2, varying from each value to the next, raised by 1.5 on the frame's edge.
-fn edged_maps(region: Region, features: u32) -> Vec<f32> {
+pub(super) fn edged_maps(region: Region, features: u32) -> Vec<f32> {
     let values = (region.samples() * features) as usize;
     let mut maps = wavy_maps(values);
 
@@ -174,7 +205,7 @@ fn edged_maps(region: Region, features: u32) -> Vec<f32> {
     maps
 }
 
-fn region(width: u32, height: u32) -> Region {
+pub(super) fn region(width: u32, height: u32) -> Region {
     Region {
         x: 0,
         y: 0,
@@ -184,7 +215,7 @@ fn region(width: u32, height: u32) -> Region {
 }
 
 /// Weights `features` wide. They are R8F64's at 64, and synthetic ones of one block otherwise.
-fn weights_of(features: u32) -> Weights {
+pub(super) fn weights_of(features: u32) -> Weights {
     match features {
         64 => r8f64(),
         _ => synthetic_weights(features, 1, 4),
@@ -194,9 +225,23 @@ fn weights_of(features: u32) -> Weights {
 /// Runs `candidate` over a `width` by `height` region of maps `features` wide with `epilogue`, and asserts
 /// it lies within one f16 step of the separate passes. Skips without an f16 cooperative matrix.
 fn assert_matches_separate(candidate: Candidate, features: u32, width: u32, height: u32, epilogue: Epilogue) {
-    let name = format!("{candidate:?} {epilogue:?} {width}x{height} at {features}");
+    let runner = Runner::One(candidate);
+
+    runner_matches_separate(runner, features, width, height, epilogue);
+}
+
+/// The same as [assert_matches_separate] with `runner`, giving the outputs, or `None` without an f16
+/// cooperative matrix.
+pub(super) fn runner_matches_separate(
+    runner: Runner,
+    features: u32,
+    width: u32,
+    height: u32,
+    epilogue: Epilogue,
+) -> Option<CandidateOutputs> {
+    let name = format!("{runner:?} {epilogue:?} {width}x{height} at {features}");
     let task = CandidateLayer {
-        candidate,
+        runner,
         weights: weights_of(features),
         region: region(width, height),
         epilogue,
@@ -204,7 +249,7 @@ fn assert_matches_separate(candidate: Candidate, features: u32, width: u32, heig
 
     let Some(outputs) = backend().build(task) else {
         println!("{name}: no f16 cooperative matrix, so the candidate cannot run");
-        return;
+        return None;
     };
 
     let candidate_values = &outputs.candidate;
@@ -221,6 +266,8 @@ fn assert_matches_separate(candidate: Candidate, features: u32, width: u32, heig
     // The candidate rounds to f16 once, after the epilogue, where the separate passes round the convolution
     // first.
     assert!(largest_share <= 1.0, "{name}: {largest_share} f16 steps");
+
+    Some(outputs)
 }
 
 #[test]
@@ -286,6 +333,17 @@ fn the_direct_candidate_with_staged_weights_matches_the_separate_passes() {
 /// Runs R8F64 over `plane` with every body convolution on the direct candidate, and gives the output and its
 /// largest difference from the reference, or `None` without an f16 cooperative matrix.
 fn direct_network_error(name: &str, plane: &[f32], width: u32, height: u32) -> Option<(Vec<f32>, f64)> {
+    candidate_network_error(name, direct(), plane, width, height)
+}
+
+/// The same as [direct_network_error] with every body convolution on `candidate`.
+fn candidate_network_error(
+    name: &str,
+    candidate: Candidate,
+    plane: &[f32],
+    width: u32,
+    height: u32,
+) -> Option<(Vec<f32>, f64)> {
     let precision = Precision::F16;
     if !super::body::supports(BodyPath::Convolution, precision) {
         println!("{name}: no f16 cooperative matrix, so the direct candidate cannot run");
@@ -303,7 +361,7 @@ fn direct_network_error(name: &str, plane: &[f32], width: u32, height: u32) -> O
             path: BodyPath::Convolution,
             precision,
         },
-        candidate: direct(),
+        candidate,
     };
 
     let ran = backend().build(task);
@@ -357,5 +415,95 @@ fn r8f64_on_the_direct_candidate_stays_finite_on_flat_extremes() {
 
         // The bound of the R8F64 flat cases.
         assert!(error <= 5e-4, "{error:e}");
+    }
+}
+
+/// The direct variants the test device offers for maps `features` wide.
+struct Offered {
+    features: u32,
+}
+
+impl BuildTask for Offered {
+    type Output = Vec<DirectVariant>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let properties = build.client().properties();
+
+        direct_variants(properties, self.features)
+    }
+}
+
+pub(super) fn offered_variants(features: u32) -> Vec<DirectVariant> {
+    let task = Offered { features };
+
+    let variants = backend().build(task);
+    println!("offered at width {features}: {variants:?}");
+
+    variants
+}
+
+/// Runs every direct variant the device offers for maps `features` wide against the separate passes, on a
+/// large region, odd sizes and a region smaller than every block, with each epilogue.
+fn assert_every_offered_variant_matches_separate(features: u32) {
+    let variants = offered_variants(features);
+
+    for variant in variants {
+        let candidate = Candidate::Direct(variant);
+
+        for (width, height) in [(200, 120), (13, 11), (31, 7), (5, 3)] {
+            for epilogue in EPILOGUES {
+                assert_matches_separate(candidate, features, width, height, epilogue);
+            }
+        }
+    }
+}
+
+#[test]
+fn every_offered_variant_matches_the_separate_passes_at_width_64() {
+    assert_every_offered_variant_matches_separate(64);
+}
+
+#[test]
+fn every_offered_variant_matches_the_separate_passes_at_width_96() {
+    assert_every_offered_variant_matches_separate(96);
+}
+
+#[test]
+fn r8f64_on_every_offered_variant_matches_the_reference() {
+    let plane = textured(24, 20);
+    let variants = offered_variants(64);
+
+    for variant in variants {
+        let candidate = Candidate::Direct(variant);
+        let name = format!("{} R8F64 24x20", candidate.name());
+
+        let Some((actual, error)) = candidate_network_error(&name, candidate, &plane, 24, 20) else {
+            return;
+        };
+
+        for value in &actual {
+            assert!(value.is_finite(), "{name}: {value} is not finite");
+        }
+
+        // The bound of the R8F64 24x20 case on every path.
+        assert!(error <= 5e-4, "{name}: {error:e}");
+    }
+}
+
+#[test]
+fn a_variant_splitting_the_output_channels_matches_the_separate_passes() {
+    let variant = DirectVariant {
+        channel_groups: 2,
+        planes_n: 1,
+        ..DirectVariant::default()
+    };
+    let candidate = Candidate::Direct(variant);
+
+    for features in [64, 96] {
+        for (width, height) in [(200, 120), (31, 7)] {
+            for epilogue in EPILOGUES {
+                assert_matches_separate(candidate, features, width, height, epilogue);
+            }
+        }
     }
 }

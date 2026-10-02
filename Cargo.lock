@@ -255,6 +255,7 @@ dependencies = [
  "cubek-matmul",
  "cubek-std",
  "half",
+ "serde",
  "thiserror",
 ]
 

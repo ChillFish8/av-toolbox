@@ -1,5 +1,5 @@
 use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition, StageError};
-use av_toolbox_cubek::artcnn::{ArtcnnError, BodyPath, Precision};
+use av_toolbox_cubek::artcnn::{ArtcnnError, BodyPath, Kernels, Precision};
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -21,6 +21,7 @@ use serde_json::json;
 use crate::upscale::Artcnn;
 use crate::upscale::artcnn::{
     ArtcnnArgs,
+    KERNEL_ENV,
     ModelName,
     PrecisionName,
     allocation_cap,
@@ -28,6 +29,7 @@ use crate::upscale::artcnn::{
     failed_convolution_and_im2col,
     fallbacks,
     frame_tile,
+    kernels_from_value,
     locate,
     warmed_path,
 };
@@ -487,9 +489,43 @@ fn a_failed_im2col_warm_up_names_its_one_cause() {
     assert!(message.contains("Im2col failed"), "{message}");
 }
 
+#[test]
+fn the_kernel_variable_pins_the_fixed_kernel_and_otherwise_leaves_autotune_on() {
+    let tuned = [None, Some(""), Some("  ")];
+    let fixed = ["fixed", "FIXED", " fixed "];
+
+    for value in tuned {
+        let kernels = kernels_from_value(STAGE, value).expect("an unset variable is valid");
+
+        assert_eq!(kernels, Kernels::Tuned, "{value:?}");
+    }
+
+    for value in fixed {
+        let kernels = kernels_from_value(STAGE, Some(value)).expect("fixed is valid");
+
+        assert_eq!(kernels, Kernels::Fixed, "{value:?}");
+    }
+}
+
+#[test]
+fn an_unknown_kernel_value_is_refused_naming_the_variable() {
+    let error = kernels_from_value(STAGE, Some("fastest")).expect_err("fastest is no kernel");
+    let message = error.to_string();
+
+    assert!(message.contains(STAGE), "{message}");
+    assert!(message.contains(KERNEL_ENV), "{message}");
+    assert!(message.contains("\"fastest\""), "{message}");
+    assert!(message.contains("\"fixed\""), "{message}");
+    assert!(message.contains("unset"), "{message}");
+}
+
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device_tests {
+    use av_toolbox_cubek::DevicePlane;
+    use av_toolbox_cubek::artcnn::{Candidate, LayerRun, Model, Weights, fixed_candidate};
+    use av_toolbox_cubek::testing::{failing_kernels, reference_artcnn};
     use av_toolbox_gpu::{Backend, BuildContext, BuildTask, Runtime, test_device};
+    use cubecl::prelude::CubeElement;
 
     use super::*;
     use crate::artcnn::Supersampler;
@@ -570,5 +606,230 @@ mod device_tests {
         }
 
         assert_eq!(loaded, BodyPath::Convolution);
+    }
+
+    /// The number of body layers R8F64 runs on one tile: three in each of its eight blocks, then the join.
+    const R8F64_BODY_LAYERS: usize = 25;
+
+    /// R8F64 at f16 loaded with `kernels`, or by [Supersampler::load](crate::artcnn::Supersampler::load)
+    /// when `kernels` is `None`, for a `width` by `height` plane.
+    struct LoadedKernels {
+        width: u32,
+        height: u32,
+        kernels: Option<Kernels>,
+    }
+
+    /// What a load chose, beside what the device offers.
+    #[derive(Debug)]
+    struct KernelsLoaded {
+        offered: BodyPath,
+        loaded: BodyPath,
+        kernels: Kernels,
+        layers: Vec<LayerRun>,
+        /// The candidate pinned kernels run on this device.
+        fixed: Candidate,
+    }
+
+    impl BuildTask for LoadedKernels {
+        type Output = KernelsLoaded;
+
+        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+            let offered = body_path(build.capabilities(), Precision::F16);
+            let properties = build.client().properties();
+            let fixed = fixed_candidate(properties, 64);
+            let model = ModelName::R8f64;
+            let precision = PrecisionName::F16;
+            let loaded = match self.kernels {
+                Some(kernels) => {
+                    Supersampler::load_with(STAGE, build, model, precision, self.width, self.height, kernels)
+                },
+                None => Supersampler::load(STAGE, build, model, precision, self.width, self.height),
+            };
+            let supersampler = loaded.expect("R8F64 loads");
+
+            KernelsLoaded {
+                offered,
+                loaded: supersampler.path(),
+                kernels: supersampler.kernels().clone(),
+                layers: supersampler.layers().to_vec(),
+                fixed,
+            }
+        }
+    }
+
+    fn load_kernels(width: u32, height: u32, kernels: Option<Kernels>) -> KernelsLoaded {
+        let backend = Backend::open_default(test_device()).expect("a backend should open");
+        let task = LoadedKernels {
+            width,
+            height,
+            kernels,
+        };
+
+        let loaded = backend.build(task);
+        println!("{width}x{height}: {loaded:?}");
+
+        loaded
+    }
+
+    #[test]
+    fn the_loaded_supersampler_tunes_its_body_convolutions_where_the_device_offers_it() {
+        let loaded = load_kernels(1920, 1080, None);
+
+        if loaded.offered != BodyPath::Convolution {
+            return;
+        }
+
+        assert_eq!(loaded.loaded, BodyPath::Convolution);
+        assert_eq!(loaded.kernels, Kernels::Tuned);
+        assert_eq!(loaded.layers.len(), R8F64_BODY_LAYERS);
+        for layer in &loaded.layers {
+            assert!(layer.fused, "{layer:?}");
+            assert!(
+                layer.candidate.is_some(),
+                "a body layer skipped the tuned path: {layer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pinned_supersampler_runs_every_body_convolution_on_the_fixed_candidate() {
+        let pinned = kernels_from_value(STAGE, Some("fixed")).expect("fixed is valid");
+
+        let loaded = load_kernels(64, 48, Some(pinned));
+
+        if loaded.offered != BodyPath::Convolution {
+            return;
+        }
+
+        assert_eq!(loaded.loaded, BodyPath::Convolution);
+        assert_eq!(loaded.layers.len(), R8F64_BODY_LAYERS);
+        for layer in &loaded.layers {
+            assert_eq!(layer.candidate, Some(loaded.fixed), "{layer:?}");
+        }
+    }
+
+    #[test]
+    fn a_supersampler_whose_every_candidate_fails_falls_back_to_the_unfused_convolution() {
+        let loaded = load_kernels(24, 20, Some(failing_kernels()));
+
+        if loaded.offered != BodyPath::Convolution {
+            return;
+        }
+
+        assert_eq!(loaded.loaded, BodyPath::UnfusedConvolution);
+        for layer in &loaded.layers {
+            assert!(!layer.fused, "{layer:?}");
+            assert_eq!(layer.candidate, None, "{layer:?}");
+        }
+    }
+
+    /// The code values the supersampler's frame runs on, up to this peak.
+    const PEAK: f32 = 65535.0;
+
+    /// A plane of `width` by `height` in `0..=1`, with ripples, a ramp and a step.
+    fn rippled(width: u32, height: u32) -> Vec<f32> {
+        let mut plane = Vec::new();
+
+        for row in 0..height {
+            for column in 0..width {
+                let ripple = (column as f32 * 0.9).cos() * (row as f32 * 0.6).sin() * 0.3;
+                let ramp = column as f32 / width as f32 * 0.4;
+                let step = if row > height / 2 { 0.2 } else { 0.0 };
+                plane.push((0.3 + ripple + ramp + step).clamp(0.0, 1.0));
+            }
+        }
+
+        plane
+    }
+
+    /// Loads R8F64 at f16 for `plane`, `width` by `height`, and doubles it, giving the output in `0..=1`,
+    /// whether the device offers the convolution path, and how the body layers ran.
+    struct LoadedFrame {
+        plane: Vec<f32>,
+        width: u32,
+        height: u32,
+    }
+
+    struct FrameRun {
+        output: Vec<f32>,
+        offered: BodyPath,
+        layers: Vec<LayerRun>,
+    }
+
+    impl BuildTask for LoadedFrame {
+        type Output = FrameRun;
+
+        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+            let client = build.client();
+            let offered = body_path(build.capabilities(), Precision::F16);
+            let loaded = Supersampler::load(
+                STAGE,
+                build,
+                ModelName::R8f64,
+                PrecisionName::F16,
+                self.width,
+                self.height,
+            );
+            let supersampler = loaded.expect("R8F64 loads");
+            let context = build.frame_context();
+            let codes: Vec<f32> = self.plane.iter().map(|value| value * PEAK).collect();
+            let output_bytes = (self.width * self.height * 4) as usize * size_of::<f32>();
+
+            let input = client.create_from_slice(f32::as_bytes(&codes));
+            let output = client.empty(output_bytes);
+
+            // Safety: the input holds `width * height` f32 values.
+            let input_plane = unsafe { DevicePlane::new(&input, self.width, self.height) };
+            // Safety: the output holds four times the input's f32 values.
+            let output_plane = unsafe { DevicePlane::new(&output, self.width * 2, self.height * 2) };
+
+            let ran = supersampler.run(client, &context, input_plane, PEAK, output_plane);
+            ran.expect("the frame runs");
+
+            let bytes = client.read_one(output).expect("the output reads back");
+            let values = f32::from_bytes(&bytes);
+            let output = values.iter().map(|code| code / PEAK).collect();
+
+            FrameRun {
+                output,
+                offered,
+                layers: supersampler.layers().to_vec(),
+            }
+        }
+    }
+
+    #[test]
+    fn a_frame_through_the_loaded_supersampler_matches_the_reference() {
+        let plane = rippled(24, 20);
+        let model = Model::R8F64;
+        let builtin = av_toolbox_models::builtin("artcnn", model.file_name());
+        let bytes = builtin.expect("R8F64 is built in");
+        let parsed = Weights::parse(bytes, model.features(), model.blocks());
+        let weights = parsed.expect("the builtin weights parse");
+        let expected = reference_artcnn(&plane, 24, 20, &weights);
+        let backend = Backend::open_default(test_device()).expect("a backend should open");
+        let task = LoadedFrame {
+            plane,
+            width: 24,
+            height: 20,
+        };
+
+        let ran = backend.build(task);
+
+        let error = ran
+            .output
+            .iter()
+            .zip(&expected)
+            .map(|(got, want)| (f64::from(*got) - want).abs())
+            .fold(0.0, f64::max);
+        let tuned = ran.layers.iter().all(|layer| layer.candidate.is_some());
+        println!("loaded 24x20: largest error {error:e}, tuned {tuned}");
+
+        if ran.offered == BodyPath::Convolution {
+            assert!(tuned, "a body layer skipped the tuned path");
+        }
+
+        // The bound of the R8F64 24x20 case on every path.
+        assert!(error <= 5e-4, "{error:e}");
     }
 }

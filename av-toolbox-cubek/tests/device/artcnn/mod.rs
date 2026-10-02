@@ -3,6 +3,7 @@ mod ends;
 mod fused;
 mod kernels;
 mod tiling;
+mod tune;
 
 use av_toolbox_cubek::artcnn::{Precision, offers_cmma_16};
 use cubecl::prelude::*;
