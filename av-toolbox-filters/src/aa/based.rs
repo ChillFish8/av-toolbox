@@ -18,6 +18,7 @@ use av_toolbox_cubek::aa::{
     Eedi3Settings,
     binarize_prewitt,
     double_mclip,
+    double_mclip_turned,
     prewitt_threshold,
     pscale_blend,
     transpose,
@@ -487,12 +488,12 @@ struct TurnedClips {
 }
 
 impl TurnedClips {
-    /// Transposes `supersampled` and `mclip`.
+    /// Transposes `supersampled`, keeping `mclip`, the clip already transposed.
     fn new<R: Runtime>(
         client: &ComputeClient<R>,
         context: &FrameContext,
         supersampled: DevicePlane<'_>,
-        mclip: Option<DevicePlane<'_>>,
+        mclip: Option<Scratch>,
     ) -> Self {
         let sizing = Sizing(context);
         let width = supersampled.width();
@@ -502,17 +503,9 @@ impl TurnedClips {
         let turned_supersampled_plane = turned_supersampled.plane();
         transpose(client, &sizing, supersampled, turned_supersampled_plane);
 
-        let turned_mclip = mclip.map(|plane| {
-            let turned = Scratch::new::<f32>(context, height, width);
-            let turned_plane = turned.plane();
-            transpose(client, &sizing, plane, turned_plane);
-
-            turned
-        });
-
         Self {
             supersampled: turned_supersampled,
-            mclip: turned_mclip,
+            mclip,
         }
     }
 
@@ -587,8 +580,13 @@ impl<R: Runtime> BasedChain<R> {
             assert_plane(&edges.mclip, 2 * width, 2 * height, "mclip");
         }
 
+        // The horizontal pass reads the clip transposed, written beside the clip itself.
+        let reads_turned_mclip = self.direction.runs_horizontally() && planes.edges.is_some();
+        let turned_mclip = reads_turned_mclip.then(|| Scratch::new::<f32>(context, 2 * height, 2 * width));
+        let turned_mclip_plane = turned_mclip.as_ref().map(Scratch::plane);
+
         let mask_peak = match planes.edges {
-            Some(edges) => self.prepare_mask(context, planes.luma, edges),
+            Some(edges) => self.prepare_mask(context, planes.luma, edges, turned_mclip_plane),
             None => self.peak,
         };
 
@@ -596,7 +594,13 @@ impl<R: Runtime> BasedChain<R> {
             .run(&self.client, context, planes.luma, self.peak, planes.supersampled)?;
 
         let mclip = planes.edges.map(|edges| edges.mclip);
-        self.antialias(context, planes.supersampled, mclip, planes.antialiased);
+        self.antialias(
+            context,
+            planes.supersampled,
+            mclip,
+            turned_mclip,
+            planes.antialiased,
+        );
 
         if self.postfilter {
             let blended = Scratch::new::<f32>(context, width, height);
@@ -622,7 +626,15 @@ impl<R: Runtime> BasedChain<R> {
     }
 
     /// Builds the mask when it is not bound, then doubles it into the clip, giving the mask's peak.
-    fn prepare_mask(&self, context: &FrameContext, luma: DevicePlane<'_>, edges: EdgePlanes<'_>) -> f32 {
+    ///
+    /// When `turned` is given, the clip is also written into it transposed.
+    fn prepare_mask(
+        &self,
+        context: &FrameContext,
+        luma: DevicePlane<'_>,
+        edges: EdgePlanes<'_>,
+        turned: Option<DevicePlane<'_>>,
+    ) -> f32 {
         let sizing = Sizing(context);
 
         let mask_peak = if edges.bound {
@@ -632,7 +644,12 @@ impl<R: Runtime> BasedChain<R> {
             self.peak
         };
 
-        double_mclip(&self.client, &sizing, edges.mask, edges.mclip, mask_peak);
+        match turned {
+            Some(turned) => {
+                double_mclip_turned(&self.client, &sizing, edges.mask, edges.mclip, turned, mask_peak);
+            },
+            None => double_mclip(&self.client, &sizing, edges.mask, edges.mclip, mask_peak),
+        }
 
         mask_peak
     }
@@ -672,12 +689,14 @@ impl<R: Runtime> BasedChain<R> {
 
     /// Runs EEDI3 on `supersampled` into `output`, with `supersampled` as its `sclip`.
     ///
-    /// The horizontal pass reads the transposed supersample and clip, made once before either pass.
+    /// The horizontal pass reads the transposed supersample, made once before either pass, and
+    /// `turned_mclip`, the clip already transposed.
     fn antialias(
         &self,
         context: &FrameContext,
         supersampled: DevicePlane<'_>,
         mclip: Option<DevicePlane<'_>>,
+        turned_mclip: Option<Scratch>,
         output: DevicePlane<'_>,
     ) {
         let vertical = Eedi3FieldPass {
@@ -692,7 +711,7 @@ impl<R: Runtime> BasedChain<R> {
         let turned = self
             .direction
             .runs_horizontally()
-            .then(|| TurnedClips::new(&self.client, context, supersampled, mclip));
+            .then(|| TurnedClips::new(&self.client, context, supersampled, turned_mclip));
         let horizontal_clips = match &turned {
             Some(turned) => turned.clips(),
             None => Eedi3DeviceClips::default(),

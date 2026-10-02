@@ -2,6 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
+use super::transpose::{TILE, TILE_ROWS, TILE_STRIDE, tile_cubes, tile_shape, transpose, write_turned_tile};
 use crate::edges::{prewitt_across, prewitt_down, tap};
 use crate::plane::assert_plane;
 use crate::{DevicePlane, Dispatch};
@@ -92,17 +93,11 @@ fn first_weight(doubled: u32) -> f32 {
     weight
 }
 
-#[cube(launch_unchecked)]
-fn double_mclip_kernel(mask: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, mask_peak: f32) {
-    if ABSOLUTE_POS >= output.len() {
-        terminate!();
-    }
-
-    let position = ABSOLUTE_POS as u32;
-    let out_width = width * 2u32;
-    let column = position % out_width;
-    let row = position / out_width;
-
+/// The doubled clip's sample at `column` and `row`, from a `width` by `height` mask.
+///
+/// It is 255 when set and 0 otherwise.
+#[cube]
+fn doubled_clip(mask: &Array<f32>, column: u32, row: u32, width: u32, height: u32, mask_peak: f32) -> f32 {
     let column_start = tap_start(column);
     let row_start = tap_start(row);
     let left = clamp_tap(column_start, width);
@@ -127,7 +122,56 @@ fn double_mclip_kernel(mask: &Array<f32>, output: &mut Array<f32>, width: u32, h
         clipped = 255.0;
     }
 
-    output[ABSOLUTE_POS] = clipped;
+    clipped
+}
+
+#[cube(launch_unchecked)]
+fn double_mclip_kernel(mask: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, mask_peak: f32) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let out_width = width * 2u32;
+    let column = position % out_width;
+    let row = position / out_width;
+
+    output[ABSOLUTE_POS] = doubled_clip(mask, column, row, width, height, mask_peak);
+}
+
+/// The doubled clip of one `TILE` square, written as it is and staged through shared memory to be
+/// written transposed, so every write runs along rows.
+#[cube(launch_unchecked)]
+fn double_mclip_turned_kernel(
+    mask: &Array<f32>,
+    output: &mut Array<f32>,
+    turned: &mut Array<f32>,
+    width: u32,
+    height: u32,
+    mask_peak: f32,
+) {
+    let mut tile = SharedMemory::<f32>::new(comptime!((TILE * TILE_STRIDE) as usize));
+    let out_width = width * 2u32;
+    let out_height = height * 2u32;
+    let first_column = CUBE_POS_X * TILE;
+    let first_row = CUBE_POS_Y * TILE;
+    let column = first_column + UNIT_POS_X;
+
+    #[unroll]
+    for step in 0..comptime!(TILE / TILE_ROWS) {
+        let local_row = UNIT_POS_Y + step * TILE_ROWS;
+        let row = first_row + local_row;
+        if column < out_width && row < out_height {
+            let clipped = doubled_clip(mask, column, row, width, height, mask_peak);
+
+            output[(row * out_width + column) as usize] = clipped;
+            tile[(local_row * TILE_STRIDE + UNIT_POS_X) as usize] = clipped;
+        }
+    }
+
+    sync_cube();
+
+    write_turned_tile(&tile, turned, first_column, first_row, out_width, out_height);
 }
 
 #[cube(launch_unchecked)]
@@ -234,6 +278,52 @@ pub fn double_mclip<R: Runtime>(
             unit,
             mask_array,
             output_array,
+            width,
+            height,
+            mask_peak,
+        );
+    }
+}
+
+/// The same as [double_mclip](crate::aa::double_mclip), also writing the clip transposed into `turned`.
+///
+/// `turned` is twice the mask's height wide and twice its width tall.
+pub fn double_mclip_turned<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    mask: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+    turned: DevicePlane<'_>,
+    mask_peak: f32,
+) {
+    let width = mask.width();
+    let height = mask.height();
+
+    assert_plane(&mask, width, height, "mask");
+    assert_plane(&output, 2 * width, 2 * height, "output");
+    assert_plane(&turned, 2 * height, 2 * width, "turned");
+
+    let Some(cubes) = tile_cubes(2 * width, 2 * height) else {
+        double_mclip(client, dispatch, mask, output, mask_peak);
+        transpose(client, dispatch, output, turned);
+        return;
+    };
+
+    let mask_array = mask.array::<R>();
+    let output_array = output.array::<R>();
+    let turned_array = turned.array::<R>();
+    let unit = tile_shape();
+
+    // Safety: every read is clamped inside the asserted mask, and each tile writes only the positions
+    // its guards place inside the asserted output and turned planes.
+    unsafe {
+        double_mclip_turned_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            mask_array,
+            output_array,
+            turned_array,
             width,
             height,
             mask_peak,

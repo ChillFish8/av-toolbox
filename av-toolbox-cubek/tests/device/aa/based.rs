@@ -1,4 +1,10 @@
-use av_toolbox_cubek::aa::{binarize_prewitt, double_mclip, prewitt_threshold, pscale_blend};
+use av_toolbox_cubek::aa::{
+    binarize_prewitt,
+    double_mclip,
+    double_mclip_turned,
+    prewitt_threshold,
+    pscale_blend,
+};
 use av_toolbox_cubek::neighbourhood::{Extreme, Shape, Smooth, median_of_three};
 use av_toolbox_cubek::resize::{Kernel, ResizePlanes, apply_float, centred_taps, upload};
 use av_toolbox_cubek::testing::{
@@ -14,6 +20,7 @@ use av_toolbox_cubek::testing::{
     reference_median_of_three,
     reference_pscale_blend,
     reference_smooth,
+    transposed_plane,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::{ComputeClient, Runtime};
@@ -338,6 +345,79 @@ fn double_mclip_matches_the_reference_exactly() {
     for (index, (output, reference)) in outputs.iter().zip(&expected).enumerate() {
         assert_job(output, reference, 2 * width, index);
     }
+}
+
+/// The plain doubled clip of a mask, and the turned call's doubled and turned clips of the same mask.
+struct TurnedClip {
+    mask: Vec<f32>,
+    width: u32,
+    height: u32,
+}
+
+impl BuildTask for TurnedClip {
+    type Output = (Vec<f32>, Vec<f32>, Vec<f32>);
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let width = self.width;
+        let height = self.height;
+        let bytes = 4 * self.mask.len() * size_of::<f32>();
+
+        let mask = upload_f32(client, &self.mask);
+        let plain = empty(client, bytes);
+        let output = empty(client, bytes);
+        let turned = empty(client, bytes);
+        let mask_plane = plane(&mask, width, height);
+        let plain_plane = plane(&plain, 2 * width, 2 * height);
+        let output_plane = plane(&output, 2 * width, 2 * height);
+        let turned_plane = plane(&turned, 2 * height, 2 * width);
+
+        double_mclip(client, &sizing, mask_plane, plain_plane, 255.0);
+        double_mclip_turned(client, &sizing, mask_plane, output_plane, turned_plane, 255.0);
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        let plain_clip = read_f32(client, &plain);
+        let output_clip = read_f32(client, &output);
+        let turned_clip = read_f32(client, &turned);
+
+        (plain_clip, output_clip, turned_clip)
+    }
+}
+
+#[test]
+fn the_turned_clip_is_the_doubled_clip_transposed() {
+    let mut random = SplitMix(28);
+
+    for (width, height) in [(5, 3), (40, 17), (97, 64)] {
+        let mask = random_eedi3_mask(&mut random, width, height);
+        let task = TurnedClip { mask, width, height };
+
+        let (plain, output, turned) = backend().build(task);
+
+        let expected = transposed_plane(&plain, 2 * width, 2 * height);
+        assert_eq!(output, plain, "{width}x{height} doubled clip");
+        assert_eq!(turned, expected, "{width}x{height} turned clip");
+    }
+}
+
+#[test]
+fn the_turned_clip_is_the_doubled_clip_transposed_on_a_mask_too_wide_to_tile() {
+    let width = 1_048_577;
+    let height = 1;
+    let mut random = SplitMix(29);
+    let mask = random_eedi3_mask(&mut random, width, height);
+    let task = TurnedClip { mask, width, height };
+
+    let (plain, output, turned) = backend().build(task);
+
+    let expected = transposed_plane(&plain, 2 * width, 2 * height);
+    assert!(output == plain, "the doubled clip differs from the plain clip");
+    assert!(
+        turned == expected,
+        "the turned clip differs from the plain clip transposed"
+    );
 }
 
 #[test]

@@ -75,3 +75,39 @@ fn transpose_handles_a_single_row_and_column() {
     assert_eq!(column_transposed, input);
     assert_eq!(column_round_trip, input);
 }
+
+#[test]
+fn transpose_matches_the_cpu_at_sizes_off_the_tile() {
+    let sizes = [
+        (1, 1),
+        (1, 77),
+        (77, 1),
+        (31, 33),
+        (32, 32),
+        (33, 31),
+        (64, 65),
+        (100, 37),
+        (1000, 3),
+    ];
+    for (width, height) in sizes {
+        let input: Vec<f32> = (0..width * height).map(|value| value as f32).collect();
+        let expected = transposed_plane(&input, width, height);
+
+        let (found, round_trip) = on_device(&input, width, height);
+
+        assert_eq!(found, expected, "{width}x{height}");
+        assert_eq!(round_trip, input, "{width}x{height} round trip");
+    }
+}
+
+#[test]
+fn transpose_matches_the_cpu_on_a_plane_too_wide_to_tile() {
+    let width = 2_097_121;
+    let input: Vec<f32> = (0..width).map(|value| value as f32).collect();
+    let expected = transposed_plane(&input, width, 1);
+
+    let (found, round_trip) = on_device(&input, width, 1);
+
+    assert!(found == expected, "the transpose differs from the CPU");
+    assert!(round_trip == input, "the round trip differs from the input");
+}
