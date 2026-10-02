@@ -1,3 +1,4 @@
+mod backtrack;
 mod bands;
 mod exact;
 

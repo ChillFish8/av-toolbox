@@ -4,6 +4,7 @@ use cubecl::prelude::*;
 
 use super::mask::ActiveWindow;
 use super::{
+    ACTIVE_PER_WORD,
     BACKPOINTERS_PER_WORD,
     EEDI3_MAX_MDIS,
     FieldPass,
@@ -353,17 +354,19 @@ fn copied_code(previous_code: u32, column: u32, width: u32, direction: i32, mdis
 /// Each unit keeps its band sums over the window and slides them a column at a time, refilling them after
 /// a column it skips.
 ///
-/// Under a mask, an inactive column copies the path state of the previous one. At column 0 and 1 it takes
-/// the costs of the rebuilt row above that lends them. A direction a column cannot take keeps a path cost
-/// of 0 and leads to direction 0.
+/// Under a mask, unit 0 records which columns are active, one bit a column, in the lenders scratch after the
+/// lenders. An inactive column copies the path state of the previous one. At column 0 and 1 it takes the
+/// costs of the rebuilt row above that lends them. A direction a column cannot take keeps a path cost of 0
+/// and leads to direction 0.
 #[cube(launch_unchecked)]
 fn path_kernel(
     input: &Array<f32>,
     mclip: &Array<f32>,
-    lenders: &Array<i32>,
+    lenders: &mut Array<i32>,
     backpointers: &mut Array<u32>,
     width: u32,
     groups: u32,
+    active_words: u32,
     height: u32,
     first_rebuilt: u32,
     rows: u32,
@@ -406,6 +409,9 @@ fn path_kernel(
     let mut band_sums = BandSums::new(nrad);
     let mut warm = false;
 
+    let active_start = 3 * rows + field_row * active_words;
+    let mut active_word = 0i32;
+
     let mut word = 0u32;
     let mut previous_code = u32::new(TO_ZERO_CODE as i64);
     for column in 0..width {
@@ -417,6 +423,23 @@ fn path_kernel(
         let entering = signed_column + mdis as i32;
         let leaving = signed_column - leaving_distance;
         let active = window.slide(mclip, mask_start, entering, leaving, width, masked);
+
+        if comptime!(masked) {
+            let bit = column % ACTIVE_PER_WORD;
+            if active {
+                active_word |= 1i32 << bit as i32;
+            }
+
+            let word_full = bit == ACTIVE_PER_WORD - 1;
+            if lane == 0 && (word_full || column + 1 == width) {
+                let index = active_start + column / ACTIVE_PER_WORD;
+                lenders[index as usize] = active_word;
+            }
+
+            if word_full {
+                active_word = 0i32;
+            }
+        }
 
         // A direction outside the column's reach keeps a path cost of 0. The zeros are read. An inactive
         // run from the left edge copies them from column 1 to its first active column.
@@ -511,7 +534,8 @@ fn path_kernel(
     }
 }
 
-/// Launches the path search over every rebuilt row, writing the backpointers.
+/// Launches the path search over every rebuilt row, writing the backpointers and, under a mask, the
+/// active bits.
 pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>) {
     let span = pass.span();
     let cubes = row_cubes(pass.rows);
@@ -523,16 +547,18 @@ pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPa
     debug_assert!(span <= 2 * EEDI3_MAX_MDIS + 1, "the settings checked mdis");
 
     // Safety: the input and the mask hold `width * height` f32 values, `lenders` three `i32` values per
-    // rebuilt row and `backpointers` a `u32` per word of every rebuilt row, as `FieldPass::new` checked.
-    // Each cube owns one rebuilt row and each unit one direction, writing only that direction's words of
-    // that row. Every read of the input reflects and clamps into the plane, and the mask is read only
-    // inside the row. A lender is a rebuilt row above, or -1 and never read.
+    // rebuilt row then the active words of every rebuilt row, and `backpointers` a `u32` per word of every
+    // rebuilt row, as `FieldPass::new` checked. Each cube owns one rebuilt row and each unit one direction,
+    // writing only that direction's words of that row. Unit 0 alone writes the row's active words, which
+    // lie after every lender. Every read of the input reflects and clamps into the plane, and the mask is
+    // read only inside the row. A lender is a rebuilt row above, or -1 and never read.
     unsafe {
         let input = pass.input.array::<R>();
         let mclip = mask.array::<R>();
         let lenders = pass.lenders_array::<R>();
         let backpointers = pass.backpointers_array::<R>();
         let groups = pass.groups();
+        let active_words = pass.active_words();
 
         path_kernel::launch_unchecked::<R>(
             client,
@@ -544,6 +570,7 @@ pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPa
             backpointers,
             pass.width,
             groups,
+            active_words,
             pass.height,
             pass.first_rebuilt,
             pass.rows,

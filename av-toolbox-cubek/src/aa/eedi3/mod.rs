@@ -20,6 +20,9 @@ const EEDI3_MAX_MDIS: u32 = 40;
 /// The backpointers packed into one `u32`, 2 bits each.
 const BACKPOINTERS_PER_WORD: u32 = 16;
 
+/// The active columns packed into one `i32`, 1 bit each.
+const ACTIVE_PER_WORD: u32 = 32;
+
 /// The backpointer code of a step that comes from direction 0, whatever direction it leads into.
 const TO_ZERO_CODE: u32 = 3;
 
@@ -182,7 +185,8 @@ impl Eedi3Settings {
 ///   holds one run of words per direction, each run covering the columns in order.
 /// - `lenders` holds `i32` values used under a mask. First comes one per rebuilt row, whose bits say
 ///   whether its column 0 and column 1 are active. Then come two per rebuilt row, the rebuilt rows that
-///   lend it the costs of column 0 and column 1.
+///   lend it the costs of column 0 and column 1. After them come the active columns of each rebuilt row,
+///   one bit a column, 32 to an `i32`.
 ///
 /// The four buffers must be distinct. [eedi3_scratch](crate::aa::eedi3_scratch) gives the size of each.
 #[derive(Debug, Clone, Copy)]
@@ -209,12 +213,14 @@ pub fn eedi3_scratch(width: u32, height: u32, mdis: u32) -> Eedi3ScratchSizes {
     let directions = 2 * mdis as usize + 1;
     let groups = width.div_ceil(BACKPOINTERS_PER_WORD) as usize;
     let words = rows * directions * groups;
+    let active_words = width.div_ceil(ACTIVE_PER_WORD) as usize;
+    let lenders = 3 * rows + rows * active_words;
 
     Eedi3ScratchSizes {
         rebuilt: rebuilt_samples * size_of::<f32>(),
         directions: rebuilt_samples * size_of::<i32>(),
         backpointers: words * size_of::<u32>(),
-        lenders: 3 * rows * size_of::<i32>(),
+        lenders: lenders * size_of::<i32>(),
     }
 }
 
@@ -357,6 +363,10 @@ impl<'a> FieldPass<'a> {
         self.width.div_ceil(BACKPOINTERS_PER_WORD)
     }
 
+    fn active_words(&self) -> u32 {
+        self.width.div_ceil(ACTIVE_PER_WORD)
+    }
+
     /// The rebuilt rows scratch as a kernel argument.
     fn rebuilt_array<R: Runtime>(&self) -> ArrayArg<R> {
         let owned = self.scratch.rebuilt.clone();
@@ -387,9 +397,11 @@ impl<'a> FieldPass<'a> {
     /// The lenders scratch as a kernel argument.
     fn lenders_array<R: Runtime>(&self) -> ArrayArg<R> {
         let owned = self.scratch.lenders.clone();
-        let values = 3 * self.rows as usize;
+        let rows = self.rows as usize;
+        let values = 3 * rows + rows * self.active_words() as usize;
 
-        // Safety: `new` checked that `lenders` holds three `i32` values per rebuilt row.
+        // Safety: `new` checked that `lenders` holds three `i32` values per rebuilt row, then a word of
+        // active bits per 32 columns of every rebuilt row.
         unsafe { ArrayArg::from_raw_parts(owned, values) }
     }
 
