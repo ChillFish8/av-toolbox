@@ -119,6 +119,24 @@ impl BuildTask for CandidateForward {
     }
 }
 
+/// The same as [Forward] with the weights uploaded as `model`, and every body convolution run by `candidate`
+/// if given. Gives the output and how each body layer ran.
+pub(super) struct ModelForward {
+    pub(super) forward: Forward,
+    pub(super) model: Model,
+    pub(super) candidate: Option<Candidate>,
+}
+
+impl BuildTask for ModelForward {
+    type Output = Result<(Vec<f32>, Vec<LayerRun>), ArtcnnError>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let model = Some(self.model);
+
+        run_forward_as(self.forward, build, None, self.candidate, model)
+    }
+}
+
 /// The same as [Forward], with `conv0` holding `conv0_bytes` rather than what the scratch sizes ask for.
 struct ForwardWithConv0 {
     forward: Forward,
@@ -141,10 +159,28 @@ fn run_forward<R: Runtime>(
     conv0_bytes: Option<usize>,
     candidate: Option<Candidate>,
 ) -> Result<Vec<f32>, ArtcnnError> {
+    let (values, _) = run_forward_as(task, build, conv0_bytes, candidate, None)?;
+
+    Ok(values)
+}
+
+/// The same as [run_forward] with the weights uploaded as `model` if given, giving how each body layer ran
+/// beside the output.
+fn run_forward_as<R: Runtime>(
+    task: Forward,
+    build: &BuildContext<R>,
+    conv0_bytes: Option<usize>,
+    candidate: Option<Candidate>,
+    model: Option<Model>,
+) -> Result<(Vec<f32>, Vec<LayerRun>), ArtcnnError> {
     let client = build.client();
     let frame_context = build.frame_context();
     let sizing = Sizing(frame_context);
-    let network = Network::upload(client, &task.weights, task.precision).expect("the weights are valid");
+    let uploaded = match model {
+        Some(model) => Network::upload_model(client, model, &task.weights, task.precision),
+        None => Network::upload(client, &task.weights, task.precision),
+    };
+    let network = uploaded.expect("the weights are valid");
     let region = Region {
         x: 0,
         y: 0,
@@ -208,12 +244,12 @@ fn run_forward<R: Runtime>(
         ),
     };
     synced(client);
-    ran?;
+    let runs = ran?;
 
     let codes = read_f32(client, &output);
     let values = codes.iter().map(|code| code / PEAK).collect();
 
-    Ok(values)
+    Ok((values, runs))
 }
 
 pub(super) fn largest_error(actual: &[f32], expected: &[f64]) -> f64 {

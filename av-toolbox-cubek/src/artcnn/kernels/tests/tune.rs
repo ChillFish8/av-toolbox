@@ -29,7 +29,7 @@ fn the_kernels_are_tuned_unless_pinned() {
 fn the_offered_candidates_end_with_the_fused_cubek_convolution_and_have_distinct_names() {
     let properties = R9700.properties();
 
-    let candidates = offered_candidates(&properties, 64);
+    let candidates = offered_candidates(&properties, 64, None);
 
     let names: HashSet<String> = candidates.iter().map(Candidate::name).collect();
     assert_eq!(candidates.last(), Some(&Candidate::FusedCubek));

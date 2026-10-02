@@ -1,5 +1,6 @@
 mod direct;
 mod tune;
+mod winograd;
 
 #[cfg(test)]
 mod tests;
@@ -16,17 +17,27 @@ pub use self::tune::Kernels;
 #[cfg(any(test, feature = "test-support"))]
 pub use self::tune::{Epilogue, TunedRun, fixed_candidate, offered_candidates, run_tuned};
 pub(crate) use self::tune::{run_tuned_layer, takes_tuner};
+pub(crate) use self::winograd::transform_weights;
+use self::winograd::{POSITIONS, run_winograd};
+pub use self::winograd::{WinogradVariant, winograd_allowed};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::winograd::{transform_input, winograd_variants};
 use super::body::{Finish, Operands, body_operands, launch_fused_convolution};
-use crate::artcnn::{Activation, ArtcnnError, Network, Precision, Region};
+use crate::artcnn::{Activation, ArtcnnError, Model, Network, Precision, Region};
 
 /// One body convolution of f16 NHWC maps, with its bias and what it applies as it writes.
 ///
 /// The weights are laid out by output channel, row, column and input channel, and the bias is in f16. The
 /// output is the convolution plus the bias, through `activation`, plus `residual` if given.
+///
+/// `transformed` holds the layer's Winograd weights, by position, output channel and input channel, when its
+/// model is allow-listed. `model` is the network's model, when it was uploaded as one.
 #[derive(Clone, Copy)]
 pub struct BodyConvolution<'a> {
     pub input: &'a Handle,
     pub weights: &'a Handle,
+    pub transformed: Option<&'a Handle>,
+    pub model: Option<Model>,
     pub bias: &'a Handle,
     pub residual: Option<&'a Handle>,
     pub activation: Activation,
@@ -55,10 +66,13 @@ impl<'a> BodyConvolution<'a> {
 
         let operands = body_operands(network, layer, true);
         let bias = operands.bias.expect("the operands carry the bias");
+        let transformed = network.layer(layer).transformed.as_ref();
 
         Self {
             input,
             weights: operands.weights,
+            transformed,
+            model: network.model(),
             bias,
             residual: finish.residual,
             activation: finish.activation,
@@ -116,6 +130,13 @@ impl<'a> BodyConvolution<'a> {
         );
         assert!(!same_buffer(self.input, self.output), "the output is the input");
 
+        if let Some(transformed) = self.transformed {
+            assert!(
+                transformed.size_in_used() >= u64::from(POSITIONS) * features * features * half,
+                "the transformed weights are smaller than the layer's"
+            );
+        }
+
         if let Some(residual) = self.residual {
             assert!(
                 residual.size_in_used() >= map_bytes,
@@ -136,6 +157,8 @@ fn same_buffer(first: &Handle, second: &Handle) -> bool {
 pub enum Candidate {
     /// The direct implicit-GEMM convolution on cooperative matrices.
     Direct(DirectVariant),
+    /// Winograd F(2x2, 3x3) on cooperative matrices, for allow-listed models.
+    Winograd(WinogradVariant),
     /// `cubek-convolution` with the epilogue applied as it writes.
     FusedCubek,
 }
@@ -143,8 +166,10 @@ pub enum Candidate {
 impl Candidate {
     /// A short name that tells every candidate apart.
     pub fn name(&self) -> String {
-        let Candidate::Direct(variant) = self else {
-            return "fused-cubek".to_string();
+        let variant = match self {
+            Candidate::Direct(variant) => variant,
+            Candidate::Winograd(variant) => return winograd_name(variant),
+            Candidate::FusedCubek => return "fused-cubek".to_string(),
         };
 
         let staging = match variant.weights {
@@ -169,9 +194,17 @@ impl Candidate {
     pub(crate) fn check(&self, properties: &DeviceProperties, features: u32) -> Result<(), String> {
         match self {
             Candidate::Direct(variant) => check_variant(properties, variant, features),
+            Candidate::Winograd(variant) => winograd::check_variant(properties, variant, features),
             Candidate::FusedCubek => Ok(()),
         }
     }
+}
+
+fn winograd_name(variant: &WinogradVariant) -> String {
+    format!(
+        "winograd-{}x{}-planes{}x{}-width{}",
+        variant.tile_rows, variant.tile_columns, variant.planes_m, variant.planes_n, variant.plane_width,
+    )
 }
 
 /// Runs `convolution` with `candidate`.
@@ -201,6 +234,11 @@ pub(crate) fn launch_candidate<R: Runtime>(
     match candidate {
         Candidate::Direct(variant) => {
             run_direct(client, variant, convolution)?;
+
+            Ok(false)
+        },
+        Candidate::Winograd(variant) => {
+            run_winograd(client, variant, convolution)?;
 
             Ok(false)
         },

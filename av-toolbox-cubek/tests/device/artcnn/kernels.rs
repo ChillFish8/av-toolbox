@@ -7,6 +7,7 @@ use av_toolbox_cubek::artcnn::{
     DirectVariant,
     Finish,
     Kernels,
+    Model,
     Network,
     Precision,
     Region,
@@ -30,7 +31,7 @@ use super::{read_maps, steps_from_separate, synced, textured, upload_maps, wavy_
 use crate::support::{Sizing, backend, empty};
 
 /// The value the candidate's output holds before it runs, far outside what any layer writes.
-const UNWRITTEN: f32 = -1000.0;
+pub(super) const UNWRITTEN: f32 = -1000.0;
 
 /// What a body convolution applies as it writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,18 +93,19 @@ pub(super) enum Runner {
 }
 
 /// One body layer of the same maps run by a runner, through the separate passes, and as its bare
-/// convolution and bias.
-struct CandidateLayer {
-    runner: Runner,
-    weights: Weights,
-    region: Region,
-    epilogue: Epilogue,
+/// convolution and bias. The weights are uploaded as `model` when one is given.
+pub(super) struct CandidateLayer {
+    pub(super) runner: Runner,
+    pub(super) weights: Weights,
+    pub(super) model: Option<Model>,
+    pub(super) region: Region,
+    pub(super) epilogue: Epilogue,
 }
 
 pub(super) struct CandidateOutputs {
     pub(super) candidate: Vec<f32>,
-    separate: Vec<f32>,
-    convolved: Vec<f32>,
+    pub(super) separate: Vec<f32>,
+    pub(super) convolved: Vec<f32>,
     /// How the chosen candidate ran, when kernels chose it.
     pub(super) chosen: Option<TunedRun>,
 }
@@ -119,7 +121,11 @@ impl BuildTask for CandidateLayer {
 
         let sizing = Sizing(build.frame_context());
         let precision = Precision::F16;
-        let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
+        let uploaded = match self.model {
+            Some(model) => Network::upload_model(client, model, &self.weights, precision),
+            None => Network::upload(client, &self.weights, precision),
+        };
+        let network = uploaded.expect("the weights are valid");
         let features = network.features();
         let values = (self.region.samples() * features) as usize;
         let maps = edged_maps(self.region, features);
@@ -243,6 +249,7 @@ pub(super) fn runner_matches_separate(
     let task = CandidateLayer {
         runner,
         weights: weights_of(features),
+        model: None,
         region: region(width, height),
         epilogue,
     };

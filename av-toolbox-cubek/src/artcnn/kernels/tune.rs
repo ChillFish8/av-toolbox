@@ -20,9 +20,10 @@ use cubecl::tune::{
 use serde::{Deserialize, Serialize};
 
 use super::direct::direct_variants;
+use super::winograd::{winograd_allowed, winograd_variants};
 use super::{BodyConvolution, Candidate, DirectVariant, launch_candidate};
 use crate::artcnn::body::{Finish, LayerRun, offers_cmma_16};
-use crate::artcnn::{Activation, ArtcnnError, BodyPath, Network, Precision, Region};
+use crate::artcnn::{Activation, ArtcnnError, BodyPath, Model, Network, Precision, Region};
 
 /// The samples at which a region leaves the smallest bucket, 64k.
 const MEDIUM_SAMPLES: u64 = 1 << 16;
@@ -33,10 +34,14 @@ const LARGE_SAMPLES: u64 = 1 << 20;
 /// The label that keeps the tunings of the candidates a device offers apart from any other list.
 const OFFERED_LABEL: &str = "offered";
 
+/// The label that keeps the tunings of the candidates a device offers an allow-listed model apart from any
+/// other list.
+const OFFERED_WINOGRAD_LABEL: &str = "offered-winograd";
+
 /// Chooses each body convolution's candidate, per device and tune key.
 static TUNER: LocalTuner<TuneKey, String> = LocalTuner::new("av-toolbox-artcnn-body-convolution");
 
-/// The plan each kernel choice runs by, per runtime, device limits and model width.
+/// The plan each kernel choice runs by, per runtime, device limits, model and model width.
 static PLANS: LazyLock<Mutex<HashMap<PlanKey, SharedPlan>>> = LazyLock::new(Mutex::default);
 
 /// A [Plan] for any runtime.
@@ -261,11 +266,13 @@ fn run_tunable<R: Runtime>(input: TuneInput<'_, R>, candidate: Candidate) -> Res
     Ok(candidate_run(candidate, false))
 }
 
+/// How `candidate` ran, as though it were the only candidate offered.
 fn candidate_run(candidate: Candidate, forced: bool) -> LayerRun {
     LayerRun {
         forced,
         fused: true,
         candidate: Some(candidate),
+        winograd_offered: matches!(candidate, Candidate::Winograd(_)),
     }
 }
 
@@ -307,11 +314,27 @@ fn tuner_id<R: Runtime>(client: &ComputeClient<R>, label: &str) -> String {
     )
 }
 
-/// The candidates a device with `properties` offers for maps of `features` channels, the direct variants
-/// first and the fused cubek convolution last.
-pub fn offered_candidates(properties: &DeviceProperties, features: u32) -> Vec<Candidate> {
+/// Whether the candidates offered for `model` hold Winograd variants.
+fn offers_winograd(model: Option<Model>) -> bool {
+    model.is_some_and(winograd_allowed)
+}
+
+/// The candidates a device with `properties` offers `model` for maps of `features` channels: the direct
+/// variants first, then the Winograd variants for an allow-listed model, and the fused cubek convolution
+/// last.
+pub fn offered_candidates(
+    properties: &DeviceProperties,
+    features: u32,
+    model: Option<Model>,
+) -> Vec<Candidate> {
     let variants = direct_variants(properties, features);
     let mut candidates: Vec<Candidate> = variants.into_iter().map(Candidate::Direct).collect();
+
+    if offers_winograd(model) {
+        let winograd = winograd_variants(properties, features);
+        candidates.extend(winograd.into_iter().map(Candidate::Winograd));
+    }
+
     candidates.push(Candidate::FusedCubek);
 
     candidates
@@ -337,7 +360,7 @@ pub fn fixed_candidate(properties: &DeviceProperties, features: u32) -> Candidat
     Candidate::FusedCubek
 }
 
-/// What a plan is kept under: the runtime and device facts it was worked out from, the model width and
+/// What a plan is kept under: the runtime and device facts it was worked out from, the model, its width and
 /// the kernel choice.
 #[derive(PartialEq, Eq, Hash)]
 struct PlanKey {
@@ -348,12 +371,18 @@ struct PlanKey {
     shared_bytes: usize,
     units: u32,
     offers_matrix: bool,
+    model: Option<Model>,
     features: u32,
     kernels: Kernels,
 }
 
 impl PlanKey {
-    fn of<R: Runtime>(client: &ComputeClient<R>, kernels: &Kernels, features: u32) -> Self {
+    fn of<R: Runtime>(
+        client: &ComputeClient<R>,
+        kernels: &Kernels,
+        model: Option<Model>,
+        features: u32,
+    ) -> Self {
         let hardware = &client.properties().hardware;
 
         Self {
@@ -364,6 +393,7 @@ impl PlanKey {
             shared_bytes: hardware.max_shared_memory_size,
             units: hardware.max_units_per_cube,
             offers_matrix: offers_cmma_16(client),
+            model,
             features,
             kernels: kernels.clone(),
         }
@@ -376,10 +406,12 @@ enum Plan<R: Runtime> {
     Refused(String),
     /// One candidate runs without tuning.
     Once(Candidate),
-    /// The tuner chooses from `set`, keeping its tunings under `id`.
+    /// The tuner chooses from `set`, keeping its tunings under `id`. `winograd` is whether the set holds a
+    /// Winograd variant.
     Tuned {
         id: String,
         set: Arc<TunableSet<TuneKey, BodyInputs<R>, LayerRun>>,
+        winograd: bool,
     },
 }
 
@@ -423,17 +455,34 @@ fn plan_among<R: Runtime>(
     let set = tunable_set::<R>(candidates);
     let shared_set = Arc::new(set);
 
-    Plan::Tuned { id, set: shared_set }
+    let winograd = candidates
+        .iter()
+        .any(|candidate| matches!(candidate, Candidate::Winograd(_)));
+
+    Plan::Tuned {
+        id,
+        set: shared_set,
+        winograd,
+    }
 }
 
-fn make_plan<R: Runtime>(client: &ComputeClient<R>, kernels: &Kernels, features: u32) -> Plan<R> {
+fn make_plan<R: Runtime>(
+    client: &ComputeClient<R>,
+    kernels: &Kernels,
+    model: Option<Model>,
+    features: u32,
+) -> Plan<R> {
     let properties = client.properties();
 
     match kernels {
         Kernels::Tuned => {
-            let candidates = offered_candidates(properties, features);
+            let candidates = offered_candidates(properties, features, model);
+            let label = match offers_winograd(model) {
+                true => OFFERED_WINOGRAD_LABEL,
+                false => OFFERED_LABEL,
+            };
 
-            plan_among(client, OFFERED_LABEL, &candidates, features)
+            plan_among(client, label, &candidates, features)
         },
         Kernels::Fixed => {
             let candidate = fixed_candidate(properties, features);
@@ -445,10 +494,15 @@ fn make_plan<R: Runtime>(client: &ComputeClient<R>, kernels: &Kernels, features:
     }
 }
 
-/// The plan `kernels` runs by on the client's device for maps of `features` channels, worked out on its
-/// first use.
-fn plan_for<R: Runtime>(client: &ComputeClient<R>, kernels: &Kernels, features: u32) -> Arc<Plan<R>> {
-    let key = PlanKey::of(client, kernels, features);
+/// The plan `kernels` runs by on the client's device for `model`'s maps of `features` channels, worked out
+/// on its first use.
+fn plan_for<R: Runtime>(
+    client: &ComputeClient<R>,
+    kernels: &Kernels,
+    model: Option<Model>,
+    features: u32,
+) -> Arc<Plan<R>> {
+    let key = PlanKey::of(client, kernels, model, features);
     let mut plans = PLANS.lock().unwrap_or_else(PoisonError::into_inner);
 
     let known = plans.get(&key).cloned();
@@ -456,7 +510,7 @@ fn plan_for<R: Runtime>(client: &ComputeClient<R>, kernels: &Kernels, features: 
         return plan;
     }
 
-    let made = make_plan(client, kernels, features);
+    let made = make_plan(client, kernels, model, features);
     let plan = Arc::new(made);
     plans.insert(key, plan.clone());
 
@@ -521,12 +575,20 @@ pub fn run_tuned<R: Runtime>(
 ) -> Result<TunedRun, ArtcnnError> {
     convolution.check();
 
-    let plan = plan_for(client, kernels, convolution.features);
+    let plan = plan_for(client, kernels, convolution.model, convolution.features);
 
     match plan.as_ref() {
         Plan::Refused(reasons) => Err(ArtcnnError::Convolution(reasons.clone())),
         Plan::Once(candidate) => run_once(client, *candidate, convolution),
-        Plan::Tuned { id, set } => run_tuner(client, id, set, convolution, epilogue),
+        Plan::Tuned { id, set, winograd } => {
+            let tuned = run_tuner(client, id, set, convolution, epilogue)?;
+            let run = LayerRun {
+                winograd_offered: *winograd,
+                ..tuned.run
+            };
+
+            Ok(TunedRun { run, ..tuned })
+        },
     }
 }
 

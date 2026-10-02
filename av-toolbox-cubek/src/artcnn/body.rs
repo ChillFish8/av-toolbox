@@ -797,6 +797,7 @@ fn convolve_fused<R: Runtime>(
         forced,
         fused: true,
         candidate: None,
+        winograd_offered: false,
     })
 }
 
@@ -846,6 +847,8 @@ pub struct LayerRun {
     pub fused: bool,
     /// The candidate that ran the convolution, if one was chosen for it.
     pub candidate: Option<Candidate>,
+    /// Whether a Winograd variant was among the candidates the convolution's kernel was chosen from.
+    pub winograd_offered: bool,
 }
 
 /// What a body layer applies after its convolution and bias.
@@ -893,6 +896,7 @@ pub(crate) fn body_layer<R: Runtime>(
         forced,
         fused: false,
         candidate: None,
+        winograd_offered: false,
     })
 }
 
@@ -937,6 +941,7 @@ pub fn body_layer_with_blueprint<R: Runtime>(
         forced: false,
         fused: false,
         candidate: None,
+        winograd_offered: false,
     })
 }
 

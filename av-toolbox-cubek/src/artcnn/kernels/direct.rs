@@ -9,28 +9,28 @@ use crate::artcnn::body::offers_cmma_16_in;
 use crate::artcnn::{Activation, ArtcnnError};
 
 /// The side of the cooperative-matrix tiles the kernel multiplies.
-const TILE: u32 = 16;
+pub(super) const TILE: u32 = 16;
 
 /// The values one tile holds.
-const TILE_VALUES: u32 = TILE * TILE;
+pub(super) const TILE_VALUES: u32 = TILE * TILE;
 
 /// The halves one shared-memory load moves.
-const LOAD_WIDTH: u32 = 8;
+pub(super) const LOAD_WIDTH: u32 = 8;
 
 /// The halves of padding after each sample's channels in shared memory.
 ///
 /// It moves neighbouring rows of a fragment onto different banks.
-const SAMPLE_PADDING: u32 = 8;
+pub(super) const SAMPLE_PADDING: u32 = 8;
 
 /// The values one output write covers.
-const WRITE_WIDTH: u32 = 4;
+pub(super) const WRITE_WIDTH: u32 = 4;
 
 /// The 3x3 taps of the convolution.
 const TAPS: u32 = 9;
 
-type Load = Vector<f16, Const<8>>;
-type Quad = Vector<f16, Const<4>>;
-type Sums = Vector<f32, Const<4>>;
+pub(super) type Load = Vector<f16, Const<8>>;
+pub(super) type Quad = Vector<f16, Const<4>>;
+pub(super) type Sums = Vector<f32, Const<4>>;
 
 /// Where a direct body convolution reads each tap's weights from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -344,7 +344,10 @@ fn stage_tap(
 
 /// A 16x16x16 cooperative-matrix fragment, filled before it is read.
 #[cube]
-fn fragment<E: Scalar>(#[comptime] ident: cmma::MatrixIdent, layout: cmma::MatrixLayout) -> cmma::Matrix<E> {
+pub(super) fn fragment<E: Scalar>(
+    #[comptime] ident: cmma::MatrixIdent,
+    layout: cmma::MatrixLayout,
+) -> cmma::Matrix<E> {
     // Safety: every fragment is loaded before the kernel reads it.
     unsafe { cmma::Matrix::<E>::uninitialized(ident, TILE as usize, TILE as usize, TILE as usize, layout) }
 }
@@ -568,7 +571,6 @@ fn write_out(
     let tile_quads = comptime!(TILE_VALUES / WRITE_WIDTH);
     let row_quads = comptime!(TILE / WRITE_WIDTH);
     let sample_quads = comptime!(shape.features / WRITE_WIDTH);
-    let one = Sums::new(1.0);
 
     #[unroll]
     for pixel_tile in 0..pixel_tiles {
@@ -600,17 +602,10 @@ fn write_out(
 
                 if row < height && column < width {
                     let position = (row * width + column) * sample_quads + tile_channel / WRITE_WIDTH + quad;
-                    let mut sum = scratch[(spot.scratch + index) as usize];
+                    let sum = scratch[(spot.scratch + index) as usize];
+                    let finished = finish_sums(sum, residual, position, shape.silu, shape.residual);
 
-                    if comptime!(shape.silu) {
-                        sum = sum / (one + Sums::exp(-sum));
-                    }
-
-                    if comptime!(shape.residual) {
-                        sum += Sums::cast_from(residual[position as usize]);
-                    }
-
-                    output[position as usize] = Quad::cast_from(sum);
+                    output[position as usize] = Quad::cast_from(finished);
                 }
 
                 index += CUBE_DIM_X;
@@ -619,23 +614,56 @@ fn write_out(
     }
 }
 
+/// `sum` through SiLU when `silu` is set, plus the residual quad at `position` when `residual_added` is set.
+#[cube]
+pub(super) fn finish_sums(
+    sum: Sums,
+    residual: &Array<Quad>,
+    position: u32,
+    #[comptime] silu: bool,
+    #[comptime] residual_added: bool,
+) -> Sums {
+    let one = Sums::new(1.0);
+    let mut finished = sum;
+
+    if comptime!(silu) {
+        finished = finished / (one + Sums::exp(-finished));
+    }
+
+    if comptime!(residual_added) {
+        finished += Sums::cast_from(residual[position as usize]);
+    }
+
+    finished
+}
+
 /// Whether a device with `properties` can run `variant` compiled as `shape`.
-///
-/// The device must offer the 16x16x16 f16 cooperative matrix accumulating in f32, and hold the shared memory
-/// and units the variant takes. A plane narrower than the device's widest subgroup is refused, since the
-/// driver may run a subgroup across two planes. A wider plane holds whole subgroups that repeat each other's
-/// work.
 pub(crate) fn check_device(
     properties: &DeviceProperties,
     variant: &DirectVariant,
     shape: &DirectShape,
 ) -> Result<(), String> {
+    let shared_bytes = shape.shared_bytes();
+    let units = variant.units();
+
+    check_limits(properties, variant.plane_width, units, shared_bytes)
+}
+
+/// Whether a device with `properties` can run a workgroup of `units` units in planes `plane_width` wide,
+/// declaring `shared_bytes` of shared memory.
+///
+/// The device must offer the 16x16x16 f16 cooperative matrix accumulating in f32. A plane narrower than the
+/// device's widest subgroup is refused, since the driver may run a subgroup across two planes. A wider plane
+/// holds whole subgroups that repeat each other's work.
+pub(super) fn check_limits(
+    properties: &DeviceProperties,
+    plane_width: u32,
+    units: u32,
+    shared_bytes: usize,
+) -> Result<(), String> {
     let offers_matrix = offers_cmma_16_in(&properties.features.matmul.cmma);
     let hardware = &properties.hardware;
     let widest = hardware.plane_size_max;
-    let plane_width = variant.plane_width;
-    let shared_bytes = shape.shared_bytes();
-    let units = variant.units();
 
     if !offers_matrix {
         return Err("the device offers no 16x16x16 f16 cooperative matrix".to_string());
@@ -662,6 +690,14 @@ pub(crate) fn check_device(
     Ok(())
 }
 
+/// The plane width candidates are offered at on a device with `properties`, its widest subgroup, or `None`
+/// when no layout is offered at that width.
+pub(super) fn offered_plane_width(properties: &DeviceProperties) -> Option<u32> {
+    let plane_width = properties.hardware.plane_size_max;
+
+    PLANE_WIDTHS.contains(&plane_width).then_some(plane_width)
+}
+
 /// Whether a device with `properties` can run `variant` on maps of `features` channels.
 pub(crate) fn check_variant(
     properties: &DeviceProperties,
@@ -678,12 +714,11 @@ pub(crate) fn check_variant(
 /// A variant is offered when the device can run it and its planes are exactly the device's widest subgroup,
 /// so no subgroup repeats another's work when the driver runs that width.
 pub fn direct_variants(properties: &DeviceProperties, features: u32) -> Vec<DirectVariant> {
-    let plane_width = properties.hardware.plane_size_max;
     let mut offered = Vec::new();
 
-    if !PLANE_WIDTHS.contains(&plane_width) {
+    let Some(plane_width) = offered_plane_width(properties) else {
         return offered;
-    }
+    };
 
     for layout in LAYOUTS {
         let variant = DirectVariant {

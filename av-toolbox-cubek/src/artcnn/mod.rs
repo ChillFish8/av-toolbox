@@ -33,8 +33,17 @@ pub use self::kernels::{
     offered_candidates,
     run_candidate,
     run_tuned,
+    transform_input,
+    winograd_variants,
 };
-pub use self::kernels::{Candidate, DirectVariant, Kernels, WeightStaging};
+pub use self::kernels::{
+    Candidate,
+    DirectVariant,
+    Kernels,
+    WeightStaging,
+    WinogradVariant,
+    winograd_allowed,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::network::run_region_with_candidate;
 pub use self::network::{Maps, Network, Precision, run_region};

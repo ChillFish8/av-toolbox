@@ -1,5 +1,6 @@
 mod direct;
 mod tune;
+mod winograd;
 
 use cubecl::features::{Features, MmaConfig};
 use cubecl::ir::{DeviceProperties, HardwareProperties, MemoryDeviceProperties};

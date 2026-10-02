@@ -265,7 +265,7 @@ fn load_network<R: Runtime>(
         Err(error) => return Err(broken_model(stage, file, error)),
     };
 
-    let uploaded = Network::upload(client, &weights, precision);
+    let uploaded = Network::upload_model(client, model, &weights, precision);
     match uploaded {
         Ok(network) => Ok(network),
         Err(error) => Err(broken_model(stage, file, error)),
@@ -531,6 +531,12 @@ impl Supersampler {
     #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     pub(crate) fn kernels(&self) -> &Kernels {
         self.network.kernels()
+    }
+
+    /// The model the network was uploaded as.
+    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    pub(crate) fn model(&self) -> Option<Model> {
+        self.network.model()
     }
 
     /// How each body layer of each tile ran in the warm-up.

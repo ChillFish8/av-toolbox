@@ -3,12 +3,22 @@ use cubecl::server::Handle;
 use half::f16;
 
 use super::body::{Finish, LayerRun, body_layer};
-use super::kernels::{BodyConvolution, Candidate, Kernels, launch_candidate, run_tuned_layer, takes_tuner};
+use super::kernels::{
+    BodyConvolution,
+    Candidate,
+    Kernels,
+    launch_candidate,
+    run_tuned_layer,
+    takes_tuner,
+    transform_weights,
+    winograd_allowed,
+};
 use crate::artcnn::{
     Activation,
     ArtcnnError,
     BodyPath,
     Layer,
+    Model,
     Region,
     Weights,
     WeightsError,
@@ -42,9 +52,13 @@ impl Precision {
 }
 
 /// One layer's weights and bias on the device, in the feature maps' type.
+///
+/// A body layer of an allow-listed model on f16 maps also holds its Winograd weights, by position, output
+/// channel and input channel.
 pub(crate) struct LayerBuffers {
     pub(crate) weights: Handle,
     pub(crate) bias: Handle,
+    pub(crate) transformed: Option<Handle>,
     pub(crate) out_channels: u32,
     pub(crate) in_channels: u32,
 }
@@ -61,6 +75,7 @@ pub(crate) struct PaddedLastLayer {
 /// An ArtCNN network's weights on the device, in the feature maps' type, and how its body convolutions
 /// choose their kernel.
 pub struct Network {
+    model: Option<Model>,
     features: u32,
     blocks: u32,
     precision: Precision,
@@ -76,47 +91,26 @@ impl Network {
         weights: &Weights,
         precision: Precision,
     ) -> Result<Self, WeightsError> {
-        weights.validate()?;
+        upload_network(client, None, weights, precision)
+    }
 
-        let mut layers = Vec::new();
+    /// Uploads `model`'s `weights` in `precision`'s type, refusing weights of another shape.
+    ///
+    /// On f16 maps, a model on the Winograd allow-list also holds its body layers' transformed weights.
+    pub fn upload_model<R: Runtime>(
+        client: &ComputeClient<R>,
+        model: Model,
+        weights: &Weights,
+        precision: Precision,
+    ) -> Result<Self, WeightsError> {
+        let found = [weights.features, weights.blocks];
+        let expected = [model.features(), model.blocks()];
 
-        for layer in &weights.layers {
-            let weight_bytes = encode(&layer.weights, precision);
-            let bias_bytes = encode(&layer.bias, precision);
-            let weights_handle = client.create_from_slice(&weight_bytes);
-            let bias_handle = client.create_from_slice(&bias_bytes);
-
-            layers.push(LayerBuffers {
-                weights: weights_handle,
-                bias: bias_handle,
-                out_channels: layer.out_channels,
-                in_channels: layer.in_channels,
-            });
+        if found != expected {
+            return Err(WeightsError::ModelShape { found, expected });
         }
 
-        let last = weights
-            .layers
-            .last()
-            .expect("validated weights have a last layer");
-        let padded_weights = padded_weights(last);
-        let padded_bias = padded_bias(last);
-        let weight_bytes = encode(&padded_weights, precision);
-        let bias_bytes = f32::as_bytes(&padded_bias);
-        let padded_weights_handle = client.create_from_slice(&weight_bytes);
-        let padded_bias_handle = client.create_from_slice(bias_bytes);
-        let padded_last = PaddedLastLayer {
-            weights: padded_weights_handle,
-            bias: padded_bias_handle,
-        };
-
-        Ok(Self {
-            features: weights.features,
-            blocks: weights.blocks,
-            precision,
-            layers,
-            padded_last,
-            kernels: Kernels::default(),
-        })
+        upload_network(client, Some(model), weights, precision)
     }
 
     /// The same network, with its f16 body convolutions on the convolution path choosing their kernel by
@@ -127,6 +121,11 @@ impl Network {
 
     pub fn kernels(&self) -> &Kernels {
         &self.kernels
+    }
+
+    /// The model the network was uploaded as, if any.
+    pub fn model(&self) -> Option<Model> {
+        self.model
     }
 
     pub fn features(&self) -> u32 {
@@ -159,6 +158,71 @@ impl Network {
     pub(crate) fn padded_last_layer(&self) -> &PaddedLastLayer {
         &self.padded_last
     }
+}
+
+/// Uploads `weights` in `precision`'s type as `model`, refusing weights whose layers do not match their
+/// model.
+fn upload_network<R: Runtime>(
+    client: &ComputeClient<R>,
+    model: Option<Model>,
+    weights: &Weights,
+    precision: Precision,
+) -> Result<Network, WeightsError> {
+    weights.validate()?;
+
+    let winograd = model.is_some_and(winograd_allowed) && precision == Precision::F16;
+    let body_layers = 1..=3 * weights.blocks as usize + 1;
+    let mut layers = Vec::new();
+
+    for (index, layer) in weights.layers.iter().enumerate() {
+        let weight_bytes = encode(&layer.weights, precision);
+        let bias_bytes = encode(&layer.bias, precision);
+        let weights_handle = client.create_from_slice(&weight_bytes);
+        let bias_handle = client.create_from_slice(&bias_bytes);
+        let takes_transform = winograd && body_layers.contains(&index);
+        let transformed = takes_transform.then(|| upload_transformed(client, layer));
+
+        layers.push(LayerBuffers {
+            weights: weights_handle,
+            bias: bias_handle,
+            transformed,
+            out_channels: layer.out_channels,
+            in_channels: layer.in_channels,
+        });
+    }
+
+    let last = weights
+        .layers
+        .last()
+        .expect("validated weights have a last layer");
+    let padded_weights = padded_weights(last);
+    let padded_bias = padded_bias(last);
+    let weight_bytes = encode(&padded_weights, precision);
+    let bias_bytes = f32::as_bytes(&padded_bias);
+    let padded_weights_handle = client.create_from_slice(&weight_bytes);
+    let padded_bias_handle = client.create_from_slice(bias_bytes);
+    let padded_last = PaddedLastLayer {
+        weights: padded_weights_handle,
+        bias: padded_bias_handle,
+    };
+
+    Ok(Network {
+        model,
+        features: weights.features,
+        blocks: weights.blocks,
+        precision,
+        layers,
+        padded_last,
+        kernels: Kernels::default(),
+    })
+}
+
+/// The f16 Winograd weights of `layer` on the device.
+fn upload_transformed<R: Runtime>(client: &ComputeClient<R>, layer: &Layer) -> Handle {
+    let transformed = transform_weights(layer);
+    let bytes = encode(&transformed, Precision::F16);
+
+    client.create_from_slice(&bytes)
 }
 
 /// The weights of `layer`, followed by zeros up to 16 output channels.
@@ -434,6 +498,7 @@ fn run_body_layer<R: Runtime>(
             forced,
             fused: true,
             candidate: Some(candidate),
+            winograd_offered: matches!(candidate, Candidate::Winograd(_)),
         });
     }
 

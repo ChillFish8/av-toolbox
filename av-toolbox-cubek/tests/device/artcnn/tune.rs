@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use av_toolbox_cubek::artcnn::{
     BodyConvolution,
     Candidate,
@@ -40,7 +38,7 @@ impl BuildTask for Offered {
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let properties = build.client().properties();
 
-        offered_candidates(properties, 64)
+        offered_candidates(properties, 64, None)
     }
 }
 
@@ -151,7 +149,7 @@ fn pinned_kernels_run_the_default_direct_variant_without_tuning() {
     }
 }
 
-/// How long each candidate takes on one large body convolution, and which one the tuner chose for it.
+/// The median time each candidate takes on one large body convolution, and which one the tuner chose for it.
 struct Timed {
     candidates: Vec<Candidate>,
     label: String,
@@ -162,30 +160,57 @@ struct Timings {
     milliseconds: Vec<(Candidate, f64)>,
 }
 
-/// The mean of `runs` back-to-back runs of `candidate` over `convolution`, after three to warm up.
-fn time_candidate<R: Runtime>(
+/// The milliseconds one run of `candidate` over `convolution` takes on the device, timed as the tuner times
+/// its candidates.
+fn time_once<R: Runtime>(
     client: &ComputeClient<R>,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
-    runs: u32,
 ) -> f64 {
-    for _ in 0..3 {
-        let warmed = run_candidate(client, candidate, convolution);
-        warmed.expect("a candidate the tuner measured runs");
+    let profiled = client.profile(|| run_candidate(client, candidate, convolution), "candidate");
+    let (ran, duration) = profiled.expect("the device profiles a run");
+    ran.expect("a candidate the tuner measured runs");
+
+    let resolving = duration.resolve();
+    let ticks = cubecl::future::block_on(resolving);
+
+    ticks.duration().as_secs_f64() * 1e3
+}
+
+/// The median milliseconds of each of `candidates` over `convolution`, after three runs each to warm up.
+///
+/// The runs take turns, one of each candidate a round for `rounds` rounds, so a burst of other work on the
+/// device slows every candidate alike.
+fn interleaved_medians<R: Runtime>(
+    client: &ComputeClient<R>,
+    candidates: &[Candidate],
+    convolution: &BodyConvolution<'_>,
+    rounds: usize,
+) -> Vec<(Candidate, f64)> {
+    for candidate in candidates.iter().copied() {
+        for _ in 0..3 {
+            let warmed = run_candidate(client, candidate, convolution);
+            warmed.expect("a candidate the tuner measured runs");
+        }
     }
 
-    synced(client);
-    let started = Instant::now();
+    let mut samples = vec![Vec::with_capacity(rounds); candidates.len()];
 
-    for _ in 0..runs {
-        let ran = run_candidate(client, candidate, convolution);
-        ran.expect("a candidate the tuner measured runs");
+    for _ in 0..rounds {
+        for (index, candidate) in candidates.iter().copied().enumerate() {
+            let milliseconds = time_once(client, candidate, convolution);
+            samples[index].push(milliseconds);
+        }
     }
 
-    synced(client);
-    let elapsed = started.elapsed();
+    candidates.iter().copied().zip(samples).map(median_of).collect()
+}
 
-    elapsed.as_secs_f64() * 1e3 / f64::from(runs)
+fn median_of((candidate, mut samples): (Candidate, Vec<f64>)) -> (Candidate, f64) {
+    samples.sort_by(f64::total_cmp);
+    let median = samples[samples.len() / 2];
+
+    (candidate, median)
 }
 
 impl BuildTask for Timed {
@@ -221,11 +246,7 @@ impl BuildTask for Timed {
         let tuned = tuned.expect("the tuner finds a candidate");
         let chosen = tuned.run.candidate.expect("the tuner reports its candidate");
 
-        let mut milliseconds = Vec::new();
-        for candidate in self.candidates {
-            let mean = time_candidate(client, candidate, &convolution, 20);
-            milliseconds.push((candidate, mean));
-        }
+        let milliseconds = interleaved_medians(client, &self.candidates, &convolution, 21);
 
         Some(Timings { chosen, milliseconds })
     }
@@ -257,26 +278,26 @@ fn the_tuner_chooses_the_fastest_measured_candidate() {
         return;
     };
 
-    for (candidate, mean) in &timings.milliseconds {
+    for (candidate, median) in &timings.milliseconds {
         let name = candidate.name();
-        println!("{name}: {mean:.3} ms");
+        println!("{name}: median {median:.3} ms");
     }
 
     let fastest = timings
         .milliseconds
         .iter()
-        .map(|(_, mean)| *mean)
+        .map(|(_, median)| *median)
         .fold(f64::INFINITY, f64::min);
     let chosen_time = timings
         .milliseconds
         .iter()
         .find(|(candidate, _)| *candidate == timings.chosen)
-        .map(|(_, mean)| *mean)
+        .map(|(_, median)| *median)
         .expect("the chosen candidate was timed");
     let chosen_name = timings.chosen.name();
     println!("chosen {chosen_name}: {chosen_time:.3} ms against the fastest {fastest:.3} ms");
 
-    // Run-to-run noise on one convolution is about 5 to 10 percent.
+    // The candidates differ by 1.6x and more, while load and run-to-run noise move a median by a few percent.
     assert!(
         chosen_time <= fastest * 1.2,
         "{chosen_name} takes {chosen_time:.3} ms, the fastest {fastest:.3} ms"

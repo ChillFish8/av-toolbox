@@ -522,7 +522,14 @@ fn an_unknown_kernel_value_is_refused_naming_the_variable() {
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device_tests {
     use av_toolbox_cubek::DevicePlane;
-    use av_toolbox_cubek::artcnn::{Candidate, LayerRun, Model, Weights, fixed_candidate};
+    use av_toolbox_cubek::artcnn::{
+        Candidate,
+        LayerRun,
+        Model,
+        Weights,
+        fixed_candidate,
+        offered_candidates,
+    };
     use av_toolbox_cubek::testing::{failing_kernels, reference_artcnn};
     use av_toolbox_gpu::{Backend, BuildContext, BuildTask, Runtime, test_device};
     use cubecl::prelude::CubeElement;
@@ -628,6 +635,10 @@ mod device_tests {
         layers: Vec<LayerRun>,
         /// The candidate pinned kernels run on this device.
         fixed: Candidate,
+        /// The model the network was uploaded as.
+        model: Option<Model>,
+        /// The candidates the device offers R8F64.
+        candidates: Vec<Candidate>,
     }
 
     impl BuildTask for LoadedKernels {
@@ -637,6 +648,7 @@ mod device_tests {
             let offered = body_path(build.capabilities(), Precision::F16);
             let properties = build.client().properties();
             let fixed = fixed_candidate(properties, 64);
+            let candidates = offered_candidates(properties, 64, Some(Model::R8F64));
             let model = ModelName::R8f64;
             let precision = PrecisionName::F16;
             let loaded = match self.kernels {
@@ -653,6 +665,8 @@ mod device_tests {
                 kernels: supersampler.kernels().clone(),
                 layers: supersampler.layers().to_vec(),
                 fixed,
+                model: supersampler.model(),
+                candidates,
             }
         }
     }
@@ -681,13 +695,22 @@ mod device_tests {
 
         assert_eq!(loaded.loaded, BodyPath::Convolution);
         assert_eq!(loaded.kernels, Kernels::Tuned);
+        assert_eq!(loaded.model, Some(Model::R8F64));
+
+        let winograd_offered = loaded
+            .candidates
+            .iter()
+            .any(|candidate| matches!(candidate, Candidate::Winograd(_)));
         assert_eq!(loaded.layers.len(), R8F64_BODY_LAYERS);
         for layer in &loaded.layers {
             assert!(layer.fused, "{layer:?}");
+
+            let candidate = layer.candidate.expect("a body layer took the tuned path");
             assert!(
-                layer.candidate.is_some(),
-                "a body layer skipped the tuned path: {layer:?}"
+                loaded.candidates.contains(&candidate),
+                "{candidate:?} is not among the candidates offered to R8F64"
             );
+            assert_eq!(layer.winograd_offered, winograd_offered, "{layer:?}");
         }
     }
 

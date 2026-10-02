@@ -4,6 +4,7 @@ mod fused;
 mod kernels;
 mod tiling;
 mod tune;
+mod winograd;
 
 use av_toolbox_cubek::artcnn::{Precision, offers_cmma_16};
 use cubecl::prelude::*;

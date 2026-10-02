@@ -4,7 +4,7 @@ use half::f16;
 const MAGIC: &[u8; 8] = b"AVTBCNN1";
 
 /// The ArtCNN networks av-toolbox can run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Model {
     R8F64,
     R16F96,
@@ -67,6 +67,9 @@ pub enum WeightsError {
         found: [u32; 4],
         expected: [u32; 4],
     },
+
+    #[error("the weights are {found:?} features and blocks, but the model has {expected:?}")]
+    ModelShape { found: [u32; 2], expected: [u32; 2] },
 
     #[error("the weights have {count} bytes after their last layer")]
     TrailingBytes { count: usize },
