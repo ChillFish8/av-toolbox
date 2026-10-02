@@ -1,3 +1,4 @@
+mod bands;
 mod exact;
 
 use av_toolbox_cubek::aa::{

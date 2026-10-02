@@ -37,6 +37,24 @@ impl KeptRows {
     }
 }
 
+/// The three absolute differences of one tap, between the upper rows at column `upper` and the lower rows
+/// at column `lower`.
+#[cube]
+fn column_difference(input: &Array<f32>, rows: &KeptRows, width: u32, upper: i32, lower: i32) -> i32 {
+    let far_above = sample_at(input, rows.far_above, upper, width);
+    let above_upper = sample_at(input, rows.above, upper, width);
+    let below_upper = sample_at(input, rows.below, upper, width);
+    let above_lower = sample_at(input, rows.above, lower, width);
+    let below_lower = sample_at(input, rows.below, lower, width);
+    let far_below = sample_at(input, rows.far_below, lower, width);
+
+    let mut total = i32::abs(far_above - above_lower);
+    total += i32::abs(above_upper - below_lower);
+    total += i32::abs(below_upper - far_below);
+
+    total
+}
+
 /// The absolute differences between the upper rows shifted by `upper_shift` and the lower rows shifted by
 /// `lower_shift`, summed over the `2 nrad + 1` columns around `column`.
 #[cube]
@@ -47,32 +65,49 @@ fn band_sum(
     column: i32,
     upper_shift: i32,
     lower_shift: i32,
-    nrad: u32,
+    #[comptime] nrad: u32,
 ) -> i32 {
     let mut total = 0i32;
     for step in 0..2 * nrad + 1 {
         let tap = step as i32 - nrad as i32;
         let upper = column + upper_shift + tap;
         let lower = column + lower_shift + tap;
-        let far_above = sample_at(input, rows.far_above, upper, width);
-        let above_upper = sample_at(input, rows.above, upper, width);
-        let below_upper = sample_at(input, rows.below, upper, width);
-        let above_lower = sample_at(input, rows.above, lower, width);
-        let below_lower = sample_at(input, rows.below, lower, width);
-        let far_below = sample_at(input, rows.far_below, lower, width);
 
-        total += i32::abs(far_above - above_lower);
-        total += i32::abs(above_upper - below_lower);
-        total += i32::abs(below_upper - far_below);
+        total += column_difference(input, rows, width, upper, lower);
     }
 
     total
 }
 
-/// The three band sums of a connection added together.
+/// The three band sums of a connection along `direction` at `column` added together.
 ///
 /// The two bands shifted along the connection count only where their shifted column stays inside the row.
 /// A band that leaves takes the other one's sum, or the connection's own when both leave.
+#[cube]
+fn bands_along(connection: i32, left: i32, right: i32, column: i32, direction: i32, width: u32) -> i32 {
+    let left_column = column - 2 * direction;
+    let right_column = column + 2 * direction;
+    let left_valid = left_column >= 0 && left_column < width as i32;
+    let right_valid = right_column >= 0 && right_column < width as i32;
+
+    let mut left_band = connection;
+    let mut right_band = connection;
+    if left_valid {
+        left_band = left;
+        right_band = left;
+    }
+
+    if right_valid {
+        right_band = right;
+        if !left_valid {
+            left_band = right;
+        }
+    }
+
+    connection + left_band + right_band
+}
+
+/// The three band sums of a connection added together, each summed from scratch.
 #[cube]
 fn band_total(
     input: &Array<f32>,
@@ -80,29 +115,13 @@ fn band_total(
     width: u32,
     column: i32,
     direction: i32,
-    nrad: u32,
+    #[comptime] nrad: u32,
 ) -> i32 {
     let connection = band_sum(input, rows, width, column, direction, -direction, nrad);
-    let left_column = column - 2 * direction;
-    let right_column = column + 2 * direction;
-    let left_valid = left_column >= 0 && left_column < width as i32;
-    let right_valid = right_column >= 0 && right_column < width as i32;
+    let left = band_sum(input, rows, width, column, 0, -2 * direction, nrad);
+    let right = band_sum(input, rows, width, column, 2 * direction, 0, nrad);
 
-    let mut left = connection;
-    let mut right = connection;
-    if left_valid {
-        left = band_sum(input, rows, width, column, 0, -2 * direction, nrad);
-        right = left;
-    }
-
-    if right_valid {
-        right = band_sum(input, rows, width, column, 2 * direction, 0, nrad);
-        if !left_valid {
-            left = right;
-        }
-    }
-
-    connection + left + right
+    bands_along(connection, left, right, column, direction, width)
 }
 
 /// How far the rows above and below `column` sit from the plain average along `direction`.
@@ -125,8 +144,19 @@ struct CostWeights {
     vertical: f32,
 }
 
-/// The cost of connecting `column` of a rebuilt row along `direction`, one rounded f32 operation at a
-/// time in the plugin's order.
+/// The cost of a connection along `direction` from its band total and vertical difference, one rounded
+/// f32 operation at a time in the plugin's order.
+#[cube]
+fn cost_of(bands: i32, difference: i32, direction: i32, weights: &CostWeights) -> f32 {
+    let band_term = weights.alpha3 * bands as f32;
+    let lean_term = weights.beta * i32::abs(direction) as f32;
+    let vertical_term = weights.vertical * difference as f32;
+    let partial = band_term + lean_term;
+
+    partial + vertical_term
+}
+
+/// The cost of connecting `column` of a rebuilt row along `direction`.
 #[cube]
 fn connection_cost(
     input: &Array<f32>,
@@ -134,17 +164,118 @@ fn connection_cost(
     width: u32,
     column: i32,
     direction: i32,
-    nrad: u32,
     weights: &CostWeights,
+    #[comptime] nrad: u32,
 ) -> f32 {
     let bands = band_total(input, rows, width, column, direction, nrad);
     let difference = vertical_difference(input, rows, width, column, direction);
-    let band_term = weights.alpha3 * bands as f32;
-    let lean_term = weights.beta * i32::abs(direction) as f32;
-    let vertical_term = weights.vertical * difference as f32;
-    let partial = band_term + lean_term;
 
-    partial + vertical_term
+    cost_of(bands, difference, direction, weights)
+}
+
+/// How many bands a connection's cost sums.
+const BANDS: u32 = 3;
+
+/// The slot of the left band, which is also its offset from the column in directions.
+const LEFT_BAND: usize = 0;
+
+/// The slot of the connection's own band, which is also its offset from the column in directions.
+const CONNECTION_BAND: usize = 1;
+
+/// The slot of the right band, which is also its offset from the column in directions.
+const RIGHT_BAND: usize = 2;
+
+/// The three bands of a connection's cost, each with a delay line of its taps and their running sum.
+///
+/// The band in slot `b` reads the upper rows `b` directions past the column, and the lower rows two
+/// directions before that. Each delay line holds its band's `2 nrad + 1` taps, left to right.
+#[derive(CubeType)]
+struct BandSums {
+    delays: Array<i32>,
+    sums: Array<i32>,
+}
+
+#[cube]
+impl BandSums {
+    fn new(#[comptime] nrad: u32) -> BandSums {
+        let window = comptime!(2 * nrad + 1);
+        let delays = Array::<i32>::new(comptime!((BANDS * window) as usize));
+        let sums = Array::<i32>::new(comptime!(BANDS as usize));
+
+        BandSums { delays, sums }
+    }
+
+    /// Fills each band's delay line with its taps around `column`, and sets its sum to their total.
+    fn fill(
+        &mut self,
+        input: &Array<f32>,
+        rows: &KeptRows,
+        width: u32,
+        column: i32,
+        direction: i32,
+        #[comptime] nrad: u32,
+    ) {
+        let window = comptime!(2 * nrad + 1);
+
+        #[unroll]
+        for band in 0..comptime!(BANDS) {
+            let centre = column + band as i32 * direction;
+            let mut total = 0i32;
+
+            #[unroll]
+            for step in 0..window {
+                let upper = centre + step as i32 - nrad as i32;
+                let lower = upper - 2 * direction;
+                let difference = column_difference(input, rows, width, upper, lower);
+
+                self.delays[(band * window + step) as usize] = difference;
+                total += difference;
+            }
+
+            self.sums[band as usize] = total;
+        }
+    }
+
+    /// Moves each band from the column before `column` to `column`, adding the tap that enters its window
+    /// and taking away the one that leaves.
+    fn slide(
+        &mut self,
+        input: &Array<f32>,
+        rows: &KeptRows,
+        width: u32,
+        column: i32,
+        direction: i32,
+        #[comptime] nrad: u32,
+    ) {
+        let window = comptime!(2 * nrad + 1);
+
+        #[unroll]
+        for band in 0..comptime!(BANDS) {
+            let start = band * window;
+            let upper = column + band as i32 * direction + nrad as i32;
+            let lower = upper - 2 * direction;
+            let entering = column_difference(input, rows, width, upper, lower);
+            let leaving = self.delays[start as usize];
+
+            #[unroll]
+            for step in 0..window - 1 {
+                let slot = start + step;
+                self.delays[slot as usize] = self.delays[(slot + 1) as usize];
+            }
+
+            self.delays[(start + window - 1) as usize] = entering;
+            self.sums[band as usize] += entering - leaving;
+        }
+    }
+
+    /// The three band sums added together at `column` along `direction`.
+    fn total(&self, column: i32, direction: i32, width: u32) -> i32 {
+        let connection = self.sums[CONNECTION_BAND];
+        let left = self.sums[LEFT_BAND];
+        let right = self.sums[RIGHT_BAND];
+
+        bands_along(connection, left, right, column, direction, width)
+    }
 }
 
 /// How far a path may lean at `column`, the largest direction whose reads stay inside the row.
@@ -161,7 +292,6 @@ struct RowShape {
     width: u32,
     height: u32,
     first_rebuilt: u32,
-    nrad: u32,
 }
 
 /// The cost at `column` along `direction` of the rebuilt row that lends it, stored at `slot` of the
@@ -175,6 +305,7 @@ fn lent_cost(
     column: i32,
     direction: i32,
     weights: &CostWeights,
+    #[comptime] nrad: u32,
 ) -> f32 {
     let lender = lenders[slot as usize];
 
@@ -182,7 +313,7 @@ fn lent_cost(
     if lender >= 0 {
         let row = plane_row(lender as u32, shape.first_rebuilt);
         let kept = KeptRows::new(row, shape.width, shape.height);
-        cost = connection_cost(input, &kept, shape.width, column, direction, shape.nrad, weights);
+        cost = connection_cost(input, &kept, shape.width, column, direction, weights, nrad);
     }
 
     cost
@@ -219,6 +350,9 @@ fn copied_code(previous_code: u32, column: u32, width: u32, direction: i32, mdis
 /// its backpointers into a word, 2 bits a column, and stores it every 16 columns. A code of 0 to 2 holds
 /// the predecessor's offset plus 1, and a code of 3 leads to direction 0.
 ///
+/// Each unit keeps its band sums over the window and slides them a column at a time, refilling them after
+/// a column it skips.
+///
 /// Under a mask, an inactive column copies the path state of the previous one. At column 0 and 1 it takes
 /// the costs of the rebuilt row above that lends them. A direction a column cannot take keeps a path cost
 /// of 0 and leads to direction 0.
@@ -237,8 +371,8 @@ fn path_kernel(
     beta: f32,
     vertical: f32,
     gamma: f32,
-    nrad: u32,
     mdis: u32,
+    #[comptime] nrad: u32,
     #[comptime] masked: bool,
 ) {
     let field_row = CUBE_POS as u32;
@@ -256,7 +390,6 @@ fn path_kernel(
         width,
         height,
         first_rebuilt,
-        nrad,
     };
     let weights = CostWeights {
         alpha3,
@@ -269,6 +402,9 @@ fn path_kernel(
     let mask_start = row * width;
     let leaving_distance = mdis as i32 + 1;
     let mut window = ActiveWindow::new(mclip, mask_start, 0, mdis, width, masked);
+
+    let mut band_sums = BandSums::new(nrad);
+    let mut warm = false;
 
     let mut word = 0u32;
     let mut previous_code = u32::new(TO_ZERO_CODE as i64);
@@ -287,7 +423,17 @@ fn path_kernel(
         let mut path_cost = 0.0f32;
         let mut code = u32::new(TO_ZERO_CODE as i64);
         if active && inside {
-            let cost = connection_cost(input, &kept, width, signed_column, direction, nrad, &weights);
+            if warm {
+                band_sums.slide(input, &kept, width, signed_column, direction, nrad);
+            } else {
+                band_sums.fill(input, &kept, width, signed_column, direction, nrad);
+            }
+
+            warm = true;
+
+            let bands = band_sums.total(signed_column, direction, width);
+            let difference = vertical_difference(input, &kept, width, signed_column, direction);
+            let cost = cost_of(bands, difference, direction, &weights);
 
             if column == 0 {
                 path_cost = cost;
@@ -323,6 +469,8 @@ fn path_kernel(
                 path_cost = best + cost;
                 code = (chosen - direction + 1) as u32;
             }
+        } else {
+            warm = false;
         }
 
         if comptime!(masked) {
@@ -330,12 +478,12 @@ fn path_kernel(
 
             if !active && column == 0 {
                 if direction == 0 {
-                    path_cost = lent_cost(input, lenders, lent_slot, &shape, 0, 0, &weights);
+                    path_cost = lent_cost(input, lenders, lent_slot, &shape, 0, 0, &weights, nrad);
                 }
             } else if !active && column == 1 {
                 if inside {
                     let slot = lent_slot + 1;
-                    path_cost = lent_cost(input, lenders, slot, &shape, 1, direction, &weights);
+                    path_cost = lent_cost(input, lenders, slot, &shape, 1, direction, &weights, nrad);
                 }
             } else if !active {
                 path_cost = path_costs[previous + lane as usize];
@@ -403,8 +551,8 @@ pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPa
             weights.beta,
             weights.vertical,
             weights.gamma,
-            pass.settings.nrad,
             pass.settings.mdis,
+            pass.settings.nrad,
             masked,
         );
     }
