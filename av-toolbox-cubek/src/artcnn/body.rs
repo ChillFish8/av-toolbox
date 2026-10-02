@@ -851,6 +851,19 @@ pub struct LayerRun {
     pub winograd_offered: bool,
 }
 
+impl LayerRun {
+    /// How `candidate` ran, as though it were the only candidate offered. `forced` is whether it took the
+    /// forced blueprint.
+    pub(crate) fn of_candidate(candidate: Candidate, forced: bool) -> Self {
+        Self {
+            forced,
+            fused: true,
+            candidate: Some(candidate),
+            winograd_offered: matches!(candidate, Candidate::Winograd(_)),
+        }
+    }
+}
+
 /// What a body layer applies after its convolution and bias.
 #[derive(Debug, Clone, Copy)]
 pub struct Finish<'a> {

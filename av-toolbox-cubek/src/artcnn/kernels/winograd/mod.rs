@@ -368,11 +368,6 @@ pub(crate) fn run_winograd<R: Runtime>(
     let height = convolution.height;
     let map_values = width as usize * height as usize * features as usize;
     let weight_values = (POSITIONS * features * features) as usize;
-    let weight_bytes = (weight_values * size_of::<f16>()) as u64;
-    assert!(
-        transformed.size_in_used() >= weight_bytes,
-        "the transformed weights are smaller than the layer's"
-    );
     assert!(
         u32::try_from(map_values).is_ok(),
         "the maps hold more values than the kernel can index"
@@ -387,9 +382,9 @@ pub(crate) fn run_winograd<R: Runtime>(
     let quad = WRITE_WIDTH as usize;
     let load = LOAD_WIDTH as usize;
 
-    // Safety: `check` asserts the input, output and residual hold `width * height * F` halves and the bias
-    // `F`, and the asserts above size the transformed weights at `16 * F * F` halves and keep every map index
-    // inside a u32.
+    // Safety: `check` asserts the input, output and residual hold `width * height * F` halves, the
+    // transformed weights `16 * F * F` and the bias `F`, and the assert above keeps every map index inside a
+    // u32.
     // - Input reads are guarded to samples inside the frame. Output writes and residual reads are guarded to
     //   samples inside the frame, at a channel below `F`.
     // - A weight fragment's last value is at `position * F * F + (channel + 15) * F + chunk * 16 + 15`, below

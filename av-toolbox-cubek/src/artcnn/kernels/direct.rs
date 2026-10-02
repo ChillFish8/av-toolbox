@@ -692,7 +692,7 @@ pub(super) fn check_limits(
 
 /// The plane width candidates are offered at on a device with `properties`, its widest subgroup, or `None`
 /// when no layout is offered at that width.
-pub(super) fn offered_plane_width(properties: &DeviceProperties) -> Option<u32> {
+pub fn offered_plane_width(properties: &DeviceProperties) -> Option<u32> {
     let plane_width = properties.hardware.plane_size_max;
 
     PLANE_WIDTHS.contains(&plane_width).then_some(plane_width)

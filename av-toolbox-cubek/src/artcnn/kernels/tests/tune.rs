@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use super::R9700;
-use crate::artcnn::kernels::tune::{SizeBucket, offered_candidates};
-use crate::artcnn::{Candidate, Kernels};
+use super::{R9700, TestDevice};
+use crate::artcnn::kernels::tune::{Choice, SizeBucket, choose, offered_candidates};
+use crate::artcnn::{Candidate, Kernels, Model, direct_variants};
 
 #[test]
 fn sizes_fall_into_their_buckets_at_the_boundaries() {
@@ -35,4 +35,27 @@ fn the_offered_candidates_end_with_the_fused_cubek_convolution_and_have_distinct
     assert_eq!(candidates.last(), Some(&Candidate::FusedCubek));
     assert!(candidates.len() > 2, "{candidates:?}");
     assert_eq!(names.len(), candidates.len(), "{names:?}");
+}
+
+#[test]
+fn a_device_offering_winograd_but_no_direct_variant_runs_the_fused_cubek_convolution() {
+    // Room for the smallest Winograd variant at width 64, but not for the smallest direct variant.
+    let device = TestDevice {
+        shared_bytes: 8 * 1024,
+        ..R9700
+    };
+    let properties = device.properties();
+    let model = Model::R8F64;
+    let features = model.features();
+
+    let direct = direct_variants(&properties, features);
+    let candidates = offered_candidates(&properties, features, Some(model));
+    let choice = choose(&properties, &candidates, features);
+
+    let holds_winograd = candidates
+        .iter()
+        .any(|candidate| matches!(candidate, Candidate::Winograd(_)));
+    assert!(direct.is_empty(), "{direct:?}");
+    assert!(holds_winograd, "{candidates:?}");
+    assert_eq!(choice, Choice::Once(Candidate::FusedCubek));
 }

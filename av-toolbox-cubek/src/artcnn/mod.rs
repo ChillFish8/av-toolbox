@@ -31,6 +31,7 @@ pub use self::kernels::{
     direct_variants,
     fixed_candidate,
     offered_candidates,
+    offered_plane_width,
     run_candidate,
     run_tuned,
     transform_input,

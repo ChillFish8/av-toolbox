@@ -493,13 +493,9 @@ fn run_body_layer<R: Runtime>(
     if let Some(candidate) = body.candidate {
         let convolution = BodyConvolution::of_layer(network, layer, input, output, region, finish);
         let forced = launch_candidate(client, candidate, &convolution)?;
+        let run = LayerRun::of_candidate(candidate, forced);
 
-        return Ok(LayerRun {
-            forced,
-            fused: true,
-            candidate: Some(candidate),
-            winograd_offered: matches!(candidate, Candidate::Winograd(_)),
-        });
+        return Ok(run);
     }
 
     if takes_tuner(network, body.path) {

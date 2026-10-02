@@ -9,10 +9,10 @@ use cubecl::ir::DeviceProperties;
 use cubecl::prelude::{ComputeClient, Runtime};
 use cubecl::server::Handle;
 
-#[cfg(any(test, feature = "test-support"))]
-pub use self::direct::direct_variants;
 pub use self::direct::{DirectVariant, WeightStaging};
 use self::direct::{check_variant, run_direct};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::direct::{direct_variants, offered_plane_width};
 pub use self::tune::Kernels;
 #[cfg(any(test, feature = "test-support"))]
 pub use self::tune::{Epilogue, TunedRun, fixed_candidate, offered_candidates, run_tuned};

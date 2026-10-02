@@ -252,7 +252,7 @@ fn run_tunable<R: Runtime>(input: TuneInput<'_, R>, candidate: Candidate) -> Res
     let launched = launch_candidate(&input.client, candidate, &input.convolution);
 
     let error = match launched {
-        Ok(forced) => return Ok(candidate_run(candidate, forced)),
+        Ok(forced) => return Ok(LayerRun::of_candidate(candidate, forced)),
         Err(error) => error.to_string(),
     };
 
@@ -263,17 +263,7 @@ fn run_tunable<R: Runtime>(input: TuneInput<'_, R>, candidate: Candidate) -> Res
     let mut failure = input.failure.lock().unwrap_or_else(PoisonError::into_inner);
     *failure = Some(error);
 
-    Ok(candidate_run(candidate, false))
-}
-
-/// How `candidate` ran, as though it were the only candidate offered.
-fn candidate_run(candidate: Candidate, forced: bool) -> LayerRun {
-    LayerRun {
-        forced,
-        fused: true,
-        candidate: Some(candidate),
-        winograd_offered: matches!(candidate, Candidate::Winograd(_)),
-    }
+    Ok(LayerRun::of_candidate(candidate, false))
 }
 
 fn tunable<R: Runtime>(candidate: Candidate) -> Tunable<TuneKey, BodyInputs<R>, LayerRun> {
@@ -404,8 +394,9 @@ impl PlanKey {
 enum Plan<R: Runtime> {
     /// No candidate can run, for the reasons given.
     Refused(String),
-    /// One candidate runs without tuning.
-    Once(Candidate),
+    /// One candidate runs without tuning. `winograd` is whether the list it came from holds a Winograd
+    /// variant.
+    Once { candidate: Candidate, winograd: bool },
     /// The tuner chooses from `set`, keeping its tunings under `id`. `winograd` is whether the set holds a
     /// Winograd variant.
     Tuned {
@@ -415,14 +406,24 @@ enum Plan<R: Runtime> {
     },
 }
 
-/// The plan for `candidates`, tuned under `label`, on maps of `features` channels.
-fn plan_among<R: Runtime>(
-    client: &ComputeClient<R>,
-    label: &str,
-    candidates: &[Candidate],
-    features: u32,
-) -> Plan<R> {
-    let properties = client.properties();
+/// How a list of candidates runs on one device, before any tuning is set up.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Choice {
+    /// No candidate can run, for the reasons given.
+    Refused(String),
+    /// One candidate runs without tuning.
+    Once(Candidate),
+    /// The tuner chooses from the list.
+    Tuned,
+}
+
+/// How `candidates` run on a device with `properties`, on maps of `features` channels.
+///
+/// CubeCL's tuner panics when every candidate fails while benchmarking. A direct candidate that passed its
+/// check does not fail to launch, so only a list holding one is tuned. Without one, the fused cubek
+/// convolution runs where it is listed, since an untuned variant may be slower than it. Otherwise the first
+/// runnable candidate runs.
+pub(super) fn choose(properties: &DeviceProperties, candidates: &[Candidate], features: u32) -> Choice {
     let mut runnable = Vec::new();
     let mut refusals = Vec::new();
 
@@ -439,30 +440,52 @@ fn plan_among<R: Runtime>(
         let reasons = refusals.join(", ");
         let message = format!("no body convolution candidate can run: {reasons}");
 
-        return Plan::Refused(message);
+        return Choice::Refused(message);
     };
 
-    // CubeCL's tuner panics when every candidate fails while benchmarking. A direct candidate that passed
-    // its check does not fail to launch, so the tuner only runs when the list holds one.
     let holds_direct = runnable
         .iter()
         .any(|candidate| matches!(candidate, Candidate::Direct(_)));
-    if !holds_direct || candidates.len() == 1 {
-        return Plan::Once(first);
+    let holds_cubek = runnable.contains(&Candidate::FusedCubek);
+    if !holds_direct && holds_cubek {
+        return Choice::Once(Candidate::FusedCubek);
     }
 
-    let id = tuner_id(client, label);
-    let set = tunable_set::<R>(candidates);
-    let shared_set = Arc::new(set);
+    if !holds_direct || candidates.len() == 1 {
+        return Choice::Once(first);
+    }
 
+    Choice::Tuned
+}
+
+/// The plan for `candidates`, tuned under `label`, on maps of `features` channels.
+fn plan_among<R: Runtime>(
+    client: &ComputeClient<R>,
+    label: &str,
+    candidates: &[Candidate],
+    features: u32,
+) -> Plan<R> {
+    let properties = client.properties();
     let winograd = candidates
         .iter()
         .any(|candidate| matches!(candidate, Candidate::Winograd(_)));
 
-    Plan::Tuned {
-        id,
-        set: shared_set,
-        winograd,
+    let choice = choose(properties, candidates, features);
+
+    match choice {
+        Choice::Refused(message) => Plan::Refused(message),
+        Choice::Once(candidate) => Plan::Once { candidate, winograd },
+        Choice::Tuned => {
+            let id = tuner_id(client, label);
+            let set = tunable_set::<R>(candidates);
+            let shared_set = Arc::new(set);
+
+            Plan::Tuned {
+                id,
+                set: shared_set,
+                winograd,
+            }
+        },
     }
 }
 
@@ -487,7 +510,10 @@ fn make_plan<R: Runtime>(
         Kernels::Fixed => {
             let candidate = fixed_candidate(properties, features);
 
-            Plan::Once(candidate)
+            Plan::Once {
+                candidate,
+                winograd: false,
+            }
         },
         #[cfg(any(test, feature = "test-support"))]
         Kernels::Among { label, candidates } => plan_among(client, label, candidates, features),
@@ -523,7 +549,7 @@ fn run_once<R: Runtime>(
     convolution: &BodyConvolution<'_>,
 ) -> Result<TunedRun, ArtcnnError> {
     let forced = launch_candidate(client, candidate, convolution)?;
-    let run = candidate_run(candidate, forced);
+    let run = LayerRun::of_candidate(candidate, forced);
 
     Ok(TunedRun { run, executions: 1 })
 }
@@ -564,6 +590,16 @@ fn run_tuner<R: Runtime>(
     })
 }
 
+/// `tuned`, reporting whether a Winograd variant was among the candidates its kernel was chosen from.
+fn offering_winograd(tuned: TunedRun, winograd: bool) -> TunedRun {
+    let run = LayerRun {
+        winograd_offered: winograd,
+        ..tuned.run
+    };
+
+    TunedRun { run, ..tuned }
+}
+
 /// Runs `convolution`, which applies `epilogue`, with the candidate `kernels` chooses.
 ///
 /// Gives an error when no candidate can run it, or when the chosen one fails to launch.
@@ -579,15 +615,15 @@ pub fn run_tuned<R: Runtime>(
 
     match plan.as_ref() {
         Plan::Refused(reasons) => Err(ArtcnnError::Convolution(reasons.clone())),
-        Plan::Once(candidate) => run_once(client, *candidate, convolution),
+        Plan::Once { candidate, winograd } => {
+            let once = run_once(client, *candidate, convolution)?;
+
+            Ok(offering_winograd(once, *winograd))
+        },
         Plan::Tuned { id, set, winograd } => {
             let tuned = run_tuner(client, id, set, convolution, epilogue)?;
-            let run = LayerRun {
-                winograd_offered: *winograd,
-                ..tuned.run
-            };
 
-            Ok(TunedRun { run, ..tuned })
+            Ok(offering_winograd(tuned, *winograd))
         },
     }
 }

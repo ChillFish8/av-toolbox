@@ -25,7 +25,16 @@ use cubecl::prelude::Runtime;
 use half::f16;
 
 use super::body::{Forward, ModelForward, f16_step, largest_error, r8f64, supports};
-use super::kernels::{CandidateLayer, EPILOGUES, Epilogue, Runner, UNWRITTEN, edged_maps, region};
+use super::kernels::{
+    CandidateLayer,
+    EPILOGUES,
+    Epilogue,
+    Runner,
+    UNWRITTEN,
+    edged_maps,
+    offers_variants,
+    region,
+};
 use super::{read_maps, steps_from_separate, synced, textured, upload_maps};
 use crate::support::{backend, empty};
 
@@ -61,11 +70,20 @@ impl BuildTask for Offered {
     }
 }
 
+/// The Winograd variants the test device offers for maps `features` wide, asserted to be some wherever the
+/// device can run them.
 fn offered_winograd(features: u32) -> Vec<WinogradVariant> {
     let task = Offered { features };
 
     let variants = backend().build(task);
     println!("Winograd offered at width {features}: {variants:?}");
+
+    if offers_variants() {
+        assert!(
+            !variants.is_empty(),
+            "no Winograd variant is offered at width {features}"
+        );
+    }
 
     variants
 }

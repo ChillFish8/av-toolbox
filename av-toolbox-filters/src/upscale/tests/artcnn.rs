@@ -529,6 +529,7 @@ mod device_tests {
         Weights,
         fixed_candidate,
         offered_candidates,
+        tiles,
     };
     use av_toolbox_cubek::testing::{failing_kernels, reference_artcnn};
     use av_toolbox_gpu::{Backend, BuildContext, BuildTask, Runtime, test_device};
@@ -633,6 +634,7 @@ mod device_tests {
         loaded: BodyPath,
         kernels: Kernels,
         layers: Vec<LayerRun>,
+        tile: u32,
         /// The candidate pinned kernels run on this device.
         fixed: Candidate,
         /// The model the network was uploaded as.
@@ -664,6 +666,7 @@ mod device_tests {
                 loaded: supersampler.path(),
                 kernels: supersampler.kernels().clone(),
                 layers: supersampler.layers().to_vec(),
+                tile: supersampler.tile(),
                 fixed,
                 model: supersampler.model(),
                 candidates,
@@ -701,7 +704,9 @@ mod device_tests {
             .candidates
             .iter()
             .any(|candidate| matches!(candidate, Candidate::Winograd(_)));
-        assert_eq!(loaded.layers.len(), R8F64_BODY_LAYERS);
+        // The halo moves each tile's edges but not how many tiles there are.
+        let frame_tiles = tiles(1920, 1080, loaded.tile, 0);
+        assert_eq!(loaded.layers.len(), R8F64_BODY_LAYERS * frame_tiles.len());
         for layer in &loaded.layers {
             assert!(layer.fused, "{layer:?}");
 

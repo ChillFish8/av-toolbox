@@ -17,6 +17,8 @@ use av_toolbox_cubek::artcnn::{
     body_layer_with_blueprint,
     convolve_with_blueprint,
     direct_variants,
+    offered_candidates,
+    offered_plane_width,
     offers_cmma_16,
     run_candidate,
     run_tuned,
@@ -440,23 +442,82 @@ impl BuildTask for Offered {
     }
 }
 
+/// Whether the test device can run the direct and Winograd variants, having the f16 cooperative matrix and a
+/// widest subgroup they are offered at.
+struct Eligible;
+
+impl BuildTask for Eligible {
+    type Output = bool;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let plane_width = offered_plane_width(client.properties());
+
+        offers_cmma_16(client) && plane_width.is_some()
+    }
+}
+
+pub(super) fn offers_variants() -> bool {
+    backend().build(Eligible)
+}
+
+/// The direct variants the test device offers for maps `features` wide, asserted to be some wherever the
+/// device can run them.
 pub(super) fn offered_variants(features: u32) -> Vec<DirectVariant> {
     let task = Offered { features };
 
     let variants = backend().build(task);
     println!("offered at width {features}: {variants:?}");
 
+    if offers_variants() {
+        assert!(
+            !variants.is_empty(),
+            "no direct variant is offered at width {features}"
+        );
+    }
+
     variants
 }
 
-/// Runs every direct variant the device offers for maps `features` wide against the separate passes, on a
-/// large region, odd sizes and a region smaller than every block, with each epilogue.
+/// The candidates the test device offers a network of no model for maps `features` wide.
+struct OfferedCandidates {
+    features: u32,
+}
+
+impl BuildTask for OfferedCandidates {
+    type Output = Vec<Candidate>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let properties = build.client().properties();
+
+        offered_candidates(properties, self.features, None)
+    }
+}
+
+/// The candidates the test device offers a network of no model for maps `features` wide, asserted to hold a
+/// direct variant wherever the device can run them.
+fn offered_without_model(features: u32) -> Vec<Candidate> {
+    let task = OfferedCandidates { features };
+
+    let candidates = backend().build(task);
+    println!("candidates at width {features}: {candidates:?}");
+
+    let holds_direct = candidates
+        .iter()
+        .any(|candidate| matches!(candidate, Candidate::Direct(_)));
+    if offers_variants() {
+        assert!(holds_direct, "no direct variant is offered at width {features}");
+    }
+
+    candidates
+}
+
+/// Runs every candidate the device offers a network of no model for maps `features` wide against the
+/// separate passes, on a large region, odd sizes and a region smaller than every block, with each epilogue.
 fn assert_every_offered_variant_matches_separate(features: u32) {
-    let variants = offered_variants(features);
+    let candidates = offered_without_model(features);
 
-    for variant in variants {
-        let candidate = Candidate::Direct(variant);
-
+    for candidate in candidates {
         for (width, height) in [(200, 120), (13, 11), (31, 7), (5, 3)] {
             for epilogue in EPILOGUES {
                 assert_matches_separate(candidate, features, width, height, epilogue);
@@ -478,10 +539,9 @@ fn every_offered_variant_matches_the_separate_passes_at_width_96() {
 #[test]
 fn r8f64_on_every_offered_variant_matches_the_reference() {
     let plane = textured(24, 20);
-    let variants = offered_variants(64);
+    let candidates = offered_without_model(64);
 
-    for variant in variants {
-        let candidate = Candidate::Direct(variant);
+    for candidate in candidates {
         let name = format!("{} R8F64 24x20", candidate.name());
 
         let Some((actual, error)) = candidate_network_error(&name, candidate, &plane, 24, 20) else {
