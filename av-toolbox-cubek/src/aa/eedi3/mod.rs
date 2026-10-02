@@ -411,6 +411,25 @@ impl<'a> FieldPass<'a> {
     }
 }
 
+/// Which reliability check a field pass ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eedi3Check {
+    /// One launch walked every row, holding the previous row in shared memory.
+    Persistent,
+    /// Each row was its own launch, for a plane wider than the shared memory holds.
+    PerRow,
+    /// `vcheck` was 0, so nothing was checked.
+    Skipped,
+}
+
+/// The widest plane the persistent check runs on, an eighth of the device's shared memory in samples.
+pub fn eedi3_check_capacity<R: Runtime>(client: &ComputeClient<R>) -> u32 {
+    let shared_bytes = client.properties().hardware.max_shared_memory_size;
+    let samples = shared_bytes / (2 * size_of::<f32>());
+
+    u32::try_from(samples).unwrap_or(u32::MAX)
+}
+
 /// One EEDI3 field pass, keeping the rows of parity `offset` and rebuilding the others into `output`.
 ///
 /// The planes hold integer code values and must be distinct buffers of the same size, at least 4 by 4
@@ -430,20 +449,64 @@ pub fn eedi3_field<R: Runtime>(
     offset: u32,
     settings: &Eedi3Settings,
     clips: Eedi3DeviceClips<'_>,
-) {
+) -> Eedi3Check {
+    let pass = FieldPass::new(input, output, scratch, offset, settings, clips);
+    let capacity = eedi3_check_capacity(client);
+
+    run_field(client, dispatch, &pass, capacity)
+}
+
+/// The same as [eedi3_field](crate::aa::eedi3_field), with the persistent check running only on planes
+/// at most `capacity` wide.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the pass"
+)]
+pub fn eedi3_field_with_check_capacity<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    input: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+    scratch: Eedi3Scratch<'_>,
+    offset: u32,
+    settings: &Eedi3Settings,
+    clips: Eedi3DeviceClips<'_>,
+    capacity: u32,
+) -> Eedi3Check {
     let pass = FieldPass::new(input, output, scratch, offset, settings, clips);
 
+    run_field(client, dispatch, &pass, capacity)
+}
+
+/// Runs every step of `pass`, checking it in one launch when it is at most `capacity` wide.
+fn run_field<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    pass: &FieldPass<'_>,
+    capacity: u32,
+) -> Eedi3Check {
     if pass.mclip.is_some() {
-        mask::mark_active_edges(client, &pass);
-        mask::find_lenders(client, &pass);
+        mask::mark_active_edges(client, pass);
+        mask::find_lenders(client, pass);
     }
 
-    path::search_paths(client, &pass);
-    interpolate::backtrack(client, &pass);
-    interpolate::interpolate(client, dispatch, &pass);
-    check::assemble(client, dispatch, &pass);
+    path::search_paths(client, pass);
+    interpolate::backtrack(client, pass);
+    interpolate::interpolate(client, dispatch, pass);
 
-    if settings.vcheck > 0 {
-        check::reliability_check(client, dispatch, &pass);
+    if pass.settings.vcheck == 0 {
+        check::assemble(client, dispatch, pass);
+        return Eedi3Check::Skipped;
     }
+
+    if pass.width <= capacity {
+        check::persistent_check(client, pass, capacity);
+        return Eedi3Check::Persistent;
+    }
+
+    check::assemble(client, dispatch, pass);
+    check::reliability_check(client, dispatch, pass);
+
+    Eedi3Check::PerRow
 }

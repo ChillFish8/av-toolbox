@@ -1,13 +1,16 @@
 mod backtrack;
 mod bands;
+mod check;
 mod exact;
 
 use av_toolbox_cubek::aa::{
     Eedi3Arguments,
+    Eedi3Check,
     Eedi3DeviceClips,
     Eedi3Scratch,
     Eedi3Settings,
     eedi3_field,
+    eedi3_field_with_check_capacity,
     eedi3_scratch,
 };
 use av_toolbox_cubek::testing::{
@@ -123,10 +126,12 @@ impl PlaneCase {
     }
 }
 
-/// One field pass the device computed, its output and its direction map at the input's size.
+/// One field pass the device computed, its output and its direction map at the input's size, with the
+/// reliability check it ran.
 struct DevicePass {
     output: Vec<f32>,
     directions: Vec<i32>,
+    check: Eedi3Check,
 }
 
 /// Spreads the direction map of the rebuilt rows over the plane, with 0 on the kept rows.
@@ -147,6 +152,8 @@ fn spread_directions(rebuilt: &[u32], width: u32, height: u32, offset: u32) -> V
 }
 
 /// Both field passes of one plane on the device, sharing one scratch.
+///
+/// With a `capacity`, the persistent check runs only on planes at most that wide.
 struct FieldPasses {
     input: Vec<f32>,
     width: u32,
@@ -154,6 +161,7 @@ struct FieldPasses {
     settings: Eedi3Settings,
     sclip: Option<Vec<f32>>,
     mclip: Option<Vec<f32>>,
+    capacity: Option<u32>,
 }
 
 impl BuildTask for FieldPasses {
@@ -195,16 +203,29 @@ impl BuildTask for FieldPasses {
                     .map(|handle| plane(handle, self.width, self.height)),
             };
 
-            eedi3_field(
-                client,
-                &sizing,
-                input_plane,
-                output_plane,
-                scratch,
-                offset,
-                &self.settings,
-                clips,
-            );
+            let check = match self.capacity {
+                Some(capacity) => eedi3_field_with_check_capacity(
+                    client,
+                    &sizing,
+                    input_plane,
+                    output_plane,
+                    scratch,
+                    offset,
+                    &self.settings,
+                    clips,
+                    capacity,
+                ),
+                None => eedi3_field(
+                    client,
+                    &sizing,
+                    input_plane,
+                    output_plane,
+                    scratch,
+                    offset,
+                    &self.settings,
+                    clips,
+                ),
+            };
 
             cubecl::future::block_on(client.sync()).expect("the device should finish");
 
@@ -214,6 +235,7 @@ impl BuildTask for FieldPasses {
             passes.push(DevicePass {
                 output: output_values,
                 directions: spread,
+                check,
             });
         }
 
@@ -222,6 +244,12 @@ impl BuildTask for FieldPasses {
 }
 
 fn on_device(case: &PlaneCase) -> Vec<DevicePass> {
+    on_device_with_capacity(case, None)
+}
+
+/// Both field passes of `case` on the device, the persistent check running only on planes at most
+/// `capacity` wide when there is one.
+fn on_device_with_capacity(case: &PlaneCase, capacity: Option<u32>) -> Vec<DevicePass> {
     let task = FieldPasses {
         input: case.input.clone(),
         width: case.width,
@@ -229,6 +257,7 @@ fn on_device(case: &PlaneCase) -> Vec<DevicePass> {
         settings: settings_for(&case.parameters),
         sclip: case.sclip.clone(),
         mclip: case.mclip.clone(),
+        capacity,
     };
 
     backend().build(task)

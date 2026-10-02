@@ -155,11 +155,70 @@ fn fallback_value(
     }
 }
 
+/// The value the reliability check gives the sample at `column` of rebuilt row `field_row`.
+///
+/// The sample keeps its interpolation, blended towards the fallback where it looks unreliable, only when
+/// its direction agrees with the rebuilt rows two above and two below. Otherwise it takes the fallback.
+/// `checked` holds the row two above after its check, starting at `checked_start`, and is read only for a
+/// blended sample. Without `sclip`, the input stands in for it and is never read as one.
+#[cube]
+fn checked_sample<L: List<f32>>(
+    input: &Array<f32>,
+    rebuilt: &Array<f32>,
+    directions: &Array<i32>,
+    sclip: &Array<f32>,
+    checked: &L,
+    checked_start: u32,
+    column: u32,
+    field_row: u32,
+    width: u32,
+    height: u32,
+    first_rebuilt: u32,
+    peak: u32,
+    vcheck: u32,
+    weights: &CheckWeights,
+    #[comptime] has_sclip: bool,
+) -> i32 {
+    let row = plane_row(field_row, first_rebuilt);
+    let here_start = field_row * width;
+    let above_start = here_start - width;
+    let below_start = here_start + width;
+    let kept_above_start = (row - 1) * width;
+    let kept_below_start = (row + 1) * width;
+
+    let fallback = fallback_value(input, sclip, row, column, width, height, peak, has_sclip);
+
+    let direction = directions[(here_start + column) as usize];
+    let direction_above = directions[(above_start + column) as usize];
+    let direction_below = directions[(below_start + column) as usize];
+    let opposed = i32::max(direction * direction_above, direction * direction_below) < 0;
+    let neither = direction_above == 0 && direction_below == 0;
+
+    let mut value = fallback;
+    if direction != 0 && !opposed && !neither {
+        let ahead = shifted(column, direction, width);
+        let behind = shifted(column, -direction, width);
+        let reads = CheckReads {
+            here: rebuilt[(here_start + column) as usize] as i32,
+            here_ahead: rebuilt[(here_start + ahead) as usize] as i32,
+            here_behind: rebuilt[(here_start + behind) as usize] as i32,
+            checked_above: checked.read((checked_start + ahead) as usize) as i32,
+            unchecked_below: rebuilt[(below_start + behind) as usize] as i32,
+            kept_above: input[(kept_above_start + column) as usize] as i32,
+            kept_below: input[(kept_below_start + column) as usize] as i32,
+            kept_above_ahead: input[(kept_above_start + ahead) as usize] as i32,
+            kept_below_behind: input[(kept_below_start + behind) as usize] as i32,
+        };
+        value = blend_check(&reads, fallback, direction, vcheck, weights);
+    }
+
+    value
+}
+
 /// The reliability check of one rebuilt row, one unit per column.
 ///
 /// It reads the row two above from `output`, where it has already been checked, and itself and the row
-/// two below from `rebuilt`, before their checks. Without `sclip`, the input stands in for it and is never
-/// read as one.
+/// two below from `rebuilt`, before their checks.
 #[cube(launch_unchecked)]
 fn check_kernel(
     input: &Array<f32>,
@@ -185,46 +244,154 @@ fn check_kernel(
     }
 
     let row = plane_row(field_row, first_rebuilt);
-    let here_start = field_row * width;
-    let above_start = here_start - width;
-    let below_start = here_start + width;
-    let kept_above_start = (row - 1) * width;
-    let kept_below_start = (row + 1) * width;
+    let checked_start = (row - 2) * width;
+    let weights = CheckWeights {
+        reciprocal0,
+        reciprocal1,
+        reciprocal2,
+        vthresh2,
+    };
 
-    let fallback = fallback_value(input, sclip, row, column, width, height, peak, has_sclip);
-
-    let direction = directions[(here_start + column) as usize];
-    let direction_above = directions[(above_start + column) as usize];
-    let direction_below = directions[(below_start + column) as usize];
-    let opposed = i32::max(direction * direction_above, direction * direction_below) < 0;
-    let neither = direction_above == 0 && direction_below == 0;
-
-    let mut value = fallback;
-    if direction != 0 && !opposed && !neither {
-        let ahead = shifted(column, direction, width);
-        let behind = shifted(column, -direction, width);
-        let checked_row = (row - 2) * width;
-        let reads = CheckReads {
-            here: rebuilt[(here_start + column) as usize] as i32,
-            here_ahead: rebuilt[(here_start + ahead) as usize] as i32,
-            here_behind: rebuilt[(here_start + behind) as usize] as i32,
-            checked_above: output[(checked_row + ahead) as usize] as i32,
-            unchecked_below: rebuilt[(below_start + behind) as usize] as i32,
-            kept_above: input[(kept_above_start + column) as usize] as i32,
-            kept_below: input[(kept_below_start + column) as usize] as i32,
-            kept_above_ahead: input[(kept_above_start + ahead) as usize] as i32,
-            kept_below_behind: input[(kept_below_start + behind) as usize] as i32,
-        };
-        let weights = CheckWeights {
-            reciprocal0,
-            reciprocal1,
-            reciprocal2,
-            vthresh2,
-        };
-        value = blend_check(&reads, fallback, direction, vcheck, &weights);
-    }
+    let value = checked_sample::<Array<f32>>(
+        input,
+        rebuilt,
+        directions,
+        sclip,
+        output,
+        checked_start,
+        column,
+        field_row,
+        width,
+        height,
+        first_rebuilt,
+        peak,
+        vcheck,
+        &weights,
+        has_sclip,
+    );
 
     output[(row * width + column) as usize] = value as f32;
+}
+
+/// The reliability check of a whole field pass by one cube, which also assembles the output.
+///
+/// The cube walks the rebuilt rows top to bottom. Each rebuilt row's values go to `written`, a double buffer
+/// of two `capacity` long halves, which the next rebuilt row reads as the row two above. One barrier per row
+/// orders every read after its write. Each unit writes its own columns of the kept row and the rebuilt row,
+/// checked where the row has a rebuilt row two above and two below.
+#[cube]
+fn check_parity(
+    input: &Array<f32>,
+    rebuilt: &Array<f32>,
+    directions: &Array<i32>,
+    sclip: &Array<f32>,
+    output: &mut Array<f32>,
+    written: &mut SharedMemory<f32>,
+    width: u32,
+    height: u32,
+    rows: u32,
+    offset: u32,
+    first_rebuilt: u32,
+    peak: u32,
+    vcheck: u32,
+    weights: &CheckWeights,
+    #[comptime] capacity: u32,
+    #[comptime] has_sclip: bool,
+) {
+    for field_row in 0..rows {
+        let kept_start = (2 * field_row + offset) * width;
+        let row = plane_row(field_row, first_rebuilt);
+        let rebuilt_start = row * width;
+        let here_start = field_row * width;
+        let here_half = (field_row % 2) * capacity;
+        let above_half = capacity - here_half;
+        let is_checked = row >= 2 && row + 3 <= height;
+
+        let mut column = UNIT_POS_X;
+        while column < width {
+            let kept_index = (kept_start + column) as usize;
+            output[kept_index] = input[kept_index];
+
+            let value = if is_checked {
+                let checked_value = checked_sample::<SharedMemory<f32>>(
+                    input,
+                    rebuilt,
+                    directions,
+                    sclip,
+                    written,
+                    above_half,
+                    column,
+                    field_row,
+                    width,
+                    height,
+                    first_rebuilt,
+                    peak,
+                    vcheck,
+                    weights,
+                    has_sclip,
+                );
+                checked_value as f32
+            } else {
+                rebuilt[(here_start + column) as usize]
+            };
+
+            written[(here_half + column) as usize] = value;
+            output[(rebuilt_start + column) as usize] = value;
+            column += CUBE_DIM_X;
+        }
+
+        sync_cube();
+    }
+}
+
+/// The reliability check of one field pass in a single cube, which also assembles the output.
+#[cube(launch_unchecked)]
+fn persistent_check_kernel(
+    input: &Array<f32>,
+    rebuilt: &Array<f32>,
+    directions: &Array<i32>,
+    sclip: &Array<f32>,
+    output: &mut Array<f32>,
+    width: u32,
+    height: u32,
+    rows: u32,
+    offset: u32,
+    first_rebuilt: u32,
+    peak: u32,
+    vcheck: u32,
+    reciprocal0: f32,
+    reciprocal1: f32,
+    reciprocal2: f32,
+    vthresh2: f32,
+    #[comptime] capacity: u32,
+    #[comptime] has_sclip: bool,
+) {
+    let mut written = SharedMemory::<f32>::new(comptime!((2 * capacity) as usize));
+    let weights = CheckWeights {
+        reciprocal0,
+        reciprocal1,
+        reciprocal2,
+        vthresh2,
+    };
+
+    check_parity(
+        input,
+        rebuilt,
+        directions,
+        sclip,
+        output,
+        &mut written,
+        width,
+        height,
+        rows,
+        offset,
+        first_rebuilt,
+        peak,
+        vcheck,
+        &weights,
+        capacity,
+        has_sclip,
+    );
 }
 
 /// Launches the assembly of the output from the kept rows and the rebuilt rows.
@@ -254,6 +421,66 @@ pub(super) fn assemble<R: Runtime>(
             output,
             pass.width,
             pass.offset,
+        );
+    }
+}
+
+/// The most units the persistent check gives its one cube.
+const PERSISTENT_UNITS: u32 = 1024;
+
+/// Launches the reliability check of a whole field pass as one cube, which also assembles the output.
+///
+/// `capacity` is the widest row the cube's shared memory holds, and must be at least the pass's width.
+pub(super) fn persistent_check<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>, capacity: u32) {
+    assert!(
+        pass.width <= capacity,
+        "the persistent check holds rows of up to {capacity} samples, not {}",
+        pass.width
+    );
+
+    let hardware = &client.properties().hardware;
+    let most_units = hardware.max_units_per_cube.min(hardware.max_cube_dim.0);
+    let units = PERSISTENT_UNITS.min(most_units);
+    let unit = CubeDim::new_1d(units);
+    let weights = pass.settings.weights;
+    let has_sclip = pass.sclip.is_some();
+    let sclip = pass.sclip.unwrap_or(pass.input);
+
+    // Safety: the input, output and `sclip` hold `width * height` f32 values, and `rebuilt` and
+    // `directions` a value per rebuilt sample, as `FieldPass::new` checked. The launch is one cube, whose
+    // units each write only their own columns of each row, so every output sample has one writer. Each
+    // checked row has a rebuilt row either side and clamps every column it reads into the row. The shared
+    // indices stay below `2 * capacity` because the width is at most `capacity`. Every unit reaches every
+    // `sync_cube`, because the row loop is uniform and nothing exits early.
+    unsafe {
+        let input = pass.input.array::<R>();
+        let rebuilt = pass.rebuilt_array::<R>();
+        let directions = pass.directions_array::<R>();
+        let sclip = sclip.array::<R>();
+        let output = pass.output.array::<R>();
+
+        persistent_check_kernel::launch_unchecked::<R>(
+            client,
+            CubeCount::Static(1, 1, 1),
+            unit,
+            input,
+            rebuilt,
+            directions,
+            sclip,
+            output,
+            pass.width,
+            pass.height,
+            pass.rows,
+            pass.offset,
+            pass.first_rebuilt,
+            pass.settings.peak,
+            pass.settings.vcheck,
+            weights.reciprocal0,
+            weights.reciprocal1,
+            weights.reciprocal2,
+            weights.vthresh2,
+            capacity,
+            has_sclip,
         );
     }
 }
