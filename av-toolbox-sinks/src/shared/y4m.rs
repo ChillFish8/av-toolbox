@@ -98,12 +98,12 @@ pub(crate) fn colourspace_of(format: &FrameFormat) -> Result<&'static str, Stage
         )
     );
 
-    if is_yuv420_eight_bit && chroma_location == ChromaLocation::Center {
-        return Ok("420jpeg");
-    }
-
     if is_yuv420_eight_bit && chroma_location == ChromaLocation::TopLeft {
         return Ok("420paldv");
+    }
+
+    if is_yuv420_eight_bit && chroma_location == ChromaLocation::Left {
+        return Ok("420mpeg2");
     }
 
     let name = match (format.layout, bits) {
@@ -312,9 +312,9 @@ mod tests {
         let mut bottom = yuv420(4, 2, SampleFormat::U8, None);
         bottom.colour.chroma_location = ChromaLocation::Bottom;
 
-        assert_eq!(colourspace_of(&center).expect("writable"), "420jpeg");
+        assert_eq!(colourspace_of(&center).expect("writable"), "420");
         assert_eq!(colourspace_of(&top_left).expect("writable"), "420paldv");
-        assert_eq!(colourspace_of(&left).expect("writable"), "420");
+        assert_eq!(colourspace_of(&left).expect("writable"), "420mpeg2");
         assert_eq!(colourspace_of(&bottom).expect("writable"), "420");
     }
 

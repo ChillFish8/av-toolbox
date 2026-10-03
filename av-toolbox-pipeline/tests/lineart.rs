@@ -28,14 +28,14 @@ const SECOND_OVERLAY: Colour = Colour {
     chroma: Chroma { u: 90, v: 170 },
 };
 
-const STROKE: Range<usize> = 30..34;
+const STROKE: Range<usize> = 29..35;
 
 const STROKE_COLUMN: usize = 31;
 
 const BACKGROUND_COLUMN: usize = 5;
 
-/// The 4:2:0 chroma column sited on luma column 32, whose bilinear taps on luma columns `31..=33`
-/// all fall inside the stroke.
+/// The 4:2:0 chroma column sited between luma columns 32 and 33, whose taps all fall inside the
+/// stroke.
 const STROKE_CHROMA_COLUMN: usize = 16;
 
 /// The 4:2:0 chroma column sited on luma column 4, whose taps all fall well clear of the stroke.
@@ -307,7 +307,7 @@ args.path = "{second_output_path}"
 
     let expected = MaskChroma {
         subsampling: Subsampling::Yuv420,
-        location: ChromaLocation::Left,
+        location: ChromaLocation::Center,
     };
 
     assert_eq!(chroma_carriers, [("lines", expected)]);

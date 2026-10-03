@@ -168,6 +168,12 @@ fn profile_passes(
         sync: setup.backend.device_sync(),
         warmup: profile.warmup,
     };
+    let measuring = format!(
+        "measuring every stage over {} + {} frames (pass 1 of 3)",
+        profile.warmup, profile.frames
+    );
+    diagnostics::progress_line(stderr, &measuring);
+
     let measure_settings = pass_settings(profile, warmup_items, Some(profiling));
     let undeclared = specs::undeclared(written);
     let measure_end = run_pass(setup, &undeclared, measure_settings, Warnings::Show, stderr);
@@ -180,10 +186,12 @@ fn profile_passes(
     mark_declared(&mut tuned, written);
 
     let plain_settings = pass_settings(profile, warmup_items, None);
+    diagnostics::progress_line(stderr, "running the pipeline as written (pass 2 of 3)");
     let baseline_end = run_pass(setup, written, plain_settings.clone(), Warnings::Hide, stderr);
     let baseline = finished(baseline_end, setup.interrupt)?;
     let baseline_fps = frame_rate(&baseline.report, warmup_items, sink_inputs);
 
+    diagnostics::progress_line(stderr, "running the suggested widths (pass 3 of 3)");
     let confirmed = confirm(setup, written, &mut tuned, &plain_settings, stderr)?;
     let tuned_fps = frame_rate(&confirmed.report, warmup_items, sink_inputs);
 

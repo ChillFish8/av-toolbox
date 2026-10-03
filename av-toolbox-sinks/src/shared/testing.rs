@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use av_toolbox_core::{Inputs, Sink};
 use av_toolbox_gpu::{
+    ChromaLocation,
     ColourInfo,
     FrameFormat,
     FrameLayout,
@@ -49,7 +50,10 @@ pub(crate) fn yuv420(width: u32, height: u32, sample: SampleFormat, rate: Option
             subsampling: Subsampling::Yuv420,
         },
         sample,
-        colour: ColourInfo::default(),
+        colour: ColourInfo {
+            chroma_location: ChromaLocation::Center,
+            ..ColourInfo::default()
+        },
         frame_rate: rate,
     }
 }

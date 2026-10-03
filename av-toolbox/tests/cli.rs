@@ -729,6 +729,8 @@ inputs = ["resize"]
         let stdout = text(&profiled.stdout);
 
         assert!(profiled.status.success(), "{stderr}");
+        assert!(stderr.contains("pass 1 of 3"), "{stderr}");
+        assert!(stderr.contains("pass 3 of 3"), "{stderr}");
         assert!(stdout.contains("filter.resize"), "{stdout}");
         assert!(
             stdout.contains("sinks replaced by null/discard: sink.output"),

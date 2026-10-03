@@ -197,9 +197,11 @@ fn range_of(raw_params: &[u8]) -> ColourRange {
 }
 
 /// The chroma location the colourspace implies.
+///
+/// A bare `C420` is centre-sited, the same as `C420jpeg`.
 fn chroma_location_of(colorspace: Colorspace) -> ChromaLocation {
     match colorspace {
-        Colorspace::C420jpeg => ChromaLocation::Center,
+        Colorspace::C420 | Colorspace::C420jpeg => ChromaLocation::Center,
         Colorspace::C420paldv => ChromaLocation::TopLeft,
         _ => ChromaLocation::Left,
     }
@@ -442,7 +444,7 @@ mod tests {
 
         assert_eq!(jpeg.format().colour.chroma_location, ChromaLocation::Center);
         assert_eq!(paldv.format().colour.chroma_location, ChromaLocation::TopLeft);
-        assert_eq!(plain.format().colour.chroma_location, ChromaLocation::Left);
+        assert_eq!(plain.format().colour.chroma_location, ChromaLocation::Center);
         assert_eq!(mpeg2.format().colour.chroma_location, ChromaLocation::Left);
     }
 

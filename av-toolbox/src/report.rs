@@ -25,6 +25,12 @@ pub(crate) fn warning_line(writer: &mut dyn WriteColor, message: &str) {
     let _ = write_line(writer, "warning", Color::Yellow, message);
 }
 
+/// Prints `<message>` with no level, for saying what is happening.
+pub(crate) fn progress_line(writer: &mut dyn WriteColor, message: &str) {
+    // Nothing is left to report a failed write to stderr to.
+    let _ = writeln!(writer, "{message}");
+}
+
 fn write_line(writer: &mut dyn WriteColor, level: &str, colour: Color, message: &str) -> std::io::Result<()> {
     let mut spec = ColorSpec::new();
     spec.set_fg(Some(colour)).set_bold(true);

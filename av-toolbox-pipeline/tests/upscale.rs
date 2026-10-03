@@ -428,9 +428,13 @@ fn subsampled_chroma_follows_catrom_at_its_left_siting() {
     let u_plane: Vec<u16> = (0..chroma_height)
         .flat_map(|row| (0..chroma_width).map(move |column| small_chroma_gradient(column, row)))
         .collect();
-    let clip = Clip { u_plane, ..base };
+    let clip = Clip {
+        u_plane,
+        colorspace: y4m::Colorspace::C420mpeg2,
+        ..base
+    };
 
-    // Plain C420 is left sited. Across, chroma sits on luma sample 0, so output sample `i` reads
+    // C420mpeg2 is left sited. Across, chroma sits on luma sample 0, so output sample `i` reads
     // `0.5 * i - 0.125`. Down, it sits halfway between two luma rows, so it reads `0.5 * i - 0.25`.
     let across = taps(24, 0.5, -0.125, &CATROM);
     let down = taps(18, 0.5, -0.25, &CATROM);
@@ -439,7 +443,7 @@ fn subsampled_chroma_follows_catrom_at_its_left_siting() {
 
     let decoded = upscale(&clip, "f16");
 
-    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420mpeg2));
     assert_eq!((decoded.width, decoded.height), (48, 36));
 
     for (index, frame) in decoded.frames.iter().enumerate() {
