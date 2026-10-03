@@ -7,6 +7,7 @@ use crate::engine::tests::harness::{
     clear_recorded,
     node_id,
     planned_graph,
+    planned_width,
     recorded,
     run_result_with_watchdog,
     run_with_watchdog,
@@ -135,4 +136,27 @@ fn a_source_share_makes_room_for_held_frames() {
     let with = default_source_share(&graph, &solved, regions, &some_held);
 
     assert_eq!(with - without, 20 * format().total_bytes());
+}
+
+#[test]
+fn a_source_share_counts_held_frames_once_per_worker() {
+    let specs = vec![
+        source_spec("input", &[0, 0], 0),
+        filter_spec("pass", "input", Some(4)),
+        sink_spec("out", "pass"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+    let plan = graph.execution_plan().expect("a planned graph");
+    let regions = plan.regions();
+    let none_held = vec![0; graph.len()];
+    let mut some_held = none_held.clone();
+    let pass = node_id(&graph, "pass");
+    some_held[pass.index()] = 20;
+
+    assert_eq!(planned_width(&graph, "pass"), 4);
+
+    let without = default_source_share(&graph, &solved, regions, &none_held);
+    let with = default_source_share(&graph, &solved, regions, &some_held);
+
+    assert_eq!(with - without, 20 * 4 * format().total_bytes());
 }
