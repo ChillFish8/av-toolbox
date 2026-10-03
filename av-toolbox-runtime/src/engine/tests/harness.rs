@@ -22,6 +22,8 @@ use av_toolbox_graph::{
     solve,
 };
 
+use crate::engine::tests::fixtures::delay::{Delay, DelayArgs, DelayInstance};
+use crate::engine::tests::fixtures::double::{Double, DoubleInstance};
 use crate::engine::tests::fixtures::failing::{
     Failing,
     FailingArgs,
@@ -93,6 +95,8 @@ fn registry() -> PipelineRegistry {
     registry.register_filter::<HostPass>().expect("should register");
     registry.register_filter::<Allocating>().expect("should register");
     registry.register_filter::<Flushing>().expect("should register");
+    registry.register_filter::<Delay>().expect("should register");
+    registry.register_filter::<Double>().expect("should register");
     registry.register_mask::<Masking>().expect("should register");
     registry
         .register_transform::<Multiplying>()
@@ -153,6 +157,11 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
         "test/host-pass" => StageBox::HostFilter(Box::new(HostPassInstance::new())),
         "test/allocating" => StageBox::Filter(Box::new(AllocatingInstance::new())),
         "test/flushing" => StageBox::Filter(Box::new(FlushingInstance::new())),
+        "test/delay" => {
+            let args: DelayArgs = serde_json::from_value(node.args().clone()).expect("valid delay args");
+            StageBox::Filter(Box::new(DelayInstance::from_args(args)))
+        },
+        "test/double" => StageBox::Filter(Box::new(DoubleInstance::new())),
         "test/masking" => StageBox::Mask(Box::new(MaskingInstance::new())),
         "test/multiplying" => StageBox::Transform(Box::new(MultiplyingInstance::new())),
         "test/join" => StageBox::Filter(Box::new(JoinInstance::new())),
@@ -232,6 +241,21 @@ pub(crate) fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, setting
     .expect("should build the engine")
 }
 
+/// The frames each node declares it holds, read the way [engine_from] reads them.
+pub(crate) fn declared_held(graph: &CompiledGraph, solved: &SolvedFormats) -> Vec<usize> {
+    graph
+        .held_frames(&registry(), solved)
+        .expect("every fixture prepares")
+}
+
+/// Solves `specs` the way [planned_graph] does, handing back whatever diagnostics it refused with.
+pub(crate) fn solve_result(specs: &[StageSpec]) -> Result<SolvedFormats, Diagnostics> {
+    let registry = registry();
+    let graph = build(&registry, specs).expect("should build").into_graph();
+
+    solve(&graph, &registry, &testing_capabilities())
+}
+
 pub(crate) fn node_id(graph: &CompiledGraph, name: &str) -> NodeId {
     graph
         .nodes()
@@ -255,6 +279,15 @@ pub(crate) fn planned_width(graph: &CompiledGraph, head: &str) -> usize {
     let node = node_id(graph, head);
 
     plan.region(plan.node(node).region()).width()
+}
+
+/// Whether the nodes named `first` and `second` sit in the same region of the plan.
+pub(crate) fn share_a_region(graph: &CompiledGraph, first: &str, second: &str) -> bool {
+    let plan = graph.execution_plan().expect("a planned graph");
+    let first_region = plan.node(node_id(graph, first)).region();
+    let second_region = plan.node(node_id(graph, second)).region();
+
+    first_region == second_region
 }
 
 /// The chunk authority the plan settled on for the region `head` leads.

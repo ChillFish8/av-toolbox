@@ -21,6 +21,8 @@ pub struct Feed {
 /// input slots. `exits` names the nodes whose output leaves the region. `paths` names each stage
 /// node, so what it emits is filed under that name. `chunked` names the nodes given one chunk at a
 /// time, which are restarted whenever their inputs move to a new one.
+/// `frame_routed` marks a region whose frames are each handed back on their own, so a filter returning no
+/// frames in it is an error.
 #[derive(Debug)]
 pub struct RegionEdges {
     feeds: Vec<Vec<Feed>>,

@@ -28,6 +28,13 @@ pub(crate) fn source_spec(name: &str, chunks: &[u64], id: u32) -> StageSpec {
     source
 }
 
+/// A source declaring its frames arrive at `rate`, as numerator and denominator.
+pub(crate) fn rated_source_spec(name: &str, chunks: &[u64], id: u32, rate: [u32; 2]) -> StageSpec {
+    let mut source = spec(StageKind::Source, name, "test/listed");
+    source.args = Spanned::unknown(json!({ "chunks": chunks, "id": id, "frame_rate": rate }));
+    source
+}
+
 pub(crate) fn host_source_spec(name: &str, chunks: &[u64], id: u32) -> StageSpec {
     let mut source = spec(StageKind::Source, name, "test/host-listed");
     source.args = Spanned::unknown(json!({ "chunks": chunks, "id": id }));
@@ -69,6 +76,36 @@ pub(crate) fn flushing_spec(name: &str, input: &str, workers: usize, per_chunk: 
     flushing.args = Spanned::unknown(json!({ "per_chunk": per_chunk }));
     flushing.workers = Some(workers);
     flushing
+}
+
+/// A filter holding `lag[n]` frames through chunk `n`, the last entry repeating.
+pub(crate) fn delay_spec(
+    name: &str,
+    input: &str,
+    lag: &[usize],
+    workers: usize,
+    per_frame: bool,
+) -> StageSpec {
+    let mut delay = spec(StageKind::Filter, name, "test/delay");
+    delay.inputs = vec![positional(input)];
+    delay.args = Spanned::unknown(json!({ "lag": lag, "per_frame": per_frame }));
+    delay.workers = Some(workers);
+    delay
+}
+
+/// The same per frame filter, holding frames without declaring that it does.
+pub(crate) fn undeclared_delay_spec(name: &str, input: &str, lag: &[usize], workers: usize) -> StageSpec {
+    let mut delay = delay_spec(name, input, lag, workers, true);
+    delay.args = Spanned::unknown(json!({ "lag": lag, "per_frame": true, "undeclared": true }));
+    delay
+}
+
+/// A filter emitting two frames for every input.
+pub(crate) fn double_spec(name: &str, input: &str, workers: Option<usize>) -> StageSpec {
+    let mut double = spec(StageKind::Filter, name, "test/double");
+    double.inputs = vec![positional(input)];
+    double.workers = workers;
+    double
 }
 
 /// A filter that allocates its own output rather than passing its input through.

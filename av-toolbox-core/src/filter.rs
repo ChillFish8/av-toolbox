@@ -10,7 +10,7 @@ pub trait Filter<S: Side = DeviceSide>: StageInstance {
     ///
     /// A filter holding a temporal window emits nothing while the window fills. A frame passed
     /// through keeps its input's metadata. A frame the filter creates gets its own index and
-    /// timestamp, and keeps the chunk of the frame it was made from.
+    /// timestamp, and copies the chunk, scene score and attachments of the frame it was made from.
     fn process(&mut self, context: &mut FrameContext, inputs: Inputs<S>)
     -> Result<Vec<S::Frame>, StageError>;
 

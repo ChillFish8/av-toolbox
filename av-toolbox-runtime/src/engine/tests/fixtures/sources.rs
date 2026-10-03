@@ -22,6 +22,7 @@ use av_toolbox_gpu::{
     FrameBudget,
     FrameContext,
     FrameMeta,
+    FrameRate,
     HostFrame,
     HostSide,
     OutputFormats,
@@ -48,6 +49,9 @@ pub(crate) struct ListedArgs {
     /// from one that was not.
     #[serde(default)]
     index_base: u64,
+    /// The frame rate the source declares, as numerator and denominator. Unknown when absent.
+    #[serde(default)]
+    frame_rate: Option<[u32; 2]>,
 }
 
 /// The frame budget limit every `Listed` source instance saw, by its `id`.
@@ -179,8 +183,12 @@ impl SourceDefinition for Listed {
         Ok(args.clone())
     }
 
-    fn produces(_capabilities: &Capabilities, _opened: &Self::Opened) -> Result<OutputFormats, StageError> {
-        let stream_format = StreamFormat::Frames(format());
+    fn produces(_capabilities: &Capabilities, opened: &Self::Opened) -> Result<OutputFormats, StageError> {
+        let mut frame_format = format();
+        frame_format.frame_rate = opened
+            .frame_rate
+            .and_then(|[numerator, denominator]| FrameRate::new(numerator, denominator));
+        let stream_format = StreamFormat::Frames(frame_format);
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&stream_format),
