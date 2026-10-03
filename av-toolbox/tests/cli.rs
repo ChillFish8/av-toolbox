@@ -400,6 +400,30 @@ fn execute_refuses_a_missing_profile() {
 }
 
 #[test]
+fn explain_warns_about_a_profile_naming_no_stage() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let profile_path = directory.path().join("passthrough.profile.toml");
+    let profile = r#"
+pipeline = "passthrough.toml"
+device = "vulkan discrete:1"
+frames = 4
+
+[workers]
+"filter.missing" = 2
+"#;
+    std::fs::write(&profile_path, profile).expect("writes the profile");
+    let pipeline = example("passthrough.toml");
+    let pipeline = pipeline.to_str().expect("utf-8 path");
+    let profile_path = profile_path.to_str().expect("utf-8 path");
+
+    let output = toolbox(&["explain", pipeline, "--structure-only", "--profile", profile_path]);
+    let stderr = text(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("filter.missing"), "{stderr}");
+}
+
+#[test]
 fn profile_refuses_a_live_source() {
     let pipeline = example("passthrough.toml");
     let pipeline = pipeline.to_str().expect("utf-8 path");
@@ -556,6 +580,67 @@ args.path = "{output_path}"
         assert!(output.status.success(), "{stderr}");
         assert!(stdout.contains("output"));
         assert!(!stderr.contains("reads a live stream"));
+    }
+
+    #[test]
+    fn explain_draws_the_widths_a_profile_gives() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let input_path = directory.path().join("input.y4m");
+        let output_path = directory.path().join("output.y4m");
+        let profile_path = directory.path().join("pipeline.profile.toml");
+        let input = y4m_stream();
+        std::fs::write(&input_path, input).expect("writes the input");
+
+        let input_path = input_path.to_str().expect("utf-8 path");
+        let output_path = output_path.to_str().expect("utf-8 path");
+        let content = format!(
+            r#"
+[source.input]
+type = "y4m/pipe"
+args.path = "{input_path}"
+
+[filter.resize]
+type = "resize/bilinear"
+inputs = ["input"]
+args.width = 32
+args.height = 32
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["resize"]
+args.path = "{output_path}"
+"#
+        );
+        let profile = r#"
+pipeline = "pipeline.toml"
+device = "vulkan discrete:1"
+frames = 4
+
+[workers]
+"filter.resize" = 3
+"#;
+        let pipeline_path = directory.path().join("pipeline.toml");
+        std::fs::write(&pipeline_path, content).expect("writes the pipeline");
+        std::fs::write(&profile_path, profile).expect("writes the profile");
+        let pipeline_path = pipeline_path.to_str().expect("utf-8 path");
+        let profile_path = profile_path.to_str().expect("utf-8 path");
+
+        let output = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args([
+                "--color",
+                "never",
+                "explain",
+                pipeline_path,
+                "--profile",
+                profile_path,
+            ])
+            .output()
+            .expect("the binary runs");
+        let stderr = text(&output.stderr);
+        let stdout = text(&output.stdout);
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(stdout.contains("×3"), "{stdout}");
     }
 
     #[test]

@@ -14,9 +14,18 @@ const DEFAULT_HTML_PATH: &str = "plan.html";
 pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
     let mut stderr = report::stderr(args.color);
 
-    let Some(loaded) = load::load(&explain.pipeline, &explain.vars, &mut stderr) else {
+    let Some(mut loaded) = load::load(&explain.pipeline, &explain.vars, &mut stderr) else {
         return ExitCode::FAILURE;
     };
+
+    let mut profile = None;
+    if let Some(path) = &explain.profile {
+        let Some(read) = load::apply_profile(path, &mut loaded, &mut stderr) else {
+            return ExitCode::FAILURE;
+        };
+
+        profile = Some(read);
+    }
 
     let Some(registry) = load::registry(&mut stderr) else {
         return ExitCode::FAILURE;
@@ -39,6 +48,10 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
     let Some(backend) = load::backend(args, &mut stderr) else {
         return ExitCode::FAILURE;
     };
+
+    if let Some(profile) = &profile {
+        load::warn_on_other_device(profile, &backend, args, &mut stderr);
+    }
 
     let Some(compiled) = load::compile(pipeline, &backend, &loaded.files, &mut stderr) else {
         return ExitCode::FAILURE;

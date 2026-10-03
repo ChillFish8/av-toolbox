@@ -203,6 +203,10 @@ pub(crate) struct ExplainArgs {
     /// Draw the stages and their connections without opening a device.
     #[arg(long)]
     pub(crate) structure_only: bool,
+
+    /// Worker counts written by `av-toolbox profile`, for every stage that declares none.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) profile: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]

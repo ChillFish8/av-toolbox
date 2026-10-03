@@ -7,6 +7,7 @@ use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline, PipelineError, 
 use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::cli::Args;
+use crate::profile::file::{self, ProfileFile};
 use crate::report::{self, PipelineFiles};
 
 /// Every built-in stage, or `None` after saying why they could not be registered.
@@ -168,4 +169,73 @@ fn print_error(
     found.extend(warnings);
 
     report::diagnostics(stderr, files, &found);
+}
+
+/// Reads the profile at `path` and applies its worker counts, warning about keys that name no stage.
+pub(crate) fn apply_profile(
+    path: &Path,
+    loaded: &mut Loaded,
+    stderr: &mut dyn WriteColor,
+) -> Option<ProfileFile> {
+    let read = file::read(path);
+    let profile = match read {
+        Ok(profile) => profile,
+        Err(error) => {
+            let message = error.to_string();
+            report::error_line(stderr, &message);
+
+            return None;
+        },
+    };
+
+    let unknown = file::apply(&profile.workers, &mut loaded.specs);
+    for key in unknown {
+        let message = format!("the profile names {key}, which is not a stage of this pipeline");
+        report::warning_line(stderr, &message);
+    }
+
+    Some(profile)
+}
+
+pub(crate) fn warn_on_other_device(
+    profile: &ProfileFile,
+    backend: &Backend,
+    args: &Args,
+    stderr: &mut dyn WriteColor,
+) {
+    let accelerator = backend.accelerator();
+    let opened = file::device_label(accelerator, args.device);
+
+    if let Some(message) = device_mismatch(&profile.device, &opened) {
+        report::warning_line(stderr, &message);
+    }
+}
+
+/// The warning for a profile measured on a different device than the one opened, if they differ.
+fn device_mismatch(profile_device: &str, opened: &str) -> Option<String> {
+    if opened == profile_device {
+        return None;
+    }
+
+    Some(format!(
+        "the profile was measured on {profile_device}, but this run uses {opened}"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_profile_from_the_opened_device_raises_no_warning() {
+        assert_eq!(device_mismatch("vulkan discrete:1", "vulkan discrete:1"), None);
+    }
+
+    #[test]
+    fn a_profile_from_another_device_names_both() {
+        let message = device_mismatch("vulkan discrete:1", "vulkan integrated:0");
+
+        let expected = "the profile was measured on vulkan discrete:1, but this run uses vulkan integrated:0";
+        assert_eq!(message.as_deref(), Some(expected));
+    }
 }

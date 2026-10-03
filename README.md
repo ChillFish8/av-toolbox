@@ -107,6 +107,7 @@ av-toolbox explain examples/scenes.toml
 av-toolbox explain examples/scenes.toml --html
 av-toolbox explain examples/scenes.toml --html --path graph.html
 av-toolbox explain examples/scenes.toml --structure-only
+av-toolbox explain examples/scenes.toml --profile scenes.profile.toml
 ```
 
 ## Profiling a pipeline
