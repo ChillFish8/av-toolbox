@@ -19,6 +19,13 @@ pub enum RunError {
         #[source]
         source: RuntimeError,
     },
+    /// Waiting for a node's device work to finish failed while the run was profiled.
+    #[error("node {node:?} could not wait for its device work to finish: {source}")]
+    Sync {
+        node: NodeId,
+        #[source]
+        source: RuntimeError,
+    },
     /// Items paired as one node's inputs were carrying different frames.
     #[error("node {node:?} was given inputs carrying different frames: {indices:?}")]
     OutOfStepFeeds { node: NodeId, indices: Vec<u64> },
@@ -83,6 +90,7 @@ impl RunError {
         match self {
             Self::Stage { node, .. } => Some(*node),
             Self::Transfer { node, .. } => Some(*node),
+            Self::Sync { node, .. } => Some(*node),
             Self::OutOfStepFeeds { node, .. }
             | Self::UnpairedFeeds { node, .. }
             | Self::HeldInFrameRegion { node } => Some(*node),

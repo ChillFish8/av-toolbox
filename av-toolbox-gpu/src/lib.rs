@@ -99,6 +99,7 @@ pub use self::frame::{
     Transfer,
 };
 pub use self::memory::{
+    BudgetWaits,
     BufferPool,
     ClientAllocator,
     DeviceAllocator,

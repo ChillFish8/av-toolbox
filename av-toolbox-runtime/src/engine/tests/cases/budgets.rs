@@ -69,6 +69,7 @@ fn a_source_waiting_for_room_nothing_will_free_fails_the_run() {
             stall_deadline: Some(Duration::from_millis(100)),
             frame_limit: None,
             warmup: 0,
+            profiling: None,
         },
     );
 

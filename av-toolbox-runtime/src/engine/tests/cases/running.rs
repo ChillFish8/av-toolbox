@@ -251,6 +251,7 @@ fn settings_and_reports_carry_the_derives_a_caller_needs() {
         warnings: Vec::new(),
         wall: Duration::ZERO,
         counted_wall: Duration::ZERO,
+        timings: Vec::new(),
     };
 
     let copied_settings = settings.clone();

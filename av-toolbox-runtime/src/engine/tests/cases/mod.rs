@@ -3,6 +3,7 @@ mod delays;
 mod failures;
 mod flushes;
 mod limits;
+mod profiling;
 mod running;
 mod shapes;
 mod workers;

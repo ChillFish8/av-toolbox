@@ -6,6 +6,7 @@ use av_toolbox_graph::{NodeId, StageBox};
 
 use super::node::{end_node, run_node, start_node};
 use crate::RunError;
+use crate::profile::{Counted, Profiler};
 
 /// One node's output filling one of another node's input slots.
 #[derive(Debug, Clone, Copy)]
@@ -84,6 +85,7 @@ pub struct RegionRunner {
     positions: HashMap<NodeId, usize>,
     queues: Vec<Vec<VecDeque<AnyItem>>>,
     last_chunks: Vec<Option<u64>>,
+    profiler: Option<Arc<Profiler>>,
 }
 
 impl RegionRunner {
@@ -107,7 +109,14 @@ impl RegionRunner {
             positions,
             queues,
             last_chunks,
+            profiler: None,
         }
+    }
+
+    /// The same runner, timing every stage call through `profiler` when there is one.
+    pub(crate) fn profiled(mut self, profiler: Option<Arc<Profiler>>) -> Self {
+        self.profiler = profiler;
+        self
     }
 
     /// Signals the start of a chunk to every node in the region.
@@ -139,6 +148,7 @@ impl RegionRunner {
             frame_routed: self.edges.frame_routed,
             authority: self.edges.authorities.get(&self.nodes[0].0).copied(),
             last: &mut self.last_chunks[0],
+            profiler: self.profiler.as_deref(),
         };
         let mut head_output = step_node(&mut self.nodes[0], &mut head_watch, context, bundle)?;
         stamp(&self.edges.paths, self.nodes[0].0, &mut head_output);
@@ -155,6 +165,7 @@ impl RegionRunner {
                 frame_routed: self.edges.frame_routed,
                 authority: self.edges.authorities.get(&node).copied(),
                 last: &mut self.last_chunks[index],
+                profiler: self.profiler.as_deref(),
             };
             let mut produced = run_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
             stamp(&self.edges.paths, node, &mut produced);
@@ -179,8 +190,9 @@ impl RegionRunner {
     pub fn end(&mut self, context: &mut FrameContext) -> Result<Vec<AnyItem>, RunError> {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
+        let profiler = self.profiler.as_deref();
         let (head_id, head_stage) = &mut self.nodes[0];
-        let mut head_flush = end_node(*head_id, head_stage, context)?;
+        let mut head_flush = call_end(*head_id, head_stage, context, profiler)?;
         stamp(&self.edges.paths, *head_id, &mut head_flush);
         outputs.push(head_flush);
 
@@ -195,6 +207,7 @@ impl RegionRunner {
                 frame_routed: self.edges.frame_routed,
                 authority: self.edges.authorities.get(&node).copied(),
                 last: &mut self.last_chunks[index],
+                profiler: self.profiler.as_deref(),
             };
             let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
             stamp(&self.edges.paths, node, &mut flushed);
@@ -234,6 +247,50 @@ struct NodeWatch<'a> {
     frame_routed: bool,
     authority: Option<usize>,
     last: &'a mut Option<u64>,
+    profiler: Option<&'a Profiler>,
+}
+
+/// Runs one node, timed when the run is profiled.
+fn call_node(
+    id: NodeId,
+    stage: &mut StageBox,
+    context: &mut FrameContext,
+    slots: Vec<Option<AnyItem>>,
+    profiler: Option<&Profiler>,
+) -> Result<Vec<AnyItem>, RunError> {
+    let Some(profiler) = profiler else {
+        return run_node(id, stage, context, slots);
+    };
+
+    let counted = counted_run(stage);
+
+    profiler.time(id, counted, context, |context| {
+        run_node(id, stage, context, slots)
+    })
+}
+
+/// Whether one run of `stage` counts as a frame. A source run that produced nothing does not.
+fn counted_run(stage: &StageBox) -> Counted {
+    match stage {
+        StageBox::Source(_) | StageBox::HostSource(_) => Counted::FrameIfProduced,
+        _ => Counted::Frame,
+    }
+}
+
+/// Ends one node, timed when the run is profiled.
+fn call_end(
+    id: NodeId,
+    stage: &mut StageBox,
+    context: &mut FrameContext,
+    profiler: Option<&Profiler>,
+) -> Result<Vec<AnyItem>, RunError> {
+    let Some(profiler) = profiler else {
+        return end_node(id, stage, context);
+    };
+
+    profiler.time(id, Counted::Never, context, |context| {
+        end_node(id, stage, context)
+    })
 }
 
 /// Runs one node over one bundle of its inputs.
@@ -250,12 +307,12 @@ fn step_node(
 
     if watch.chunked {
         let chunk = chunk_of(&slots, watch.authority);
-        let mut flushed = restart_on_new_chunk(node, watch.last, chunk, context)?;
+        let mut flushed = restart_on_new_chunk(node, watch, chunk, context)?;
         produced.append(&mut flushed);
     }
 
     let (id, stage) = node;
-    let mut result = run_node(*id, stage, context, slots)?;
+    let mut result = call_node(*id, stage, context, slots, watch.profiler)?;
 
     let held_back = watch.frame_routed && is_filter(stage) && result.is_empty();
     if held_back {
@@ -285,7 +342,7 @@ fn chunk_of(slots: &[Option<AnyItem>], authority: Option<usize>) -> Option<u64> 
 /// Ends and starts `node` again when `chunk` differs from the one it last ran on, returning what it flushed.
 fn restart_on_new_chunk(
     node: &mut (NodeId, StageBox),
-    last: &mut Option<u64>,
+    watch: &mut NodeWatch<'_>,
     chunk: Option<u64>,
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
@@ -293,7 +350,7 @@ fn restart_on_new_chunk(
         return Ok(Vec::new());
     };
 
-    let Some(previous) = last.replace(chunk) else {
+    let Some(previous) = watch.last.replace(chunk) else {
         return Ok(Vec::new());
     };
 
@@ -301,7 +358,7 @@ fn restart_on_new_chunk(
         return Ok(Vec::new());
     }
 
-    let restarted = end_and_start(node, context);
+    let restarted = end_and_start(node, context, watch.profiler);
 
     in_chunk(restarted, previous)
 }
@@ -309,9 +366,10 @@ fn restart_on_new_chunk(
 fn end_and_start(
     node: &mut (NodeId, StageBox),
     context: &mut FrameContext,
+    profiler: Option<&Profiler>,
 ) -> Result<Vec<AnyItem>, RunError> {
     let (id, stage) = node;
-    let flushed = end_node(*id, stage, context)?;
+    let flushed = call_end(*id, stage, context, profiler)?;
     start_node(*id, stage, context)?;
 
     Ok(flushed)
@@ -374,6 +432,7 @@ fn end_fed(
     watch: NodeWatch<'_>,
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
+    let profiler = watch.profiler;
     let mut forwarded = run_fed(feeds, queues, node, watch, context)?;
 
     let leftover: Vec<usize> = queues.iter().map(VecDeque::len).collect();
@@ -383,7 +442,7 @@ fn end_fed(
     }
 
     let (id, stage) = node;
-    let flushed = end_node(*id, stage, context)?;
+    let flushed = call_end(*id, stage, context, profiler)?;
 
     forwarded.extend(flushed);
     Ok(forwarded)

@@ -1,4 +1,5 @@
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::fmt;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 /// How long a wait for room lasts before the budget gives up on it.
@@ -15,16 +16,36 @@ pub enum Room {
     Stalled,
 }
 
+/// Called around every wait a budget makes for room.
+pub trait BudgetWaits: Send + Sync {
+    /// Called on the waiting thread just before it starts waiting.
+    fn before_wait(&self);
+
+    /// Called on the same thread once the wait has ended.
+    fn after_wait(&self);
+}
+
 /// How much frame memory a source may have outstanding at once.
 ///
 /// A source waits here before emitting a frame that would take it past its limit, and is woken
 /// when a frame it emitted earlier returns to the pool. Nothing else waits.
-#[derive(Debug)]
 pub struct FrameBudget {
     limit: usize,
     stall_deadline: Duration,
     state: Mutex<BudgetState>,
     room: Condvar,
+    waits: OnceLock<Arc<dyn BudgetWaits>>,
+}
+
+impl fmt::Debug for FrameBudget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FrameBudget")
+            .field("limit", &self.limit)
+            .field("stall_deadline", &self.stall_deadline)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -51,7 +72,13 @@ impl FrameBudget {
                 stalled: None,
             }),
             room: Condvar::new(),
+            waits: OnceLock::new(),
         })
+    }
+
+    /// Calls `waits` around every wait for room from now on. A second call keeps the first hook.
+    pub fn set_waits(&self, waits: Arc<dyn BudgetWaits>) {
+        let _ = self.waits.set(waits);
     }
 
     pub fn outstanding(&self) -> usize {
@@ -74,10 +101,33 @@ impl FrameBudget {
     /// the whole stall deadline without the outstanding total falling is one nothing is going to
     /// end, so the budget records what it was holding, answers [Room::Stalled], and never blocks
     /// again.
+    ///
+    /// When it has to wait, the hook given to [FrameBudget::set_waits] is called either side of
+    /// the wait with the budget unlocked.
     pub fn wait_for_room(&self, bytes: usize) -> Room {
-        let guard = self.lock();
+        let state = self.lock();
+        let has_to_wait = must_wait(&state, bytes, self.limit);
+        let waits = self.waits.get();
+
+        let Some(waits) = waits.filter(|_| has_to_wait) else {
+            return self.wait_locked(state, bytes);
+        };
+
+        drop(state);
+        waits.before_wait();
+
+        let state = self.lock();
+        let room = self.wait_locked(state, bytes);
+
+        waits.after_wait();
+
+        room
+    }
+
+    /// Waits for room while holding `guard`, which is dropped once the answer is known.
+    fn wait_locked(&self, guard: MutexGuard<'_, BudgetState>, bytes: usize) -> Room {
         let waited = self.room.wait_timeout_while(guard, self.stall_deadline, |state| {
-            !state.released && state.stalled.is_none() && !has_room(state, bytes, self.limit)
+            must_wait(state, bytes, self.limit)
         });
         let (mut state, timing) = waited.unwrap_or_else(|error| error.into_inner());
 
@@ -118,6 +168,11 @@ impl FrameBudget {
     }
 }
 
+/// Whether a request for `bytes` has to wait, because the budget is still live and it does not fit.
+fn must_wait(state: &BudgetState, bytes: usize, limit: usize) -> bool {
+    !state.released && state.stalled.is_none() && !has_room(state, bytes, limit)
+}
+
 /// Whether `bytes` more would still fit under `limit`, given `state`.
 ///
 /// Nothing outstanding always has room, even for a request larger than `limit`, or such a
@@ -128,6 +183,7 @@ fn has_room(state: &BudgetState, bytes: usize, limit: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
 
@@ -330,5 +386,59 @@ mod tests {
 
         assert!(matches!(answer, Room::Available));
         assert_eq!(budget.stalled(), None);
+    }
+
+    #[derive(Default)]
+    struct CountingWaits {
+        before: AtomicUsize,
+        after: AtomicUsize,
+    }
+
+    impl BudgetWaits for CountingWaits {
+        fn before_wait(&self) {
+            self.before.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn after_wait(&self) {
+            self.after.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_request_with_room_does_not_call_the_waits_hook() {
+        let budget = FrameBudget::new(1024);
+        let waits = Arc::new(CountingWaits::default());
+        budget.set_waits(waits.clone());
+
+        assert!(has_room_now(&budget, 512));
+        assert_eq!(waits.before.load(Ordering::SeqCst), 0);
+        assert_eq!(waits.after.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_wait_for_room_calls_the_waits_hook_once_either_side() {
+        let budget = FrameBudget::with_stall_deadline(64, Duration::from_secs(10));
+        let waits = Arc::new(CountingWaits::default());
+        budget.set_waits(waits.clone());
+        budget.charge(64);
+
+        let waiting = budget.clone();
+        let (answer_sender, answer_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            answer_sender.send(waiting.wait_for_room(64)).ok();
+        });
+
+        while waits.before.load(Ordering::SeqCst) == 0 {
+            thread::yield_now();
+        }
+        budget.credit(64);
+
+        let answer = answer_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("crediting the budget back should have woken the wait");
+
+        assert!(matches!(answer, Room::Available));
+        assert_eq!(waits.before.load(Ordering::SeqCst), 1);
+        assert_eq!(waits.after.load(Ordering::SeqCst), 1);
     }
 }

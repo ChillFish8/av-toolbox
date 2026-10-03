@@ -397,6 +397,7 @@ fn a_lag_beyond_the_default_headroom_completes() {
         stall_deadline: Some(Duration::from_secs(2)),
         frame_limit: None,
         warmup: 0,
+        profiling: None,
     };
     let engine = build_engine(&specs, settings);
 

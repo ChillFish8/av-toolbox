@@ -57,8 +57,9 @@ use self::spawn::{Outcome, spawn, spawn_exchanged};
 #[cfg(test)]
 pub(crate) use self::worker::run_worker;
 use self::wrap::{SinkTally, wrap_head_source, wrap_sinks};
+use crate::profile::Profiler;
 use crate::worker::RegionRunner;
-use crate::{Aggregate, Cancel, Disperse, RunError, RunWarning};
+use crate::{Aggregate, Cancel, Disperse, NodeTiming, Profiling, RunError, RunWarning};
 
 /// What one run of an [Engine] is allowed to keep in flight.
 #[derive(Debug, Clone, Default)]
@@ -73,6 +74,8 @@ pub struct Settings {
     pub frame_limit: Option<u64>,
     /// How many items reach the sinks before [RunReport::counted_wall] starts counting.
     pub warmup: u64,
+    /// Times every stage call when set.
+    pub profiling: Option<Profiling>,
 }
 
 /// What one run of an [Engine] produced.
@@ -99,6 +102,8 @@ pub struct RunReport {
     ///
     /// Zero when the warmup was never reached, and the whole run when there was none.
     pub counted_wall: Duration,
+    /// Every node's counted calls in node order, empty unless the run was profiled.
+    pub timings: Vec<NodeTiming>,
 }
 
 /// A graph, planned and instantiated into threads ready to run.
@@ -112,6 +117,7 @@ pub struct Engine {
     dropped: Arc<AtomicUsize>,
     warnings: Arc<Mutex<Vec<RunWarning>>>,
     cancel: Arc<Cancel>,
+    profiler: Option<Arc<Profiler>>,
 }
 
 impl Engine {
@@ -186,6 +192,7 @@ impl Engine {
         let dropped = Arc::new(AtomicUsize::new(0));
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let cancel = Arc::new(Cancel::new());
+        let profiler = settings.profiling.clone().map(Profiler::new).map(Arc::new);
 
         let mut built_regions = Vec::with_capacity(regions.len());
         for region in regions {
@@ -265,10 +272,15 @@ impl Engine {
                     let released = budget.clone();
                     cancel.on_stop(move || released.release());
 
+                    if let Some(profiler) = &profiler {
+                        budget.set_waits(profiler.clone());
+                    }
+
                     let context = make_context().with_budget(budget.clone());
                     let exhausted = Arc::new(AtomicBool::new(false));
                     let nodes = wrap_head_source(nodes, exhausted.clone(), settings.frame_limit);
-                    let runner = RegionRunner::new(nodes, build_region_edges(graph, region));
+                    let runner = RegionRunner::new(nodes, build_region_edges(graph, region))
+                        .profiled(profiler.clone());
 
                     prepared.push(PreparedRegion::Source(SourceRegion {
                         runner,
@@ -279,7 +291,8 @@ impl Engine {
                     }));
                 } else {
                     let context = make_context();
-                    let runner = RegionRunner::new(nodes, build_region_edges(graph, region));
+                    let runner = RegionRunner::new(nodes, build_region_edges(graph, region))
+                        .profiled(profiler.clone());
                     let upstream = inbound
                         .remove(&region.id())
                         .expect("a region that reads no input is refused before anything is wired");
@@ -355,7 +368,8 @@ impl Engine {
                     "a region's stages must list its head first"
                 );
                 let nodes = wrap_sinks(nodes, tally.clone());
-                let runner = RegionRunner::new(nodes, build_region_edges(graph, region));
+                let runner =
+                    RegionRunner::new(nodes, build_region_edges(graph, region)).profiled(profiler.clone());
                 let context = make_context();
                 let (result_sender, result_receiver) = mpsc::sync_channel(capacity);
 
@@ -399,6 +413,7 @@ impl Engine {
             dropped,
             warnings,
             cancel,
+            profiler,
         })
     }
 
@@ -430,6 +445,7 @@ impl Engine {
             dropped,
             warnings,
             cancel,
+            profiler,
         } = self;
 
         let started = Instant::now();
@@ -479,6 +495,11 @@ impl Engine {
         let wall = ended.duration_since(started);
         let counted_wall = tally.counted_wall(started, ended);
 
+        let timings = match &profiler {
+            Some(profiler) => profiler.timings(),
+            None => Vec::new(),
+        };
+
         Ok(RunReport {
             frames: tally.frames(),
             cancelled,
@@ -486,6 +507,7 @@ impl Engine {
             warnings,
             wall,
             counted_wall,
+            timings,
         })
     }
 }
