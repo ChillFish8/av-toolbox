@@ -72,6 +72,9 @@ fn explain_writes_html_to_a_path() {
     assert!(output.status.success(), "{stderr}");
     let html = std::fs::read_to_string(&page).expect("the page was written");
     assert!(html.contains("<html"));
+
+    let announced = format!("wrote {}", page.display());
+    assert!(stderr.contains(&announced), "{stderr}");
 }
 
 #[test]
@@ -92,6 +95,7 @@ fn explain_writes_plan_html_in_the_working_directory_by_default() {
     let page = directory.path().join("plan.html");
     let html = std::fs::read_to_string(&page).expect("the page was written");
     assert!(html.contains("<html"));
+    assert!(stderr.contains("wrote plan.html"), "{stderr}");
 }
 
 #[test]

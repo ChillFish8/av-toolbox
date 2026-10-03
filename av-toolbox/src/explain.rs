@@ -91,11 +91,14 @@ fn output(explain: &ExplainArgs, drawn: &str, stderr: &mut dyn WriteColor) -> Ex
     let default_path = Path::new(DEFAULT_HTML_PATH);
     let path = explain.path.as_deref().unwrap_or(default_path);
     let written = fs::write(path, drawn);
+    let display = path.display();
     let Err(error) = written else {
+        let message = format!("wrote {display}");
+        report::progress_line(stderr, &message);
+
         return ExitCode::SUCCESS;
     };
 
-    let display = path.display();
     let message = format!("cannot write {display}: {error}");
     report::error_line(stderr, &message);
 
