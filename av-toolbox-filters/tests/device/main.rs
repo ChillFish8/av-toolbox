@@ -4,6 +4,7 @@ mod aa;
 mod blend;
 mod deband;
 mod dehalo;
+mod deinterlace;
 mod dering;
 mod lineart;
 mod planes;

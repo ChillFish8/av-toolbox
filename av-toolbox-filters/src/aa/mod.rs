@@ -1,5 +1,5 @@
 mod based;
-mod direction;
+pub(crate) mod direction;
 mod eedi2;
 mod eedi3;
 mod sangnom;
