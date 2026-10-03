@@ -297,6 +297,18 @@ fn a_region_carries_its_head_nodes_chunk_authority() {
     assert_eq!(region.chunk_authority(), Some(0));
 }
 
+#[test]
+fn a_node_plan_carries_its_stages_chunk_authority() {
+    let plan = plan_of(&[
+        source("input"),
+        temporal("spatial", "input", 0),
+        sink("out", "spatial"),
+    ]);
+
+    assert_eq!(plan.node(NodeId::new(0)).chunk_authority(), None);
+    assert_eq!(plan.node(NodeId::new(1)).chunk_authority(), Some(0));
+}
+
 /// `test/temporal-merge` declares `[base, overlay]`. Writing them the other way round by
 /// name puts edge order and signature order at odds, so a chunk authority read by edge
 /// position rather than by slot would route by `overlay`'s chunks instead of `base`'s.

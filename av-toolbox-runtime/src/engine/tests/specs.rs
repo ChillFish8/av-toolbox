@@ -93,7 +93,7 @@ pub(crate) fn delay_spec(
     delay
 }
 
-/// The same per frame filter, holding frames without declaring that it does.
+/// A per frame `test/delay` holding frames without declaring that it does.
 pub(crate) fn undeclared_delay_spec(name: &str, input: &str, lag: &[usize], workers: usize) -> StageSpec {
     let mut delay = delay_spec(name, input, lag, workers, true);
     delay.args = Spanned::unknown(json!({ "lag": lag, "per_frame": true, "undeclared": true }));

@@ -141,7 +141,7 @@ fn a_head_restarts_when_the_chunk_in_its_authority_slot_changes() {
     let chunked = HashSet::from([head]);
     let edges = RegionEdges::new(Vec::new(), vec![])
         .with_chunked(chunked)
-        .with_head_authority(Some(1));
+        .with_authorities(HashMap::from([(head, 1)]));
     let mut runner = RegionRunner::new(nodes, edges);
 
     runner.start(&mut context_of(&context)).expect("should start");
@@ -157,4 +157,66 @@ fn a_head_restarts_when_the_chunk_in_its_authority_slot_changes() {
     let started = u64::MAX;
     let expected = vec![started, 0, started, 1, 2];
     assert_eq!(*seen.lock().expect("not poisoned"), expected);
+}
+
+#[test]
+fn a_non_head_node_restarts_when_the_chunk_in_its_authority_slot_changes() {
+    let head = NodeId::new(0);
+    let rechunk = NodeId::new(1);
+    let target = NodeId::new(2);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = StartRecording { seen: seen.clone() };
+    let nodes = vec![
+        (head, StageBox::Filter(Box::new(PassThrough))),
+        (rechunk, StageBox::Filter(Box::new(Rechunking { switch_at: 1 }))),
+        (target, StageBox::Sink(Box::new(sink))),
+    ];
+    let feeds = vec![
+        vec![Feed {
+            producer: head,
+            slot: 0,
+        }],
+        vec![
+            Feed {
+                producer: head,
+                slot: 0,
+            },
+            Feed {
+                producer: rechunk,
+                slot: 1,
+            },
+        ],
+    ];
+    let edges = RegionEdges::new(feeds, vec![])
+        .with_chunked(HashSet::from([target]))
+        .with_authorities(HashMap::from([(target, 1)]));
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    run_all(&mut runner, &[(0, 0), (1, 0), (2, 0)]);
+
+    let started = u64::MAX;
+    let expected = vec![started, 0, started, 1, 2];
+    assert_eq!(*seen.lock().expect("not poisoned"), expected);
+}
+
+#[test]
+fn a_failing_restart_flush_names_the_chunk_it_was_flushing() {
+    let head = NodeId::new(0);
+    let nodes = vec![(head, StageBox::Filter(Box::new(FailingFlush)))];
+    let chunked = HashSet::from([head]);
+    let edges = RegionEdges::new(Vec::new(), vec![head]).with_chunked(chunked);
+    let mut runner = RegionRunner::new(nodes, edges);
+    let context = testing_context();
+
+    runner.start(&mut context_of(&context)).expect("should start");
+
+    let first = vec![Some(item(&context, 0, 0))];
+    runner.run(&mut context_of(&context), first).expect("should run");
+
+    let second = vec![Some(item(&context, 1, 1))];
+    let error = runner
+        .run(&mut context_of(&context), second)
+        .expect_err("the flush should fail");
+
+    assert_eq!(error.chunk(), Some(0));
 }

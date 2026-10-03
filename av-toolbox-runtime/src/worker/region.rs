@@ -20,16 +20,16 @@ pub struct Feed {
 /// [RegionRunner]'s own node list. Each entry lists which producer fills which of that node's
 /// input slots. `exits` names the nodes whose output leaves the region. `paths` names each stage
 /// node, so what it emits is filed under that name. `chunked` names the nodes given one chunk at a
-/// time, which are restarted whenever their inputs move to a new one.
-/// `frame_routed` marks a region whose frames are each handed back on their own, so a filter returning no
-/// frames in it is an error.
+/// time, which are restarted whenever their inputs move to a new one. `authorities` names, per node, the
+/// input slot its chunk is read from, falling back to its lowest filled slot. `frame_routed` marks a region
+/// whose output is returned per input frame, so a filter returning no frames is an error.
 #[derive(Debug)]
 pub struct RegionEdges {
     feeds: Vec<Vec<Feed>>,
     exits: Vec<NodeId>,
     paths: HashMap<NodeId, Arc<str>>,
     chunked: HashSet<NodeId>,
-    head_authority: Option<usize>,
+    authorities: HashMap<NodeId, usize>,
     frame_routed: bool,
 }
 
@@ -40,7 +40,7 @@ impl RegionEdges {
             exits,
             paths: HashMap::new(),
             chunked: HashSet::new(),
-            head_authority: None,
+            authorities: HashMap::new(),
             frame_routed: false,
         }
     }
@@ -57,9 +57,9 @@ impl RegionEdges {
         self
     }
 
-    /// The same edges, reading the head's chunk from the slot `authority` names.
-    pub fn with_head_authority(mut self, authority: Option<usize>) -> Self {
-        self.head_authority = authority;
+    /// The same edges, reading each node's chunk from the input slot `authorities` names for it.
+    pub fn with_authorities(mut self, authorities: HashMap<NodeId, usize>) -> Self {
+        self.authorities = authorities;
         self
     }
 
@@ -96,7 +96,7 @@ impl RegionRunner {
         let queues = edges
             .feeds
             .iter()
-            .map(|feeds| feeds.iter().map(|_| VecDeque::new()).collect())
+            .map(|feeds| vec![VecDeque::new(); feeds.len()])
             .collect();
 
         let last_chunks = vec![None; nodes.len()];
@@ -137,7 +137,7 @@ impl RegionRunner {
         let mut head_watch = NodeWatch {
             chunked: self.edges.chunked.contains(&self.nodes[0].0),
             frame_routed: self.edges.frame_routed,
-            authority: self.edges.head_authority,
+            authority: self.edges.authorities.get(&self.nodes[0].0).copied(),
             last: &mut self.last_chunks[0],
         };
         let mut head_output = step_node(&mut self.nodes[0], &mut head_watch, context, bundle)?;
@@ -153,7 +153,7 @@ impl RegionRunner {
             let watch = NodeWatch {
                 chunked: self.edges.chunked.contains(&node),
                 frame_routed: self.edges.frame_routed,
-                authority: None,
+                authority: self.edges.authorities.get(&node).copied(),
                 last: &mut self.last_chunks[index],
             };
             let mut produced = run_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
@@ -193,7 +193,7 @@ impl RegionRunner {
             let watch = NodeWatch {
                 chunked: self.edges.chunked.contains(&node),
                 frame_routed: self.edges.frame_routed,
-                authority: None,
+                authority: self.edges.authorities.get(&node).copied(),
                 last: &mut self.last_chunks[index],
             };
             let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
@@ -293,16 +293,36 @@ fn restart_on_new_chunk(
         return Ok(Vec::new());
     };
 
-    let previous = last.replace(chunk);
-    if previous.is_none_or(|previous| previous == chunk) {
+    let Some(previous) = last.replace(chunk) else {
+        return Ok(Vec::new());
+    };
+
+    if previous == chunk {
         return Ok(Vec::new());
     }
 
+    let restarted = end_and_start(node, context);
+
+    in_chunk(restarted, previous)
+}
+
+fn end_and_start(
+    node: &mut (NodeId, StageBox),
+    context: &mut FrameContext,
+) -> Result<Vec<AnyItem>, RunError> {
     let (id, stage) = node;
     let flushed = end_node(*id, stage, context)?;
     start_node(*id, stage, context)?;
 
     Ok(flushed)
+}
+
+/// Names `chunk` in a failure of `result`.
+fn in_chunk<T>(result: Result<T, RunError>, chunk: u64) -> Result<T, RunError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => Err(error.in_chunk(chunk)),
+    }
 }
 
 /// Appends what each of a node's producers emitted this step to that feed's queue.

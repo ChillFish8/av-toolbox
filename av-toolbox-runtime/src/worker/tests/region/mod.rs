@@ -153,6 +153,40 @@ impl Filter for Lagging {
     }
 }
 
+/// Passes its input through, moving it to chunk 1 from frame `switch_at` onwards.
+struct Rechunking {
+    switch_at: u64,
+}
+
+impl StageInstance for Rechunking {}
+
+impl Filter for Rechunking {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let mut frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+        let index = frame.meta().index;
+        frame.meta_mut().chunk = u64::from(index >= self.switch_at);
+
+        Ok(vec![frame])
+    }
+}
+
+/// Passes its input through, and fails when its chunk ends.
+struct FailingFlush;
+
+impl StageInstance for FailingFlush {}
+
+impl Filter for FailingFlush {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+
+        Ok(vec![frame])
+    }
+
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
+        Err(StageError::msg("this filter fails to flush"))
+    }
+}
+
 /// Emits the frame it was given at index `2n`, and a copy of it at index `2n + 1`.
 struct Doubling;
 

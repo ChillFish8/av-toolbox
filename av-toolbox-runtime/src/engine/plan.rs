@@ -57,10 +57,18 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
         .filter(|node_id| plan.node(*node_id).parallelism() == Parallelism::Chunk)
         .collect();
 
+    let authorities = nodes
+        .iter()
+        .filter_map(|node_id| {
+            let authority = plan.node(*node_id).chunk_authority()?;
+            Some((*node_id, authority))
+        })
+        .collect();
+
     let edges = RegionEdges::new(feeds, region.exits().to_vec())
         .with_paths(paths)
         .with_chunked(chunked)
-        .with_head_authority(region.chunk_authority());
+        .with_authorities(authorities);
 
     if region.routing() == Routing::ByFrame {
         return edges.frame_routed();

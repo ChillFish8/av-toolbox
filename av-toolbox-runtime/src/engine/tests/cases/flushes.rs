@@ -130,3 +130,25 @@ fn a_chunk_routed_region_delivers_every_chunks_flush() {
     assert_eq!(report.dropped, 0);
     assert_every_thread_exited(property);
 }
+
+#[test]
+fn a_frame_mode_stage_on_one_worker_is_not_restarted_per_chunk() {
+    let property = "a_frame_mode_stage_on_one_worker_is_not_restarted_per_chunk";
+    clear_recorded();
+
+    let specs = vec![
+        source_spec("input", &[0, 0, 1, 1, 2, 2], 0),
+        flushing_spec("flush", "input", 1, false),
+        sink_spec("out", "flush"),
+    ];
+    let engine = build_engine(&specs, Settings::default());
+
+    let report = run_with_watchdog(engine, property);
+
+    let mut expected: Vec<u64> = (0..6).collect();
+    expected.push(FLUSHED_TIMESTAMP);
+
+    assert_eq!(recorded(), expected);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}

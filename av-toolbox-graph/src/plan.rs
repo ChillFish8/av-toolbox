@@ -48,6 +48,7 @@ pub struct NodePlan {
     region: RegionId,
     narrowed: Option<Narrowed>,
     routing: Routing,
+    chunk_authority: Option<usize>,
 }
 
 impl NodePlan {
@@ -59,6 +60,7 @@ impl NodePlan {
             region: RegionId::new(0),
             narrowed: Some(Narrowed::NotAsked),
             routing: Routing::ByChunk,
+            chunk_authority: None,
         }
     }
 
@@ -80,6 +82,11 @@ impl NodePlan {
 
     pub fn routing(&self) -> Routing {
         self.routing
+    }
+
+    /// The input slot this node reads its chunk from, if its stage names one.
+    pub fn chunk_authority(&self) -> Option<usize> {
+        self.chunk_authority
     }
 }
 
@@ -260,6 +267,7 @@ impl Planner<'_> {
             region: RegionId::new(0),
             narrowed,
             routing: Routing::ByChunk,
+            chunk_authority: stage.chunk_authority(),
         });
     }
 

@@ -185,6 +185,7 @@ fn a_frame_routed_node_declaring_held_frames_is_refused() {
     let accepted = holds_nothing_in_frame_region(&graph, region, &held, &mut diagnostics);
 
     assert!(!accepted);
+
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(Diagnostic::code).collect();
     assert_eq!(codes, vec![DiagnosticCode::HeldInFrameRegion]);
 }
