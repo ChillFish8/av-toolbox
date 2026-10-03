@@ -72,9 +72,31 @@ pub(crate) struct SangnomArgs {
     pub(crate) direction: Direction,
 }
 
+/// SangNom's settings without `planes` or `direction`, as another stage nests them.
+#[derive(Debug, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct SangnomTuning {
+    /// How readily edges are followed rather than rows averaged, between 0 and 128.
+    pub(crate) aa: u32,
+}
+
+impl Default for SangnomTuning {
+    fn default() -> Self {
+        Self { aa: default_aa() }
+    }
+}
+
+/// `tuning.aa` once it is checked for `stage`.
+pub(crate) fn checked_sangnom_tuning(stage: &str, tuning: &SangnomTuning) -> Result<u32, StageError> {
+    between_u32(stage, "aa", tuning.aa, 0, MAX_AA)?;
+
+    Ok(tuning.aa)
+}
+
 /// Whether each plane of `input` is anti-aliased, once `args` are checked against it.
 fn checked_planes(args: &SangnomArgs, input: &FrameFormat) -> Result<Vec<bool>, StageError> {
-    between_u32(STAGE, "aa", args.aa, 0, MAX_AA)?;
+    let tuning = SangnomTuning { aa: args.aa };
+    checked_sangnom_tuning(STAGE, &tuning)?;
 
     let requested = args.planes.as_deref();
     let selected = selected_planes(STAGE, requested, input.layout, PlaneDefault::First)?;
@@ -174,16 +196,14 @@ impl FilterDefinition for Sangnom {
     }
 }
 
-/// Runs `aa/sangnom` on every selected plane of a frame.
-struct Antialiaser<R: Runtime> {
-    client: ComputeClient<R>,
-    planewise: Planewise,
-    direction: Direction,
-    aaf: f32,
-    max: f32,
+/// One SangNom field pass at one plane's bit depth.
+pub(crate) struct SangnomPass<'a, R: Runtime> {
+    pub(crate) client: &'a ComputeClient<R>,
+    pub(crate) aaf: f32,
+    pub(crate) max: f32,
 }
 
-impl<R: Runtime> FieldPass for Antialiaser<R> {
+impl<R: Runtime> FieldPass for SangnomPass<'_, R> {
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32) {
         let bytes = sangnom_scratch(input.width(), input.height());
         let smoothed = context.scratch(bytes);
@@ -193,8 +213,17 @@ impl<R: Runtime> FieldPass for Antialiaser<R> {
             smoothed: smoothed.handle(),
         };
         let sizing = Sizing(context);
-        sangnom_field(&self.client, &sizing, planes, offset, self.aaf, self.max);
+        sangnom_field(self.client, &sizing, planes, offset, self.aaf, self.max);
     }
+}
+
+/// Runs `aa/sangnom` on every selected plane of a frame.
+struct Antialiaser<R: Runtime> {
+    client: ComputeClient<R>,
+    planewise: Planewise,
+    direction: Direction,
+    aaf: f32,
+    max: f32,
 }
 
 impl<R: Runtime> PlaneFilter for Antialiaser<R> {
@@ -205,7 +234,13 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
         input: DevicePlane<'_>,
         output: DevicePlane<'_>,
     ) -> Result<(), StageError> {
-        run_direction(&self.client, context, self, self, input, output, self.direction);
+        let pass = SangnomPass {
+            client: &self.client,
+            aaf: self.aaf,
+            max: self.max,
+        };
+
+        run_direction(&self.client, context, &pass, &pass, input, output, self.direction);
 
         Ok(())
     }

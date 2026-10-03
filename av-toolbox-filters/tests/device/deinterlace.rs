@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use av_toolbox_core::{Filter, Inputs};
+use av_toolbox_cubek::aa::{sangnom_aaf, sangnom_max};
 use av_toolbox_cubek::deinterlace::BwdifField;
-use av_toolbox_cubek::testing::{BwdifReferencePlanes, reference_bwdif};
+use av_toolbox_cubek::testing::{BwdifReferencePlanes, reference_bwdif, reference_sangnom_field};
 use av_toolbox_gpu::{
     BuildContext,
     BuildTask,
@@ -407,5 +408,108 @@ fn an_unselected_plane_is_the_input() {
     for (emitted, original) in outputs.iter().zip(&clip) {
         assert_eq!(emitted.planes[1], original.planes[1]);
         assert_eq!(emitted.planes[2], original.planes[2]);
+    }
+}
+
+#[test]
+fn a_static_clip_comes_out_unchanged_with_every_spatial_kind() {
+    let input = interlaced(32, 32, SampleFormat::U8);
+    let output = deinterlaced(input, true);
+    let still = moving_frame(&input, 0);
+    let kinds = ["eedi2", "eedi3", "sangnom"];
+
+    for kind in kinds {
+        let clip: Vec<Input> = (0..2)
+            .map(|index| Input {
+                meta: FrameMeta::at(index),
+                ..still.clone()
+            })
+            .collect();
+
+        let outputs = run(json!({ "spatial": { "kind": kind } }), input, output, vec![clip]);
+
+        assert_eq!(outputs.len(), 4, "{kind}");
+        for emitted in &outputs {
+            assert_eq!(emitted.planes, still.planes, "{kind}");
+        }
+    }
+}
+
+#[test]
+fn sangnom_prediction_matches_the_reference_on_luma() {
+    let input = interlaced(32, 32, SampleFormat::U8);
+    let output = deinterlaced(input, false);
+    let clip = moving_clip(&input, 0..3);
+
+    let args = json!({ "rate": "single", "planes": ["y"], "spatial": { "kind": "sangnom" } });
+    let outputs = run(args, input, output, vec![clip.clone()]);
+
+    let field = BwdifField {
+        rebuilt: 1,
+        first: true,
+    };
+    let current = widened(&clip[1].planes[0]);
+    let kept = 1 - field.rebuilt;
+    let aaf = sangnom_aaf(48, 8);
+    let max = sangnom_max(8);
+    let spatial = reference_sangnom_field(&current, input.width, input.height, kept, aaf, max);
+    let previous = widened(&clip[0].planes[0]);
+    let next = widened(&clip[2].planes[0]);
+    let planes = BwdifReferencePlanes {
+        previous: &previous,
+        current: &current,
+        next: &next,
+        spatial: Some(&spatial),
+    };
+
+    let values = reference_bwdif(&planes, input.width, input.height, field);
+    let expected: Vec<u8> = values
+        .iter()
+        .map(|value| value.round().clamp(0.0, 255.0) as u8)
+        .collect();
+
+    assert_within_one(&outputs[1].planes[0], &expected, "frame 1 luma");
+}
+
+#[test]
+fn sangnom_prediction_matches_the_reference_for_both_fields_at_double_rate() {
+    let input = interlaced(32, 32, SampleFormat::U8);
+    let output = deinterlaced(input, true);
+    let clip = moving_clip(&input, 0..3);
+
+    let args = json!({ "planes": ["y"], "spatial": { "kind": "sangnom" } });
+    let outputs = run(args, input, output, vec![clip.clone()]);
+
+    let first = BwdifField {
+        rebuilt: 1,
+        first: true,
+    };
+    let second = BwdifField {
+        rebuilt: 0,
+        first: false,
+    };
+    let current = widened(&clip[1].planes[0]);
+    let previous = widened(&clip[0].planes[0]);
+    let next = widened(&clip[2].planes[0]);
+    let aaf = sangnom_aaf(48, 8);
+    let max = sangnom_max(8);
+    for (offset, field) in [first, second].into_iter().enumerate() {
+        let kept = 1 - field.rebuilt;
+        let spatial = reference_sangnom_field(&current, input.width, input.height, kept, aaf, max);
+        let planes = BwdifReferencePlanes {
+            previous: &previous,
+            current: &current,
+            next: &next,
+            spatial: Some(&spatial),
+        };
+
+        let values = reference_bwdif(&planes, input.width, input.height, field);
+        let expected: Vec<u8> = values
+            .iter()
+            .map(|value| value.round().clamp(0.0, 255.0) as u8)
+            .collect();
+
+        let label = format!("frame 1, field {offset}");
+        assert_within_one(&outputs[2 + offset].planes[0], &expected, &label);
     }
 }

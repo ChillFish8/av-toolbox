@@ -82,7 +82,7 @@ const MAX_GAMMA: f32 = 1e30;
 /// The fewest samples a plane needs in either dimension.
 const MIN_PLANE_SIZE: u32 = 4;
 
-fn default_alpha() -> f64 {
+pub(crate) fn default_alpha() -> f64 {
     0.2
 }
 
@@ -90,7 +90,7 @@ pub(crate) fn default_beta() -> f64 {
     0.25
 }
 
-fn default_gamma() -> f64 {
+pub(crate) fn default_gamma() -> f64 {
     20.0
 }
 
@@ -106,7 +106,7 @@ pub(crate) fn default_vcheck() -> u32 {
     2
 }
 
-fn default_vthresh() -> [f64; 3] {
+pub(crate) fn default_vthresh() -> [f64; 3] {
     [32.0, 64.0, 4.0]
 }
 
@@ -197,17 +197,24 @@ fn threshold_too_small(stage: &str, index: usize, value: f32) -> StageError {
     StageError::msg(message)
 }
 
-fn too_small(channel: Channel, width: u32, height: u32) -> StageError {
+fn too_small(stage: &str, channel: Channel, width: u32, height: u32) -> StageError {
     let message = format!(
-        "{STAGE} needs plane {channel} to be at least {MIN_PLANE_SIZE}x{MIN_PLANE_SIZE}, got {width}x{height}"
+        "{stage} needs plane {channel} to be at least {MIN_PLANE_SIZE}x{MIN_PLANE_SIZE}, got {width}x{height}"
     );
 
     StageError::msg(message)
 }
 
-fn too_large(channel: Channel, direction: Direction, mdis: u32, width: u32, height: u32) -> StageError {
+fn too_large(
+    stage: &str,
+    channel: Channel,
+    direction: Direction,
+    mdis: u32,
+    width: u32,
+    height: u32,
+) -> StageError {
     let message = format!(
-        "{STAGE} needs plane {channel} small enough to index with mdis {mdis} and direction {direction}, \
+        "{stage} needs plane {channel} small enough to index with mdis {mdis} and direction {direction}, \
          got {width}x{height}"
     );
 
@@ -234,17 +241,24 @@ fn checked_threshold(stage: &str, index: usize, value: f64) -> Result<f32, Stage
     Err(threshold_too_small(stage, index, rounded))
 }
 
+impl Eedi3Args {
+    /// The settings of these arguments, without `planes` or `direction`.
+    pub(crate) fn tuning(&self) -> Eedi3Tuning {
+        Eedi3Tuning {
+            alpha: self.alpha,
+            beta: self.beta,
+            gamma: self.gamma,
+            nrad: self.nrad,
+            mdis: self.mdis,
+            vcheck: self.vcheck,
+            vthresh: self.vthresh,
+        }
+    }
+}
+
 /// The arguments the device pass takes, once `args` are rounded to f32 and checked.
 pub(crate) fn checked_arguments(args: &Eedi3Args) -> Result<Eedi3Arguments, StageError> {
-    let tuning = Eedi3Tuning {
-        alpha: args.alpha,
-        beta: args.beta,
-        gamma: args.gamma,
-        nrad: args.nrad,
-        mdis: args.mdis,
-        vcheck: args.vcheck,
-        vthresh: args.vthresh,
-    };
+    let tuning = args.tuning();
 
     checked_tuning(STAGE, &tuning)
 }
@@ -295,10 +309,12 @@ pub(crate) fn indexable(width: u32, height: u32, mdis: u32) -> bool {
     samples <= u32::MAX as usize && words <= u32::MAX as usize
 }
 
-/// Refuses a `width` by `height` plane `channel` that the field passes along `direction` cannot run on.
+/// Refuses a `width` by `height` plane `channel` that the field passes along `direction` cannot run on,
+/// naming `stage`.
 ///
 /// A plane needs at least 4 samples in each dimension. A horizontal pass runs on the transposed plane.
-fn checked_size(
+pub(crate) fn checked_eedi3_size(
+    stage: &str,
     channel: Channel,
     direction: Direction,
     mdis: u32,
@@ -306,17 +322,17 @@ fn checked_size(
     height: u32,
 ) -> Result<(), StageError> {
     if width < MIN_PLANE_SIZE || height < MIN_PLANE_SIZE {
-        return Err(too_small(channel, width, height));
+        return Err(too_small(stage, channel, width, height));
     }
 
     let runs_vertically = matches!(direction, Direction::Vertical | Direction::Both);
     if runs_vertically && !indexable(width, height, mdis) {
-        return Err(too_large(channel, direction, mdis, width, height));
+        return Err(too_large(stage, channel, direction, mdis, width, height));
     }
 
     let runs_horizontally = matches!(direction, Direction::Horizontal | Direction::Both);
     if runs_horizontally && !indexable(height, width, mdis) {
-        return Err(too_large(channel, direction, mdis, width, height));
+        return Err(too_large(stage, channel, direction, mdis, width, height));
     }
 
     Ok(())
@@ -338,7 +354,7 @@ fn checked_planes(args: &Eedi3Args, input: &FrameFormat) -> Result<Vec<bool>, St
             return Err(missing_plane(STAGE, *channel));
         };
 
-        checked_size(*channel, args.direction, args.mdis, width, height)?;
+        checked_eedi3_size(STAGE, *channel, args.direction, args.mdis, width, height)?;
     }
 
     Ok(selected)

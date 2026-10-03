@@ -1,8 +1,8 @@
-mod based;
+pub(crate) mod based;
 pub(crate) mod direction;
-mod eedi2;
-mod eedi3;
-mod sangnom;
+pub(crate) mod eedi2;
+pub(crate) mod eedi3;
+pub(crate) mod sangnom;
 #[cfg(test)]
 mod tests;
 

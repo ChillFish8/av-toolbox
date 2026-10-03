@@ -1,1 +1,2 @@
 mod bwdif;
+mod spatial;

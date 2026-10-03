@@ -140,26 +140,85 @@ pub(crate) struct Eedi2Args {
     pub(crate) direction: Direction,
 }
 
-fn negative(name: &str, value: i32) -> StageError {
-    let message = format!("{STAGE} needs {name} of at least 0, got {value}");
+impl Eedi2Args {
+    /// The settings of these arguments, without `planes` or `direction`.
+    pub(crate) fn tuning(&self) -> Eedi2Tuning {
+        Eedi2Tuning {
+            mthresh: self.mthresh,
+            lthresh: self.lthresh,
+            vthresh: self.vthresh,
+            estr: self.estr,
+            dstr: self.dstr,
+            maxd: self.maxd,
+            nt: self.nt,
+            pp: self.pp,
+        }
+    }
+}
+
+/// EEDI2's settings without `planes` or `direction`, as another stage nests them.
+#[derive(Debug, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct Eedi2Tuning {
+    /// The edge magnitude threshold, at least 0.
+    pub(crate) mthresh: i32,
+    /// The Laplacian threshold, at least 0.
+    pub(crate) lthresh: i32,
+    /// The variance threshold, at least 0.
+    pub(crate) vthresh: i32,
+    /// How strongly the edge mask erodes, at least 0.
+    pub(crate) estr: i32,
+    /// How strongly the edge mask dilates, at least 0.
+    pub(crate) dstr: i32,
+    /// The furthest direction searched, between 1 and 29.
+    pub(crate) maxd: u32,
+    /// The noise threshold, at least 0.
+    pub(crate) nt: i32,
+    /// Whether the output is post-processed, 0 or 1.
+    pub(crate) pp: u32,
+}
+
+impl Default for Eedi2Tuning {
+    fn default() -> Self {
+        Self {
+            mthresh: default_mthresh(),
+            lthresh: default_lthresh(),
+            vthresh: default_vthresh(),
+            estr: default_estr(),
+            dstr: default_dstr(),
+            maxd: default_maxd(),
+            nt: default_nt(),
+            pp: default_pp(),
+        }
+    }
+}
+
+fn negative(stage: &str, name: &str, value: i32) -> StageError {
+    let message = format!("{stage} needs {name} of at least 0, got {value}");
 
     StageError::msg(message)
 }
 
-fn too_small(channel: Channel, direction: Direction, size: (u32, u32), smallest: (u32, u32)) -> StageError {
+fn too_small(
+    stage: &str,
+    channel: Channel,
+    direction: Direction,
+    size: (u32, u32),
+    smallest: (u32, u32),
+) -> StageError {
     let (width, height) = size;
     let (smallest_width, smallest_height) = smallest;
     let message = format!(
-        "{STAGE} needs plane {channel} to be at least {smallest_width}x{smallest_height} with direction \
+        "{stage} needs plane {channel} to be at least {smallest_width}x{smallest_height} with direction \
          {direction}, got {width}x{height}"
     );
 
     StageError::msg(message)
 }
 
-fn too_large(channel: Channel, direction: Direction, dimension: &str, size: u32) -> StageError {
+fn too_large(stage: &str, channel: Channel, direction: Direction, dimension: &str, size: u32) -> StageError {
     let message = format!(
-        "{STAGE} needs a {dimension} of at most {EEDI2_MAX_WIDTH} on plane {channel} with direction \
+        "{stage} needs a {dimension} of at most {EEDI2_MAX_WIDTH} on plane {channel} with direction \
          {direction}, got {size}"
     );
 
@@ -167,23 +226,23 @@ fn too_large(channel: Channel, direction: Direction, dimension: &str, size: u32)
 }
 
 /// Refuses a negative `value` for the argument `name`, handing it back unsigned otherwise.
-fn non_negative(name: &str, value: i32) -> Result<u32, StageError> {
+fn non_negative(stage: &str, name: &str, value: i32) -> Result<u32, StageError> {
     match u32::try_from(value) {
         Ok(unsigned) => Ok(unsigned),
-        Err(_) => Err(negative(name, value)),
+        Err(_) => Err(negative(stage, name, value)),
     }
 }
 
-/// The arguments the device pass takes, once `args` are checked.
-fn checked_arguments(args: &Eedi2Args) -> Result<Eedi2Arguments, StageError> {
-    let mthresh = non_negative("mthresh", args.mthresh)?;
-    let lthresh = non_negative("lthresh", args.lthresh)?;
-    let vthresh = non_negative("vthresh", args.vthresh)?;
-    let estr = non_negative("estr", args.estr)?;
-    let dstr = non_negative("dstr", args.dstr)?;
-    let nt = non_negative("nt", args.nt)?;
-    between_u32(STAGE, "maxd", args.maxd, MIN_MAXD, MAX_MAXD)?;
-    between_u32(STAGE, "pp", args.pp, 0, MAX_PP)?;
+/// The arguments the device pass takes, once `tuning` is checked for `stage`.
+pub(crate) fn checked_eedi2_tuning(stage: &str, tuning: &Eedi2Tuning) -> Result<Eedi2Arguments, StageError> {
+    let mthresh = non_negative(stage, "mthresh", tuning.mthresh)?;
+    let lthresh = non_negative(stage, "lthresh", tuning.lthresh)?;
+    let vthresh = non_negative(stage, "vthresh", tuning.vthresh)?;
+    let estr = non_negative(stage, "estr", tuning.estr)?;
+    let dstr = non_negative(stage, "dstr", tuning.dstr)?;
+    let nt = non_negative(stage, "nt", tuning.nt)?;
+    between_u32(stage, "maxd", tuning.maxd, MIN_MAXD, MAX_MAXD)?;
+    between_u32(stage, "pp", tuning.pp, 0, MAX_PP)?;
 
     Ok(Eedi2Arguments {
         mthresh,
@@ -191,9 +250,9 @@ fn checked_arguments(args: &Eedi2Args) -> Result<Eedi2Arguments, StageError> {
         vthresh,
         estr,
         dstr,
-        maxd: args.maxd,
+        maxd: tuning.maxd,
         nt,
-        pp: args.pp,
+        pp: tuning.pp,
     })
 }
 
@@ -209,25 +268,32 @@ fn smallest_plane(direction: Direction) -> (u32, u32) {
     }
 }
 
-/// Refuses a `width` by `height` plane `channel` too small or too wide for EEDI2 along `direction`.
+/// Refuses a `width` by `height` plane `channel` too small or too wide for EEDI2 along `direction`, naming
+/// `stage`.
 ///
 /// A vertical pass rebuilds rows as wide as the plane, and a horizontal pass rows as long as the plane
 /// is tall.
-fn checked_size(channel: Channel, direction: Direction, width: u32, height: u32) -> Result<(), StageError> {
+pub(crate) fn checked_eedi2_size(
+    stage: &str,
+    channel: Channel,
+    direction: Direction,
+    width: u32,
+    height: u32,
+) -> Result<(), StageError> {
     let smallest = smallest_plane(direction);
     let (smallest_width, smallest_height) = smallest;
     if width < smallest_width || height < smallest_height {
-        return Err(too_small(channel, direction, (width, height), smallest));
+        return Err(too_small(stage, channel, direction, (width, height), smallest));
     }
 
     let runs_vertically = matches!(direction, Direction::Vertical | Direction::Both);
     if runs_vertically && width > EEDI2_MAX_WIDTH {
-        return Err(too_large(channel, direction, "width", width));
+        return Err(too_large(stage, channel, direction, "width", width));
     }
 
     let runs_horizontally = matches!(direction, Direction::Horizontal | Direction::Both);
     if runs_horizontally && height > EEDI2_MAX_WIDTH {
-        return Err(too_large(channel, direction, "height", height));
+        return Err(too_large(stage, channel, direction, "height", height));
     }
 
     Ok(())
@@ -249,7 +315,7 @@ fn checked_planes(args: &Eedi2Args, input: &FrameFormat) -> Result<Vec<bool>, St
             return Err(missing_plane(STAGE, *channel));
         };
 
-        checked_size(*channel, args.direction, width, height)?;
+        checked_eedi2_size(STAGE, *channel, args.direction, width, height)?;
     }
 
     Ok(selected)
@@ -259,7 +325,7 @@ fn checked_planes(args: &Eedi2Args, input: &FrameFormat) -> Result<Vec<bool>, St
 ///
 /// Only the chroma planes of a YUV layout are subsampled. A `Chroma` layout's planes are the frame's own
 /// size.
-fn subsampling_shifts(layout: FrameLayout, plane_index: usize) -> (u32, u32) {
+pub(crate) fn subsampling_shifts(layout: FrameLayout, plane_index: usize) -> (u32, u32) {
     let channels = layout.channels();
     let Some(channel) = channels.get(plane_index) else {
         return (0, 0);
@@ -319,7 +385,8 @@ impl FilterDefinition for Eedi2 {
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(STAGE, chosen)?;
         let mask = chosen.get(MASK).copied().flatten();
-        checked_arguments(args)?;
+        let tuning = args.tuning();
+        checked_eedi2_tuning(STAGE, &tuning)?;
         checked_planes(args, &input)?;
         checked_mask(STAGE, &input, mask)?;
 
@@ -340,7 +407,8 @@ impl FilterDefinition for Eedi2 {
         let inputs = formats.inputs();
         let input = checked_input(STAGE, inputs)?;
         let mask = inputs.get(MASK).copied().flatten();
-        let arguments = checked_arguments(&args)?;
+        let tuning = args.tuning();
+        let arguments = checked_eedi2_tuning(STAGE, &tuning)?;
         let selected = checked_planes(&args, &input)?;
         checked_mask(STAGE, &input, mask)?;
 
@@ -368,9 +436,9 @@ impl FilterDefinition for Eedi2 {
 }
 
 /// One EEDI2 field pass at the thresholds of one plane and orientation.
-struct Eedi2Pass<'a, R: Runtime> {
-    client: &'a ComputeClient<R>,
-    settings: Eedi2Settings,
+pub(crate) struct Eedi2Pass<'a, R: Runtime> {
+    pub(crate) client: &'a ComputeClient<R>,
+    pub(crate) settings: Eedi2Settings,
 }
 
 impl<R: Runtime> FieldPass for Eedi2Pass<'_, R> {

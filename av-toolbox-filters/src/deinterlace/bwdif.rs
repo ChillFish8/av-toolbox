@@ -15,6 +15,7 @@ use av_toolbox_core::{
     Tag,
 };
 use av_toolbox_cubek::DevicePlane;
+use av_toolbox_cubek::aa::{Eedi2Settings, Eedi3DeviceClips, Eedi3Settings, sangnom_aaf, sangnom_max};
 use av_toolbox_cubek::deinterlace::{BWDIF_MIN_ROWS, BwdifField, BwdifPlanes, bwdif_field};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::values::{narrow, widen};
@@ -45,8 +46,12 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
+use crate::aa::direction::{Direction, FieldPass, checked_dimensions, missing_plane};
+use crate::aa::eedi2::{Eedi2Pass, subsampling_shifts};
+use crate::aa::eedi3::Eedi3FieldPass;
+use crate::aa::sangnom::SangnomPass;
 use crate::bits::bits_of;
+use crate::deinterlace::spatial::{Predictor, Spatial, checked_predictor, checked_predictor_planes};
 use crate::masked::{INPUT, checked_input, missing_input};
 use crate::planes::ChannelName;
 use crate::scratch::Scratch;
@@ -87,6 +92,9 @@ pub(crate) struct BwdifArgs {
     /// The planes to deinterlace, every plane when not given.
     #[serde(default)]
     pub(crate) planes: Option<Vec<ChannelName>>,
+    /// Where each rebuilt row's spatial prediction comes from, bwdif's own cubic when not given.
+    #[serde(default)]
+    pub(crate) spatial: Spatial,
 }
 
 fn describe_order(found: Option<FieldOrder>) -> String {
@@ -283,7 +291,9 @@ impl FilterDefinition for Bwdif {
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(STAGE, chosen)?;
         checked_order(args, &input)?;
-        checked_planes(args, &input)?;
+        let selected = checked_planes(args, &input)?;
+        let predictor = checked_predictor(&args.spatial)?;
+        checked_predictor_planes(predictor, &input, &selected)?;
 
         let output = output_format(&input, args.rate)?;
         let format = StreamFormat::Frames(output);
@@ -304,6 +314,8 @@ impl FilterDefinition for Bwdif {
         let input = checked_input(STAGE, inputs)?;
         let order = checked_order(&args, &input)?;
         let selected = checked_planes(&args, &input)?;
+        let predictor = checked_predictor(&args.spatial)?;
+        checked_predictor_planes(predictor, &input, &selected)?;
         let output = output_format(&input, args.rate)?;
 
         let bits = bits_of(input.sample);
@@ -317,6 +329,8 @@ impl FilterDefinition for Bwdif {
             input,
             output,
             selected,
+            predictor,
+            bits,
             element,
             peak,
             fields,
@@ -350,6 +364,32 @@ fn fields_of(order: Order, rate: Rate) -> Vec<BwdifField> {
     }
 }
 
+/// Runs `pass` on `current` into `outputs`, keeping for each of `fields` the rows it keeps.
+fn run_fields(
+    pass: &impl FieldPass,
+    context: &FrameContext,
+    current: DevicePlane<'_>,
+    fields: &[BwdifField],
+    outputs: &[Scratch],
+) {
+    if let [first, _] = fields {
+        // The pass keeping the even rows serves the field rebuilding the odd rows.
+        let (even, odd) = if first.rebuilt == 1 {
+            (&outputs[0], &outputs[1])
+        } else {
+            (&outputs[1], &outputs[0])
+        };
+
+        pass.run_both(context, current, even.plane(), odd.plane());
+        return;
+    }
+
+    for (field, output) in fields.iter().zip(outputs) {
+        let kept = 1 - field.rebuilt;
+        pass.run(context, current, output.plane(), kept);
+    }
+}
+
 /// The three frames one output reads.
 struct Window<'a> {
     previous: &'a Frame,
@@ -372,6 +412,8 @@ struct Deinterlacer<R: Runtime> {
     output: FrameFormat,
     /// Whether each plane, in channel order, is deinterlaced.
     selected: Vec<bool>,
+    predictor: Predictor,
+    bits: u32,
     element: Element,
     peak: f32,
     fields: Vec<BwdifField>,
@@ -459,6 +501,67 @@ impl<R: Runtime> Deinterlacer<R> {
         Ok(output.clone())
     }
 
+    /// Runs the predictor's field pass on `current` for each of `fields`, one plane per field in the same order.
+    ///
+    /// Each pass keeps the rows its field keeps. Two fields run through `run_both`, which EEDI3's persistent
+    /// check runs in one launch. The cubic predictor has no field pass and gives no planes.
+    fn predictions(
+        &self,
+        context: &FrameContext,
+        plane_index: usize,
+        current: DevicePlane<'_>,
+        fields: &[BwdifField],
+    ) -> Vec<Scratch> {
+        if matches!(self.predictor, Predictor::Cubic) {
+            return Vec::new();
+        }
+
+        let width = current.width();
+        let height = current.height();
+        let outputs: Vec<Scratch> = fields
+            .iter()
+            .map(|_| Scratch::new::<f32>(context, width, height))
+            .collect();
+
+        match self.predictor {
+            Predictor::Cubic => {},
+            Predictor::Eedi2(arguments) => {
+                let layout = self.input.layout;
+                let (across, _) = subsampling_shifts(layout, plane_index);
+                let settings = Eedi2Settings::new(&arguments, self.bits, across);
+                let pass = Eedi2Pass {
+                    client: &self.client,
+                    settings,
+                };
+
+                run_fields(&pass, context, current, fields, &outputs);
+            },
+            Predictor::Eedi3(arguments) => {
+                let settings = Eedi3Settings::new(&arguments, self.bits);
+                let pass = Eedi3FieldPass {
+                    client: &self.client,
+                    settings,
+                    clips: Eedi3DeviceClips::default(),
+                };
+
+                run_fields(&pass, context, current, fields, &outputs);
+            },
+            Predictor::Sangnom { aa } => {
+                let aaf = sangnom_aaf(aa, self.bits);
+                let max = sangnom_max(self.bits);
+                let pass = SangnomPass {
+                    client: &self.client,
+                    aaf,
+                    max,
+                };
+
+                run_fields(&pass, context, current, fields, &outputs);
+            },
+        }
+
+        outputs
+    }
+
     /// Rebuilds plane `plane_index` of the window's current frame once for each of `fields`.
     fn rebuild_plane(
         &self,
@@ -479,15 +582,17 @@ impl<R: Runtime> Deinterlacer<R> {
         let (width, height) = current_source.dimensions();
         let sizing = Sizing(context);
         let meta = window.current.meta();
+        let predictions = self.predictions(context, plane_index, current.plane(), fields);
 
         let mut rebuilt = Vec::with_capacity(fields.len());
-        for field in fields {
+        for (index, field) in fields.iter().enumerate() {
             let output = Scratch::new::<f32>(context, width, height);
+            let spatial = predictions.get(index).map(Scratch::plane);
             let planes = BwdifPlanes {
                 previous: previous.plane(),
                 current: current.plane(),
                 next: next.plane(),
-                spatial: None,
+                spatial,
                 output: output.plane(),
             };
             bwdif_field(&self.client, &sizing, planes, *field);
