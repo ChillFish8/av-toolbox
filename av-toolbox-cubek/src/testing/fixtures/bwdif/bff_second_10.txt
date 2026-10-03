@@ -1,0 +1,6 @@
+width 20
+height 14
+bits 10
+rebuilt 1
+first 0
+edeint 0
