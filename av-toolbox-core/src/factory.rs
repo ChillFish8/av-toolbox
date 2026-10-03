@@ -122,6 +122,9 @@ pub trait PreparedSource: Send + Sync {
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
 
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
+
     fn produces(&self, capabilities: &Capabilities) -> Result<OutputFormats, StageError>;
 
     fn residency(&self) -> Residency;
@@ -140,6 +143,9 @@ pub trait PreparedFilter: Send + Sync {
 
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
+
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
 
     fn accepts_input(
         &self,
@@ -172,6 +178,9 @@ pub trait PreparedMask: Send + Sync {
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
 
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -202,6 +211,9 @@ pub trait PreparedTransform: Send + Sync {
 
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
+
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
 
     fn accepts_input(
         &self,
@@ -234,6 +246,9 @@ pub trait PreparedMetaTransform: Send + Sync {
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
 
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -265,6 +280,9 @@ pub trait PreparedSink: Send + Sync {
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
 
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -289,6 +307,9 @@ pub trait PreparedMetaSink: Send + Sync {
 
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
+
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
 
     fn accepts_input(
         &self,
@@ -355,6 +376,19 @@ impl PreparedStage {
             Self::MetaSink(prepared) => prepared.chunk_authority(),
             // A crossing's one input is the only thing it could line up by.
             Self::Crossing(_) => Some(0),
+        }
+    }
+
+    pub fn held_frames(&self, formats: &ResolvedFormats) -> usize {
+        match self {
+            Self::Source(prepared) => prepared.held_frames(formats),
+            Self::Filter(prepared) => prepared.held_frames(formats),
+            Self::Mask(prepared) => prepared.held_frames(formats),
+            Self::Transform(prepared) => prepared.held_frames(formats),
+            Self::MetaTransform(prepared) => prepared.held_frames(formats),
+            Self::Sink(prepared) => prepared.held_frames(formats),
+            Self::MetaSink(prepared) => prepared.held_frames(formats),
+            Self::Crossing(_) => 0,
         }
     }
 
@@ -614,6 +648,10 @@ macro_rules! impl_stage_factory {
                 self.inputs.chunk_authority()
             }
 
+            fn held_frames(&self, formats: &ResolvedFormats) -> usize {
+                D::held_frames(&self.args, formats)
+            }
+
             fn accepts_input(
                 &self,
                 capabilities: &Capabilities,
@@ -704,6 +742,10 @@ macro_rules! impl_source_factory {
 
             fn chunk_authority(&self) -> Option<usize> {
                 self.inputs.chunk_authority()
+            }
+
+            fn held_frames(&self, formats: &ResolvedFormats) -> usize {
+                D::held_frames(&self.args, formats)
             }
 
             fn produces(&self, capabilities: &Capabilities) -> Result<OutputFormats, StageError> {
@@ -801,6 +843,10 @@ macro_rules! impl_sink_factory {
 
             fn chunk_authority(&self) -> Option<usize> {
                 self.inputs.chunk_authority()
+            }
+
+            fn held_frames(&self, formats: &ResolvedFormats) -> usize {
+                D::held_frames(&self.args, formats)
             }
 
             fn accepts_input(
@@ -913,6 +959,10 @@ impl<D: MetaTransformDefinition> PreparedMetaTransform for Prepared<D> {
         self.inputs.chunk_authority()
     }
 
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize {
+        D::held_frames(&self.args, formats)
+    }
+
     fn accepts_input(
         &self,
         capabilities: &Capabilities,
@@ -993,6 +1043,10 @@ impl<D: MetaSinkDefinition> PreparedMetaSink for Prepared<D> {
 
     fn chunk_authority(&self) -> Option<usize> {
         self.inputs.chunk_authority()
+    }
+
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize {
+        D::held_frames(&self.args, formats)
     }
 
     fn accepts_input(

@@ -145,6 +145,32 @@ impl CompiledGraph {
         Ok(stages)
     }
 
+    /// The most frames each node may hold back at once, indexed by node.
+    ///
+    /// A node that cannot be prepared is reported the same way [CompiledGraph::instantiate]
+    /// reports it.
+    pub fn held_frames(
+        &self,
+        registry: &PipelineRegistry,
+        formats: &SolvedFormats,
+    ) -> Result<Vec<usize>, Diagnostics> {
+        let mut diagnostics = Diagnostics::new();
+        let prepared = self.prepare_stages(registry, &mut diagnostics);
+
+        if diagnostics.has_errors() {
+            return Err(diagnostics);
+        }
+
+        let mut held = Vec::with_capacity(prepared.len());
+        for (index, stage) in prepared.iter().enumerate() {
+            let node_formats = formats.get(NodeId::new(index));
+            let node_held = stage.as_ref().map_or(0, |stage| stage.held_frames(node_formats));
+            held.push(node_held);
+        }
+
+        Ok(held)
+    }
+
     /// Builds one instance of every stage in `region`, in `region.nodes()` order.
     ///
     /// A worker running that region calls this once per copy it needs, so every call builds its
@@ -337,9 +363,20 @@ fn describe(error: &BuildStageError) -> String {
 #[cfg(test)]
 mod diagnostics_tests {
     use av_toolbox_core::{PreparedStage, StageKind};
+    use av_toolbox_gpu::ResolvedFormats;
     use serde_json::json;
 
-    use crate::{Diagnostic, DiagnosticCode, Diagnostics, Span, Spanned, StageSpec, build, testing};
+    use crate::{
+        Diagnostic,
+        DiagnosticCode,
+        Diagnostics,
+        SolvedFormats,
+        Span,
+        Spanned,
+        StageSpec,
+        build,
+        testing,
+    };
 
     /// The pipeline every test in this file builds from, tweaking whichever node it needs to.
     ///
@@ -420,6 +457,20 @@ mod diagnostics_tests {
             prepared[crossing.index()],
             Some(PreparedStage::Crossing(av_toolbox_core::Crossing::Unload))
         ));
+    }
+
+    #[test]
+    fn a_graph_of_stages_holding_nothing_holds_nothing() {
+        let registry = testing::registry();
+        let graph = build(&registry, &pipeline()).expect("should build").into_graph();
+        let per_node = (0..graph.len())
+            .map(|_| ResolvedFormats::new(Vec::new(), None))
+            .collect();
+        let formats = SolvedFormats::new(per_node);
+
+        let held = graph.held_frames(&registry, &formats).expect("should prepare");
+
+        assert_eq!(held, vec![0, 0, 0]);
     }
 
     #[test]

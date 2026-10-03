@@ -663,9 +663,7 @@ mod tests {
         assert_eq!(error.node(), Some(NodeId::new(3)));
     }
 
-    /// A filter's `process` always returns exactly one item, since it is declared as
-    /// `Result<Frame, StageError>` rather than an optional one. Holding cannot withhold its
-    /// input during `process`, only keep a copy to flush again once its chunk ends.
+    /// Holding emits its input during `process` and keeps a copy to flush again once its chunk ends.
     #[test]
     fn ending_a_filter_flushes_what_it_held() {
         let context = testing_context();

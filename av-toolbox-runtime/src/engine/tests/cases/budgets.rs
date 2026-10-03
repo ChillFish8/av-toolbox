@@ -1,14 +1,17 @@
 use std::time::Duration;
 
+use crate::engine::plan::default_source_share;
 use crate::engine::tests::fixtures::sources::SOURCE_BUDGETS;
 use crate::engine::tests::harness::{
     build_engine,
     clear_recorded,
+    node_id,
+    planned_graph,
     recorded,
     run_result_with_watchdog,
     run_with_watchdog,
 };
-use crate::engine::tests::specs::{allocating_spec, masking_spec, sink_spec, source_spec};
+use crate::engine::tests::specs::{allocating_spec, filter_spec, masking_spec, sink_spec, source_spec};
 use crate::engine::tests::support::{format, mask_format};
 use crate::{RunError, Settings};
 
@@ -111,4 +114,25 @@ fn a_budget_derived_for_a_plan_with_masks_counts_them() {
         limit >= region_holds,
         "{property}: a share of {limit} bytes cannot hold the {region_holds} bytes its region does",
     );
+}
+
+#[test]
+fn a_source_share_makes_room_for_held_frames() {
+    let specs = vec![
+        source_spec("input", &[0, 0], 0),
+        filter_spec("pass", "input", None),
+        sink_spec("out", "pass"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+    let plan = graph.execution_plan().expect("a planned graph");
+    let regions = plan.regions();
+    let none_held = vec![0; graph.len()];
+    let mut some_held = none_held.clone();
+    let pass = node_id(&graph, "pass");
+    some_held[pass.index()] = 20;
+
+    let without = default_source_share(&graph, &solved, regions, &none_held);
+    let with = default_source_share(&graph, &solved, regions, &some_held);
+
+    assert_eq!(with - without, 20 * format().total_bytes());
 }

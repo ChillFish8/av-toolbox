@@ -116,9 +116,12 @@ impl Engine {
         formats: &SolvedFormats,
         settings: Settings,
     ) -> Result<Engine, Diagnostics> {
+        let held = graph.held_frames(registry, formats)?;
+
         Self::build_with(
             graph,
             formats,
+            &held,
             settings,
             |region, _worker| graph.instantiate_region(registry, backend, formats, region),
             || backend.frame_context(),
@@ -133,12 +136,16 @@ impl Engine {
     /// building fixtures directly, exactly as [crate::worker::region]'s own tests build a
     /// [RegionRunner] by hand, and exercise this whole topology without a device.
     ///
+    /// `held` is how many frames each node may hold back, indexed by node, as
+    /// [CompiledGraph::held_frames](av_toolbox_graph::CompiledGraph::held_frames) gives it.
+    ///
     /// `graph` must already carry an [ExecutionPlan](av_toolbox_graph::ExecutionPlan). Every
     /// region is built in isolation, so one region's stages failing to build does not stop
     /// another's from being attempted, and every failure is reported together.
     pub(crate) fn build_with<Instantiate, MakeContext>(
         graph: &CompiledGraph,
         formats: &SolvedFormats,
+        held: &[usize],
         settings: Settings,
         mut instantiate: Instantiate,
         mut make_context: MakeContext,
@@ -160,7 +167,7 @@ impl Engine {
 
         let total_budget = settings
             .frame_budget
-            .unwrap_or_else(|| default_source_share(graph, formats, regions) * source_workers);
+            .unwrap_or_else(|| default_source_share(graph, formats, regions, held) * source_workers);
         let source_share = total_budget.checked_div(source_workers).unwrap_or(0);
 
         let mut diagnostics = Diagnostics::new();

@@ -38,9 +38,12 @@ fn a_widened_source_is_rejected() {
     let specs = vec![widened_source_spec("input", &[], 0, 4), sink_spec("out", "input")];
     let (graph, solved) = planned_graph(&specs);
 
+    let held = vec![0; graph.len()];
+
     let result = Engine::build_with(
         &graph,
         &solved,
+        &held,
         Settings::default(),
         |region, worker| instantiate(&graph, region, worker),
         testing_context,

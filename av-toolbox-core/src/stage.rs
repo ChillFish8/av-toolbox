@@ -221,6 +221,14 @@ pub trait StageDefinition: 'static {
         Parallelism::Stream
     }
 
+    /// The most frames this stage may hold back at once, given what its inputs and output resolved to.
+    ///
+    /// It sizes how far a source may run ahead of the stage. The stage may hold fewer at any
+    /// point, and holding more only risks the source waiting on its budget.
+    fn held_frames(_args: &Self::Args, _formats: &ResolvedFormats) -> usize {
+        0
+    }
+
     fn inputs() -> &'static InputSignature;
 }
 

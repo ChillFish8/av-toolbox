@@ -220,20 +220,37 @@ fn longest_source_region(graph: &CompiledGraph, regions: &[Region]) -> usize {
         .unwrap_or(0)
 }
 
+/// How many frames every node in the plan may hold back at once, counting one window per worker.
+fn held_by_stages(regions: &[Region], held: &[usize]) -> usize {
+    let mut total = 0;
+
+    for region in regions {
+        for node in region.nodes() {
+            total += held[node.index()] * region.width();
+        }
+    }
+
+    total
+}
+
 /// The frame memory one source may hold outstanding at once, derived from the plan.
 ///
-/// It covers two things. One item per node in the longest source region, so a region holding
-/// every one of its outputs still fits, and four items per worker in the plan on top, so a
-/// source can run ahead of the workers reading from it rather than waiting on each item to come
-/// all the way back.
+/// It covers three things. One item per node in the longest source region, so a region holding
+/// every one of its outputs still fits. Every frame a stage may hold back, once per worker, so
+/// a stage filling its window and a join waiting on it both fit. And four items per worker on
+/// top, so a source can run ahead of the workers reading from it rather than waiting on each
+/// item to come all the way back.
 pub(super) fn default_source_share(
     graph: &CompiledGraph,
     formats: &SolvedFormats,
     regions: &[Region],
+    held: &[usize],
 ) -> usize {
     let total_workers: usize = regions.iter().map(Region::width).sum();
-    let held_at_once = longest_source_region(graph, regions);
+    let region_holds = longest_source_region(graph, regions);
+    let stages_hold = held_by_stages(regions, held);
     let headroom = HEADROOM_ITEMS_PER_WORKER * total_workers;
+    let held_at_once = region_holds + stages_hold;
 
     (held_at_once + headroom) * largest_item_bytes(formats)
 }

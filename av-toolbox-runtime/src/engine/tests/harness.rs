@@ -216,9 +216,15 @@ pub(crate) fn build_engine(specs: &[StageSpec], settings: Settings) -> Engine {
 
 /// The same, for a test that needs the graph itself as well, to name the node it asserts on.
 pub(crate) fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, settings: Settings) -> Engine {
+    let registry = registry();
+    let held = graph
+        .held_frames(&registry, solved)
+        .expect("every fixture prepares");
+
     Engine::build_with(
         graph,
         solved,
+        &held,
         settings,
         |region, worker| instantiate(graph, region, worker),
         testing_context,
