@@ -13,11 +13,11 @@ mod worker;
 mod wrap;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use av_toolbox_core::PipelineRegistry;
 use av_toolbox_gpu::{Backend, FrameContext};
@@ -56,7 +56,7 @@ use self::source::run_source;
 use self::spawn::{Outcome, spawn, spawn_exchanged};
 #[cfg(test)]
 pub(crate) use self::worker::run_worker;
-use self::wrap::{wrap_head_source, wrap_sinks};
+use self::wrap::{SinkTally, wrap_head_source, wrap_sinks};
 use crate::worker::RegionRunner;
 use crate::{Aggregate, Cancel, Disperse, RunError, RunWarning};
 
@@ -69,6 +69,10 @@ pub struct Settings {
     /// How long a source may wait for room on its share before the run fails rather than hangs.
     /// `None` leaves [FrameBudget](av_toolbox_gpu::FrameBudget) its own default.
     pub stall_deadline: Option<Duration>,
+    /// How many frames every source may produce before it ends. `None` lets each run to its end.
+    pub frame_limit: Option<u64>,
+    /// How many items reach the sinks before [RunReport::counted_wall] starts counting.
+    pub warmup: u64,
 }
 
 /// What one run of an [Engine] produced.
@@ -89,6 +93,12 @@ pub struct RunReport {
     pub dropped: usize,
     /// Things the run noticed that did not stop it.
     pub warnings: Vec<RunWarning>,
+    /// How long the run took from start to finish.
+    pub wall: Duration,
+    /// How long the run took after [Settings::warmup] items had reached the sinks.
+    ///
+    /// Zero when the warmup was never reached, and the whole run when there was none.
+    pub counted_wall: Duration,
 }
 
 /// A graph, planned and instantiated into threads ready to run.
@@ -98,7 +108,7 @@ pub struct RunReport {
 /// wiring describes and waits for them to finish.
 pub struct Engine {
     prepared: Vec<PreparedRegion>,
-    frames: Arc<AtomicU64>,
+    tally: Arc<SinkTally>,
     dropped: Arc<AtomicUsize>,
     warnings: Arc<Mutex<Vec<RunWarning>>>,
     cancel: Arc<Cancel>,
@@ -172,7 +182,7 @@ impl Engine {
         let source_share = total_budget.checked_div(source_workers).unwrap_or(0);
 
         let mut diagnostics = Diagnostics::new();
-        let frames = Arc::new(AtomicU64::new(0));
+        let tally = Arc::new(SinkTally::new(settings.warmup));
         let dropped = Arc::new(AtomicUsize::new(0));
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let cancel = Arc::new(Cancel::new());
@@ -248,7 +258,7 @@ impl Engine {
                     Some(region.head()),
                     "a region's stages must list its head first"
                 );
-                let nodes = wrap_sinks(nodes, frames.clone());
+                let nodes = wrap_sinks(nodes, tally.clone());
 
                 if is_source_region(graph, region) {
                     let budget = source_budget(source_share, settings.stall_deadline);
@@ -257,7 +267,7 @@ impl Engine {
 
                     let context = make_context().with_budget(budget.clone());
                     let exhausted = Arc::new(AtomicBool::new(false));
-                    let nodes = wrap_head_source(nodes, exhausted.clone());
+                    let nodes = wrap_head_source(nodes, exhausted.clone(), settings.frame_limit);
                     let runner = RegionRunner::new(nodes, build_region_edges(graph, region));
 
                     prepared.push(PreparedRegion::Source(SourceRegion {
@@ -344,7 +354,7 @@ impl Engine {
                     Some(region.head()),
                     "a region's stages must list its head first"
                 );
-                let nodes = wrap_sinks(nodes, frames.clone());
+                let nodes = wrap_sinks(nodes, tally.clone());
                 let runner = RegionRunner::new(nodes, build_region_edges(graph, region));
                 let context = make_context();
                 let (result_sender, result_receiver) = mpsc::sync_channel(capacity);
@@ -385,7 +395,7 @@ impl Engine {
 
         Ok(Engine {
             prepared,
-            frames,
+            tally,
             dropped,
             warnings,
             cancel,
@@ -416,12 +426,13 @@ impl Engine {
     pub fn run(self) -> Result<RunReport, RunError> {
         let Engine {
             prepared,
-            frames,
+            tally,
             dropped,
             warnings,
             cancel,
         } = self;
 
+        let started = Instant::now();
         let outcome = Arc::new(Outcome {
             cancel: cancel.clone(),
             error: Mutex::new(None),
@@ -451,6 +462,8 @@ impl Engine {
             }
         }
 
+        let ended = Instant::now();
+
         if let Some(error) = outcome.take_error() {
             return Err(error);
         }
@@ -463,11 +476,16 @@ impl Engine {
 
         let warnings = warnings.lock().expect("not poisoned").clone();
 
+        let wall = ended.duration_since(started);
+        let counted_wall = tally.counted_wall(started, ended);
+
         Ok(RunReport {
-            frames: frames.load(Ordering::SeqCst),
+            frames: tally.frames(),
             cancelled,
             dropped,
             warnings,
+            wall,
+            counted_wall,
         })
     }
 }

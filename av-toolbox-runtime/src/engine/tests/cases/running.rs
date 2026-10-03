@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use crate::engine::tests::fixtures::filters::{PASS_BUILD_CALLS, PASS_HAD_BUDGET};
 use crate::engine::tests::fixtures::sinks::PAIRING_STEPS;
@@ -248,6 +249,8 @@ fn settings_and_reports_carry_the_derives_a_caller_needs() {
         cancelled: false,
         dropped: 0,
         warnings: Vec::new(),
+        wall: Duration::ZERO,
+        counted_wall: Duration::ZERO,
     };
 
     let copied_settings = settings.clone();
