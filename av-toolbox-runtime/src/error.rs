@@ -28,6 +28,14 @@ pub enum RunError {
     /// matched means the branches feeding it disagree on how many frames there are.
     #[error("node {node:?} ended with items its other feeds never matched: {leftover:?}")]
     UnpairedFeeds { node: NodeId, leftover: Vec<usize> },
+    /// A filter in a frame routed region emitted no frames for one input.
+    ///
+    /// A frame routed worker hands back each frame's output on its own, so a filter holding a
+    /// frame for a later call would return it with the wrong one.
+    #[error(
+        "node {node:?} held a frame back in a frame routed region, so it must use chunk or stream parallelism"
+    )]
+    HeldInFrameRegion { node: NodeId },
     /// A thread of the run panicked.
     ///
     /// The panic is caught on the thread it happened on and reported here, so the run stops and
@@ -75,7 +83,9 @@ impl RunError {
         match self {
             Self::Stage { node, .. } => Some(*node),
             Self::Transfer { node, .. } => Some(*node),
-            Self::OutOfStepFeeds { node, .. } | Self::UnpairedFeeds { node, .. } => Some(*node),
+            Self::OutOfStepFeeds { node, .. }
+            | Self::UnpairedFeeds { node, .. }
+            | Self::HeldInFrameRegion { node } => Some(*node),
             Self::InChunk { source, .. } => source.node(),
             Self::Panicked { .. }
             | Self::Exchange { .. }

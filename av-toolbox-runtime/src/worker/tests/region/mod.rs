@@ -1,6 +1,7 @@
 mod chunks;
 mod feeds;
 mod flushing;
+mod frame_routed;
 mod paths;
 mod steps;
 
@@ -149,6 +150,24 @@ impl Filter for Lagging {
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
         let flushed = self.held.drain(..).collect();
         Ok(flushed)
+    }
+}
+
+/// Emits the frame it was given at index `2n`, and a copy of it at index `2n + 1`.
+struct Doubling;
+
+impl StageInstance for Doubling {}
+
+impl Filter for Doubling {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let mut first = inputs.take_frame(0).ok_or_else(missing_frame)?;
+        let index = first.meta().index;
+        first.set_index(index * 2);
+
+        let mut second = first.clone();
+        second.set_index(index * 2 + 1);
+
+        Ok(vec![first, second])
     }
 }
 

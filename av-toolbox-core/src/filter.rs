@@ -6,10 +6,11 @@ use crate::{Inputs, StageError, StageInstance};
 ///
 /// The side defaults to the device.
 pub trait Filter<S: Side = DeviceSide>: StageInstance {
-    /// The frames this emits for one input, in order, which may be none.
+    /// The frames this emits for one input, in order, which may be none or several.
     ///
-    /// A filter holding a temporal window emits nothing while the window fills. Every frame
-    /// carries the metadata of the input it was made from.
+    /// A filter holding a temporal window emits nothing while the window fills. A frame passed
+    /// through keeps its input's metadata. A frame the filter creates gets its own index and
+    /// timestamp, and keeps the chunk of the frame it was made from.
     fn process(&mut self, context: &mut FrameContext, inputs: Inputs<S>)
     -> Result<Vec<S::Frame>, StageError>;
 

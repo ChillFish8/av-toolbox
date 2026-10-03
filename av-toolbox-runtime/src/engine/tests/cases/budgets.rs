@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use crate::engine::plan::default_source_share;
+use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, Routing};
+
+use crate::engine::plan::{default_source_share, holds_nothing_in_frame_region};
 use crate::engine::tests::fixtures::sources::SOURCE_BUDGETS;
 use crate::engine::tests::harness::{
     build_engine,
@@ -9,6 +11,7 @@ use crate::engine::tests::harness::{
     planned_graph,
     planned_width,
     recorded,
+    routing_of,
     run_result_with_watchdog,
     run_with_watchdog,
 };
@@ -159,4 +162,52 @@ fn a_source_share_counts_held_frames_once_per_worker() {
     let with = default_source_share(&graph, &solved, regions, &some_held);
 
     assert_eq!(with - without, 20 * 4 * format().total_bytes());
+}
+
+#[test]
+fn a_frame_routed_node_declaring_held_frames_is_refused() {
+    let specs = vec![
+        source_spec("input", &[0, 0], 0),
+        filter_spec("pass", "input", Some(4)),
+        sink_spec("out", "pass"),
+    ];
+    let (graph, _solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "pass"), Routing::ByFrame);
+
+    let plan = graph.execution_plan().expect("a planned graph");
+    let pass = node_id(&graph, "pass");
+    let region = plan.region(plan.node(pass).region());
+    let mut held = vec![0; graph.len()];
+    held[pass.index()] = 1;
+    let mut diagnostics = Diagnostics::new();
+
+    let accepted = holds_nothing_in_frame_region(&graph, region, &held, &mut diagnostics);
+
+    assert!(!accepted);
+    let codes: Vec<DiagnosticCode> = diagnostics.iter().map(Diagnostic::code).collect();
+    assert_eq!(codes, vec![DiagnosticCode::HeldInFrameRegion]);
+}
+
+#[test]
+fn a_frame_routed_node_holding_nothing_is_accepted() {
+    let specs = vec![
+        source_spec("input", &[0, 0], 0),
+        filter_spec("pass", "input", Some(4)),
+        sink_spec("out", "pass"),
+    ];
+    let (graph, _solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "pass"), Routing::ByFrame);
+
+    let plan = graph.execution_plan().expect("a planned graph");
+    let pass = node_id(&graph, "pass");
+    let region = plan.region(plan.node(pass).region());
+    let held = vec![0; graph.len()];
+    let mut diagnostics = Diagnostics::new();
+
+    let accepted = holds_nothing_in_frame_region(&graph, region, &held, &mut diagnostics);
+
+    assert!(accepted);
+    assert!(diagnostics.is_empty());
 }

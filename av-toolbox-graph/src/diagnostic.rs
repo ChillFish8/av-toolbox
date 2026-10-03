@@ -52,6 +52,7 @@ pub enum DiagnosticCode {
     CallCycle,
     ConflictingMaskPlanes,
     HostMaskPlanes,
+    HeldInFrameRegion,
 }
 
 impl DiagnosticCode {
@@ -85,6 +86,7 @@ impl DiagnosticCode {
             Self::CallCycle => "call-cycle",
             Self::ConflictingMaskPlanes => "conflicting-mask-planes",
             Self::HostMaskPlanes => "host-mask-planes",
+            Self::HeldInFrameRegion => "held-in-frame-region",
         }
     }
 }

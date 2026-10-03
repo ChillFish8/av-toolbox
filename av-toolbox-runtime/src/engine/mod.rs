@@ -45,6 +45,7 @@ use self::plan::{
     bound_slots,
     build_region_edges,
     default_source_share,
+    holds_nothing_in_frame_region,
     is_source_region,
     region_is_supported,
     source_budget,
@@ -178,7 +179,9 @@ impl Engine {
 
         let mut built_regions = Vec::with_capacity(regions.len());
         for region in regions {
-            if !region_is_supported(graph, region, &mut diagnostics) {
+            let supported = region_is_supported(graph, region, &mut diagnostics);
+            let holds_nothing = holds_nothing_in_frame_region(graph, region, held, &mut diagnostics);
+            if !supported || !holds_nothing {
                 built_regions.push(Vec::new());
                 continue;
             }

@@ -57,10 +57,16 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
         .filter(|node_id| plan.node(*node_id).parallelism() == Parallelism::Chunk)
         .collect();
 
-    RegionEdges::new(feeds, region.exits().to_vec())
+    let edges = RegionEdges::new(feeds, region.exits().to_vec())
         .with_paths(paths)
         .with_chunked(chunked)
-        .with_head_authority(region.chunk_authority())
+        .with_head_authority(region.chunk_authority());
+
+    if region.routing() == Routing::ByFrame {
+        return edges.frame_routed();
+    }
+
+    edges
 }
 
 /// Which of a head's input slots are bound, sized to the widest slot any edge names.
@@ -74,6 +80,46 @@ pub(super) fn bound_slots(graph: &CompiledGraph, head: NodeId) -> Vec<bool> {
     }
 
     bound
+}
+
+/// Reports every node of a frame routed region that declares it holds frames back.
+///
+/// A frame routed worker hands back each frame's output on its own, so a frame emitted on a
+/// later call than its input would be returned with the wrong one.
+pub(super) fn holds_nothing_in_frame_region(
+    graph: &CompiledGraph,
+    region: &Region,
+    held: &[usize],
+    diagnostics: &mut Diagnostics,
+) -> bool {
+    if region.routing() != Routing::ByFrame {
+        return true;
+    }
+
+    let mut accepted = true;
+
+    for id in region.nodes() {
+        let frames = held[id.index()];
+        if frames == 0 {
+            continue;
+        }
+
+        let node = graph.node(*id);
+        let message = format!(
+            "{} may hold back {frames} frames, so it must use chunk or stream parallelism rather than frame",
+            node.name(),
+        );
+
+        diagnostics.push(Diagnostic::error(
+            DiagnosticCode::HeldInFrameRegion,
+            format!("{}.{}", node.kind(), node.name()),
+            node.span(),
+            message,
+        ));
+        accepted = false;
+    }
+
+    accepted
 }
 
 pub(super) fn is_source_region(graph: &CompiledGraph, region: &Region) -> bool {
