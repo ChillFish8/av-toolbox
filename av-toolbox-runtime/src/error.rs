@@ -19,12 +19,15 @@ pub enum RunError {
         #[source]
         source: RuntimeError,
     },
-    /// A node's feeds disagreed about how many items they supplied.
+    /// Items paired as one node's inputs were carrying different frames.
+    #[error("node {node:?} was given inputs carrying different frames: {indices:?}")]
+    OutOfStepFeeds { node: NodeId, indices: Vec<u64> },
+    /// A node was ended with items still waiting on one of its feeds.
     ///
-    /// One feed short of the others is not a guess to make, it means the graph does not mean
-    /// what its author thought.
-    #[error("node {node:?} has feeds that disagree on how many items they supply: {counts:?}")]
-    MismatchedFeeds { node: NodeId, counts: Vec<usize> },
+    /// Every feed of a node carries the same frames, so one ending with items the others never
+    /// matched means the branches feeding it disagree on how many frames there are.
+    #[error("node {node:?} ended with items its other feeds never matched: {leftover:?}")]
+    UnpairedFeeds { node: NodeId, leftover: Vec<usize> },
     /// A thread of the run panicked.
     ///
     /// The panic is caught on the thread it happened on and reported here, so the run stops and
@@ -72,7 +75,7 @@ impl RunError {
         match self {
             Self::Stage { node, .. } => Some(*node),
             Self::Transfer { node, .. } => Some(*node),
-            Self::MismatchedFeeds { node, .. } => Some(*node),
+            Self::OutOfStepFeeds { node, .. } | Self::UnpairedFeeds { node, .. } => Some(*node),
             Self::InChunk { source, .. } => source.node(),
             Self::Panicked { .. }
             | Self::Exchange { .. }

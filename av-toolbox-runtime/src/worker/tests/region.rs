@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use av_toolbox_core::{
     Filter,
@@ -76,22 +77,77 @@ impl Filter for PassThrough {
     }
 }
 
-/// Passes its input through with a fixed frame index, so two branches from the same
-/// producer can be told apart downstream.
+/// Passes its input through with a fixed timestamp, so two branches from the same producer can be told apart
+/// downstream.
 struct Retagging {
-    index: u64,
+    seconds: u64,
 }
 
 impl StageInstance for Retagging {}
 
 impl Filter for Retagging {
     fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
-        let mut frame = inputs
-            .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
-        frame.set_index(self.index);
+        let mut frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+        frame.meta_mut().timestamp = Some(Duration::from_secs(self.seconds));
+
         Ok(vec![frame])
     }
+}
+
+/// Passes its input through with a fixed frame index.
+struct Reindexing {
+    index: u64,
+}
+
+impl StageInstance for Reindexing {}
+
+impl Filter for Reindexing {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let mut frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+        frame.set_index(self.index);
+
+        Ok(vec![frame])
+    }
+}
+
+/// Holds `lag` frames, emitting the oldest once it holds more, and flushes the rest when its chunk ends.
+struct Lagging {
+    lag: usize,
+    held: VecDeque<Frame>,
+}
+
+impl Lagging {
+    fn new(lag: usize) -> Self {
+        Self {
+            lag,
+            held: VecDeque::new(),
+        }
+    }
+}
+
+impl StageInstance for Lagging {}
+
+impl Filter for Lagging {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+        self.held.push_back(frame);
+
+        if self.held.len() <= self.lag {
+            return Ok(Vec::new());
+        }
+
+        let oldest = self.held.pop_front().expect("more than the lag is held");
+        Ok(vec![oldest])
+    }
+
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
+        let flushed = self.held.drain(..).collect();
+        Ok(flushed)
+    }
+}
+
+fn missing_frame() -> StageError {
+    StageError::msg("expected a frame in slot 0")
 }
 
 /// Requires both of its two inputs, and returns the one at slot 0.
@@ -193,6 +249,27 @@ impl Sink for Recording {
         for slot in 0..inputs.len() {
             if let Some(item) = inputs.take(slot) {
                 seen.push(item.meta().index);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Records the timestamp of what it was asked to consume, by slot order.
+struct TimestampRecording {
+    seen: Arc<Mutex<Vec<Option<Duration>>>>,
+}
+
+impl StageInstance for TimestampRecording {}
+
+impl Sink for TimestampRecording {
+    fn consume(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<(), StageError> {
+        let mut seen = self.seen.lock().expect("not poisoned");
+
+        for slot in 0..inputs.len() {
+            if let Some(item) = inputs.take(slot) {
+                seen.push(item.meta().timestamp);
             }
         }
 
@@ -325,8 +402,11 @@ fn an_edge_fills_the_input_slot_it_names() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let nodes = vec![
         (head, StageBox::Filter(Box::new(PassThrough))),
-        (retagged, StageBox::Filter(Box::new(Retagging { index: 8 }))),
-        (sink, StageBox::Sink(Box::new(Recording { seen: seen.clone() }))),
+        (retagged, StageBox::Filter(Box::new(Retagging { seconds: 8 }))),
+        (
+            sink,
+            StageBox::Sink(Box::new(TimestampRecording { seen: seen.clone() })),
+        ),
     ];
     let feeds = vec![
         vec![Feed {
@@ -351,7 +431,10 @@ fn an_edge_fills_the_input_slot_it_names() {
         .run(&mut context_of(&context), vec![Some(item(&context, 7, 0))])
         .expect("should run");
 
-    assert_eq!(*seen.lock().expect("not poisoned"), vec![8, 7]);
+    assert_eq!(
+        *seen.lock().expect("not poisoned"),
+        vec![Some(Duration::from_secs(8)), None]
+    );
 }
 
 #[test]
@@ -474,10 +557,10 @@ fn ending_a_region_flushes_its_nodes_in_topological_order() {
     assert_eq!(produced[0].meta().index, 9);
 }
 
-/// `left` multiplies head's one item into 2, `right` multiplies it into 1, so `join`'s two
-/// feeds disagree about how many items they supply.
+/// `left` multiplies head's one item into 2 and `right` into 1, so `join` runs once and one of `left`'s
+/// items is never paired.
 #[test]
-fn feeds_that_disagree_on_how_many_items_they_supply_are_an_error() {
+fn feeds_that_still_disagree_when_the_region_ends_are_an_error() {
     let context = testing_context();
     let head = NodeId::new(0);
     let left = NodeId::new(1);
@@ -517,14 +600,18 @@ fn feeds_that_disagree_on_how_many_items_they_supply_are_an_error() {
     let edges = RegionEdges::new(feeds, vec![join]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let result = runner.run(&mut context_of(&context), vec![Some(item(&context, 0, 0))]);
+    runner
+        .run(&mut context_of(&context), vec![Some(item(&context, 0, 0))])
+        .expect("a step whose feeds lag each other still runs");
 
-    let Err(RunError::MismatchedFeeds { node, counts }) = result else {
-        panic!("feeds supplying different counts should have been an error");
+    let result = runner.end(&mut context_of(&context));
+
+    let Err(RunError::UnpairedFeeds { node, leftover }) = result else {
+        panic!("feeds left holding items at the end should have been an error");
     };
 
     assert_eq!(node, join);
-    assert_eq!(counts, vec![2, 1]);
+    assert_eq!(leftover, vec![1, 0]);
 }
 
 /// `left` and `right` both multiply head's one item into 2, so `join`'s two feeds agree and
@@ -930,4 +1017,109 @@ fn ending_a_flush_at_hand_off_region_flushes_it() {
     runner.end(&mut context).expect("should end");
 
     assert_eq!(flushes.load(Ordering::SeqCst), 1);
+}
+
+/// A head feeding a branch that lags by `lag` and one that does not, joined by a sink recording both slots.
+fn lagging_diamond(lag: usize, seen: Arc<Mutex<Vec<u64>>>) -> (RegionRunner, NodeId) {
+    let head = NodeId::new(0);
+    let lagging = NodeId::new(1);
+    let direct = NodeId::new(2);
+    let join = NodeId::new(3);
+    let nodes = vec![
+        (head, StageBox::Filter(Box::new(PassThrough))),
+        (lagging, StageBox::Filter(Box::new(Lagging::new(lag)))),
+        (direct, StageBox::Filter(Box::new(PassThrough))),
+        (join, StageBox::Sink(Box::new(Recording { seen }))),
+    ];
+    let head_feed = Feed {
+        producer: head,
+        slot: 0,
+    };
+    let join_feeds = vec![
+        Feed {
+            producer: lagging,
+            slot: 0,
+        },
+        Feed {
+            producer: direct,
+            slot: 1,
+        },
+    ];
+    let feeds = vec![vec![head_feed], vec![head_feed], join_feeds];
+    let edges = RegionEdges::new(feeds, vec![join]);
+    let runner = RegionRunner::new(nodes, edges);
+
+    (runner, join)
+}
+
+#[test]
+fn a_join_waits_for_its_lagging_feed_and_pairs_by_index() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (mut runner, _) = lagging_diamond(2, seen.clone());
+
+    for index in 0..5 {
+        let bundle = vec![Some(item(&context, index, 0))];
+        runner.run(&mut context_of(&context), bundle).expect("should run");
+    }
+
+    runner.end(&mut context_of(&context)).expect("should end");
+
+    let expected = vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4];
+    assert_eq!(*seen.lock().expect("not poisoned"), expected);
+}
+
+#[test]
+fn a_join_runs_nothing_while_its_lagging_feed_fills() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (mut runner, _) = lagging_diamond(2, seen.clone());
+
+    for index in 0..2 {
+        let bundle = vec![Some(item(&context, index, 0))];
+        runner.run(&mut context_of(&context), bundle).expect("should run");
+    }
+
+    assert!(seen.lock().expect("not poisoned").is_empty());
+}
+
+#[test]
+fn paired_items_carrying_different_indices_are_an_error() {
+    let context = testing_context();
+    let head = NodeId::new(0);
+    let left = NodeId::new(1);
+    let right = NodeId::new(2);
+    let join = NodeId::new(3);
+    let nodes = vec![
+        (head, StageBox::Filter(Box::new(PassThrough))),
+        (left, StageBox::Filter(Box::new(PassThrough))),
+        (right, StageBox::Filter(Box::new(Reindexing { index: 8 }))),
+        (join, StageBox::Filter(Box::new(Joining))),
+    ];
+    let head_feed = Feed {
+        producer: head,
+        slot: 0,
+    };
+    let join_feeds = vec![
+        Feed {
+            producer: left,
+            slot: 0,
+        },
+        Feed {
+            producer: right,
+            slot: 1,
+        },
+    ];
+    let feeds = vec![vec![head_feed], vec![head_feed], join_feeds];
+    let edges = RegionEdges::new(feeds, vec![join]);
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    let result = runner.run(&mut context_of(&context), vec![Some(item(&context, 4, 0))]);
+
+    let Err(RunError::OutOfStepFeeds { node, indices }) = result else {
+        panic!("items for different frames should not have been paired");
+    };
+
+    assert_eq!(node, join);
+    assert_eq!(indices, vec![4, 8]);
 }

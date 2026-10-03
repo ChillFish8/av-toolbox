@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use av_toolbox_gpu::{AnyItem, FrameContext, StreamItem, StreamPolicy};
@@ -48,10 +48,14 @@ impl RegionEdges {
 /// The head is the only node whose inputs come from outside the region, so [RegionRunner::run]
 /// hands it the bundle directly. Every other node's inputs are assembled from other nodes already
 /// run in this same list, following the region's edges.
+///
+/// Every node after the head keeps one queue per feed, holding what its producers emitted until
+/// every feed has an item ready, so a node whose producers lag each other still sees matching frames.
 pub struct RegionRunner {
     nodes: Vec<(NodeId, StageBox)>,
     edges: RegionEdges,
     positions: HashMap<NodeId, usize>,
+    queues: Vec<Vec<VecDeque<AnyItem>>>,
 }
 
 impl RegionRunner {
@@ -61,11 +65,17 @@ impl RegionRunner {
             .enumerate()
             .map(|(position, (id, _))| (*id, position))
             .collect();
+        let queues = edges
+            .feeds
+            .iter()
+            .map(|feeds| feeds.iter().map(|_| VecDeque::new()).collect())
+            .collect();
 
         Self {
             nodes,
             edges,
             positions,
+            queues,
         }
     }
 
@@ -91,14 +101,16 @@ impl RegionRunner {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
         let held_inputs = hold_until_flushed(context, &bundle);
 
-        let (head_id, head_stage) = &mut self.nodes[0];
-        let mut head_output = run_node(*head_id, head_stage, context, bundle)?;
-        stamp(&self.edges.paths, *head_id, &mut head_output);
+        let mut head_output = step_node(&mut self.nodes[0], context, bundle)?;
+        stamp(&self.edges.paths, self.nodes[0].0, &mut head_output);
         outputs.push(head_output);
 
         for index in 1..self.nodes.len() {
             let feeds = &self.edges.feeds[index - 1];
-            let mut produced = run_fed(feeds, &outputs, &self.positions, &mut self.nodes[index], context)?;
+            let queues = &mut self.queues[index - 1];
+            enqueue(feeds, queues, &outputs, &self.positions);
+
+            let mut produced = run_fed(feeds, queues, &mut self.nodes[index], context)?;
             let node = self.nodes[index].0;
             stamp(&self.edges.paths, node, &mut produced);
             outputs.push(produced);
@@ -129,7 +141,10 @@ impl RegionRunner {
 
         for index in 1..self.nodes.len() {
             let feeds = &self.edges.feeds[index - 1];
-            let mut flushed = end_fed(feeds, &outputs, &self.positions, &mut self.nodes[index], context)?;
+            let queues = &mut self.queues[index - 1];
+            enqueue(feeds, queues, &outputs, &self.positions);
+
+            let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], context)?;
             let node = self.nodes[index].0;
             stamp(&self.edges.paths, node, &mut flushed);
             outputs.push(flushed);
@@ -162,23 +177,48 @@ fn device_item(item: &AnyItem) -> Option<StreamItem> {
     }
 }
 
-/// Runs one non-head node once per item its feeds have ready, in the order they arrived.
-///
-/// See [ready_count] for how many times that is.
-fn run_fed(
+/// Runs one node over one bundle of its inputs.
+fn step_node(
+    node: &mut (NodeId, StageBox),
+    context: &mut FrameContext,
+    slots: Vec<Option<AnyItem>>,
+) -> Result<Vec<AnyItem>, RunError> {
+    let (id, stage) = node;
+    run_node(*id, stage, context, slots)
+}
+
+/// Appends what each of a node's producers emitted this step to that feed's queue.
+fn enqueue(
     feeds: &[Feed],
+    queues: &mut [VecDeque<AnyItem>],
     outputs: &[Vec<AnyItem>],
     positions: &HashMap<NodeId, usize>,
+) {
+    for (feed, queue) in feeds.iter().zip(queues.iter_mut()) {
+        let position = positions[&feed.producer];
+        queue.extend(outputs[position].iter().cloned());
+    }
+}
+
+/// Runs one non-head node once for every item all of its feeds have ready, in the order they arrived.
+///
+/// A node with no feeds needs no input at all, so it runs once.
+fn run_fed(
+    feeds: &[Feed],
+    queues: &mut [VecDeque<AnyItem>],
     node: &mut (NodeId, StageBox),
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
-    let (id, stage) = node;
-    let count = ready_count(*id, feeds, outputs, positions)?;
+    if feeds.is_empty() {
+        return step_node(node, context, Vec::new());
+    }
 
+    let ready = ready_count(queues);
     let mut produced = Vec::new();
-    for item_index in 0..count {
-        let inputs = inputs_for(feeds, outputs, positions, item_index);
-        let mut result = run_node(*id, stage, context, inputs)?;
+
+    for _ in 0..ready {
+        let slots = take_inputs(node.0, feeds, queues)?;
+        let mut result = step_node(node, context, slots)?;
         produced.append(&mut result);
     }
 
@@ -186,14 +226,22 @@ fn run_fed(
 }
 
 /// Feeds a node whatever its producers flushed, then flushes the node itself.
+///
+/// Anything its feeds still hold afterwards was never matched by the others, and is an error.
 fn end_fed(
     feeds: &[Feed],
-    outputs: &[Vec<AnyItem>],
-    positions: &HashMap<NodeId, usize>,
+    queues: &mut [VecDeque<AnyItem>],
     node: &mut (NodeId, StageBox),
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
-    let mut forwarded = run_fed(feeds, outputs, positions, node, context)?;
+    let mut forwarded = run_fed(feeds, queues, node, context)?;
+
+    let leftover: Vec<usize> = queues.iter().map(VecDeque::len).collect();
+    if leftover.iter().any(|&count| count > 0) {
+        let node = node.0;
+        return Err(RunError::UnpairedFeeds { node, leftover });
+    }
+
     let (id, stage) = node;
     let flushed = end_node(*id, stage, context)?;
 
@@ -214,54 +262,38 @@ fn stamp(paths: &HashMap<NodeId, Arc<str>>, node: NodeId, items: &mut [AnyItem])
     }
 }
 
-/// How many times a node fed by `feeds` is ready to run.
-///
-/// A node with no feeds runs once, since it needs no input at all. A node with one feed runs
-/// once per item that feed made ready. A node with several feeds needs them to agree, since a
-/// mismatch means the branches feeding it fell out of step, not that one of them should be
-/// guessed at or silently dropped.
-fn ready_count(
-    node: NodeId,
-    feeds: &[Feed],
-    outputs: &[Vec<AnyItem>],
-    positions: &HashMap<NodeId, usize>,
-) -> Result<usize, RunError> {
-    if feeds.is_empty() {
-        return Ok(1);
-    }
-
-    let counts: Vec<usize> = feeds
-        .iter()
-        .map(|feed| {
-            let position = positions[&feed.producer];
-            outputs[position].len()
-        })
-        .collect();
-
-    let first = counts[0];
-    if counts.iter().all(|&count| count == first) {
-        return Ok(first);
-    }
-
-    Err(RunError::MismatchedFeeds { node, counts })
+/// How many times a node fed by `queues` is ready to run, which is how many items its shortest queue holds.
+fn ready_count(queues: &[VecDeque<AnyItem>]) -> usize {
+    queues.iter().map(VecDeque::len).min().unwrap_or(0)
 }
 
-/// Builds one node's slots from its feeds, taking the `item_index`th item each names.
-fn inputs_for(
+/// Takes the next item from every feed and places each in the slot its feed fills.
+///
+/// Every item taken together must carry the same frame index, the same as an exchange requires of a bundle,
+/// since items for different frames lined up as one node's inputs would be processed as if they matched.
+fn take_inputs(
+    node: NodeId,
     feeds: &[Feed],
-    outputs: &[Vec<AnyItem>],
-    positions: &HashMap<NodeId, usize>,
-    item_index: usize,
-) -> Vec<Option<AnyItem>> {
+    queues: &mut [VecDeque<AnyItem>],
+) -> Result<Vec<Option<AnyItem>>, RunError> {
     let width = feeds.iter().map(|feed| feed.slot + 1).max().unwrap_or(0);
     let mut slots: Vec<Option<AnyItem>> = vec![None; width];
+    let mut indices = Vec::with_capacity(feeds.len());
 
-    for feed in feeds {
-        let position = positions[&feed.producer];
-        slots[feed.slot] = Some(outputs[position][item_index].clone());
+    for (feed, queue) in feeds.iter().zip(queues.iter_mut()) {
+        let item = queue
+            .pop_front()
+            .expect("every queue holds at least the ready count");
+        indices.push(item.meta().index);
+        slots[feed.slot] = Some(item);
     }
 
-    slots
+    let first = indices[0];
+    if indices.iter().any(|&index| index != first) {
+        return Err(RunError::OutOfStepFeeds { node, indices });
+    }
+
+    Ok(slots)
 }
 
 /// Concatenates what every exit node produced, in the order the region names them.
