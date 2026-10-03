@@ -354,6 +354,7 @@ pub(crate) fn merged(args: &MergeArgs, inputs: &[FrameFormat]) -> Result<Merged,
         sample,
         colour,
         frame_rate: inputs[0].frame_rate,
+        field_order: inputs[0].field_order,
     };
 
     Ok(Merged { format, sources })

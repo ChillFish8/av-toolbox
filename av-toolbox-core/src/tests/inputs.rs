@@ -85,6 +85,7 @@ fn frame() -> Frame {
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     };
 
     pool().alloc_frame(&format, FrameMeta::at(0))
@@ -587,6 +588,7 @@ fn host_frame(index: u64) -> HostStreamItem {
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     };
 
     let frame = HostPool::new()

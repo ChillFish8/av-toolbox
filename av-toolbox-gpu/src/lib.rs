@@ -68,6 +68,7 @@ pub use self::frame::{
     ColourRange,
     Depth,
     DepthError,
+    FieldOrder,
     Frame,
     FrameError,
     FrameFormat,

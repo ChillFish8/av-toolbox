@@ -106,6 +106,29 @@ pub struct ColourInfo {
     pub chroma_location: ChromaLocation,
 }
 
+/// How the rows of a frame were captured.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum FieldOrder {
+    /// Every row was captured at once.
+    Progressive,
+    /// The even rows were captured first, then the odd rows.
+    TopFirst,
+    /// The odd rows were captured first, then the even rows.
+    BottomFirst,
+}
+
+impl fmt::Display for FieldOrder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Progressive => "progressive",
+            Self::TopFirst => "top field first",
+            Self::BottomFirst => "bottom field first",
+        };
+
+        formatter.write_str(name)
+    }
+}
+
 /// What a frame is.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct FrameFormat {
@@ -116,6 +139,8 @@ pub struct FrameFormat {
     pub colour: ColourInfo,
     /// How many frames the stream shows per second, `None` when it is unknown.
     pub frame_rate: Option<FrameRate>,
+    /// How the rows of each frame were captured, `None` when it is unknown.
+    pub field_order: Option<FieldOrder>,
 }
 
 impl FrameFormat {
@@ -313,6 +338,7 @@ mod tests {
             sample,
             colour: ColourInfo::default(),
             frame_rate: None,
+            field_order: None,
         }
     }
 
@@ -323,6 +349,24 @@ mod tests {
             },
             sample,
         )
+    }
+
+    #[test]
+    fn a_field_order_reads_as_words() {
+        assert_eq!(FieldOrder::Progressive.to_string(), "progressive");
+        assert_eq!(FieldOrder::TopFirst.to_string(), "top field first");
+        assert_eq!(FieldOrder::BottomFirst.to_string(), "bottom field first");
+    }
+
+    #[test]
+    fn the_field_order_does_not_change_how_a_format_reads() {
+        let unknown = yuv420(SampleFormat::U8);
+        let interlaced = FrameFormat {
+            field_order: Some(FieldOrder::TopFirst),
+            ..unknown
+        };
+
+        assert_eq!(interlaced.to_string(), unknown.to_string());
     }
 
     #[test]
@@ -355,6 +399,7 @@ mod tests {
             sample: SampleFormat::F32,
             colour: ColourInfo::default(),
             frame_rate: None,
+            field_order: None,
         };
 
         let expected = (3840 * 2160 + 2 * 1920 * 1080) * 4;

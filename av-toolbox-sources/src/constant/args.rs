@@ -140,6 +140,7 @@ pub(crate) fn frame_format(shape: &Shape, stage: &str) -> Result<FrameFormat, St
         sample,
         colour,
         frame_rate,
+        field_order: None,
     })
 }
 

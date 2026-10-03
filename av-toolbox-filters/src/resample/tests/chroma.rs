@@ -30,6 +30,7 @@ fn yuv(width: u32, height: u32, subsampling: Subsampling, location: ChromaLocati
         sample: SampleFormat::U8,
         colour,
         frame_rate: None,
+        field_order: None,
     }
 }
 

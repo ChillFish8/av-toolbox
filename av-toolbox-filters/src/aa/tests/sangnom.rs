@@ -33,6 +33,7 @@ fn format(width: u32, height: u32, layout: FrameLayout, sample: SampleFormat) ->
         sample,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     }
 }
 

@@ -53,6 +53,7 @@ fn yuv(width: u32, height: u32, subsampling: Subsampling) -> FrameFormat {
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     }
 }
 

@@ -36,6 +36,7 @@ fn format(layout: FrameLayout, sample: SampleFormat) -> FrameFormat {
         sample,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     }
 }
 

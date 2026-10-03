@@ -223,6 +223,7 @@ mod tests {
             sample,
             colour: ColourInfo::default(),
             frame_rate: None,
+            field_order: None,
         })
     }
 

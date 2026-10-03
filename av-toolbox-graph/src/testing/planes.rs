@@ -138,6 +138,7 @@ impl SourceDefinition for LayoutFile {
             sample: SampleFormat::U8,
             colour,
             frame_rate: None,
+            field_order: None,
         })
     }
 

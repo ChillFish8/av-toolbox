@@ -57,6 +57,7 @@ fn yuv420(width: u32, height: u32) -> FrameFormat {
         sample: SampleFormat::U8,
         colour,
         frame_rate: None,
+        field_order: None,
     }
 }
 

@@ -36,6 +36,7 @@ fn format(layout: FrameLayout, sample: SampleFormat) -> FrameFormat {
         sample,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     }
 }
 
@@ -213,6 +214,7 @@ fn a_plane_size_that_overflows_is_refused_through_produces() {
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     };
     let chosen = [Some(StreamFormat::Frames(input))];
 
@@ -232,6 +234,7 @@ fn a_plane_wider_than_the_supersampled_limit_is_refused_through_produces() {
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     };
     let chosen = [Some(StreamFormat::Frames(input))];
 

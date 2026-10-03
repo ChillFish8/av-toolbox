@@ -318,6 +318,7 @@ mod tests {
             sample: SampleFormat::U8,
             colour,
             frame_rate: None,
+            field_order: None,
         }
     }
 

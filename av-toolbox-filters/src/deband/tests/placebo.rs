@@ -36,6 +36,7 @@ fn format(layout: FrameLayout, sample: SampleFormat, range: ColourRange) -> Fram
         sample,
         colour,
         frame_rate: None,
+        field_order: None,
     }
 }
 

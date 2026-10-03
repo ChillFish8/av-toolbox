@@ -161,6 +161,7 @@ mod tests {
             sample,
             colour: ColourInfo::default(),
             frame_rate: None,
+            field_order: None,
         })
     }
 
@@ -283,6 +284,7 @@ mod tests {
             sample: SampleFormat::U8,
             colour: ColourInfo::default(),
             frame_rate: None,
+            field_order: None,
         });
         planes.resize_for(&grey);
 

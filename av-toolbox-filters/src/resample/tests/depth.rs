@@ -35,6 +35,7 @@ fn frames(layout: FrameLayout, sample: SampleFormat) -> StreamFormat {
         sample,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     })
 }
 

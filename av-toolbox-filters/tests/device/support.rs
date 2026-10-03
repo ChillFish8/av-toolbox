@@ -59,6 +59,7 @@ pub(crate) fn frame(
         sample,
         colour,
         frame_rate: None,
+        field_order: None,
     }
 }
 

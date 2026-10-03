@@ -55,6 +55,7 @@ pub(crate) fn yuv420(width: u32, height: u32, sample: SampleFormat, rate: Option
             ..ColourInfo::default()
         },
         frame_rate: rate,
+        field_order: None,
     }
 }
 

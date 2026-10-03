@@ -211,6 +211,7 @@ fn wide_formats() -> ResolvedFormats {
         sample: SampleFormat::U8,
         colour: ColourInfo::default(),
         frame_rate: None,
+        field_order: None,
     });
 
     ResolvedFormats::new(vec![Some(format)], Some(format))

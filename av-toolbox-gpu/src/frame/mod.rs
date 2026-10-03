@@ -23,6 +23,7 @@ pub use self::format::{
     ChromaLocation,
     ColourInfo,
     ColourRange,
+    FieldOrder,
     FrameFormat,
     MaskChroma,
     MaskFormat,

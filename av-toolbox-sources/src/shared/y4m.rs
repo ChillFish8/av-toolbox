@@ -78,6 +78,7 @@ impl<R: Read> Y4mReader<R> {
             sample,
             colour,
             frame_rate: rate_of(frame_rate),
+            field_order: None,
         };
 
         let frame_end = bytes_read.load(Ordering::Relaxed);
