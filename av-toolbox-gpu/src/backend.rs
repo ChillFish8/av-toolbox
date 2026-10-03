@@ -6,7 +6,7 @@ use cubecl::stream_id::StreamId;
 
 use crate::memory::{BufferPool, ClientAllocator};
 use crate::probe::{open_client, supported_device};
-use crate::{Accelerator, Capabilities, Device, FrameContext, StreamPolicy};
+use crate::{Accelerator, Capabilities, Device, FrameContext, RuntimeError, StreamPolicy};
 
 /// The one stream every client of a [StreamPolicy::SharedStream] backend queues on.
 const SHARED_STREAM: StreamId = StreamId { value: 0 };
@@ -103,6 +103,9 @@ pub trait BuildTask {
 
     fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output;
 }
+
+/// Blocks until the work the calling thread queued on the device has finished.
+pub type DeviceSync = Arc<dyn Fn() -> Result<(), RuntimeError> + Send + Sync>;
 
 /// An opened accelerator, ready to build stages against.
 pub struct Backend {
@@ -217,6 +220,18 @@ impl Backend {
         }
     }
 
+    /// A hook blocking until the work the calling thread queued on this device has finished.
+    pub fn device_sync(&self) -> DeviceSync {
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            Opened::Cuda(context) => sync_hook(context.client()),
+            #[cfg(feature = "rocm")]
+            Opened::Rocm(context) => sync_hook(context.client()),
+            #[cfg(any(feature = "vulkan", feature = "metal"))]
+            Opened::Wgpu(context) => sync_hook(context.client()),
+        }
+    }
+
     /// Runs `task` against this backend's context.
     pub fn build<T: BuildTask>(&self, task: T) -> T::Output {
         match &self.inner {
@@ -230,6 +245,17 @@ impl Backend {
     }
 }
 
+fn sync_hook<R: Runtime>(client: &ComputeClient<R>) -> DeviceSync {
+    let client = client.clone();
+
+    Arc::new(move || {
+        let pending = client.sync();
+        let synced = cubecl::future::block_on(pending);
+
+        synced.map_err(RuntimeError::Sync)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
@@ -238,6 +264,15 @@ mod tests {
     use crate::test_device;
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::testing::TEST_ACCELERATOR;
+
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    #[test]
+    fn a_device_sync_returns_on_an_idle_backend() {
+        let backend = Backend::open(TEST_ACCELERATOR, test_device()).expect("should open");
+        let sync = backend.device_sync();
+
+        sync().expect("an idle device syncs");
+    }
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]

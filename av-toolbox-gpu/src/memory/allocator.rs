@@ -22,6 +22,8 @@ pub enum RuntimeError {
          and the client that produced it should be replaced rather than retried"
     )]
     Readback(#[from] ServerError),
+    #[error("waiting for the device to finish its work failed: {0}")]
+    Sync(ServerError),
     #[error("the device returned {returned} buffers for a read of {expected} planes")]
     ReadShape { expected: usize, returned: usize },
     #[error(

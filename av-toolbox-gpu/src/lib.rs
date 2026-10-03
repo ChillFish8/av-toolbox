@@ -45,7 +45,7 @@ pub use cubecl::client::ComputeClient;
 pub use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, Runtime};
 
 pub use self::accelerator::{Accelerator, default_accelerators};
-pub use self::backend::{Backend, BuildContext, BuildTask};
+pub use self::backend::{Backend, BuildContext, BuildTask, DeviceSync};
 pub use self::batch::{PendingBatch, TryWait};
 pub use self::cache::{
     COMPILATION_CACHE_ENV,
