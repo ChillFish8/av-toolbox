@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use av_toolbox_gpu::{AnyItem, FrameContext, StreamItem, StreamPolicy};
@@ -19,12 +19,15 @@ pub struct Feed {
 /// `feeds` holds one entry per node after the head, in the same order those nodes appear in
 /// [RegionRunner]'s own node list. Each entry lists which producer fills which of that node's
 /// input slots. `exits` names the nodes whose output leaves the region. `paths` names each stage
-/// node, so what it emits is filed under that name.
+/// node, so what it emits is filed under that name. `chunked` names the nodes given one chunk at a
+/// time, which are restarted whenever their inputs move to a new one.
 #[derive(Debug)]
 pub struct RegionEdges {
     feeds: Vec<Vec<Feed>>,
     exits: Vec<NodeId>,
     paths: HashMap<NodeId, Arc<str>>,
+    chunked: HashSet<NodeId>,
+    head_authority: Option<usize>,
 }
 
 impl RegionEdges {
@@ -33,12 +36,26 @@ impl RegionEdges {
             feeds,
             exits,
             paths: HashMap::new(),
+            chunked: HashSet::new(),
+            head_authority: None,
         }
     }
 
     /// The same edges, filing what each named node emits under its path.
     pub fn with_paths(mut self, paths: HashMap<NodeId, Arc<str>>) -> Self {
         self.paths = paths;
+        self
+    }
+
+    /// The same edges, restarting each of `chunked` whenever its inputs move to a new chunk.
+    pub fn with_chunked(mut self, chunked: HashSet<NodeId>) -> Self {
+        self.chunked = chunked;
+        self
+    }
+
+    /// The same edges, reading the head's chunk from the slot `authority` names.
+    pub fn with_head_authority(mut self, authority: Option<usize>) -> Self {
+        self.head_authority = authority;
         self
     }
 }
@@ -56,6 +73,7 @@ pub struct RegionRunner {
     edges: RegionEdges,
     positions: HashMap<NodeId, usize>,
     queues: Vec<Vec<VecDeque<AnyItem>>>,
+    last_chunks: Vec<Option<u64>>,
 }
 
 impl RegionRunner {
@@ -71,16 +89,21 @@ impl RegionRunner {
             .map(|feeds| feeds.iter().map(|_| VecDeque::new()).collect())
             .collect();
 
+        let last_chunks = vec![None; nodes.len()];
+
         Self {
             nodes,
             edges,
             positions,
             queues,
+            last_chunks,
         }
     }
 
     /// Signals the start of a chunk to every node in the region.
     pub fn start(&mut self, context: &mut FrameContext) -> Result<(), RunError> {
+        self.last_chunks.fill(None);
+
         for (id, stage) in &mut self.nodes {
             start_node(*id, stage, context)?;
         }
@@ -101,7 +124,12 @@ impl RegionRunner {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
         let held_inputs = hold_until_flushed(context, &bundle);
 
-        let mut head_output = step_node(&mut self.nodes[0], context, bundle)?;
+        let head_watch = ChunkWatch {
+            chunked: self.edges.chunked.contains(&self.nodes[0].0),
+            authority: self.edges.head_authority,
+            last: &mut self.last_chunks[0],
+        };
+        let mut head_output = step_node(&mut self.nodes[0], head_watch, context, bundle)?;
         stamp(&self.edges.paths, self.nodes[0].0, &mut head_output);
         outputs.push(head_output);
 
@@ -110,8 +138,13 @@ impl RegionRunner {
             let queues = &mut self.queues[index - 1];
             enqueue(feeds, queues, &outputs, &self.positions);
 
-            let mut produced = run_fed(feeds, queues, &mut self.nodes[index], context)?;
             let node = self.nodes[index].0;
+            let watch = ChunkWatch {
+                chunked: self.edges.chunked.contains(&node),
+                authority: None,
+                last: &mut self.last_chunks[index],
+            };
+            let mut produced = run_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
             stamp(&self.edges.paths, node, &mut produced);
             outputs.push(produced);
         }
@@ -144,8 +177,13 @@ impl RegionRunner {
             let queues = &mut self.queues[index - 1];
             enqueue(feeds, queues, &outputs, &self.positions);
 
-            let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], context)?;
             let node = self.nodes[index].0;
+            let watch = ChunkWatch {
+                chunked: self.edges.chunked.contains(&node),
+                authority: None,
+                last: &mut self.last_chunks[index],
+            };
+            let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
             stamp(&self.edges.paths, node, &mut flushed);
             outputs.push(flushed);
         }
@@ -177,14 +215,70 @@ fn device_item(item: &AnyItem) -> Option<StreamItem> {
     }
 }
 
+/// What a node needs to notice its inputs moving to a new chunk.
+struct ChunkWatch<'a> {
+    chunked: bool,
+    authority: Option<usize>,
+    last: &'a mut Option<u64>,
+}
+
 /// Runs one node over one bundle of its inputs.
+///
+/// A node given one chunk at a time is ended and started again first when the bundle opens a new chunk,
+/// and what that end flushed comes ahead of what the bundle produces.
 fn step_node(
     node: &mut (NodeId, StageBox),
+    watch: ChunkWatch<'_>,
     context: &mut FrameContext,
     slots: Vec<Option<AnyItem>>,
 ) -> Result<Vec<AnyItem>, RunError> {
+    let mut produced = Vec::new();
+
+    if watch.chunked {
+        let chunk = chunk_of(&slots, watch.authority);
+        let mut flushed = restart_on_new_chunk(node, watch.last, chunk, context)?;
+        produced.append(&mut flushed);
+    }
+
     let (id, stage) = node;
-    run_node(*id, stage, context, slots)
+    let mut result = run_node(*id, stage, context, slots)?;
+    produced.append(&mut result);
+
+    Ok(produced)
+}
+
+/// The chunk a bundle belongs to, read from the slot `authority` names or else its lowest filled slot.
+fn chunk_of(slots: &[Option<AnyItem>], authority: Option<usize>) -> Option<u64> {
+    let authoritative = authority
+        .and_then(|slot| slots.get(slot))
+        .and_then(Option::as_ref);
+    let first_filled = slots.iter().flatten().next();
+    let item = authoritative.or(first_filled)?;
+
+    Some(item.meta().chunk)
+}
+
+/// Ends and starts `node` again when `chunk` differs from the one it last ran on, returning what it flushed.
+fn restart_on_new_chunk(
+    node: &mut (NodeId, StageBox),
+    last: &mut Option<u64>,
+    chunk: Option<u64>,
+    context: &mut FrameContext,
+) -> Result<Vec<AnyItem>, RunError> {
+    let Some(chunk) = chunk else {
+        return Ok(Vec::new());
+    };
+
+    let previous = last.replace(chunk);
+    if previous.is_none_or(|previous| previous == chunk) {
+        return Ok(Vec::new());
+    }
+
+    let (id, stage) = node;
+    let flushed = end_node(*id, stage, context)?;
+    start_node(*id, stage, context)?;
+
+    Ok(flushed)
 }
 
 /// Appends what each of a node's producers emitted this step to that feed's queue.
@@ -207,10 +301,11 @@ fn run_fed(
     feeds: &[Feed],
     queues: &mut [VecDeque<AnyItem>],
     node: &mut (NodeId, StageBox),
+    watch: ChunkWatch<'_>,
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
     if feeds.is_empty() {
-        return step_node(node, context, Vec::new());
+        return step_node(node, watch, context, Vec::new());
     }
 
     let ready = ready_count(queues);
@@ -218,7 +313,12 @@ fn run_fed(
 
     for _ in 0..ready {
         let slots = take_inputs(node.0, feeds, queues)?;
-        let mut result = step_node(node, context, slots)?;
+        let watch = ChunkWatch {
+            chunked: watch.chunked,
+            authority: watch.authority,
+            last: &mut *watch.last,
+        };
+        let mut result = step_node(node, watch, context, slots)?;
         produced.append(&mut result);
     }
 
@@ -232,9 +332,10 @@ fn end_fed(
     feeds: &[Feed],
     queues: &mut [VecDeque<AnyItem>],
     node: &mut (NodeId, StageBox),
+    watch: ChunkWatch<'_>,
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
-    let mut forwarded = run_fed(feeds, queues, node, context)?;
+    let mut forwarded = run_fed(feeds, queues, node, watch, context)?;
 
     let leftover: Vec<usize> = queues.iter().map(VecDeque::len).collect();
     if leftover.iter().any(|&count| count > 0) {
@@ -269,8 +370,8 @@ fn ready_count(queues: &[VecDeque<AnyItem>]) -> usize {
 
 /// Takes the next item from every feed and places each in the slot its feed fills.
 ///
-/// Every item taken together must carry the same frame index, the same as an exchange requires of a bundle,
-/// since items for different frames lined up as one node's inputs would be processed as if they matched.
+/// Every item taken together must carry the same frame index. Items for different frames lined up as one
+/// node's inputs would be processed as if they matched.
 fn take_inputs(
     node: NodeId,
     feeds: &[Feed],

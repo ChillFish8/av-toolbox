@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use av_toolbox_core::StageKind;
+use av_toolbox_core::{Parallelism, StageKind};
 use av_toolbox_gpu::FrameBudget;
 use av_toolbox_graph::{
     CompiledGraph,
@@ -48,7 +48,19 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
         })
         .collect();
 
-    RegionEdges::new(feeds, region.exits().to_vec()).with_paths(paths)
+    let plan = graph
+        .execution_plan()
+        .expect("a graph must be planned before its regions are wired");
+    let chunked = nodes
+        .iter()
+        .copied()
+        .filter(|node_id| plan.node(*node_id).parallelism() == Parallelism::Chunk)
+        .collect();
+
+    RegionEdges::new(feeds, region.exits().to_vec())
+        .with_paths(paths)
+        .with_chunked(chunked)
+        .with_head_authority(region.chunk_authority())
 }
 
 /// Which of a head's input slots are bound, sized to the widest slot any edge names.
@@ -208,9 +220,8 @@ pub(crate) const FRAME_UNITS_IN_FLIGHT: usize = HEADROOM_ITEMS_PER_WORKER;
 
 /// How many nodes the longest source region runs.
 ///
-/// A source region's nodes all share the source's one budgeted context, and
-/// [RegionRunner::run](crate::RegionRunner::run) holds every one of their outputs until it
-/// returns, so this is how many items that one share has to fit at once.
+/// Each node's output from one step is held until the step returns, so the source's share of the
+/// budget must fit one item per node.
 fn longest_source_region(graph: &CompiledGraph, regions: &[Region]) -> usize {
     regions
         .iter()
