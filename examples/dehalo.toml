@@ -14,7 +14,7 @@ description = "Where to write the y4m stream"
 default = "output.y4m"
 
 [source.input]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ input }}"
 
 [filter.dehaloed]
