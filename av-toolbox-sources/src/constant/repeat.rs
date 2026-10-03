@@ -145,7 +145,7 @@ impl RepeatFilter {
 impl StageInstance for RepeatFilter {}
 
 impl Filter for RepeatFilter {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(reference) = inputs.take_frame(0) else {
             return Err(missing_reference(self.stage));
         };
@@ -153,7 +153,9 @@ impl Filter for RepeatFilter {
         let meta = reference.meta().clone();
         drop(reference);
 
-        self.repeat.frame(context, meta)
+        let frame = self.repeat.frame(context, meta)?;
+
+        Ok(vec![frame])
     }
 }
 

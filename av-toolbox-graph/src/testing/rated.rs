@@ -117,10 +117,12 @@ struct RetimeStage;
 impl StageInstance for RetimeStage {}
 
 impl Filter for RetimeStage {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        inputs
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 

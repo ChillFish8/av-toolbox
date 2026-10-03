@@ -557,7 +557,7 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
 impl<R: Runtime> StageInstance for Antialiaser<R> {}
 
 impl<R: Runtime> Filter for Antialiaser<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));
         };
@@ -572,6 +572,8 @@ impl<R: Runtime> Filter for Antialiaser<R> {
             inner: &*self,
         };
 
-        self.planewise.run(&self.client, context, input, &masked)
+        let output = self.planewise.run(&self.client, context, input, &masked)?;
+
+        Ok(vec![output])
     }
 }

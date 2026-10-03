@@ -5,6 +5,7 @@ use av_toolbox_gpu::{
     ChromaLocation,
     ColourInfo,
     Depth,
+    Frame,
     FrameFormat,
     FrameLayout,
     FrameMeta,
@@ -22,6 +23,17 @@ use serde_json::json;
 use crate::planes::PlaneName;
 use crate::planes::extract::extracted;
 use crate::planes::merge::{Merge, MergeArgs, Merger, merged};
+
+/// The one frame a filter emitted for one input.
+fn only_frame(mut frames: Vec<Frame>) -> Frame {
+    assert_eq!(
+        frames.len(),
+        1,
+        "a filter emitted {} frames for one input",
+        frames.len()
+    );
+    frames.remove(0)
+}
 
 fn capabilities() -> Capabilities {
     let accelerator = default_accelerators()[0];
@@ -230,7 +242,8 @@ fn merging_shares_every_plane() {
 
     let slots = vec![Some(StreamItem::Frame(luma)), Some(StreamItem::Frame(chroma))];
     let inputs = Inputs::new(slots);
-    let produced = merger.process(&mut context, inputs).expect("merges");
+    let emitted = merger.process(&mut context, inputs).expect("merges");
+    let produced = only_frame(emitted);
 
     let produced_v = produced.plane(Channel::V).expect("carries V");
     assert!(std::ptr::eq(produced_v.buffer(), original_v.buffer()));

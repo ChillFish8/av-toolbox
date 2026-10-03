@@ -67,10 +67,12 @@ struct PassInstance;
 impl StageInstance for PassInstance {}
 
 impl Filter for PassInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        inputs
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 
@@ -137,14 +139,14 @@ struct TagInstance;
 impl StageInstance for TagInstance {}
 
 impl Filter for TagInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let mut frame = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
         let index = frame.meta().index as i64;
         frame.meta_mut().attach("index_again", MetaValue::Int(index));
 
-        Ok(frame)
+        Ok(vec![frame])
     }
 }
 

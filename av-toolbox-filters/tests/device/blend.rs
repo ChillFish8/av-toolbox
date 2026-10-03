@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
     ChromaLocation,
     ColourInfo,
     Depth,
+    Frame,
     FrameFormat,
     FrameLayout,
     FrameMeta,
@@ -33,6 +34,17 @@ use av_toolbox_gpu::{
     test_device,
 };
 use cubecl::prelude::Runtime;
+
+/// The one frame a filter emitted for one input.
+fn only_frame(mut frames: Vec<Frame>) -> Frame {
+    assert_eq!(
+        frames.len(),
+        1,
+        "a filter emitted {} frames for one input",
+        frames.len()
+    );
+    frames.remove(0)
+}
 
 fn backend() -> Backend {
     Backend::open_default(test_device()).expect("a backend should open")
@@ -157,7 +169,8 @@ impl BuildTask for BlendOnce {
             .start_of_stream(&mut context)
             .expect("should start the stream");
         let inputs = Inputs::new(slots);
-        let output = self.filter.process(&mut context, inputs).expect("should blend");
+        let processed = self.filter.process(&mut context, inputs).expect("should blend");
+        let output = only_frame(processed);
 
         self.format
             .channels()

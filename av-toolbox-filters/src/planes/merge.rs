@@ -508,7 +508,7 @@ impl Merger {
 impl StageInstance for Merger {}
 
 impl Filter for Merger {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let mut frames = Vec::with_capacity(inputs.len());
 
         for index in 0..inputs.len() {
@@ -533,6 +533,6 @@ impl Filter for Merger {
 
         let output = Frame::from_planes(self.merged.format, planes, meta).map_err(bad_frame)?;
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

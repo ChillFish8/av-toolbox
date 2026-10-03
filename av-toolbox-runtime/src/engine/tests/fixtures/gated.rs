@@ -90,7 +90,7 @@ impl SlowInstance {
 impl StageInstance for SlowInstance {}
 
 impl Filter for SlowInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         if let Some(parked) = self.parked.take() {
             parked.send(()).ok();
         }
@@ -99,9 +99,11 @@ impl Filter for SlowInstance {
             gate.recv().ok();
         }
 
-        inputs
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 
@@ -202,7 +204,7 @@ impl Filter<HostSide> for HostSlowInstance {
         &mut self,
         _context: &mut FrameContext,
         mut inputs: Inputs<HostSide>,
-    ) -> Result<HostFrame, StageError> {
+    ) -> Result<Vec<HostFrame>, StageError> {
         if let Some(parked) = self.parked.take() {
             parked.send(()).ok();
         }
@@ -211,9 +213,11 @@ impl Filter<HostSide> for HostSlowInstance {
             gate.recv().ok();
         }
 
-        inputs
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 
@@ -314,7 +318,7 @@ impl TrackedInstance {
 impl StageInstance for TrackedInstance {}
 
 impl Filter for TrackedInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         self.gate.wait();
 
         let frame = inputs
@@ -324,7 +328,7 @@ impl Filter for TrackedInstance {
         self.id.processed(frame_second(frame.meta()));
         WorkerGate::processed();
 
-        Ok(frame)
+        Ok(vec![frame])
     }
 }
 
@@ -426,7 +430,7 @@ impl MatchingInstance {
 impl StageInstance for MatchingInstance {}
 
 impl Filter for MatchingInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         self.gate.wait();
 
         let base = inputs
@@ -446,7 +450,7 @@ impl Filter for MatchingInstance {
         self.id.processed(base_second);
         WorkerGate::processed();
 
-        Ok(base)
+        Ok(vec![base])
     }
 }
 

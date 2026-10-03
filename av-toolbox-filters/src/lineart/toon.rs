@@ -296,7 +296,7 @@ impl<R: Runtime> PlaneFilter for Toner<R> {
 impl<R: Runtime> StageInstance for Toner<R> {}
 
 impl<R: Runtime> Filter for Toner<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));
         };
@@ -311,6 +311,8 @@ impl<R: Runtime> Filter for Toner<R> {
             inner: &*self,
         };
 
-        self.planewise.run(&self.client, context, input, &masked)
+        let output = self.planewise.run(&self.client, context, input, &masked)?;
+
+        Ok(vec![output])
     }
 }

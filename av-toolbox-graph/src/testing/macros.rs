@@ -79,10 +79,12 @@ macro_rules! fixture_kind_method {
                 &mut self,
                 _context: &mut FrameContext,
                 mut inputs: Inputs,
-            ) -> Result<Frame, StageError> {
-                inputs
+            ) -> Result<Vec<Frame>, StageError> {
+                let frame = inputs
                     .take_frame(0)
-                    .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+                    .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+                Ok(vec![frame])
             }
         }
     };
@@ -320,10 +322,12 @@ macro_rules! opinionated_filter {
                 &mut self,
                 _context: &mut FrameContext,
                 mut inputs: Inputs,
-            ) -> Result<Frame, StageError> {
-                inputs
+            ) -> Result<Vec<Frame>, StageError> {
+                let frame = inputs
                     .take_frame(0)
-                    .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+                    .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+                Ok(vec![frame])
             }
         }
 

@@ -128,10 +128,16 @@ pub trait StageInstance: Send + 'static {
 /// impl StageInstance for DenoiseFilter {}
 ///
 /// impl Filter for DenoiseFilter {
-///     fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-///         inputs
+///     fn process(
+///         &mut self,
+///         _context: &mut FrameContext,
+///         mut inputs: Inputs,
+///     ) -> Result<Vec<Frame>, StageError> {
+///         let frame = inputs
 ///             .take_frame(0)
-///             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+///             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+///
+///         Ok(vec![frame])
 ///     }
 /// }
 ///
@@ -492,10 +498,16 @@ mod tests {
     impl StageInstance for ExampleInstance {}
 
     impl Filter for ExampleInstance {
-        fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-            inputs
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: Inputs,
+        ) -> Result<Vec<Frame>, StageError> {
+            let frame = inputs
                 .take_frame(0)
-                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+            Ok(vec![frame])
         }
     }
 

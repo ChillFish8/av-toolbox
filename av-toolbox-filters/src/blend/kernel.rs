@@ -141,7 +141,7 @@ struct PlaneSet<'a> {
 impl<R: Runtime> StageInstance for MaskedBlend<R> {}
 
 impl<R: Runtime> Filter for MaskedBlend<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let base = inputs.take_frame(0).ok_or_else(missing_base)?;
         let overlay = inputs.take_frame(1).ok_or_else(missing_overlay)?;
         let mask = inputs.take_mask(2).ok_or_else(missing_mask)?;
@@ -172,6 +172,6 @@ impl<R: Runtime> Filter for MaskedBlend<R> {
             }
         }
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

@@ -716,11 +716,13 @@ impl<R: Runtime> PlaneFilter for Deringer<R> {
 impl<R: Runtime> StageInstance for Deringer<R> {}
 
 impl<R: Runtime> Filter for Deringer<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());
         };
 
-        self.planewise.run(&self.client, context, input, self)
+        let output = self.planewise.run(&self.client, context, input, self)?;
+
+        Ok(vec![output])
     }
 }

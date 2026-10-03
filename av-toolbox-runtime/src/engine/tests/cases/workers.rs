@@ -77,7 +77,7 @@ struct AlwaysFailing;
 impl StageInstance for AlwaysFailing {}
 
 impl Filter for AlwaysFailing {
-    fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         Err(StageError::msg("this filter always fails"))
     }
 }

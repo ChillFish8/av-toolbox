@@ -67,10 +67,12 @@ struct PassThrough;
 impl StageInstance for PassThrough {}
 
 impl Filter for PassThrough {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        inputs
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 
@@ -83,12 +85,12 @@ struct Retagging {
 impl StageInstance for Retagging {}
 
 impl Filter for Retagging {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let mut frame = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
         frame.set_index(self.index);
-        Ok(frame)
+        Ok(vec![frame])
     }
 }
 
@@ -98,7 +100,7 @@ struct Joining;
 impl StageInstance for Joining {}
 
 impl Filter for Joining {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let left = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
@@ -106,7 +108,7 @@ impl Filter for Joining {
             .take_frame(1)
             .ok_or_else(|| StageError::msg("expected a frame in slot 1"))?;
 
-        Ok(left)
+        Ok(vec![left])
     }
 }
 
@@ -118,12 +120,12 @@ struct Holding {
 impl StageInstance for Holding {}
 
 impl Filter for Holding {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let frame = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
         self.held = Some(frame.clone());
-        Ok(frame)
+        Ok(vec![frame])
     }
 
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
@@ -203,7 +205,7 @@ struct Failing;
 impl StageInstance for Failing {}
 
 impl Filter for Failing {
-    fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         Err(StageError::msg("this filter always fails"))
     }
 }

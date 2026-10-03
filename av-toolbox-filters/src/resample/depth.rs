@@ -278,13 +278,13 @@ impl<R: Runtime> Converter<R> {
 impl<R: Runtime> StageInstance for Converter<R> {}
 
 impl<R: Runtime> Filter for Converter<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());
         };
 
         if self.identity {
-            return Ok(input);
+            return Ok(vec![input]);
         }
 
         let meta = input.meta().clone();
@@ -302,6 +302,6 @@ impl<R: Runtime> Filter for Converter<R> {
             self.convert_plane(context, input_plane, output_plane, index as u32);
         }
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

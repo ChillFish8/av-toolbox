@@ -617,7 +617,7 @@ fn a_host_filter_is_written_against_host_frames() {
             &mut self,
             _context: &mut av_toolbox_gpu::FrameContext,
             mut inputs: Inputs<HostSide>,
-        ) -> Result<HostFrame, crate::StageError> {
+        ) -> Result<Vec<HostFrame>, crate::StageError> {
             let frame = inputs.take_frame(0).expect("a frame");
             let mut frame = frame.try_into_mut().expect("nothing else holds it");
             frame
@@ -625,14 +625,15 @@ fn a_host_filter_is_written_against_host_frames() {
                 .expect("grey")
                 .fill(200);
 
-            Ok(frame.freeze())
+            Ok(vec![frame.freeze()])
         }
     }
 
     let mut context = av_toolbox_gpu::testing_context();
     let inputs = Inputs::<HostSide>::from_slots(vec![Some(host_frame(0))]);
 
-    let out = crate::Filter::process(&mut Brighten, &mut context, inputs).expect("processes");
+    let mut outputs = crate::Filter::process(&mut Brighten, &mut context, inputs).expect("processes");
+    let out = outputs.remove(0);
 
     assert!(
         out.plane(av_toolbox_gpu::Channel::Y)

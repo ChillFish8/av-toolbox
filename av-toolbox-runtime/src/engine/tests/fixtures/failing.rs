@@ -115,7 +115,7 @@ impl StageInstance for FailingInstance {
 }
 
 impl Filter for FailingInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         if let Some(parked) = self.parked.take() {
             parked.send(()).ok();
         }
@@ -131,9 +131,11 @@ impl Filter for FailingInstance {
             ));
         }
 
-        inputs
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
@@ -224,7 +226,7 @@ impl PanickingInstance {
 impl StageInstance for PanickingInstance {}
 
 impl Filter for PanickingInstance {
-    fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         panic!("the panicking filter panicked");
     }
 }

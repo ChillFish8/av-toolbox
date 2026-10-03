@@ -73,10 +73,12 @@ impl StageInstance for PassInstance {
 }
 
 impl Filter for PassInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        inputs
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
@@ -165,10 +167,12 @@ impl Filter<HostSide> for HostPassInstance {
         &mut self,
         _context: &mut FrameContext,
         mut inputs: Inputs<HostSide>,
-    ) -> Result<HostFrame, StageError> {
-        inputs
+    ) -> Result<Vec<HostFrame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 
@@ -263,10 +267,12 @@ impl FlushingInstance {
 impl StageInstance for FlushingInstance {}
 
 impl Filter for FlushingInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        inputs
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 
     fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
@@ -361,12 +367,14 @@ impl AllocatingInstance {
 impl StageInstance for AllocatingInstance {}
 
 impl Filter for AllocatingInstance {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let input = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
 
-        Ok(context.alloc_frame(&format(), input.meta().clone()))
+        let output = context.alloc_frame(&format(), input.meta().clone());
+
+        Ok(vec![output])
     }
 }
 

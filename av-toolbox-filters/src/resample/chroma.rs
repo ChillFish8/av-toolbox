@@ -428,13 +428,13 @@ impl<R: Runtime> ChromaResampler<R> {
 impl<R: Runtime> StageInstance for ChromaResampler<R> {}
 
 impl<R: Runtime> Filter for ChromaResampler<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());
         };
 
         if input.format() == &self.output {
-            return Ok(input);
+            return Ok(vec![input]);
         }
 
         let Some(luma) = input.plane(Channel::Y) else {
@@ -456,7 +456,7 @@ impl<R: Runtime> Filter for ChromaResampler<R> {
             let planes = vec![luma, input_u, input_v];
             let output = Frame::from_planes(self.output, planes, meta).map_err(bad_frame)?;
 
-            return Ok(output);
+            return Ok(vec![output]);
         }
 
         let chroma_format = FrameFormat {
@@ -484,6 +484,6 @@ impl<R: Runtime> Filter for ChromaResampler<R> {
         let planes = vec![luma, output_u, output_v];
         let output = Frame::from_planes(self.output, planes, meta).map_err(bad_frame)?;
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

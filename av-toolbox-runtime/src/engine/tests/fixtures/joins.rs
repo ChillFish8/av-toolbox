@@ -51,7 +51,7 @@ impl JoinInstance {
 impl StageInstance for JoinInstance {}
 
 impl Filter for JoinInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let base = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
@@ -59,7 +59,7 @@ impl Filter for JoinInstance {
             .take_frame(1)
             .ok_or_else(|| StageError::msg("expected a frame in slot 1"))?;
 
-        Ok(base)
+        Ok(vec![base])
     }
 }
 
@@ -153,10 +153,12 @@ impl ReferringInstance {
 impl StageInstance for ReferringInstance {}
 
 impl Filter for ReferringInstance {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        inputs
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 

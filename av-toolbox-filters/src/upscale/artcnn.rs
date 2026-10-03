@@ -353,7 +353,7 @@ impl<R: Runtime> Upscaler<R> {
 impl<R: Runtime> StageInstance for Upscaler<R> {}
 
 impl<R: Runtime> Filter for Upscaler<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_frame());
         };
@@ -372,7 +372,7 @@ impl<R: Runtime> Filter for Upscaler<R> {
         self.upscale_luma(context, input_luma, output_luma)?;
 
         let Some(tables) = &self.chroma else {
-            return Ok(output);
+            return Ok(vec![output]);
         };
 
         for channel in [Channel::U, Channel::V] {
@@ -394,6 +394,6 @@ impl<R: Runtime> Filter for Upscaler<R> {
             );
         }
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

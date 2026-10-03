@@ -17,6 +17,7 @@ use av_toolbox_gpu::{
     ChromaLocation,
     ColourInfo,
     Depth,
+    Frame,
     FrameFormat,
     FrameLayout,
     FrameMeta,
@@ -127,7 +128,8 @@ impl BuildTask for FilterOnce {
             .expect("should start the stream");
 
         let inputs = Inputs::new(slots);
-        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let emitted = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = only_frame(emitted);
 
         assert_eq!(processed.format(), &self.output);
 
@@ -218,7 +220,8 @@ impl BuildTask for IdentityCheck {
             .expect("should start the stream");
 
         let inputs = Inputs::new(slots);
-        let output = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let output = only_frame(processed);
 
         assert_eq!(output.format(), &self.output);
 
@@ -311,7 +314,8 @@ impl BuildTask for LumaSharedCheck {
             .expect("should start the stream");
 
         let inputs = Inputs::new(slots);
-        let output = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let output = only_frame(processed);
 
         assert_eq!(output.format(), &self.output);
 
@@ -382,7 +386,8 @@ impl BuildTask for AllPlanesSharedCheck {
             .expect("should start the stream");
 
         let inputs = Inputs::new(slots);
-        let output = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let output = only_frame(processed);
 
         assert_eq!(output.format(), &self.output);
 
@@ -420,6 +425,17 @@ pub(crate) fn every_plane_is_shared(
 pub(crate) struct DeviceOutput {
     pub(crate) format: FrameFormat,
     pub(crate) planes: Vec<Vec<u8>>,
+}
+
+/// The one frame a filter emitted for one input.
+fn only_frame(mut frames: Vec<Frame>) -> Frame {
+    assert_eq!(
+        frames.len(),
+        1,
+        "a filter emitted {} frames for one input",
+        frames.len()
+    );
+    frames.remove(0)
 }
 
 /// Builds `stage` against one positional input per entry of `inputs`, working out its output
@@ -508,7 +524,8 @@ impl BuildTask for MultiFilterOnce {
             .expect("should start the stream");
 
         let inputs = Inputs::new(slots);
-        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let emitted = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = only_frame(emitted);
 
         assert_eq!(processed.format(), &self.output);
 
@@ -706,7 +723,8 @@ impl BuildTask for MaskedOnce {
             .expect("should start the stream");
 
         let inputs = Inputs::new(slots);
-        let output = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let output = only_frame(processed);
 
         assert_eq!(output.format(), &self.format);
 
@@ -815,7 +833,8 @@ impl BuildTask for SharedPlanes {
             .expect("should start the stream");
 
         let inputs = Inputs::new(slots);
-        let output = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let output = only_frame(processed);
 
         self.format
             .channels()

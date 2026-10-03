@@ -337,7 +337,7 @@ impl<R: Runtime> Warper<R> {
 impl<R: Runtime> StageInstance for Warper<R> {}
 
 impl<R: Runtime> Filter for Warper<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());
         };
@@ -362,6 +362,6 @@ impl<R: Runtime> Filter for Warper<R> {
 
         let output = Frame::from_planes(self.output, planes, meta).map_err(bad_frame)?;
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

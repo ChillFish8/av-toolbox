@@ -399,13 +399,13 @@ impl<R: Runtime> Debander<R> {
 impl<R: Runtime> StageInstance for Debander<R> {}
 
 impl<R: Runtime> Filter for Debander<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());
         };
 
         if self.skip_all {
-            return Ok(input);
+            return Ok(vec![input]);
         }
 
         let meta = input.meta().clone();
@@ -427,6 +427,6 @@ impl<R: Runtime> Filter for Debander<R> {
 
         let output = Frame::from_planes(self.output, planes, meta).map_err(bad_frame)?;
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

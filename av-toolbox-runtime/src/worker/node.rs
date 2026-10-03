@@ -18,8 +18,8 @@ use crate::RunError;
 
 /// Runs one stage against one bundle of inputs, producing what it emits.
 ///
-/// A source ignores `slots` and produces at most one item, a filter and a mask each produce
-/// exactly one, a transform produces however many it returns, and a sink produces nothing.
+/// A source ignores `slots` and produces at most one item, a mask produces exactly one, a filter
+/// and a transform produce however many they return, and a sink produces nothing.
 pub fn run_node(
     node: NodeId,
     stage: &mut StageBox,
@@ -206,11 +206,11 @@ fn run_filter<S: Side>(
     context: &mut FrameContext,
     inputs: Inputs<S>,
 ) -> Result<Vec<AnyItem>, RunError> {
-    let frame = filter
+    let frames = filter
         .process(context, inputs)
         .map_err(|source| RunError::Stage { node, source })?;
 
-    Ok(emitted::<S>([S::frame_item(frame)]))
+    Ok(emitted::<S>(frames.into_iter().map(S::frame_item)))
 }
 
 fn run_mask<S: Side>(
@@ -360,10 +360,16 @@ mod tests {
     impl StageInstance for PassThrough {}
 
     impl Filter for PassThrough {
-        fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-            inputs
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: Inputs,
+        ) -> Result<Vec<Frame>, StageError> {
+            let frame = inputs
                 .take_frame(0)
-                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+            Ok(vec![frame])
         }
     }
 
@@ -376,10 +382,12 @@ mod tests {
             &mut self,
             _context: &mut FrameContext,
             mut inputs: Inputs<HostSide>,
-        ) -> Result<HostFrame, StageError> {
-            inputs
+        ) -> Result<Vec<HostFrame>, StageError> {
+            let frame = inputs
                 .take_frame(0)
-                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+                .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+            Ok(vec![frame])
         }
     }
 
@@ -395,17 +403,45 @@ mod tests {
     impl StageInstance for Holding {}
 
     impl Filter for Holding {
-        fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: Inputs,
+        ) -> Result<Vec<Frame>, StageError> {
             let frame = inputs
                 .take_frame(0)
                 .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
             self.held = Some(frame.clone());
-            Ok(frame)
+            Ok(vec![frame])
         }
 
         fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
             Ok(self.held.take().into_iter().collect())
         }
+    }
+
+    /// Emits `copies` copies of the frame it was given.
+    struct Copying {
+        copies: usize,
+    }
+
+    impl StageInstance for Copying {}
+
+    impl Filter for Copying {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: Inputs,
+        ) -> Result<Vec<Frame>, StageError> {
+            let frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+            let copies = vec![frame; self.copies];
+
+            Ok(copies)
+        }
+    }
+
+    fn missing_frame() -> StageError {
+        StageError::msg("expected a frame in slot 0")
     }
 
     /// Emits a fixed number of copies of what it was given.
@@ -500,7 +536,11 @@ mod tests {
     impl StageInstance for Failing {}
 
     impl Filter for Failing {
-        fn process(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<Frame, StageError> {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            _inputs: Inputs,
+        ) -> Result<Vec<Frame>, StageError> {
             Err(StageError::msg("this filter always fails"))
         }
     }
@@ -639,6 +679,43 @@ mod tests {
         assert_eq!(during.len(), 1);
         assert_eq!(flushed.len(), 1);
         assert_eq!(flushed[0].meta().index, 9);
+    }
+
+    #[test]
+    fn a_filter_emitting_nothing_produces_nothing() {
+        let context = testing_context();
+        let mut stage = StageBox::Filter(Box::new(Copying { copies: 0 }));
+        let slots = vec![Some(item(&context, 3, 0))];
+
+        let produced =
+            run_node(NodeId::new(0), &mut stage, &mut context_of(&context), slots).expect("should run");
+
+        assert!(produced.is_empty());
+    }
+
+    #[test]
+    fn a_filter_emitting_one_frame_produces_it() {
+        let context = testing_context();
+        let mut stage = StageBox::Filter(Box::new(Copying { copies: 1 }));
+        let slots = vec![Some(item(&context, 3, 0))];
+
+        let produced =
+            run_node(NodeId::new(0), &mut stage, &mut context_of(&context), slots).expect("should run");
+
+        assert_eq!(produced.len(), 1);
+        assert_eq!(produced[0].meta().index, 3);
+    }
+
+    #[test]
+    fn a_filter_emitting_several_frames_produces_them_all() {
+        let context = testing_context();
+        let mut stage = StageBox::Filter(Box::new(Copying { copies: 3 }));
+        let slots = vec![Some(item(&context, 3, 0))];
+
+        let produced =
+            run_node(NodeId::new(0), &mut stage, &mut context_of(&context), slots).expect("should run");
+
+        assert_eq!(produced.len(), 3);
     }
 
     #[test]

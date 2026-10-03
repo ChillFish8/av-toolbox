@@ -4,6 +4,7 @@ use av_toolbox_gpu::{
     Channel,
     ChromaLocation,
     ColourInfo,
+    Frame,
     FrameFormat,
     FrameLayout,
     FrameMeta,
@@ -19,6 +20,17 @@ use av_toolbox_gpu::{
 
 use crate::planes::extract::{ExtractArgs, Extractor, extracted};
 use crate::planes::{Extract, PlaneName};
+
+/// The one frame a filter emitted for one input.
+fn only_frame(mut frames: Vec<Frame>) -> Frame {
+    assert_eq!(
+        frames.len(),
+        1,
+        "a filter emitted {} frames for one input",
+        frames.len()
+    );
+    frames.remove(0)
+}
 
 fn capabilities() -> Capabilities {
     let accelerator = default_accelerators()[0];
@@ -130,7 +142,8 @@ fn extracting_shares_the_plane() {
 
     let slots = vec![Some(StreamItem::Frame(frame))];
     let inputs = Inputs::new(slots);
-    let produced = extractor.process(&mut context, inputs).expect("extracts");
+    let emitted = extractor.process(&mut context, inputs).expect("extracts");
+    let produced = only_frame(emitted);
 
     let produced_u = produced.plane(Channel::U).expect("carries U");
     assert!(std::ptr::eq(produced_u.buffer(), original_u.buffer()));

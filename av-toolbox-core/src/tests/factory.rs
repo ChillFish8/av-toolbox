@@ -68,10 +68,12 @@ struct ExampleFilter;
 impl StageInstance for ExampleFilter {}
 
 impl Filter for ExampleFilter {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
-        inputs
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 
@@ -464,10 +466,12 @@ impl Filter<HostSide> for HostExample {
         &mut self,
         _context: &mut FrameContext,
         mut inputs: Inputs<HostSide>,
-    ) -> Result<HostFrame, StageError> {
-        inputs
+    ) -> Result<Vec<HostFrame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 

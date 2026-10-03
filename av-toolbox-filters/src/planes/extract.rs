@@ -225,7 +225,7 @@ impl Extractor {
 impl StageInstance for Extractor {}
 
 impl Filter for Extractor {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());
         };
@@ -243,6 +243,6 @@ impl Filter for Extractor {
 
         let output = Frame::from_planes(self.output, planes, meta).map_err(bad_frame)?;
 
-        Ok(output)
+        Ok(vec![output])
     }
 }

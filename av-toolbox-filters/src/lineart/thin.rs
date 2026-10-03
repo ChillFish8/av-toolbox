@@ -314,7 +314,7 @@ impl<R: Runtime> PlaneFilter for ThinPass<'_, R> {
 impl<R: Runtime> StageInstance for Thinner<R> {}
 
 impl<R: Runtime> Filter for Thinner<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));
         };
@@ -335,6 +335,8 @@ impl<R: Runtime> Filter for Thinner<R> {
             inner: &pass,
         };
 
-        self.planewise.run(&self.client, context, input, &masked)
+        let output = self.planewise.run(&self.client, context, input, &masked)?;
+
+        Ok(vec![output])
     }
 }

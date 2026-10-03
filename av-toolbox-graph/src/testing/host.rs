@@ -102,10 +102,12 @@ impl Filter<HostSide> for HostBlurStage {
         &mut self,
         _context: &mut FrameContext,
         mut inputs: Inputs<HostSide>,
-    ) -> Result<HostFrame, StageError> {
-        inputs
+    ) -> Result<Vec<HostFrame>, StageError> {
+        let frame = inputs
             .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 

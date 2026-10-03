@@ -143,7 +143,7 @@ impl<R: Runtime> BrightenFilter<R> {
 impl<R: Runtime> StageInstance for BrightenFilter<R> {}
 
 impl<R: Runtime> Filter for BrightenFilter<R> {
-    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Frame, StageError> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let frame = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
@@ -155,7 +155,7 @@ impl<R: Runtime> Filter for BrightenFilter<R> {
                     .ok_or_else(|| StageError::msg("the frame carries no luma"))?;
                 self.brighten_plane(context, luma, self.amount);
 
-                return Ok(writable.freeze());
+                return Ok(vec![writable.freeze()]);
             },
             Err(frame) => frame,
         };
@@ -175,7 +175,7 @@ impl<R: Runtime> Filter for BrightenFilter<R> {
             self.brighten_into_plane(context, source, target, amount);
         }
 
-        Ok(output)
+        Ok(vec![output])
     }
 }
 
@@ -306,6 +306,17 @@ fn filled_frame<R: Runtime>(
     frame
 }
 
+/// The one frame a filter emitted for one input.
+fn only_frame(mut frames: Vec<Frame>) -> Frame {
+    assert_eq!(
+        frames.len(),
+        1,
+        "a filter emitted {} frames for one input",
+        frames.len()
+    );
+    frames.remove(0)
+}
+
 fn read_plane<R: Runtime>(build: &BuildContext<R>, frame: &Frame, channel: Channel) -> Vec<f32> {
     let plane = frame.plane(channel).expect("the frame carries this channel");
     let bytes = build
@@ -345,7 +356,8 @@ impl BuildTask for RunExclusive {
             .expect("should start the stream");
 
         let inputs = Inputs::new(vec![Some(input.into())]);
-        let output = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let output = only_frame(processed);
 
         Processed {
             luma: read_plane(build, &output, Channel::Y),
@@ -376,7 +388,8 @@ impl BuildTask for RunShared {
 
         let held = input.clone();
         let inputs = Inputs::new(vec![Some(input.into())]);
-        let output = self.filter.process(&mut context, inputs).expect("should process");
+        let processed = self.filter.process(&mut context, inputs).expect("should process");
+        let output = only_frame(processed);
 
         ProcessedShared {
             output: Processed {
