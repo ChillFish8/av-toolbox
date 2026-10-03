@@ -83,7 +83,8 @@ fn scramble(column: u32, row: u32, frame: u32) -> u32 {
     state
 }
 
-/// A combed plane with a bar that moves `frame` samples right, plus noise, at 10 bits.
+/// A combed 10-bit plane with noise, and a bar that moves 3 samples right each frame and wraps every 64
+/// columns.
 fn moving_plane(width: u32, height: u32, frame: u32) -> Vec<f32> {
     let mut plane = Vec::with_capacity((width * height) as usize);
     for row in 0..height {

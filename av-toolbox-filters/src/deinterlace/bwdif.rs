@@ -86,7 +86,7 @@ pub(crate) struct BwdifArgs {
     /// The field shown first, the stream's own field order when not given.
     #[serde(default)]
     pub(crate) order: Option<Order>,
-    /// One frame for each frame in, or one for each field, one for each field when not given.
+    /// One frame for each frame in, or one for each field. One for each field when not given.
     #[serde(default)]
     pub(crate) rate: Rate,
     /// The planes to deinterlace, every plane when not given.
@@ -107,7 +107,7 @@ fn describe_order(found: Option<FieldOrder>) -> String {
 fn unusable_order(found: Option<FieldOrder>) -> StageError {
     let described = describe_order(found);
     let message =
-        format!("{STAGE} needs an order of top or bottom, since the stream's field order is {described}");
+        format!("{STAGE} needs `order` set to top or bottom, since the stream's field order is {described}");
 
     StageError::msg(message)
 }
@@ -364,14 +364,22 @@ fn fields_of(order: Order, rate: Rate) -> Vec<BwdifField> {
     }
 }
 
-/// Runs `pass` on `current` into `outputs`, keeping for each of `fields` the rows it keeps.
+/// Runs `pass` on `current` once for each of `fields`, keeping the rows that field keeps.
+///
+/// It gives one new plane per field, in the order of `fields`.
 fn run_fields(
     pass: &impl FieldPass,
     context: &FrameContext,
     current: DevicePlane<'_>,
     fields: &[BwdifField],
-    outputs: &[Scratch],
-) {
+) -> Vec<Scratch> {
+    let width = current.width();
+    let height = current.height();
+    let outputs: Vec<Scratch> = fields
+        .iter()
+        .map(|_| Scratch::new::<f32>(context, width, height))
+        .collect();
+
     if let [first, _] = fields {
         // The pass keeping the even rows serves the field rebuilding the odd rows.
         let (even, odd) = if first.rebuilt == 1 {
@@ -381,13 +389,15 @@ fn run_fields(
         };
 
         pass.run_both(context, current, even.plane(), odd.plane());
-        return;
+        return outputs;
     }
 
-    for (field, output) in fields.iter().zip(outputs) {
+    for (field, output) in fields.iter().zip(&outputs) {
         let kept = 1 - field.rebuilt;
         pass.run(context, current, output.plane(), kept);
     }
+
+    outputs
 }
 
 /// The three frames one output reads.
@@ -501,10 +511,9 @@ impl<R: Runtime> Deinterlacer<R> {
         Ok(output.clone())
     }
 
-    /// Runs the predictor's field pass on `current` for each of `fields`, one plane per field in the same order.
+    /// Runs the predictor's field pass on `current` for each of `fields`, one plane per field.
     ///
-    /// Each pass keeps the rows its field keeps. Two fields run through `run_both`, which EEDI3's persistent
-    /// check runs in one launch. The cubic predictor has no field pass and gives no planes.
+    /// The cubic predictor has no field pass and gives no planes.
     fn predictions(
         &self,
         context: &FrameContext,
@@ -512,19 +521,8 @@ impl<R: Runtime> Deinterlacer<R> {
         current: DevicePlane<'_>,
         fields: &[BwdifField],
     ) -> Vec<Scratch> {
-        if matches!(self.predictor, Predictor::Cubic) {
-            return Vec::new();
-        }
-
-        let width = current.width();
-        let height = current.height();
-        let outputs: Vec<Scratch> = fields
-            .iter()
-            .map(|_| Scratch::new::<f32>(context, width, height))
-            .collect();
-
         match self.predictor {
-            Predictor::Cubic => {},
+            Predictor::Cubic => Vec::new(),
             Predictor::Eedi2(arguments) => {
                 let layout = self.input.layout;
                 let (across, _) = subsampling_shifts(layout, plane_index);
@@ -534,7 +532,7 @@ impl<R: Runtime> Deinterlacer<R> {
                     settings,
                 };
 
-                run_fields(&pass, context, current, fields, &outputs);
+                run_fields(&pass, context, current, fields)
             },
             Predictor::Eedi3(arguments) => {
                 let settings = Eedi3Settings::new(&arguments, self.bits);
@@ -544,7 +542,7 @@ impl<R: Runtime> Deinterlacer<R> {
                     clips: Eedi3DeviceClips::default(),
                 };
 
-                run_fields(&pass, context, current, fields, &outputs);
+                run_fields(&pass, context, current, fields)
             },
             Predictor::Sangnom { aa } => {
                 let aaf = sangnom_aaf(aa, self.bits);
@@ -555,11 +553,9 @@ impl<R: Runtime> Deinterlacer<R> {
                     max,
                 };
 
-                run_fields(&pass, context, current, fields, &outputs);
+                run_fields(&pass, context, current, fields)
             },
         }
-
-        outputs
     }
 
     /// Rebuilds plane `plane_index` of the window's current frame once for each of `fields`.
@@ -582,7 +578,8 @@ impl<R: Runtime> Deinterlacer<R> {
         let (width, height) = current_source.dimensions();
         let sizing = Sizing(context);
         let meta = window.current.meta();
-        let predictions = self.predictions(context, plane_index, current.plane(), fields);
+        let current_plane = current.plane();
+        let predictions = self.predictions(context, plane_index, current_plane, fields);
 
         let mut rebuilt = Vec::with_capacity(fields.len());
         for (index, field) in fields.iter().enumerate() {

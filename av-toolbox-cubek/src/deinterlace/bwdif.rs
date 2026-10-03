@@ -168,8 +168,8 @@ fn bwdif_kernel(
 
 /// Rebuilds the rows of parity `field.rebuilt` of `planes.current` into `planes.output`, copying the others.
 ///
-/// A rebuilt sample blends a spatial prediction with the same sample of the neighbouring fields, clamped by how
-/// much the area moves. The prediction is bwdif's cubic down the column, or `planes.spatial` when given.
+/// A rebuilt sample blends a spatial prediction with the same sample of the neighbouring fields, clamped by
+/// how much the area moves. The prediction is bwdif's cubic down the column, or `planes.spatial` when given.
 pub fn bwdif_field<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -202,7 +202,8 @@ pub fn bwdif_field<R: Runtime>(
         (planes.current, planes.next)
     };
 
-    // Without a prediction the kernel never reads `spatial`, so any plane of the right size fills the binding.
+    // Without a prediction the kernel never reads `spatial`, so any plane of the right size fills the
+    // binding.
     let has_spatial = planes.spatial.is_some();
     let spatial = planes.spatial.unwrap_or(planes.current);
 
@@ -217,8 +218,9 @@ pub fn bwdif_field<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: every plane holds `samples` f32 values, and a rebuilt row reads only the rows its class allows,
-    // which `height >= 4` keeps inside the plane.
+    // Safety: every plane holds `samples` f32 values. A rebuilt row reads 2 or 4 rows away only when its
+    // row class has those rows, and mirrors the rows next to it at the plane's edges, so every read stays
+    // inside the plane.
     unsafe {
         bwdif_kernel::launch_unchecked::<R>(
             client,

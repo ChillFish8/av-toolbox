@@ -11,7 +11,8 @@ use crate::deinterlace::{
 
 /// One case written by the plugin's own scalar code, through the float path.
 ///
-/// `previous`, `current`, `next` and `spatial` are little-endian u16 code values, and `output` little-endian f32.
+/// `previous`, `current`, `next` and `spatial` are little-endian u16 code values, and `output` is
+/// little-endian f32.
 /// `metadata` holds the `width`, `height`, `bits`, `rebuilt`, `first` and `edeint` it was written with.
 pub struct BwdifFixture {
     pub name: &'static str,
@@ -281,8 +282,9 @@ mod tests {
         };
         let width = fixture.setting("width");
         let height = fixture.setting("height");
+        let field = fixture.field();
 
-        reference_bwdif(&planes, width, height, fixture.field())
+        reference_bwdif(&planes, width, height, field)
     }
 
     #[test]
