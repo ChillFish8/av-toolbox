@@ -394,6 +394,85 @@ fn persistent_check_kernel(
     );
 }
 
+/// The reliability checks of two field passes in one launch of two cubes, which also assemble the outputs.
+///
+/// Cube 0 checks the pass of `rebuilt`, `directions` and `output`. Cube 1 checks the pass of the `other_`
+/// buffers. The cubes each hold their own shared memory and never wait on each other.
+#[cube(launch_unchecked)]
+fn persistent_checks_kernel(
+    input: &Array<f32>,
+    sclip: &Array<f32>,
+    rebuilt: &Array<f32>,
+    directions: &Array<i32>,
+    output: &mut Array<f32>,
+    other_rebuilt: &Array<f32>,
+    other_directions: &Array<i32>,
+    other_output: &mut Array<f32>,
+    width: u32,
+    height: u32,
+    rows: u32,
+    offset: u32,
+    first_rebuilt: u32,
+    other_offset: u32,
+    other_first_rebuilt: u32,
+    peak: u32,
+    vcheck: u32,
+    reciprocal0: f32,
+    reciprocal1: f32,
+    reciprocal2: f32,
+    vthresh2: f32,
+    #[comptime] capacity: u32,
+    #[comptime] has_sclip: bool,
+) {
+    let mut written = SharedMemory::<f32>::new(comptime!((2 * capacity) as usize));
+    let weights = CheckWeights {
+        reciprocal0,
+        reciprocal1,
+        reciprocal2,
+        vthresh2,
+    };
+
+    if CUBE_POS_X == 0 {
+        check_parity(
+            input,
+            rebuilt,
+            directions,
+            sclip,
+            output,
+            &mut written,
+            width,
+            height,
+            rows,
+            offset,
+            first_rebuilt,
+            peak,
+            vcheck,
+            &weights,
+            capacity,
+            has_sclip,
+        );
+    } else {
+        check_parity(
+            input,
+            other_rebuilt,
+            other_directions,
+            sclip,
+            other_output,
+            &mut written,
+            width,
+            height,
+            rows,
+            other_offset,
+            other_first_rebuilt,
+            peak,
+            vcheck,
+            &weights,
+            capacity,
+            has_sclip,
+        );
+    }
+}
+
 /// Launches the assembly of the output from the kept rows and the rebuilt rows.
 pub(super) fn assemble<R: Runtime>(
     client: &ComputeClient<R>,
@@ -425,23 +504,56 @@ pub(super) fn assemble<R: Runtime>(
     }
 }
 
-/// The most units the persistent check gives its one cube.
+/// The most units the persistent check gives each cube.
 const PERSISTENT_UNITS: u32 = 1024;
 
-/// Launches the reliability check of a whole field pass as one cube, which also assembles the output.
-///
-/// `capacity` is the widest row the cube's shared memory holds, and must be at least the pass's width.
-pub(super) fn persistent_check<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>, capacity: u32) {
-    assert!(
-        pass.width <= capacity,
-        "the persistent check holds rows of up to {capacity} samples, not {}",
-        pass.width
-    );
-
+/// The units of each persistent check cube, as many as the device allows up to [PERSISTENT_UNITS].
+fn persistent_unit<R: Runtime>(client: &ComputeClient<R>) -> CubeDim {
     let hardware = &client.properties().hardware;
     let most_units = hardware.max_units_per_cube.min(hardware.max_cube_dim.0);
     let units = PERSISTENT_UNITS.min(most_units);
-    let unit = CubeDim::new_1d(units);
+
+    CubeDim::new_1d(units)
+}
+
+/// Whether two passes read the same input, `sclip` and settings, so one launch can check both.
+fn share_sources(pass: &FieldPass<'_>, other: &FieldPass<'_>) -> bool {
+    let same_input = std::ptr::eq(pass.input.handle(), other.input.handle());
+    let pass_sclip = pass.sclip.map(|sclip| sclip.handle() as *const _);
+    let other_sclip = other.sclip.map(|sclip| sclip.handle() as *const _);
+
+    same_input && pass_sclip == other_sclip && pass.settings == other.settings
+}
+
+/// Launches the reliability check of one or two field passes, one cube a pass, which also assembles the
+/// outputs.
+///
+/// Two passes must read the same input, `sclip` and settings. `capacity` is the widest row each cube's
+/// shared memory holds, and must be at least the passes' width.
+pub(super) fn persistent_check<R: Runtime>(
+    client: &ComputeClient<R>,
+    passes: &[FieldPass<'_>],
+    capacity: u32,
+) {
+    let width = passes[0].width;
+    assert!(
+        width <= capacity,
+        "the persistent check holds rows of up to {capacity} samples, not {width}"
+    );
+
+    match passes {
+        [pass] => persistent_check_one(client, pass, capacity),
+        [pass, other] => persistent_check_two(client, pass, other, capacity),
+        _ => panic!(
+            "the persistent check runs one or two passes, not {}",
+            passes.len()
+        ),
+    }
+}
+
+/// Launches the reliability check of `pass` as one cube.
+fn persistent_check_one<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>, capacity: u32) {
+    let unit = persistent_unit(client);
     let weights = pass.settings.weights;
     let has_sclip = pass.sclip.is_some();
     let sclip = pass.sclip.unwrap_or(pass.input);
@@ -473,6 +585,72 @@ pub(super) fn persistent_check<R: Runtime>(client: &ComputeClient<R>, pass: &Fie
             pass.rows,
             pass.offset,
             pass.first_rebuilt,
+            pass.settings.peak,
+            pass.settings.vcheck,
+            weights.reciprocal0,
+            weights.reciprocal1,
+            weights.reciprocal2,
+            weights.vthresh2,
+            capacity,
+            has_sclip,
+        );
+    }
+}
+
+/// Launches the reliability checks of `pass` and `other` as two cubes of one launch.
+fn persistent_check_two<R: Runtime>(
+    client: &ComputeClient<R>,
+    pass: &FieldPass<'_>,
+    other: &FieldPass<'_>,
+    capacity: u32,
+) {
+    assert!(
+        share_sources(pass, other),
+        "the two passes of one persistent check read different sources"
+    );
+
+    let unit = persistent_unit(client);
+    let weights = pass.settings.weights;
+    let has_sclip = pass.sclip.is_some();
+    let sclip = pass.sclip.unwrap_or(pass.input);
+
+    // Safety: both passes read the same input and `sclip`, so they share one size. The planes hold
+    // `width * height` f32 values, and each pass's `rebuilt` and `directions` a value per rebuilt sample,
+    // as `FieldPass::new` checked. Each cube checks one pass and its units each write only their own
+    // columns of each row of that pass's output, so every output sample has one writer. Each checked row
+    // has a rebuilt row either side and clamps every column it reads into the row. Each cube has its own
+    // shared memory, whose indices stay below `2 * capacity` because the width is at most `capacity`.
+    // Every unit of a cube takes the same branch and reaches every `sync_cube`, because the row loop is
+    // uniform and nothing exits early.
+    unsafe {
+        let input = pass.input.array::<R>();
+        let sclip = sclip.array::<R>();
+        let rebuilt = pass.rebuilt_array::<R>();
+        let directions = pass.directions_array::<R>();
+        let output = pass.output.array::<R>();
+        let other_rebuilt = other.rebuilt_array::<R>();
+        let other_directions = other.directions_array::<R>();
+        let other_output = other.output.array::<R>();
+
+        persistent_checks_kernel::launch_unchecked::<R>(
+            client,
+            CubeCount::Static(2, 1, 1),
+            unit,
+            input,
+            sclip,
+            rebuilt,
+            directions,
+            output,
+            other_rebuilt,
+            other_directions,
+            other_output,
+            pass.width,
+            pass.height,
+            pass.rows,
+            pass.offset,
+            pass.first_rebuilt,
+            other.offset,
+            other.first_rebuilt,
             pass.settings.peak,
             pass.settings.vcheck,
             weights.reciprocal0,

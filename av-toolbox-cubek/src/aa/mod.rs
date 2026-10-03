@@ -29,10 +29,11 @@ pub use self::eedi3::{
     Eedi3Weights,
     eedi3_check_capacity,
     eedi3_field,
+    eedi3_fields,
     eedi3_scratch,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use self::eedi3::{eedi3_field_with_check_capacity, eedi3_mul_exact};
+pub use self::eedi3::{eedi3_field_with_check_capacity, eedi3_fields_with_check_capacity, eedi3_mul_exact};
 pub use self::merge::merge_fields;
 pub use self::sangnom::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_max, sangnom_scratch};
 pub use self::transpose::transpose;

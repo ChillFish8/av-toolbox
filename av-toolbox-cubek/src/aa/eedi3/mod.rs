@@ -197,6 +197,18 @@ pub struct Eedi3Scratch<'a> {
     pub lenders: &'a Handle,
 }
 
+impl<'a> Eedi3Scratch<'a> {
+    /// Each buffer with its name.
+    fn buffers(&self) -> [(&'static str, &'a Handle); 4] {
+        [
+            ("rebuilt", self.rebuilt),
+            ("directions", self.directions),
+            ("backpointers", self.backpointers),
+            ("lenders", self.lenders),
+        ]
+    }
+}
+
 /// The byte size of each buffer of an [Eedi3Scratch](crate::aa::Eedi3Scratch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Eedi3ScratchSizes {
@@ -453,7 +465,7 @@ pub fn eedi3_field<R: Runtime>(
     let pass = FieldPass::new(input, output, scratch, offset, settings, clips);
     let capacity = eedi3_check_capacity(client);
 
-    run_field(client, dispatch, &pass, capacity)
+    run_fields(client, dispatch, &[pass], capacity)
 }
 
 /// The same as [eedi3_field](crate::aa::eedi3_field), with the persistent check running only on planes
@@ -476,16 +488,92 @@ pub fn eedi3_field_with_check_capacity<R: Runtime>(
 ) -> Eedi3Check {
     let pass = FieldPass::new(input, output, scratch, offset, settings, clips);
 
-    run_field(client, dispatch, &pass, capacity)
+    run_fields(client, dispatch, &[pass], capacity)
 }
 
-/// Runs every step of `pass`, checking it in one launch when it is at most `capacity` wide.
-fn run_field<R: Runtime>(
+/// Two field passes over one plane, `outputs[0]` keeping the even rows and `outputs[1]` the odd ones.
+///
+/// Each pass needs its own output and scratch.
+fn field_pair<'a>(
+    input: DevicePlane<'a>,
+    outputs: [DevicePlane<'a>; 2],
+    scratches: [Eedi3Scratch<'a>; 2],
+    settings: &Eedi3Settings,
+    clips: Eedi3DeviceClips<'a>,
+) -> [FieldPass<'a>; 2] {
+    let [even_output, odd_output] = outputs;
+    let [even_scratch, odd_scratch] = scratches;
+    assert_separate(&even_scratch, &odd_scratch);
+    assert!(
+        !std::ptr::eq(even_output.handle(), odd_output.handle()),
+        "both EEDI3 field passes were given the same output"
+    );
+
+    let even_pass = FieldPass::new(input, even_output, even_scratch, 0, settings, clips);
+    let odd_pass = FieldPass::new(input, odd_output, odd_scratch, 1, settings, clips);
+
+    [even_pass, odd_pass]
+}
+
+/// Asserts that no buffer of `scratch` is also a buffer of `other`.
+fn assert_separate(scratch: &Eedi3Scratch<'_>, other: &Eedi3Scratch<'_>) {
+    let buffers = scratch.buffers();
+    let other_buffers = other.buffers();
+
+    for (name, buffer) in buffers {
+        let shared = other_buffers
+            .iter()
+            .any(|(_, other_buffer)| std::ptr::eq(buffer, *other_buffer));
+        assert!(
+            !shared,
+            "both EEDI3 field passes were given the {name} scratch, each needs its own"
+        );
+    }
+}
+
+/// Both EEDI3 field passes of one plane, `outputs[0]` keeping the even rows and `outputs[1]` the odd ones.
+///
+/// Each pass takes its own output and scratch, which must not share a buffer. The two passes share one
+/// launch of the reliability check.
+pub fn eedi3_fields<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    pass: &FieldPass<'_>,
+    input: DevicePlane<'_>,
+    outputs: [DevicePlane<'_>; 2],
+    scratches: [Eedi3Scratch<'_>; 2],
+    settings: &Eedi3Settings,
+    clips: Eedi3DeviceClips<'_>,
+) -> Eedi3Check {
+    let passes = field_pair(input, outputs, scratches, settings, clips);
+    let capacity = eedi3_check_capacity(client);
+
+    run_fields(client, dispatch, &passes, capacity)
+}
+
+/// The same as [eedi3_fields](crate::aa::eedi3_fields), with the persistent check running only on planes
+/// at most `capacity` wide.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the passes"
+)]
+pub fn eedi3_fields_with_check_capacity<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    input: DevicePlane<'_>,
+    outputs: [DevicePlane<'_>; 2],
+    scratches: [Eedi3Scratch<'_>; 2],
+    settings: &Eedi3Settings,
+    clips: Eedi3DeviceClips<'_>,
     capacity: u32,
 ) -> Eedi3Check {
+    let passes = field_pair(input, outputs, scratches, settings, clips);
+
+    run_fields(client, dispatch, &passes, capacity)
+}
+
+/// Runs the steps of `pass` before the reliability check, ending with its rebuilt rows interpolated.
+fn rebuild_field<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, pass: &FieldPass<'_>) {
     if pass.mclip.is_some() {
         mask::mark_active_edges(client, pass);
         mask::find_lenders(client, pass);
@@ -494,19 +582,44 @@ fn run_field<R: Runtime>(
     path::search_paths(client, pass);
     interpolate::backtrack(client, pass);
     interpolate::interpolate(client, dispatch, pass);
+}
 
-    if pass.settings.vcheck == 0 {
-        check::assemble(client, dispatch, pass);
-        return Eedi3Check::Skipped;
-    }
+/// Runs every step of each of `passes`, which share their input and settings, checking them in one launch
+/// when they are at most `capacity` wide.
+///
+/// Otherwise each pass runs to its end before the next starts, which keeps the device busier through the
+/// per-row check's many small launches.
+fn run_fields<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    passes: &[FieldPass<'_>],
+    capacity: u32,
+) -> Eedi3Check {
+    assert!(!passes.is_empty(), "an EEDI3 run needs at least one field pass");
 
-    if pass.width <= capacity {
-        check::persistent_check(client, pass, capacity);
+    let first_pass = &passes[0];
+    let checked = first_pass.settings.vcheck > 0;
+
+    if checked && first_pass.width <= capacity {
+        for pass in passes {
+            rebuild_field(client, dispatch, pass);
+        }
+
+        check::persistent_check(client, passes, capacity);
         return Eedi3Check::Persistent;
     }
 
-    check::assemble(client, dispatch, pass);
-    check::reliability_check(client, dispatch, pass);
+    for pass in passes {
+        rebuild_field(client, dispatch, pass);
+        check::assemble(client, dispatch, pass);
 
-    Eedi3Check::PerRow
+        if checked {
+            check::reliability_check(client, dispatch, pass);
+        }
+    }
+
+    match checked {
+        true => Eedi3Check::PerRow,
+        false => Eedi3Check::Skipped,
+    }
 }

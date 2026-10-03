@@ -3,14 +3,18 @@ mod bands;
 mod check;
 mod exact;
 
+use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::aa::{
     Eedi3Arguments,
     Eedi3Check,
     Eedi3DeviceClips,
     Eedi3Scratch,
+    Eedi3ScratchSizes,
     Eedi3Settings,
     eedi3_field,
     eedi3_field_with_check_capacity,
+    eedi3_fields,
+    eedi3_fields_with_check_capacity,
     eedi3_scratch,
 };
 use av_toolbox_cubek::testing::{
@@ -35,7 +39,8 @@ use av_toolbox_cubek::testing::{
     worked_edge_plane,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
+use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::server::Handle;
 
 use crate::aa::transposed_plane;
 use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32};
@@ -151,9 +156,40 @@ fn spread_directions(rebuilt: &[u32], width: u32, height: u32, offset: u32) -> V
     directions
 }
 
-/// Both field passes of one plane on the device, sharing one scratch.
+/// The four scratch buffers of one field pass on the device.
+struct DeviceScratch {
+    rebuilt: Handle,
+    directions: Handle,
+    backpointers: Handle,
+    lenders: Handle,
+}
+
+impl DeviceScratch {
+    fn new<R: Runtime>(client: &ComputeClient<R>, sizes: &Eedi3ScratchSizes) -> Self {
+        Self {
+            rebuilt: empty(client, sizes.rebuilt),
+            directions: empty(client, sizes.directions),
+            backpointers: empty(client, sizes.backpointers),
+            lenders: empty(client, sizes.lenders),
+        }
+    }
+
+    fn scratch(&self) -> Eedi3Scratch<'_> {
+        Eedi3Scratch {
+            rebuilt: &self.rebuilt,
+            directions: &self.directions,
+            backpointers: &self.backpointers,
+            lenders: &self.lenders,
+        }
+    }
+}
+
+/// Both field passes of one plane on the device.
 ///
-/// With a `capacity`, the persistent check runs only on planes at most that wide.
+/// With a `capacity`, the persistent check runs only on planes at most that wide. `together` runs both
+/// passes through [eedi3_fields](av_toolbox_cubek::aa::eedi3_fields), each with its own scratch.
+/// Otherwise each pass is its own [eedi3_field](av_toolbox_cubek::aa::eedi3_field) call, sharing one
+/// scratch.
 struct FieldPasses {
     input: Vec<f32>,
     width: u32,
@@ -162,6 +198,72 @@ struct FieldPasses {
     sclip: Option<Vec<f32>>,
     mclip: Option<Vec<f32>>,
     capacity: Option<u32>,
+    together: bool,
+}
+
+impl FieldPasses {
+    /// The output and spread directions of the pass keeping the rows of parity `offset`, once the device
+    /// has finished.
+    fn read_pass<R: Runtime>(
+        &self,
+        client: &ComputeClient<R>,
+        output: &Handle,
+        scratch: &DeviceScratch,
+        offset: u32,
+        check: Eedi3Check,
+    ) -> DevicePass {
+        let output_values = read_f32(client, output);
+        let rebuilt_directions = read_u32(client, &scratch.directions);
+        let spread = spread_directions(&rebuilt_directions, self.width, self.height, offset);
+
+        DevicePass {
+            output: output_values,
+            directions: spread,
+            check,
+        }
+    }
+
+    /// Both passes through one call, each with its own output and scratch.
+    fn run_together<R: Runtime>(
+        &self,
+        client: &ComputeClient<R>,
+        sizing: &Sizing,
+        input: DevicePlane<'_>,
+        clips: Eedi3DeviceClips<'_>,
+    ) -> Vec<DevicePass> {
+        let bytes = self.input.len() * size_of::<f32>();
+        let sizes = eedi3_scratch(self.width, self.height, self.settings.mdis());
+        let even_output = empty(client, bytes);
+        let odd_output = empty(client, bytes);
+        let even_scratch = DeviceScratch::new(client, &sizes);
+        let odd_scratch = DeviceScratch::new(client, &sizes);
+        let outputs = [
+            plane(&even_output, self.width, self.height),
+            plane(&odd_output, self.width, self.height),
+        ];
+        let scratches = [even_scratch.scratch(), odd_scratch.scratch()];
+
+        let check = match self.capacity {
+            Some(capacity) => eedi3_fields_with_check_capacity(
+                client,
+                sizing,
+                input,
+                outputs,
+                scratches,
+                &self.settings,
+                clips,
+                capacity,
+            ),
+            None => eedi3_fields(client, sizing, input, outputs, scratches, &self.settings, clips),
+        };
+
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        let even_pass = self.read_pass(client, &even_output, &even_scratch, 0, check);
+        let odd_pass = self.read_pass(client, &odd_output, &odd_scratch, 1, check);
+
+        vec![even_pass, odd_pass]
+    }
 }
 
 impl BuildTask for FieldPasses {
@@ -178,30 +280,27 @@ impl BuildTask for FieldPasses {
         let input = upload_f32(client, &self.input);
         let sclip = self.sclip.as_deref().map(|values| upload_f32(client, values));
         let mclip = self.mclip.as_deref().map(|values| upload_f32(client, values));
-        let rebuilt = empty(client, sizes.rebuilt);
-        let directions = empty(client, sizes.directions);
-        let backpointers = empty(client, sizes.backpointers);
-        let lenders = empty(client, sizes.lenders);
-        let scratch = Eedi3Scratch {
-            rebuilt: &rebuilt,
-            directions: &directions,
-            backpointers: &backpointers,
-            lenders: &lenders,
+        let input_plane = plane(&input, self.width, self.height);
+        let clips = Eedi3DeviceClips {
+            sclip: sclip
+                .as_ref()
+                .map(|handle| plane(handle, self.width, self.height)),
+            mclip: mclip
+                .as_ref()
+                .map(|handle| plane(handle, self.width, self.height)),
         };
+
+        if self.together {
+            return self.run_together(client, &sizing, input_plane, clips);
+        }
+
+        let device_scratch = DeviceScratch::new(client, &sizes);
+        let scratch = device_scratch.scratch();
 
         let mut passes = Vec::new();
         for offset in 0..2 {
             let output = empty(client, bytes);
-            let input_plane = plane(&input, self.width, self.height);
             let output_plane = plane(&output, self.width, self.height);
-            let clips = Eedi3DeviceClips {
-                sclip: sclip
-                    .as_ref()
-                    .map(|handle| plane(handle, self.width, self.height)),
-                mclip: mclip
-                    .as_ref()
-                    .map(|handle| plane(handle, self.width, self.height)),
-            };
 
             let check = match self.capacity {
                 Some(capacity) => eedi3_field_with_check_capacity(
@@ -229,14 +328,8 @@ impl BuildTask for FieldPasses {
 
             cubecl::future::block_on(client.sync()).expect("the device should finish");
 
-            let output_values = read_f32(client, &output);
-            let rebuilt_directions = read_u32(client, &directions);
-            let spread = spread_directions(&rebuilt_directions, self.width, self.height, offset);
-            passes.push(DevicePass {
-                output: output_values,
-                directions: spread,
-                check,
-            });
+            let pass = self.read_pass(client, &output, &device_scratch, offset, check);
+            passes.push(pass);
         }
 
         passes
@@ -250,6 +343,17 @@ fn on_device(case: &PlaneCase) -> Vec<DevicePass> {
 /// Both field passes of `case` on the device, the persistent check running only on planes at most
 /// `capacity` wide when there is one.
 fn on_device_with_capacity(case: &PlaneCase, capacity: Option<u32>) -> Vec<DevicePass> {
+    run_on_device(case, capacity, false)
+}
+
+/// Both field passes of `case` on the device through one
+/// [eedi3_fields](av_toolbox_cubek::aa::eedi3_fields) call, the persistent check running only on planes
+/// at most `capacity` wide when there is one.
+fn on_device_together(case: &PlaneCase, capacity: Option<u32>) -> Vec<DevicePass> {
+    run_on_device(case, capacity, true)
+}
+
+fn run_on_device(case: &PlaneCase, capacity: Option<u32>, together: bool) -> Vec<DevicePass> {
     let task = FieldPasses {
         input: case.input.clone(),
         width: case.width,
@@ -258,6 +362,7 @@ fn on_device_with_capacity(case: &PlaneCase, capacity: Option<u32>) -> Vec<Devic
         sclip: case.sclip.clone(),
         mclip: case.mclip.clone(),
         capacity,
+        together,
     };
 
     backend().build(task)

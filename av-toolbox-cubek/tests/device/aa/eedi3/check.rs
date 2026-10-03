@@ -1,5 +1,5 @@
 use av_toolbox_cubek::aa::Eedi3Check;
-use av_toolbox_cubek::testing::{CloseDecisionTally, Eedi3Parameters, assert_same_plane};
+use av_toolbox_cubek::testing::{CloseDecisionTally, Eedi3Fixture, Eedi3Parameters, assert_same_plane};
 
 use super::{
     Bands,
@@ -9,6 +9,7 @@ use super::{
     diagonal_bands,
     larger_masked_case,
     on_device,
+    on_device_together,
     on_device_with_capacity,
     random_based_case,
 };
@@ -109,4 +110,56 @@ fn a_tall_plane_checks_every_row_in_order() {
     let case = noisy_bands_case("200 by 300", 200, 300);
 
     assert_checks_agree(&case, None, 1);
+}
+
+/// Asserts that both passes of `case` through one call match two single passes exactly, with the
+/// persistent check running only on planes at most `capacity` wide when there is one.
+fn assert_together_matches_single(case: &PlaneCase, capacity: Option<u32>) {
+    let together_passes = on_device_together(case, capacity);
+    let single_passes = on_device_with_capacity(case, capacity);
+    assert_eq!(together_passes.len(), single_passes.len(), "{}", case.label);
+
+    let pairs = together_passes.iter().zip(&single_passes);
+    for (offset, (together_pass, single_pass)) in pairs.enumerate() {
+        let label = format!("{} at offset {offset}", case.label);
+        assert_eq!(together_pass.check, single_pass.check, "{label}");
+
+        let output_label = format!("{label}: the output");
+        assert_same_plane(
+            &together_pass.output,
+            &single_pass.output,
+            case.width,
+            &output_label,
+        );
+
+        let directions_label = format!("{label}: the directions");
+        assert_same_plane(
+            &together_pass.directions,
+            &single_pass.directions,
+            case.width,
+            &directions_label,
+        );
+    }
+}
+
+#[test]
+fn both_parities_in_one_launch_match_two_single_passes() {
+    let mut cases: Vec<PlaneCase> = (0..=30).map(random_based_case).collect();
+    cases.push(larger_masked_case(Eedi3Parameters::default()));
+    cases.push(noisy_bands_case("1500 wide", 1500, 40));
+
+    let fixture = Eedi3Fixture::named("based");
+    let mut based = PlaneCase::of_fixture(fixture);
+    based.sclip = fixture.sclip_plane();
+    based.mclip = fixture.mclip_plane();
+    cases.push(based);
+
+    let mut unchecked = noisy_bands_case("vcheck 0", 240, 48);
+    unchecked.parameters.vcheck = 0;
+    cases.push(unchecked);
+
+    for case in &cases {
+        assert_together_matches_single(case, None);
+        assert_together_matches_single(case, Some(1));
+    }
 }

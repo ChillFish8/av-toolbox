@@ -95,6 +95,19 @@ pub(crate) trait FieldPass {
     ///
     /// Both are f32 planes of one size, with an even height.
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32);
+
+    /// Runs the pass keeping the even rows into `even_output` and the one keeping the odd rows into
+    /// `odd_output`.
+    fn run_both(
+        &self,
+        context: &FrameContext,
+        input: DevicePlane<'_>,
+        even_output: DevicePlane<'_>,
+        odd_output: DevicePlane<'_>,
+    ) {
+        self.run(context, input, even_output, 0);
+        self.run(context, input, odd_output, 1);
+    }
 }
 
 /// Anti-aliases `input` into `output` along `direction`.
@@ -138,8 +151,7 @@ fn run_vertical<R: Runtime>(
     let even_plane = even_kept.plane();
     let odd_plane = odd_kept.plane();
 
-    pass.run(context, input, even_plane, 0);
-    pass.run(context, input, odd_plane, 1);
+    pass.run_both(context, input, even_plane, odd_plane);
 
     let sizing = Sizing(context);
     merge_fields(client, &sizing, even_plane, odd_plane, output);

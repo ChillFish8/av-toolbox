@@ -16,6 +16,7 @@ use av_toolbox_cubek::aa::{
     Eedi3Scratch,
     Eedi3Settings,
     eedi3_field,
+    eedi3_fields,
     eedi3_scratch,
 };
 use av_toolbox_cubek::depth::Element;
@@ -31,6 +32,7 @@ use av_toolbox_gpu::{
     FrameFormat,
     Offered,
     OutputFormats,
+    PlaneBuffer,
     ResolvedFormats,
     Runtime,
     StreamFormat,
@@ -442,17 +444,8 @@ pub(crate) struct Eedi3FieldPass<'a, R: Runtime> {
 impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32) {
         let mdis = self.settings.mdis();
-        let sizes = eedi3_scratch(input.width(), input.height(), mdis);
-        let rebuilt = context.scratch(sizes.rebuilt);
-        let directions = context.scratch(sizes.directions);
-        let backpointers = context.scratch(sizes.backpointers);
-        let lenders = context.scratch(sizes.lenders);
-        let scratch = Eedi3Scratch {
-            rebuilt: rebuilt.handle(),
-            directions: directions.handle(),
-            backpointers: backpointers.handle(),
-            lenders: lenders.handle(),
-        };
+        let buffers = FieldScratch::new(context, input.width(), input.height(), mdis);
+        let scratch = buffers.scratch();
 
         let sizing = Sizing(context);
         eedi3_field(
@@ -465,6 +458,61 @@ impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
             &self.settings,
             self.clips,
         );
+    }
+
+    fn run_both(
+        &self,
+        context: &FrameContext,
+        input: DevicePlane<'_>,
+        even_output: DevicePlane<'_>,
+        odd_output: DevicePlane<'_>,
+    ) {
+        let mdis = self.settings.mdis();
+        let even_buffers = FieldScratch::new(context, input.width(), input.height(), mdis);
+        let odd_buffers = FieldScratch::new(context, input.width(), input.height(), mdis);
+        let outputs = [even_output, odd_output];
+        let scratches = [even_buffers.scratch(), odd_buffers.scratch()];
+
+        let sizing = Sizing(context);
+        eedi3_fields(
+            self.client,
+            &sizing,
+            input,
+            outputs,
+            scratches,
+            &self.settings,
+            self.clips,
+        );
+    }
+}
+
+/// The scratch buffers of one EEDI3 field pass, returned to the pool when they drop.
+struct FieldScratch {
+    rebuilt: PlaneBuffer,
+    directions: PlaneBuffer,
+    backpointers: PlaneBuffer,
+    lenders: PlaneBuffer,
+}
+
+impl FieldScratch {
+    fn new(context: &FrameContext, width: u32, height: u32, mdis: u32) -> Self {
+        let sizes = eedi3_scratch(width, height, mdis);
+
+        Self {
+            rebuilt: context.scratch(sizes.rebuilt),
+            directions: context.scratch(sizes.directions),
+            backpointers: context.scratch(sizes.backpointers),
+            lenders: context.scratch(sizes.lenders),
+        }
+    }
+
+    fn scratch(&self) -> Eedi3Scratch<'_> {
+        Eedi3Scratch {
+            rebuilt: self.rebuilt.handle(),
+            directions: self.directions.handle(),
+            backpointers: self.backpointers.handle(),
+            lenders: self.lenders.handle(),
+        }
     }
 }
 
