@@ -7,10 +7,6 @@ use av_toolbox_graph::StageSpec;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the profile command writes the file in a later task")
-)]
 const HEADER: &str = "# Worker counts measured by `av-toolbox profile`.\n";
 
 /// The worker counts one profile run settled on, and where it ran.
@@ -36,10 +32,6 @@ pub(crate) enum FileError {
         #[source]
         source: toml::de::Error,
     },
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the profile command writes the file in a later task")
-    )]
     #[error("cannot write the profile {path}: {source}")]
     Write {
         path: String,
@@ -64,10 +56,6 @@ pub(crate) fn read(path: &Path) -> Result<ProfileFile, FileError> {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the profile command writes the file in a later task")
-)]
 pub(crate) fn write(path: &Path, profile: &ProfileFile) -> Result<(), FileError> {
     let body = toml::to_string(profile)?;
     let text = format!("{HEADER}{body}");
@@ -76,10 +64,6 @@ pub(crate) fn write(path: &Path, profile: &ProfileFile) -> Result<(), FileError>
     written.map_err(|source| write_error(path, source))
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the profile command writes the file in a later task")
-)]
 fn write_error(path: &Path, source: io::Error) -> FileError {
     let shown = path.display().to_string();
     FileError::Write { path: shown, source }

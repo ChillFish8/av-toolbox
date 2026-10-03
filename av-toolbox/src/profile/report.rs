@@ -6,7 +6,6 @@ use std::time::Duration;
 const BAR_WIDTH: f64 = 20.0;
 
 /// One stage's measured cost per frame.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 pub(crate) struct Row {
     pub(crate) label: String,
     pub(crate) host: Duration,
@@ -16,15 +15,16 @@ pub(crate) struct Row {
     pub(crate) workers: Option<WorkersCell>,
 }
 
-/// The declared and suggested worker counts of one stage.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
+/// The baseline and suggested worker counts of one stage.
 pub(crate) struct WorkersCell {
+    /// The width the baseline pass planned, inherited widths included.
+    pub(crate) baseline: usize,
+    /// The width the pipeline itself declares, if any.
     pub(crate) declared: Option<usize>,
     pub(crate) suggested: usize,
 }
 
 /// Everything the breakdown report prints. All durations are per frame.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 pub(crate) struct Summary {
     pub(crate) device: String,
     pub(crate) frames: u64,
@@ -39,7 +39,6 @@ pub(crate) struct Summary {
 }
 
 /// The breakdown table and the frame rates, as printed to stdout.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 pub(crate) fn render(summary: &Summary, bars: bool) -> String {
     let mut output = String::new();
     let total_busy: Duration = summary.rows.iter().map(|row| row.busy).sum();
@@ -80,7 +79,7 @@ pub(crate) fn render(summary: &Summary, bars: bool) -> String {
             output,
             concat!(
                 "the suggested widths did not help here, ",
-                "so the declared widths were written"
+                "so the baseline's widths were written"
             )
         );
     }
@@ -122,12 +121,11 @@ fn workers_text(cell: Option<&WorkersCell>) -> String {
         return "-".to_string();
     };
 
-    let declared = cell.declared.unwrap_or(1);
     let differs = cell.declared.is_some_and(|declared| declared != cell.suggested);
     if differs {
-        format!("{declared} -> {} (declared)", cell.suggested)
+        format!("{} -> {} (declared)", cell.baseline, cell.suggested)
     } else {
-        format!("{declared} -> {}", cell.suggested)
+        format!("{} -> {}", cell.baseline, cell.suggested)
     }
 }
 
@@ -173,6 +171,7 @@ mod tests {
             device: milliseconds(71.2),
             busy: milliseconds(72.1),
             workers: Some(WorkersCell {
+                baseline: 2,
                 declared: Some(2),
                 suggested: 1,
             }),
@@ -217,6 +216,17 @@ mod tests {
         let rendered = render(&summary(), false);
 
         assert!(rendered.contains("2 -> 1 (declared)"), "{rendered}");
+    }
+
+    #[test]
+    fn an_inherited_baseline_width_is_shown_without_the_declared_mark() {
+        let cell = WorkersCell {
+            baseline: 3,
+            declared: None,
+            suggested: 1,
+        };
+
+        assert_eq!(workers_text(Some(&cell)), "3 -> 1");
     }
 
     #[test]

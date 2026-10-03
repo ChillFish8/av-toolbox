@@ -395,6 +395,18 @@ fn execute_refuses_a_missing_profile() {
     assert!(stderr.contains("cannot read the profile"), "{stderr}");
 }
 
+#[test]
+fn profile_refuses_a_live_source() {
+    let pipeline = example("passthrough.toml");
+    let pipeline = pipeline.to_str().expect("utf-8 path");
+
+    let output = toolbox(&["profile", pipeline]);
+    let stderr = text(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(stderr.contains("y4m/stdin"), "{stderr}");
+}
+
 #[cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device {
     use std::io::Write;
@@ -705,5 +717,68 @@ args.path = "{output_path}"
             shape_of(&output.stdout),
             (FRAME_SIZE, FRAME_SIZE, METADATA_FRAME_COUNT)
         );
+    }
+
+    #[test]
+    fn profiling_writes_a_profile_that_execute_runs_with() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let pipeline_path = directory.path().join("pipeline.toml");
+        let profile_path = directory.path().join("pipeline.profile.toml");
+        let content = r##"
+[source.fill]
+type = "solid/fill"
+args.colour = "#202020"
+args.width = 64
+args.height = 64
+args.frames = 12
+args.frame_rate = [24, 1]
+
+[filter.resize]
+type = "resize/bilinear"
+inputs = ["fill"]
+args.width = 32
+args.height = 32
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["resize"]
+"##;
+        std::fs::write(&pipeline_path, content).expect("writes the pipeline");
+        let pipeline_path = pipeline_path.to_str().expect("utf-8 path");
+        let profile_path = profile_path.to_str().expect("utf-8 path");
+
+        let profiled = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args(["--color", "never", "profile", pipeline_path])
+            .args(["--frames", "4", "--warmup", "2", "--output", profile_path])
+            .output()
+            .expect("the binary runs");
+        let stderr = text(&profiled.stderr);
+        let stdout = text(&profiled.stdout);
+
+        assert!(profiled.status.success(), "{stderr}");
+        assert!(stdout.contains("filter.resize"), "{stdout}");
+        assert!(
+            stdout.contains("sinks replaced by null/discard: sink.output"),
+            "{stdout}"
+        );
+
+        let written = std::fs::read_to_string(profile_path).expect("the profile was written");
+        assert!(written.contains("\"filter.resize\""), "{written}");
+
+        let executed = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args([
+                "--color",
+                "never",
+                "execute",
+                pipeline_path,
+                "--profile",
+                profile_path,
+            ])
+            .output()
+            .expect("the binary runs");
+        let stderr = text(&executed.stderr);
+
+        assert!(executed.status.success(), "{stderr}");
+        assert!(!executed.stdout.is_empty());
     }
 }

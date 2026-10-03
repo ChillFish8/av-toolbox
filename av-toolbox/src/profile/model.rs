@@ -3,39 +3,32 @@ use std::time::Duration;
 use av_toolbox_core::Parallelism;
 
 /// How much faster than the floor a widened stage aims to keep up.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 const HEADROOM: f64 = 1.25;
 
 /// How close to the baseline's frame rate a tuned run must come for its widths to be kept.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 const KEEP_WITHIN: f64 = 0.98;
 
 /// One node's measured cost per frame.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NodeCost {
     pub(crate) key: String,
     /// `None` for a node that takes no width of its own.
     pub(crate) parallelism: Option<Parallelism>,
-    pub(crate) declared: Option<usize>,
     pub(crate) host: Duration,
     pub(crate) busy: Duration,
 }
 
 impl NodeCost {
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
     pub(crate) fn device(&self) -> Duration {
         self.busy.saturating_sub(self.host)
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
     fn widenable(&self) -> bool {
         matches!(self.parallelism, Some(Parallelism::Frame | Parallelism::Chunk))
     }
 }
 
 /// How many workers one stage runs.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Width {
     pub(crate) key: String,
@@ -47,7 +40,6 @@ pub(crate) struct Width {
 ///
 /// The device runs one dispatch at a time, so every node's device time adds up. A stage that
 /// cannot widen is a floor of its own.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 pub(crate) fn floor(costs: &[NodeCost]) -> Duration {
     let device: Duration = costs.iter().map(NodeCost::device).sum();
 
@@ -62,7 +54,6 @@ pub(crate) fn floor(costs: &[NodeCost]) -> Duration {
 }
 
 /// The fewest workers keeping each widenable stage's host time under the floor.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 pub(crate) fn suggest(costs: &[NodeCost], max_workers: usize) -> Vec<Width> {
     let floor = floor(costs);
 
@@ -77,7 +68,6 @@ pub(crate) fn suggest(costs: &[NodeCost], max_workers: usize) -> Vec<Width> {
         .collect()
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 fn workers_for(host: Duration, floor: Duration, max_workers: usize) -> usize {
     if floor.is_zero() {
         return 1;
@@ -90,24 +80,9 @@ fn workers_for(host: Duration, floor: Duration, max_workers: usize) -> usize {
     rounded.clamp(1, ceiling)
 }
 
-/// The widths the pipeline runs at as written, for every stage [suggest](crate::profile::model::suggest) would size.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
-pub(crate) fn declared(costs: &[NodeCost]) -> Vec<Width> {
-    costs
-        .iter()
-        .filter(|cost| cost.widenable())
-        .map(|cost| Width {
-            key: cost.key.clone(),
-            workers: cost.declared.unwrap_or(1),
-            host: cost.host,
-        })
-        .collect()
-}
-
 /// Takes one worker from the widest stage, ties going to the larger host time.
 ///
 /// Returns false once every stage is at one.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 pub(crate) fn step_down(widths: &mut [Width]) -> bool {
     let widest = widths
         .iter_mut()
@@ -125,7 +100,6 @@ pub(crate) fn step_down(widths: &mut [Width]) -> bool {
     true
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the profile command"))]
 pub(crate) fn keeps_tuned(baseline_fps: f64, tuned_fps: f64) -> bool {
     tuned_fps >= baseline_fps * KEEP_WITHIN
 }
@@ -142,7 +116,6 @@ mod tests {
         NodeCost {
             key: key.to_string(),
             parallelism,
-            declared: None,
             host: milliseconds(host),
             busy: milliseconds(busy),
         }
@@ -218,18 +191,6 @@ mod tests {
 
         assert_eq!(widths.len(), 1);
         assert_eq!(widths[0].key, "filter.a");
-    }
-
-    #[test]
-    fn the_declared_widths_default_to_one() {
-        let mut declared_two = widenable("filter.a", 1, 1);
-        declared_two.declared = Some(2);
-        let costs = vec![declared_two, widenable("filter.b", 1, 1)];
-
-        let widths = declared(&costs);
-
-        assert_eq!(workers_of(&widths, "filter.a"), 2);
-        assert_eq!(workers_of(&widths, "filter.b"), 1);
     }
 
     #[test]

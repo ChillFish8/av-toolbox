@@ -60,16 +60,17 @@ pub(crate) fn load(path: &Path, vars: &[(String, String)], stderr: &mut dyn Writ
 /// Builds the pipeline, or prints its diagnostics.
 pub(crate) fn build<'r>(
     registry: &'r PipelineRegistry,
-    loaded: &Loaded,
+    specs: &[StageSpec],
+    files: &PipelineFiles,
     stderr: &mut dyn WriteColor,
 ) -> Option<Pipeline<'r>> {
-    let built = Pipeline::build(registry, &loaded.specs);
+    let built = Pipeline::build(registry, specs);
 
     match built {
         Ok(pipeline) => Some(pipeline),
         Err(error) => {
             let warnings = Vec::new();
-            print_error(error, warnings, &loaded.files, stderr);
+            print_error(error, warnings, files, stderr);
 
             None
         },
@@ -114,7 +115,7 @@ pub(crate) fn backend(args: &Args, stderr: &mut dyn WriteColor) -> Option<Backen
 pub(crate) fn compile<'r, 'b>(
     pipeline: Pipeline<'r>,
     backend: &'b Backend,
-    loaded: &Loaded,
+    files: &PipelineFiles,
     stderr: &mut dyn WriteColor,
 ) -> Option<CompiledPipeline<'r, 'b>> {
     let warnings = pipeline.warnings().to_vec();
@@ -123,12 +124,12 @@ pub(crate) fn compile<'r, 'b>(
     match compiled {
         Ok(compiled) => {
             let compiled_warnings = compiled.warnings();
-            report::diagnostics(stderr, &loaded.files, compiled_warnings);
+            report::diagnostics(stderr, files, compiled_warnings);
 
             Some(compiled)
         },
         Err(error) => {
-            print_error(error, warnings, &loaded.files, stderr);
+            print_error(error, warnings, files, stderr);
 
             None
         },

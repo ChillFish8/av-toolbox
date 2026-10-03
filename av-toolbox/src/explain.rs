@@ -22,7 +22,7 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let Some(pipeline) = load::build(&registry, &loaded, &mut stderr) else {
+    let Some(pipeline) = load::build(&registry, &loaded.specs, &loaded.files, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 
@@ -40,7 +40,7 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let Some(compiled) = load::compile(pipeline, &backend, &loaded, &mut stderr) else {
+    let Some(compiled) = load::compile(pipeline, &backend, &loaded.files, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 

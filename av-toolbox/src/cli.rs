@@ -57,6 +57,12 @@ pub(crate) enum Command {
     /// Run a pipeline.
     Execute(ExecuteArgs),
 
+    /// Time every stage of a pipeline and work out how many workers each should run.
+    ///
+    /// The pipeline runs three times over the same frames, with its sinks replaced so nothing is written. The
+    /// worker counts go to a profile file that `execute --profile` applies.
+    Profile(ProfileArgs),
+
     /// List the devices each backend can see on this machine.
     ///
     /// Every row names a device in the spelling `--device` takes, next to the backends that offer
@@ -105,6 +111,38 @@ pub(crate) struct ExecuteArgs {
     /// Worker counts written by `av-toolbox profile`, for every stage that declares none.
     #[arg(long, value_name = "PATH")]
     pub(crate) profile: Option<PathBuf>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ProfileArgs {
+    /// The pipeline file to profile. Its sources must read files rather than a live stream.
+    pub(crate) pipeline: PathBuf,
+
+    /// Sets a pipeline variable, such as `--var clip_input=in.mkv`. Can be given many times.
+    ///
+    /// Takes precedence over an `AVTB_VAR_<NAME>` environment variable for the same variable.
+    #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
+    pub(crate) vars: Vec<(String, String)>,
+
+    /// How many frames each pass times, after its warmup.
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) frames: u64,
+
+    /// How many frames each pass runs first without timing them, while kernels compile and tune.
+    #[arg(long, default_value_t = 30)]
+    pub(crate) warmup: u64,
+
+    /// The most workers any one stage is given, the number of CPU threads by default.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) max_workers: Option<u64>,
+
+    /// How much memory frames in flight may occupy, as for `execute`.
+    #[arg(long, value_name = "SIZE", value_parser = parse_frame_budget)]
+    pub(crate) frame_budget: Option<usize>,
+
+    /// Where to write the profile, `<pipeline>.profile.toml` in the working directory by default.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) output: Option<PathBuf>,
 }
 
 /// Reads `NAME=VALUE` into its name and value.

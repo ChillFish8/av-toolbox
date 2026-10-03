@@ -24,6 +24,7 @@ fn main() -> ExitCode {
 
     match &args.command {
         Command::Execute(execute) => execute::run(&args, execute),
+        Command::Profile(profile_args) => profile::run(&args, profile_args),
         Command::ListDevices => list_devices::run(&args.accelerators),
         Command::ListStages(list) => list_stages::run(&args, list),
         Command::Explain(explain) => explain::run(&args, explain),

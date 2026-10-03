@@ -13,7 +13,7 @@ use crate::profile::file::{self, ProfileFile};
 use crate::{load, report};
 
 /// The exit code of a run stopped with Ctrl+C.
-const CANCELLED: u8 = 130;
+pub(crate) const CANCELLED: u8 = 130;
 
 pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
     let mut stderr = report::stderr(args.color);
@@ -35,7 +35,7 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let Some(pipeline) = load::build(&registry, &loaded, &mut stderr) else {
+    let Some(pipeline) = load::build(&registry, &loaded.specs, &loaded.files, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 
@@ -47,7 +47,7 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
         warn_on_other_device(profile, &backend, args, &mut stderr);
     }
 
-    let Some(compiled) = load::compile(pipeline, &backend, &loaded, &mut stderr) else {
+    let Some(compiled) = load::compile(pipeline, &backend, &loaded.files, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 

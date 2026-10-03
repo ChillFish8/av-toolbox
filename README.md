@@ -108,6 +108,20 @@ av-toolbox explain examples/scenes.toml --html --path graph.html
 av-toolbox explain examples/scenes.toml --structure-only
 ```
 
+## Profiling a pipeline
+
+`profile` runs a pipeline three times over the same frames, with its sinks replaced so nothing is written. It
+prints how much of each frame every stage takes, and writes the worker counts it found to a profile file.
+
+```bash
+av-toolbox profile examples/scenes.toml --var input=clip.mkv
+av-toolbox profile examples/scenes.toml --var input=clip.mkv --frames 600 --output scenes.profile.toml
+av-toolbox execute examples/scenes.toml --var input=clip.mkv --var output=out.y4m --profile scenes.profile.toml
+```
+
+A `workers` written in the pipeline always wins over the profile. Profiling needs a file source, since a stream
+such as standard input can only be read once.
+
 ## Finding stages and devices
 
 ```bash
