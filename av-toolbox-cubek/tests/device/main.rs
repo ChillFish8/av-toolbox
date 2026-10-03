@@ -6,6 +6,7 @@ mod bilateral;
 mod blur;
 mod deband;
 mod dehalo;
+mod deinterlace;
 mod depth;
 mod edges;
 mod histogram;
