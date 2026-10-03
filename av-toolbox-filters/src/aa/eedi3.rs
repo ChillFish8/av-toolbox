@@ -12,11 +12,13 @@ use av_toolbox_core::{
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::aa::{
     Eedi3Arguments,
+    Eedi3Check,
     Eedi3DeviceClips,
     Eedi3Scratch,
     Eedi3Settings,
     eedi3_field,
     eedi3_fields,
+    eedi3_planned_check,
     eedi3_scratch,
 };
 use av_toolbox_cubek::depth::Element;
@@ -467,6 +469,14 @@ impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
         even_output: DevicePlane<'_>,
         odd_output: DevicePlane<'_>,
     ) {
+        // Only the persistent check gains from both passes at once, so the others take one scratch in turn.
+        let planned = eedi3_planned_check(self.client, &self.settings, input.width());
+        if planned != Eedi3Check::Persistent {
+            self.run(context, input, even_output, 0);
+            self.run(context, input, odd_output, 1);
+            return;
+        }
+
         let mdis = self.settings.mdis();
         let even_buffers = FieldScratch::new(context, input.width(), input.height(), mdis);
         let odd_buffers = FieldScratch::new(context, input.width(), input.height(), mdis);

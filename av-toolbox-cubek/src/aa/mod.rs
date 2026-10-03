@@ -30,6 +30,7 @@ pub use self::eedi3::{
     eedi3_check_capacity,
     eedi3_field,
     eedi3_fields,
+    eedi3_planned_check,
     eedi3_scratch,
 };
 #[cfg(any(test, feature = "test-support"))]

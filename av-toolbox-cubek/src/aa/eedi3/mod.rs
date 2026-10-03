@@ -442,6 +442,29 @@ pub fn eedi3_check_capacity<R: Runtime>(client: &ComputeClient<R>) -> u32 {
     u32::try_from(samples).unwrap_or(u32::MAX)
 }
 
+/// The check a field pass `width` samples wide runs under `settings` on `client`'s device.
+pub fn eedi3_planned_check<R: Runtime>(
+    client: &ComputeClient<R>,
+    settings: &Eedi3Settings,
+    width: u32,
+) -> Eedi3Check {
+    let capacity = eedi3_check_capacity(client);
+
+    chosen_check(settings, width, capacity)
+}
+
+/// The check a field pass `width` samples wide runs under `settings`, where rows of up to `capacity` samples
+/// fit the persistent check.
+fn chosen_check(settings: &Eedi3Settings, width: u32, capacity: u32) -> Eedi3Check {
+    if settings.vcheck == 0 {
+        Eedi3Check::Skipped
+    } else if width <= capacity {
+        Eedi3Check::Persistent
+    } else {
+        Eedi3Check::PerRow
+    }
+}
+
 /// One EEDI3 field pass, keeping the rows of parity `offset` and rebuilding the others into `output`.
 ///
 /// The planes hold integer code values and must be distinct buffers of the same size, at least 4 by 4
@@ -533,8 +556,8 @@ fn assert_separate(scratch: &Eedi3Scratch<'_>, other: &Eedi3Scratch<'_>) {
 
 /// Both EEDI3 field passes of one plane, `outputs[0]` keeping the even rows and `outputs[1]` the odd ones.
 ///
-/// Each pass takes its own output and scratch, which must not share a buffer. The two passes share one
-/// launch of the reliability check.
+/// Each pass takes its own output and scratch, which must not share a buffer. When the persistent check
+/// runs, the two passes share one launch of it.
 pub fn eedi3_fields<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -584,11 +607,11 @@ fn rebuild_field<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch
     interpolate::interpolate(client, dispatch, pass);
 }
 
-/// Runs every step of each of `passes`, which share their input and settings, checking them in one launch
-/// when they are at most `capacity` wide.
+/// Runs every step of each of `passes`, which share their input and settings.
 ///
-/// Otherwise each pass runs to its end before the next starts, which keeps the device busier through the
-/// per-row check's many small launches.
+/// When they are checked and at most `capacity` wide, one launch checks them all. Otherwise each pass runs
+/// to its end before the next starts, which keeps the device busy through the per-row check's many small
+/// launches.
 fn run_fields<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -598,28 +621,61 @@ fn run_fields<R: Runtime>(
     assert!(!passes.is_empty(), "an EEDI3 run needs at least one field pass");
 
     let first_pass = &passes[0];
-    let checked = first_pass.settings.vcheck > 0;
+    let chosen = chosen_check(&first_pass.settings, first_pass.width, capacity);
 
-    if checked && first_pass.width <= capacity {
+    if chosen == Eedi3Check::Persistent {
         for pass in passes {
             rebuild_field(client, dispatch, pass);
         }
 
         check::persistent_check(client, passes, capacity);
-        return Eedi3Check::Persistent;
+        return chosen;
     }
 
     for pass in passes {
         rebuild_field(client, dispatch, pass);
         check::assemble(client, dispatch, pass);
 
-        if checked {
+        if chosen == Eedi3Check::PerRow {
             check::reliability_check(client, dispatch, pass);
         }
     }
 
-    match checked {
-        true => Eedi3Check::PerRow,
-        false => Eedi3Check::Skipped,
+    chosen
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings_with_vcheck(vcheck: u32) -> Eedi3Settings {
+        let arguments = Eedi3Arguments {
+            vcheck,
+            ..Eedi3Arguments::default()
+        };
+
+        Eedi3Settings::new(&arguments, 8)
+    }
+
+    #[test]
+    fn a_plane_within_the_capacity_takes_the_persistent_check() {
+        let settings = settings_with_vcheck(2);
+
+        assert_eq!(chosen_check(&settings, 64, 64), Eedi3Check::Persistent);
+    }
+
+    #[test]
+    fn a_plane_wider_than_the_capacity_takes_the_per_row_check() {
+        let settings = settings_with_vcheck(2);
+
+        assert_eq!(chosen_check(&settings, 65, 64), Eedi3Check::PerRow);
+    }
+
+    #[test]
+    fn vcheck_zero_skips_the_check_at_any_width() {
+        let settings = settings_with_vcheck(0);
+
+        assert_eq!(chosen_check(&settings, 64, 64), Eedi3Check::Skipped);
+        assert_eq!(chosen_check(&settings, 65, 64), Eedi3Check::Skipped);
     }
 }
