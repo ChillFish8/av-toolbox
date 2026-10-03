@@ -46,6 +46,11 @@ pub(crate) fn render(summary: &Summary, bars: bool) -> String {
     let mut output = String::new();
     let total_busy: Duration = summary.rows.iter().map(|row| row.busy).sum();
     let label_width = label_width(&summary.rows);
+    let workers_width = workers_width(&summary.rows);
+    let widths = Widths {
+        label: label_width,
+        workers: workers_width,
+    };
 
     let _ = writeln!(output, "Profiled {} frames on {}", summary.frames, summary.device);
     let _ = writeln!(output);
@@ -56,7 +61,7 @@ pub(crate) fn render(summary: &Summary, bars: bool) -> String {
     );
 
     for row in &summary.rows {
-        let line = row_line(row, label_width, total_busy, bars);
+        let line = row_line(row, &widths, total_busy, bars);
         let _ = writeln!(output, "{line}");
     }
 
@@ -98,24 +103,38 @@ pub(crate) fn render(summary: &Summary, bars: bool) -> String {
     output
 }
 
-fn row_line(row: &Row, label_width: usize, total_busy: Duration, bars: bool) -> String {
+/// How wide the variable columns of the table are.
+struct Widths {
+    label: usize,
+    workers: usize,
+}
+
+fn row_line(row: &Row, widths: &Widths, total_busy: Duration, bars: bool) -> String {
     let share = share_of(row.busy, total_busy);
     let workers = workers_text(row.workers.as_ref());
     let host = milliseconds(row.host);
     let device = milliseconds(row.device);
     let busy = milliseconds(row.busy);
+    let label_width = widths.label;
 
     let mut line = format!(
-        "{:<label_width$} {host:>9.2} {device:>9.2} {busy:>9.2} {share:>5.1} %   {workers}",
+        "{:<label_width$} {host:>9.2} {device:>9.2} {busy:>9.2} {share:>5.1} %   ",
         row.label
     );
 
-    if bars {
-        let length = (share / 100.0 * BAR_WIDTH).round() as usize;
-        let bar = "#".repeat(length);
-        line.push_str("  ");
-        line.push_str(&bar);
+    if !bars {
+        line.push_str(&workers);
+        return line;
     }
+
+    let workers_width = widths.workers;
+    let padded = format!("{workers:<workers_width$}");
+    let length = (share / 100.0 * BAR_WIDTH).round() as usize;
+    let bar = "#".repeat(length);
+
+    line.push_str(&padded);
+    line.push_str("  ");
+    line.push_str(&bar);
 
     line
 }
@@ -125,6 +144,16 @@ fn label_width(rows: &[Row]) -> usize {
     let longest = rows.iter().map(|row| row.label.chars().count()).max();
 
     longest.unwrap_or(0).max(MIN_LABEL_WIDTH)
+}
+
+/// The width of the workers column, so the bars after it start in one column.
+fn workers_width(rows: &[Row]) -> usize {
+    let longest = rows
+        .iter()
+        .map(|row| workers_text(row.workers.as_ref()).chars().count())
+        .max();
+
+    longest.unwrap_or(0)
 }
 
 fn workers_text(cell: Option<&WorkersCell>) -> String {
@@ -296,5 +325,15 @@ mod tests {
 
         assert!(!plain.contains('#'));
         assert!(barred.contains('#'));
+    }
+
+    #[test]
+    fn every_bar_starts_in_the_same_column() {
+        let rendered = render(&summary(), true);
+
+        let starts: Vec<usize> = rendered.lines().filter_map(|line| line.find('#')).collect();
+
+        assert_eq!(starts.len(), 2, "{rendered}");
+        assert_eq!(starts[0], starts[1], "{rendered}");
     }
 }
