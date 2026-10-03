@@ -1,4 +1,4 @@
-# Reads two y4m clips of the same format, finds the line art in the first, and writes the first
+# Reads two videos of the same format, finds the line art in the first, and writes the first
 # clip with the second clip's pixels wherever a line was found.
 
 [variable.base]
@@ -17,11 +17,11 @@ description = "Where to write the y4m stream"
 default = "output.y4m"
 
 [source.base]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ base }}"
 
 [source.overlay]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ overlay }}"
 
 [mask.xdog]

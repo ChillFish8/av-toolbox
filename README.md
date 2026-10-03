@@ -75,15 +75,16 @@ inputs = ["input"]
 variables.speed = "fast"
 
 [sink.output]
-type = "y4m/stdout"
+type = "y4m/pipe"
 inputs = ["scenes"]
+args.path = "{{ output }}"
 ```
 
 Read a call's output as `<call>.<output>`, or as `<call>` when the file has one output. Stages from a called file
 show up as `<call>.<stage>`, such as `scenes.detect`.
 
 ```bash
-av-toolbox execute examples/chunked.toml < input.y4m > output.y4m
+av-toolbox execute examples/chunked.toml --var input=clip.mkv --var output=output.y4m
 ```
 
 ## Resizing and generated frames
@@ -93,10 +94,10 @@ The `resize/*` filters resize a clip with a point, bilinear, bicubic, lanczos or
 size, format and length of another clip.
 
 ```bash
-av-toolbox execute examples/resize.toml --var width=1280 --var height=720 < input.y4m > output.y4m
-av-toolbox execute examples/solid.toml --var colour=#202020 > solid.y4m
-av-toolbox execute examples/image.toml --var image=logo.png > logo.y4m
-av-toolbox execute examples/recolour-lines.toml --var colour=#ff0000 < input.y4m > output.y4m
+av-toolbox execute examples/resize.toml --var width=1280 --var height=720 --var input=clip.mkv --var output=output.y4m
+av-toolbox execute examples/solid.toml --var colour=#202020 --var output=solid.y4m
+av-toolbox execute examples/image.toml --var image=logo.png --var output=logo.y4m
+av-toolbox execute examples/recolour-lines.toml --var colour=#ff0000 --var input=clip.mkv --var output=output.y4m
 ```
 
 ## Drawing a pipeline

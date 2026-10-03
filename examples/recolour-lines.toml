@@ -1,16 +1,26 @@
-# Reads a y4m stream from standard input, finds its line art and paints the lines one colour, writing the result
-# to standard output.
+# Reads a video, finds its line art and paints the lines one colour, writing the result as y4m.
 #
 # solid/like makes a frame of the colour in the input's size and format for every input frame, which
 # blend/masked then takes wherever a line was found.
+
+[variable.input]
+type = "path"
+description = "The video to decode"
+default = "input.mkv"
 
 [variable.colour]
 type = "string"
 description = "The colour to paint the lines, as #rrggbb"
 default = "#ff0000"
 
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
 [source.input]
-type = "y4m/stdin"
+type = "ffms2/file"
+args.path = "{{ input }}"
 
 [mask.lines]
 type = "lines/xdog"
@@ -26,5 +36,6 @@ type = "blend/masked"
 inputs = ["input", "paint", "lines"]
 
 [sink.output]
-type = "y4m/stdout"
+type = "y4m/pipe"
 inputs = ["blend"]
+args.path = "{{ output }}"

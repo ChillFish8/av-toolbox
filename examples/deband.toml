@@ -1,6 +1,6 @@
-# Reads a y4m clip, smooths its banding with libplacebo's algorithm, and writes it back.
+# Reads a video, smooths its banding with libplacebo's algorithm, and writes it back.
 #
-# Luma is debanded harder than chroma, and only luma gets grain.
+# Luma is deband harder than chroma, and only luma gets grain.
 
 [variable.input]
 type = "path"
@@ -13,10 +13,10 @@ description = "Where to write the y4m stream"
 default = "output.y4m"
 
 [source.input]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ input }}"
 
-[filter.debanded]
+[filter.deband]
 type = "deband/placebo"
 inputs = ["input"]
 args.iterations = 2
@@ -25,5 +25,5 @@ args.grain = [6.0, 0.0, 0.0]
 
 [sink.output]
 type = "y4m/pipe"
-inputs = ["debanded"]
+inputs = ["deband"]
 args.path = "{{ output }}"

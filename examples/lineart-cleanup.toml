@@ -14,22 +14,22 @@ description = "Where to write the y4m stream"
 default = "output.y4m"
 
 [source.input]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ input }}"
 
-[filter.decombed]
+[filter.decomb]
 type = "lineart/vinverse"
 inputs = ["input"]
 
-[filter.thinned]
+[filter.thin]
 type = "lineart/thin"
-inputs = ["decombed"]
+inputs = ["decomb"]
 
-[filter.darkened]
+[filter.darken]
 type = "lineart/darken"
-inputs = ["thinned"]
+inputs = ["thin"]
 
 [sink.output]
 type = "y4m/pipe"
-inputs = ["darkened"]
+inputs = ["darken"]
 args.path = "{{ output }}"

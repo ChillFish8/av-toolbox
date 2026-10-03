@@ -1,4 +1,4 @@
-# Reads a y4m clip, removes halos around its edges and the ringing beside them on luma, and writes it back.
+# Reads a video, removes halos around its edges and the ringing beside them on luma, and writes it back.
 #
 # dehalo/fine only touches a band around strong edges. dering/hq then smooths ringing in a mask built around the
 # edges it finds.
@@ -17,15 +17,15 @@ default = "output.y4m"
 type = "ffms2/file"
 args.path = "{{ input }}"
 
-[filter.dehaloed]
+[filter.dehalo]
 type = "dehalo/fine"
 inputs = ["input"]
 
-[filter.derung]
+[filter.dering]
 type = "dering/hq"
-inputs = ["dehaloed"]
+inputs = ["dehalo"]
 
 [sink.output]
 type = "y4m/pipe"
-inputs = ["derung"]
+inputs = ["dering"]
 args.path = "{{ output }}"

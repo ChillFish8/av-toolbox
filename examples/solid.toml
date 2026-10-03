@@ -1,4 +1,4 @@
-# Writes a clip of a single colour to standard output.
+# Writes a clip of a single colour as y4m.
 
 [variable.colour]
 type = "string"
@@ -23,6 +23,11 @@ description = "How many frames to write"
 default = 48
 min = 1
 
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
 [source.fill]
 type = "solid/fill"
 args.colour = "{{ colour }}"
@@ -32,5 +37,6 @@ args.frames = "{{ frames }}"
 args.frame_rate = [24, 1]
 
 [sink.output]
-type = "y4m/stdout"
+type = "y4m/pipe"
 inputs = ["fill"]
+args.path = "{{ output }}"

@@ -1,5 +1,4 @@
-# Shows a PNG or JPEG image for a number of frames, resized with a Lanczos kernel, and writes it to standard
-# output.
+# Shows a PNG or JPEG image for a number of frames, resized with a Lanczos kernel, and writes it as y4m.
 
 [variable.image]
 type = "path"
@@ -24,6 +23,11 @@ description = "The output height"
 default = 720
 min = 1
 
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
 [source.image]
 type = "image/file"
 args.path = "{{ image }}"
@@ -38,5 +42,6 @@ args.width = "{{ width }}"
 args.height = "{{ height }}"
 
 [sink.output]
-type = "y4m/stdout"
+type = "y4m/pipe"
 inputs = ["resize"]
+args.path = "{{ output }}"

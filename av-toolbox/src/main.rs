@@ -34,7 +34,10 @@ fn main() -> ExitCode {
 
 /// Logs to stderr, quieter for the commands that only print a table.
 fn start_logging(command: &Command) {
-    let quiet = matches!(command, Command::ListDevices | Command::ListStages(_));
+    let quiet = matches!(
+        command,
+        Command::ListDevices | Command::ListStages(_) | Command::Explain(_) | Command::Profile(_)
+    );
     let default = if quiet { "warn" } else { "info" };
     let from_env = EnvFilter::try_from_default_env();
     let filter = from_env.unwrap_or_else(|_| EnvFilter::new(default));

@@ -1,8 +1,13 @@
-# Reads a y4m stream from standard input, resizes it with a Spline36 kernel and writes it to standard output.
+# Reads a video, resizes it with a Spline36 kernel and writes it out as y4m.
 #
 # The other kernels are resize/point, resize/bilinear, resize/bicubic, resize/lanczos, resize/spline16 and
 # resize/spline64. Any of them can also crop or shift the picture with src_left, src_top, src_width and
 # src_height.
+
+[variable.input]
+type = "path"
+description = "The video to decode"
+default = "input.mkv"
 
 [variable.width]
 type = "integer"
@@ -16,8 +21,14 @@ description = "The output height"
 default = 720
 min = 1
 
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
 [source.input]
-type = "y4m/stdin"
+type = "ffms2/file"
+args.path = "{{ input }}"
 
 [filter.resize]
 type = "resize/spline36"
@@ -26,5 +37,6 @@ args.width = "{{ width }}"
 args.height = "{{ height }}"
 
 [sink.output]
-type = "y4m/stdout"
+type = "y4m/pipe"
 inputs = ["resize"]
+args.path = "{{ output }}"

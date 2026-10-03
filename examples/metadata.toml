@@ -1,13 +1,23 @@
-# Reads a y4m stream from standard input, marks its scene changes, writes it to standard output and logs each
-# frame's metadata as one line of JSON.
+# Reads a video, marks its scene changes, writes it as y4m and logs each frame's metadata as one line of JSON.
+
+[variable.input]
+type = "path"
+description = "The video to decode"
+default = "input.mkv"
 
 [variable.metadata]
 type = "path"
 description = "Where to write the metadata log"
 default = "metadata.ndjson"
 
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
 [source.input]
-type = "y4m/stdin"
+type = "ffms2/file"
+args.path = "{{ input }}"
 
 [transform.detect]
 type = "scene/detect"
@@ -15,8 +25,9 @@ inputs = ["input"]
 args.mode = "natural"
 
 [sink.output]
-type = "y4m/stdout"
+type = "y4m/pipe"
 inputs = ["detect"]
+args.path = "{{ output }}"
 
 [sink.log]
 type = "metadata/ndjson"

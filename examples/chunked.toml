@@ -1,6 +1,11 @@
-# Reads a y4m stream from standard input, marks its scene changes and writes it to standard output.
+# Reads a video, marks its scene changes and writes it out as y4m.
 #
 # The scene detection lives in parts/scenes.toml, which this file calls.
+
+[variable.input]
+type = "path"
+description = "The video to decode"
+default = "input.mkv"
 
 [variable.speed]
 type = "string"
@@ -8,8 +13,14 @@ description = "How carefully to compare frames"
 default = "standard"
 choices = ["standard", "fast"]
 
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
 [source.input]
-type = "y4m/stdin"
+type = "ffms2/file"
+args.path = "{{ input }}"
 
 [call.scenes]
 path = "parts/scenes.toml"
@@ -17,5 +28,6 @@ inputs = ["input"]
 variables.speed = "{{ speed }}"
 
 [sink.output]
-type = "y4m/stdout"
+type = "y4m/pipe"
 inputs = ["scenes"]
+args.path = "{{ output }}"

@@ -559,30 +559,12 @@ args.path = "{output_path}"
         let directory = tempfile::tempdir().expect("a temp dir");
         let log_path = directory.path().join("metadata.ndjson");
         let log_path = log_path.to_str().expect("utf-8 path");
-        let path = example("metadata.toml");
-        let path = path.to_str().expect("utf-8 path");
         let metadata_var = format!("metadata={log_path}");
 
-        let mut child = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
-            .args(["--color", "never", "execute", path])
-            .args(["--var", &metadata_var])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the binary runs");
+        let run = execute("metadata.toml", &[&metadata_var], Some(textured_y4m_stream()));
+        let stderr = text(&run.output.stderr);
 
-        let mut stdin = child.stdin.take().expect("stdin is piped");
-        let input = textured_y4m_stream();
-        let feeder = thread::spawn(move || {
-            stdin.write_all(&input).expect("writes the stream");
-        });
-
-        let output = child.wait_with_output().expect("the binary finishes");
-        feeder.join().expect("the feeder thread finishes");
-        let stderr = text(&output.stderr);
-
-        assert!(output.status.success(), "{stderr}");
+        assert!(run.output.status.success(), "{stderr}");
 
         let logged = std::fs::read_to_string(log_path).expect("reads the log");
         let lines: Vec<serde_json::Value> = logged
@@ -601,55 +583,46 @@ args.path = "{output_path}"
 
     #[test]
     fn executing_the_chunked_example_runs_through_the_called_file() {
-        let path = example("chunked.toml");
-        let path = path.to_str().expect("utf-8 path");
+        let run = execute("chunked.toml", &[], Some(y4m_stream()));
+        let stderr = text(&run.output.stderr);
 
-        let mut child = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
-            .args(["--color", "never", "execute", path])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the binary runs");
-
-        let mut stdin = child.stdin.take().expect("stdin is piped");
-        let input = y4m_stream();
-        let feeder = thread::spawn(move || {
-            stdin.write_all(&input).expect("writes the stream");
-        });
-
-        let output = child.wait_with_output().expect("the binary finishes");
-        feeder.join().expect("the feeder thread finishes");
-        let stderr = text(&output.stderr);
-
-        assert!(output.status.success(), "{stderr}");
-        assert!(output.stdout.starts_with(b"YUV4MPEG2"));
+        assert!(run.output.status.success(), "{stderr}");
+        assert!(run.stream.starts_with(b"YUV4MPEG2"));
     }
 
-    /// Runs an example with `vars`, feeding it `input` on standard input.
-    fn execute(name: &str, vars: &[&str], input: Vec<u8>) -> Output {
+    /// An example run, with the y4m stream it wrote to its `output` file.
+    struct Run {
+        output: Output,
+        stream: Vec<u8>,
+    }
+
+    /// Runs an example with `vars`, writing `input` to a file for its `input` variable and reading
+    /// the stream back from its `output` variable.
+    fn execute(name: &str, vars: &[&str], input: Option<Vec<u8>>) -> Run {
         let path = example(name);
         let path = path.to_str().expect("utf-8 path");
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let input_path = directory.path().join("input.y4m");
+        let output_path = directory.path().join("output.y4m");
+        let output_var = format!("output={}", output_path.to_str().expect("utf-8 path"));
         let var_args = vars.iter().flat_map(|var| ["--var", var]);
 
-        let mut child = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_av-toolbox"));
+        command
             .args(["--color", "never", "execute", path])
             .args(var_args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the binary runs");
+            .args(["--var", &output_var]);
 
-        let mut stdin = child.stdin.take().expect("stdin is piped");
-        let feeder = thread::spawn(move || {
-            stdin.write_all(&input).expect("writes the stream");
-        });
+        if let Some(bytes) = input {
+            std::fs::write(&input_path, bytes).expect("writes the input");
+            let input_var = format!("input={}", input_path.to_str().expect("utf-8 path"));
+            command.args(["--var", &input_var]);
+        }
 
-        let output = child.wait_with_output().expect("the binary finishes");
-        feeder.join().expect("the feeder thread finishes");
+        let output = command.output().expect("the binary runs");
+        let stream = std::fs::read(&output_path).unwrap_or_default();
 
-        output
+        Run { output, stream }
     }
 
     /// The width, height and frame count of a y4m stream.
@@ -670,22 +643,22 @@ args.path = "{output_path}"
     fn executing_the_resize_example_writes_the_new_size() {
         let input = y4m_stream();
 
-        let output = execute("resize.toml", &["width=32", "height=24"], input);
-        let stderr = text(&output.stderr);
+        let run = execute("resize.toml", &["width=32", "height=24"], Some(input));
+        let stderr = text(&run.output.stderr);
 
-        assert!(output.status.success(), "{stderr}");
-        assert_eq!(shape_of(&output.stdout), (32, 24, FRAME_COUNT));
+        assert!(run.output.status.success(), "{stderr}");
+        assert_eq!(shape_of(&run.stream), (32, 24, FRAME_COUNT));
     }
 
     #[test]
     fn executing_the_solid_example_writes_its_frames() {
         let vars = ["width=64", "height=48", "frames=3"];
 
-        let output = execute("solid.toml", &vars, Vec::new());
-        let stderr = text(&output.stderr);
+        let run = execute("solid.toml", &vars, None);
+        let stderr = text(&run.output.stderr);
 
-        assert!(output.status.success(), "{stderr}");
-        assert_eq!(shape_of(&output.stdout), (64, 48, 3));
+        assert!(run.output.status.success(), "{stderr}");
+        assert_eq!(shape_of(&run.stream), (64, 48, 3));
     }
 
     #[test]
@@ -698,23 +671,23 @@ args.path = "{output_path}"
         let image_var = format!("image={image_path}");
         let vars = [image_var.as_str(), "frames=2", "width=20", "height=12"];
 
-        let output = execute("image.toml", &vars, Vec::new());
-        let stderr = text(&output.stderr);
+        let run = execute("image.toml", &vars, None);
+        let stderr = text(&run.output.stderr);
 
-        assert!(output.status.success(), "{stderr}");
-        assert_eq!(shape_of(&output.stdout), (20, 12, 2));
+        assert!(run.output.status.success(), "{stderr}");
+        assert_eq!(shape_of(&run.stream), (20, 12, 2));
     }
 
     #[test]
     fn executing_the_recolour_lines_example_keeps_the_input_shape() {
         let input = textured_y4m_stream();
 
-        let output = execute("recolour-lines.toml", &[], input);
-        let stderr = text(&output.stderr);
+        let run = execute("recolour-lines.toml", &[], Some(input));
+        let stderr = text(&run.output.stderr);
 
-        assert!(output.status.success(), "{stderr}");
+        assert!(run.output.status.success(), "{stderr}");
         assert_eq!(
-            shape_of(&output.stdout),
+            shape_of(&run.stream),
             (FRAME_SIZE, FRAME_SIZE, METADATA_FRAME_COUNT)
         );
     }

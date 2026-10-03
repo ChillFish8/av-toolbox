@@ -1,4 +1,4 @@
-# Reads a 4:2:0 y4m clip, upscales its chroma on its own to the luma size, and writes the result as 4:4:4.
+# Reads a 4:2:0 video, upscales its chroma on its own to the luma size, and writes the result as 4:4:4.
 
 [variable.input]
 type = "path"
@@ -23,7 +23,7 @@ default = 720
 min = 1
 
 [source.input]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ input }}"
 
 [filter.luma]
@@ -36,20 +36,20 @@ type = "planes/extract"
 inputs = ["input"]
 args.plane = "chroma"
 
-[filter.upscaled_chroma]
+[filter.upscale_chroma]
 type = "resize/spline36"
 inputs = ["chroma"]
 args.width = "{{ width }}"
 args.height = "{{ height }}"
 
-[filter.merged]
+[filter.merge]
 type = "planes/merge"
-inputs = ["luma", "upscaled_chroma"]
+inputs = ["luma", "upscale_chroma"]
 args.y = { input = 0 }
 args.u = { input = 1 }
 args.v = { input = 1 }
 
 [sink.output]
 type = "y4m/pipe"
-inputs = ["merged"]
+inputs = ["merge"]
 args.path = "{{ output }}"

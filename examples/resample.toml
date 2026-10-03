@@ -1,4 +1,4 @@
-# Reads a 4:2:0 8-bit y4m clip, works on it at 4:4:4 10-bit, and writes it back at 4:2:0 8-bit.
+# Reads a 4:2:0 8-bit video, works on it at 4:4:4 10-bit, and writes it back at 4:2:0 8-bit.
 #
 # Lowering the depth dithers with blue noise. Set args.dither to "ordered" or "none" to change that.
 
@@ -13,7 +13,7 @@ description = "Where to write the y4m stream"
 default = "output.y4m"
 
 [source.input]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ input }}"
 
 [filter.full_chroma]

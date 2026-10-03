@@ -1,4 +1,4 @@
-# Doubles a y4m clip with ArtCNN. Luma goes through the R8F64 network and chroma through Catrom.
+# Doubles a video with ArtCNN. Luma goes through the R8F64 network and chroma through Catrom.
 #
 # Set args.model to "r16f96" after `av-toolbox pull artcnn`.
 # Set args.precision to "f32" for full-precision feature maps.
@@ -14,18 +14,18 @@ default = "input.y4m"
 
 [variable.output]
 type = "path"
-description = "Where to write the doubled clip"
+description = "Where to write the upscale clip"
 default = "output.y4m"
 
 [source.input]
-type = "y4m/pipe"
+type = "ffms2/file"
 args.path = "{{ input }}"
 
-[filter.doubled]
+[filter.upscale]
 type = "upscale/artcnn"
 inputs = ["input"]
 
 [sink.output]
 type = "y4m/pipe"
-inputs = ["doubled"]
+inputs = ["upscale"]
 args.path = "{{ output }}"
