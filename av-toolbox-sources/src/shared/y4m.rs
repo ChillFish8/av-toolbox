@@ -10,6 +10,7 @@ use av_toolbox_gpu::{
     ColourInfo,
     ColourRange,
     Depth,
+    FieldOrder,
     FrameContext,
     FrameFormat,
     FrameLayout,
@@ -64,6 +65,7 @@ impl<R: Read> Y4mReader<R> {
         let (layout, sample) = layout_of(colorspace)?;
         let raw_params = decoder.get_raw_params();
         let range = range_of(raw_params);
+        let field_order = field_order_of(raw_params);
         let chroma_location = chroma_location_of(colorspace);
         let colour = ColourInfo {
             range,
@@ -78,7 +80,7 @@ impl<R: Read> Y4mReader<R> {
             sample,
             colour,
             frame_rate: rate_of(frame_rate),
-            field_order: None,
+            field_order,
         };
 
         let frame_end = bytes_read.load(Ordering::Relaxed);
@@ -197,6 +199,24 @@ fn range_of(raw_params: &[u8]) -> ColourRange {
     ColourRange::Unspecified
 }
 
+/// The field order the `I` header parameter names, if any.
+///
+/// `Im` marks a stream whose frames each name their own order, which gives the stream no single order.
+fn field_order_of(raw_params: &[u8]) -> Option<FieldOrder> {
+    let fields = raw_params.split(|&byte| byte == b' ');
+
+    for field in fields {
+        match field {
+            b"Ip" => return Some(FieldOrder::Progressive),
+            b"It" => return Some(FieldOrder::TopFirst),
+            b"Ib" => return Some(FieldOrder::BottomFirst),
+            _ => {},
+        }
+    }
+
+    None
+}
+
 /// The chroma location the colourspace implies.
 ///
 /// A bare `C420` is centre-sited, the same as `C420jpeg`.
@@ -237,6 +257,7 @@ mod tests {
         ChromaLocation,
         ColourRange,
         Depth,
+        FieldOrder,
         FrameLayout,
         FrameRate,
         SampleFormat,
@@ -563,5 +584,33 @@ mod tests {
         reader.read_frame(&context).expect("reads").expect("a frame");
 
         assert!(reader.read_frame(&context).expect("ends cleanly").is_none());
+    }
+
+    /// A one frame 4x2 4:2:0 stream whose header carries `tag` after the frame rate.
+    fn tagged_stream(tag: &str) -> Vec<u8> {
+        let header = format!("YUV4MPEG2 W4 H2 F25:1{tag} C420jpeg\n");
+        let mut bytes = header.into_bytes();
+        bytes.extend_from_slice(b"FRAME\n");
+        bytes.extend_from_slice(&[0; 12]);
+
+        bytes
+    }
+
+    #[test]
+    fn the_interlacing_tag_becomes_the_field_order() {
+        let cases = [
+            (" Ip", Some(FieldOrder::Progressive)),
+            (" It", Some(FieldOrder::TopFirst)),
+            (" Ib", Some(FieldOrder::BottomFirst)),
+            (" Im", None),
+            ("", None),
+        ];
+
+        for (tag, expected) in cases {
+            let bytes = tagged_stream(tag);
+            let reader = Y4mReader::open(Cursor::new(bytes)).expect("opens");
+
+            assert_eq!(reader.format().field_order, expected, "tag {tag:?}");
+        }
     }
 }

@@ -6,6 +6,7 @@ use av_toolbox_gpu::{
     Channel,
     ChromaLocation,
     ColourRange,
+    FieldOrder,
     FrameFormat,
     FrameLayout,
     FrameRate,
@@ -184,8 +185,9 @@ fn bits_of(sample: SampleFormat) -> Option<u8> {
 fn header_of(format: &FrameFormat, frame_rate: FrameRate) -> Result<Vec<u8>, StageError> {
     let colourspace = colourspace_of(format)?;
     let range = range_field(format.colour.range);
+    let interlacing = interlacing_field(format.field_order);
     let header = format!(
-        "YUV4MPEG2 W{} H{} F{}:{}{range} C{colourspace}\n",
+        "YUV4MPEG2 W{} H{} F{}:{}{interlacing}{range} C{colourspace}\n",
         format.width,
         format.height,
         frame_rate.numerator(),
@@ -193,6 +195,15 @@ fn header_of(format: &FrameFormat, frame_rate: FrameRate) -> Result<Vec<u8>, Sta
     );
 
     Ok(header.into_bytes())
+}
+
+fn interlacing_field(field_order: Option<FieldOrder>) -> &'static str {
+    match field_order {
+        Some(FieldOrder::Progressive) => " Ip",
+        Some(FieldOrder::TopFirst) => " It",
+        Some(FieldOrder::BottomFirst) => " Ib",
+        None => "",
+    }
 }
 
 fn range_field(range: ColourRange) -> &'static str {
@@ -240,7 +251,7 @@ fn write_error(position: &str, error: &io::Error) -> StageError {
 mod tests {
     use std::io::Cursor;
 
-    use av_toolbox_gpu::{ChromaLocation, ColourRange, Depth, FrameMeta, testing_context};
+    use av_toolbox_gpu::{ChromaLocation, ColourRange, Depth, FieldOrder, FrameMeta, testing_context};
 
     use super::*;
     use crate::shared::testing::{SharedBuffer, filled_frame, yuv420};
@@ -478,5 +489,37 @@ mod tests {
 
         let error = outcome.expect_err("the reader is gone");
         assert!(error.to_string().contains("reader closed"), "{error}");
+    }
+
+    #[test]
+    fn the_field_order_is_written_after_the_rate() {
+        let cases = [
+            (Some(FieldOrder::Progressive), "YUV4MPEG2 W4 H2 F25:1 Ip C420\n"),
+            (Some(FieldOrder::TopFirst), "YUV4MPEG2 W4 H2 F25:1 It C420\n"),
+            (Some(FieldOrder::BottomFirst), "YUV4MPEG2 W4 H2 F25:1 Ib C420\n"),
+            (None, "YUV4MPEG2 W4 H2 F25:1 C420\n"),
+        ];
+
+        for (field_order, expected) in cases {
+            let format = FrameFormat {
+                field_order,
+                ..yuv420(4, 2, SampleFormat::U8, None)
+            };
+
+            let bytes = written(format, &[]);
+
+            assert_eq!(bytes, expected.as_bytes(), "{field_order:?}");
+        }
+    }
+
+    #[test]
+    fn the_field_order_comes_before_the_range() {
+        let mut format = yuv420(4, 2, SampleFormat::U8, None);
+        format.colour.range = ColourRange::Full;
+        format.field_order = Some(FieldOrder::TopFirst);
+
+        let bytes = written(format, &[]);
+
+        assert_eq!(bytes, b"YUV4MPEG2 W4 H2 F25:1 It XCOLORRANGE=FULL C420\n");
     }
 }

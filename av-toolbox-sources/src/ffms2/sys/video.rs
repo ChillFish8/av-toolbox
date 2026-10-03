@@ -226,6 +226,14 @@ impl Frame<'_> {
         self.frame.ChromaLocation
     }
 
+    pub(crate) fn interlaced(&self) -> bool {
+        self.frame.InterlacedFrame != 0
+    }
+
+    pub(crate) fn top_field_first(&self) -> bool {
+        self.frame.TopFieldFirst != 0
+    }
+
     /// One plane of the frame as `rows` rows of `row_bytes`.
     ///
     /// Gives `None` when the plane is missing or its stride cannot hold `rows` rows of
@@ -426,5 +434,23 @@ mod tests {
         let error = opened.err().expect("track 5 does not exist");
 
         assert!(!error.to_string().is_empty());
+    }
+
+    #[test]
+    fn a_frame_reports_its_field_flags() {
+        let mut progressive = opened("yuv420p.mkv");
+        let mut top_first = opened("interlaced_tff.mkv");
+        let mut bottom_first = opened("interlaced_bff.mkv");
+
+        let progressive_frame = progressive.frame(0).expect("decodes");
+        assert!(!progressive_frame.interlaced());
+
+        let top_first_frame = top_first.frame(0).expect("decodes");
+        assert!(top_first_frame.interlaced());
+        assert!(top_first_frame.top_field_first());
+
+        let bottom_first_frame = bottom_first.frame(0).expect("decodes");
+        assert!(bottom_first_frame.interlaced());
+        assert!(!bottom_first_frame.top_field_first());
     }
 }

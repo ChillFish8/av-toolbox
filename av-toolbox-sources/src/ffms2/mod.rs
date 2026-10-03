@@ -21,6 +21,7 @@ use av_toolbox_gpu::{
     ChromaLocation,
     ColourInfo,
     ColourRange,
+    FieldOrder,
     FrameContext,
     FrameFormat,
     FrameLayout,
@@ -137,6 +138,8 @@ impl SourceDefinition for File {
         let primaries = probe.colour_primaries();
         let transfer = probe.transfer();
         let chroma_location = probe.chroma_location();
+        let interlaced = probe.interlaced();
+        let top_field_first = probe.top_field_first();
 
         let resolved_name = pixel_format_name(encoded_id);
         let choice = resolve_choice(&args.path, encoded_id, resolved_name, args.format)?;
@@ -156,6 +159,7 @@ impl SourceDefinition for File {
             chroma_location,
         };
         let colour = colour_of(raw_colour, choice.full_range, source_layout, layout);
+        let field_order = field_order_of(interlaced, top_field_first);
         let format = FrameFormat {
             width: width as u32,
             height: height as u32,
@@ -163,7 +167,7 @@ impl SourceDefinition for File {
             sample,
             colour,
             frame_rate,
-            field_order: None,
+            field_order: Some(field_order),
         };
         let expected = FrameShape {
             width,
@@ -364,6 +368,19 @@ struct RawColour {
     chroma_location: i32,
 }
 
+/// The field order a decoded frame's interlacing flags give.
+fn field_order_of(interlaced: bool, top_field_first: bool) -> FieldOrder {
+    if !interlaced {
+        return FieldOrder::Progressive;
+    }
+
+    if top_field_first {
+        FieldOrder::TopFirst
+    } else {
+        FieldOrder::BottomFirst
+    }
+}
+
 /// The colour a frame carries, mapped from its ffms2 properties.
 ///
 /// A forced format that crosses the RGB/YUV family boundary overrides the source's matrix and
@@ -556,6 +573,7 @@ mod tests {
         Channel,
         ChromaLocation,
         ColourRange,
+        FieldOrder,
         FrameLayout,
         FrameRate,
         SampleFormat,
@@ -994,5 +1012,16 @@ mod tests {
     #[test]
     fn an_overflowing_pts_gives_no_timestamp_instead_of_panicking() {
         assert_eq!(timestamp_of(i64::MAX, i64::MAX, 1), None);
+    }
+
+    #[test]
+    fn a_file_reports_its_field_order() {
+        let (_progressive_folder, progressive) = opened("yuv420p.mkv", None);
+        let (_top_folder, top_first) = opened("interlaced_tff.mkv", None);
+        let (_bottom_folder, bottom_first) = opened("interlaced_bff.mkv", None);
+
+        assert_eq!(progressive.format().field_order, Some(FieldOrder::Progressive));
+        assert_eq!(top_first.format().field_order, Some(FieldOrder::TopFirst));
+        assert_eq!(bottom_first.format().field_order, Some(FieldOrder::BottomFirst));
     }
 }
