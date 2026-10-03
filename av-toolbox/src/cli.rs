@@ -101,6 +101,10 @@ pub(crate) struct ExecuteArgs {
     /// Left unset, the budget is worked out from the pipeline.
     #[arg(long, value_name = "SIZE", value_parser = parse_frame_budget)]
     pub(crate) frame_budget: Option<usize>,
+
+    /// Worker counts written by `av-toolbox profile`, for every stage that declares none.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) profile: Option<PathBuf>,
 }
 
 /// Reads `NAME=VALUE` into its name and value.

@@ -383,6 +383,18 @@ fn pull_refuses_an_unknown_pack_without_downloading() {
     );
 }
 
+#[test]
+fn execute_refuses_a_missing_profile() {
+    let pipeline = example("passthrough.toml");
+    let pipeline = pipeline.to_str().expect("utf-8 path");
+
+    let output = toolbox(&["execute", pipeline, "--profile", "/nowhere/clip.profile.toml"]);
+    let stderr = text(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(stderr.contains("cannot read the profile"), "{stderr}");
+}
+
 #[cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device {
     use std::io::Write;

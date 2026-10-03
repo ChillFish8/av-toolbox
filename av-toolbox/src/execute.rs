@@ -1,10 +1,15 @@
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use av_toolbox_gpu::Backend;
 use av_toolbox_runtime::{Cancel, RunReport, Settings};
+use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::cli::{Args, ExecuteArgs};
+use crate::load::Loaded;
+use crate::profile::file::{self, ProfileFile};
 use crate::{load, report};
 
 /// The exit code of a run stopped with Ctrl+C.
@@ -13,9 +18,18 @@ const CANCELLED: u8 = 130;
 pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
     let mut stderr = report::stderr(args.color);
 
-    let Some(loaded) = load::load(&execute.pipeline, &execute.vars, &mut stderr) else {
+    let Some(mut loaded) = load::load(&execute.pipeline, &execute.vars, &mut stderr) else {
         return ExitCode::FAILURE;
     };
+
+    let mut profile = None;
+    if let Some(path) = &execute.profile {
+        let Some(read) = apply_profile(path, &mut loaded, &mut stderr) else {
+            return ExitCode::FAILURE;
+        };
+
+        profile = Some(read);
+    }
 
     let Some(registry) = load::registry(&mut stderr) else {
         return ExitCode::FAILURE;
@@ -28,6 +42,10 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
     let Some(backend) = load::backend(args, &mut stderr) else {
         return ExitCode::FAILURE;
     };
+
+    if let Some(profile) = &profile {
+        warn_on_other_device(profile, &backend, args, &mut stderr);
+    }
 
     let Some(compiled) = load::compile(pipeline, &backend, &loaded, &mut stderr) else {
         return ExitCode::FAILURE;
@@ -61,6 +79,42 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
             ExitCode::FAILURE
         },
     }
+}
+
+/// Reads the profile at `path` and applies its worker counts, warning about keys that name no stage.
+fn apply_profile(path: &Path, loaded: &mut Loaded, stderr: &mut dyn WriteColor) -> Option<ProfileFile> {
+    let read = file::read(path);
+    let profile = match read {
+        Ok(profile) => profile,
+        Err(error) => {
+            let message = error.to_string();
+            report::error_line(stderr, &message);
+
+            return None;
+        },
+    };
+
+    let unknown = file::apply(&profile.workers, &mut loaded.specs);
+    for key in unknown {
+        let message = format!("the profile names {key}, which is not a stage of this pipeline");
+        report::warning_line(stderr, &message);
+    }
+
+    Some(profile)
+}
+
+fn warn_on_other_device(profile: &ProfileFile, backend: &Backend, args: &Args, stderr: &mut dyn WriteColor) {
+    let accelerator = backend.accelerator();
+    let opened = file::device_label(accelerator, args.device);
+    if opened == profile.device {
+        return;
+    }
+
+    let message = format!(
+        "the profile was measured on {}, but this run uses {opened}",
+        profile.device
+    );
+    report::warning_line(stderr, &message);
 }
 
 fn finish(run: &RunReport) -> ExitCode {

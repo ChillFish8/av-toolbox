@@ -4,6 +4,7 @@ mod explain;
 mod list_devices;
 mod list_stages;
 mod load;
+mod profile;
 mod pull;
 mod report;
 
