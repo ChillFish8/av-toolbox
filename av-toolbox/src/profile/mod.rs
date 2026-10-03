@@ -19,7 +19,7 @@ use codespan_reporting::term::termcolor::WriteColor;
 
 use self::file::ProfileFile;
 use self::model::{NodeCost, Width};
-use self::pass::{Interrupt, Pass, PassEnd, PassSetup, run_pass};
+use self::pass::{Interrupt, Pass, PassEnd, PassSetup, Warnings, run_pass};
 use self::report::Summary;
 use self::summary::RowSources;
 use crate::cli::{Args, ProfileArgs};
@@ -170,16 +170,17 @@ fn profile_passes(
     };
     let measure_settings = pass_settings(profile, warmup_items, Some(profiling));
     let undeclared = specs::undeclared(written);
-    let measure_end = run_pass(setup, &undeclared, measure_settings, stderr);
+    let measure_end = run_pass(setup, &undeclared, measure_settings, Warnings::Show, stderr);
     let measured = finished(measure_end, setup.interrupt)?;
     let counted = timed_frames(&measured.report, profile, warmup_items, sink_inputs, stderr)?;
 
     let costs = summary::costs(&measured);
     let max_workers = max_workers(profile);
     let mut tuned = model::suggest(&costs, max_workers);
+    mark_declared(&mut tuned, written);
 
     let plain_settings = pass_settings(profile, warmup_items, None);
-    let baseline_end = run_pass(setup, written, plain_settings.clone(), stderr);
+    let baseline_end = run_pass(setup, written, plain_settings.clone(), Warnings::Hide, stderr);
     let baseline = finished(baseline_end, setup.interrupt)?;
     let baseline_fps = frame_rate(&baseline.report, warmup_items, sink_inputs);
 
@@ -197,6 +198,19 @@ fn profile_passes(
     })
 }
 
+/// Flags every width whose stage declares its own workers, since a profile cannot change those.
+fn mark_declared(widths: &mut [Width], written: &[StageSpec]) {
+    let declared: Vec<String> = written
+        .iter()
+        .filter(|spec| spec.workers.is_some())
+        .map(file::stage_key)
+        .collect();
+
+    for width in widths {
+        width.declared = declared.contains(&width.key);
+    }
+}
+
 /// Runs `written` at the `tuned` widths, taking a worker away and trying again each time it fails.
 fn confirm(
     setup: &PassSetup<'_>,
@@ -210,7 +224,7 @@ fn confirm(
         let mut widened = written.to_vec();
         file::apply(&workers, &mut widened);
 
-        let end = run_pass(setup, &widened, settings.clone(), stderr);
+        let end = run_pass(setup, &widened, settings.clone(), Warnings::Hide, stderr);
         let failed = matches!(end, PassEnd::Failed);
         if !failed || setup.interrupt.interrupted() {
             return finished(end, setup.interrupt);

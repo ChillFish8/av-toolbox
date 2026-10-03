@@ -50,12 +50,12 @@ impl Interrupt {
 
     /// Makes `cancel` the run the next Ctrl+C stops, stopping it at once if one already came.
     pub(super) fn watch(&self, cancel: Arc<Cancel>) {
+        let mut current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
+        *current = Some(cancel.clone());
+
         if self.interrupted() {
             cancel.stop();
         }
-
-        let mut current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
-        *current = Some(cancel);
     }
 
     pub(super) fn interrupted(&self) -> bool {
@@ -97,18 +97,30 @@ pub(super) enum PassEnd {
     Interrupted,
 }
 
+/// Whether a pass prints the warnings compiling its pipeline raises.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(super) enum Warnings {
+    Show,
+    Hide,
+}
+
 /// Builds, compiles and runs `specs` once, printing whatever went wrong.
 pub(super) fn run_pass(
     setup: &PassSetup<'_>,
     specs: &[StageSpec],
     settings: Settings,
+    warnings: Warnings,
     stderr: &mut dyn WriteColor,
 ) -> PassEnd {
     let Some(pipeline) = load::build(setup.registry, specs, setup.files, stderr) else {
         return PassEnd::Failed;
     };
 
-    let Some(compiled) = load::compile(pipeline, setup.backend, setup.files, stderr) else {
+    let compiled = match warnings {
+        Warnings::Show => load::compile(pipeline, setup.backend, setup.files, stderr),
+        Warnings::Hide => load::compile_quietly(pipeline, setup.backend, setup.files, stderr),
+    };
+    let Some(compiled) = compiled else {
         return PassEnd::Failed;
     };
 
@@ -131,6 +143,10 @@ pub(super) fn run_pass(
     let report = match finished {
         Ok(report) => report,
         Err(error) => {
+            if setup.interrupt.interrupted() {
+                return PassEnd::Interrupted;
+            }
+
             let stage = error.node().and_then(|node| compiled.stage_of(node));
             report::run_error(stderr, setup.files, &error, stage);
 

@@ -118,13 +118,35 @@ pub(crate) fn compile<'r, 'b>(
     files: &PipelineFiles,
     stderr: &mut dyn WriteColor,
 ) -> Option<CompiledPipeline<'r, 'b>> {
+    compile_pipeline(pipeline, backend, files, stderr, true)
+}
+
+/// The same as [compile], but a pipeline that compiles prints no warnings.
+pub(crate) fn compile_quietly<'r, 'b>(
+    pipeline: Pipeline<'r>,
+    backend: &'b Backend,
+    files: &PipelineFiles,
+    stderr: &mut dyn WriteColor,
+) -> Option<CompiledPipeline<'r, 'b>> {
+    compile_pipeline(pipeline, backend, files, stderr, false)
+}
+
+fn compile_pipeline<'r, 'b>(
+    pipeline: Pipeline<'r>,
+    backend: &'b Backend,
+    files: &PipelineFiles,
+    stderr: &mut dyn WriteColor,
+    show_warnings: bool,
+) -> Option<CompiledPipeline<'r, 'b>> {
     let warnings = pipeline.warnings().to_vec();
     let compiled = pipeline.compile(backend);
 
     match compiled {
         Ok(compiled) => {
-            let compiled_warnings = compiled.warnings();
-            report::diagnostics(stderr, files, compiled_warnings);
+            if show_warnings {
+                let compiled_warnings = compiled.warnings();
+                report::diagnostics(stderr, files, compiled_warnings);
+            }
 
             Some(compiled)
         },

@@ -5,6 +5,9 @@ use std::time::Duration;
 /// How many characters a full share bar takes.
 const BAR_WIDTH: f64 = 20.0;
 
+/// The width the first column takes at least, the length of its longest fixed text.
+const MIN_LABEL_WIDTH: usize = "runtime overhead".len();
+
 /// One stage's measured cost per frame.
 pub(crate) struct Row {
     pub(crate) label: String,
@@ -42,24 +45,25 @@ pub(crate) struct Summary {
 pub(crate) fn render(summary: &Summary, bars: bool) -> String {
     let mut output = String::new();
     let total_busy: Duration = summary.rows.iter().map(|row| row.busy).sum();
+    let label_width = label_width(&summary.rows);
 
     let _ = writeln!(output, "Profiled {} frames on {}", summary.frames, summary.device);
     let _ = writeln!(output);
     let _ = writeln!(
         output,
-        "{:<24} {:>9} {:>9} {:>9} {:>7}   workers",
+        "{:<label_width$} {:>9} {:>9} {:>9} {:>7}   workers",
         "stage", "host ms", "device ms", "busy ms", "share"
     );
 
     for row in &summary.rows {
-        let line = row_line(row, total_busy, bars);
+        let line = row_line(row, label_width, total_busy, bars);
         let _ = writeln!(output, "{line}");
     }
 
     let overhead = milliseconds(summary.overhead);
     let _ = writeln!(
         output,
-        "{:<24} {:>9} {:>9} {:>9.2}",
+        "{:<label_width$} {:>9} {:>9} {:>9.2}",
         "runtime overhead", "", "", overhead
     );
     let _ = writeln!(output);
@@ -94,7 +98,7 @@ pub(crate) fn render(summary: &Summary, bars: bool) -> String {
     output
 }
 
-fn row_line(row: &Row, total_busy: Duration, bars: bool) -> String {
+fn row_line(row: &Row, label_width: usize, total_busy: Duration, bars: bool) -> String {
     let share = share_of(row.busy, total_busy);
     let workers = workers_text(row.workers.as_ref());
     let host = milliseconds(row.host);
@@ -102,7 +106,7 @@ fn row_line(row: &Row, total_busy: Duration, bars: bool) -> String {
     let busy = milliseconds(row.busy);
 
     let mut line = format!(
-        "{:<24} {host:>9.2} {device:>9.2} {busy:>9.2} {share:>5.1} %   {workers}",
+        "{:<label_width$} {host:>9.2} {device:>9.2} {busy:>9.2} {share:>5.1} %   {workers}",
         row.label
     );
 
@@ -114,6 +118,13 @@ fn row_line(row: &Row, total_busy: Duration, bars: bool) -> String {
     }
 
     line
+}
+
+/// The width of the first column, wide enough for the longest label and the fixed rows.
+fn label_width(rows: &[Row]) -> usize {
+    let longest = rows.iter().map(|row| row.label.chars().count()).max();
+
+    longest.unwrap_or(0).max(MIN_LABEL_WIDTH)
 }
 
 fn workers_text(cell: Option<&WorkersCell>) -> String {
@@ -260,6 +271,22 @@ mod tests {
             rendered.contains("the suggested widths did not help"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn a_long_label_widens_the_first_column_for_every_line() {
+        let mut summary = summary();
+        summary.rows[0].label = "download -> transform.scenes.detect.output".to_string();
+
+        let rendered = render(&summary, false);
+
+        let header = rendered.lines().find(|line| line.starts_with("stage"));
+        let header = header.expect("a header");
+        let long_line = rendered.lines().find(|line| line.starts_with("download"));
+        let long_line = long_line.expect("the long label has a row");
+        let header_end = header.find("host ms").expect("a host column") + "host ms".len();
+        let value_end = long_line.find("6.20").expect("a host value") + "6.20".len();
+        assert_eq!(header_end, value_end, "{rendered}");
     }
 
     #[test]

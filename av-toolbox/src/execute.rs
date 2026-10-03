@@ -106,15 +106,21 @@ fn apply_profile(path: &Path, loaded: &mut Loaded, stderr: &mut dyn WriteColor) 
 fn warn_on_other_device(profile: &ProfileFile, backend: &Backend, args: &Args, stderr: &mut dyn WriteColor) {
     let accelerator = backend.accelerator();
     let opened = file::device_label(accelerator, args.device);
-    if opened == profile.device {
-        return;
+
+    if let Some(message) = device_mismatch(&profile.device, &opened) {
+        report::warning_line(stderr, &message);
+    }
+}
+
+/// The warning for a profile measured on a different device than the one opened, if they differ.
+fn device_mismatch(profile_device: &str, opened: &str) -> Option<String> {
+    if opened == profile_device {
+        return None;
     }
 
-    let message = format!(
-        "the profile was measured on {}, but this run uses {opened}",
-        profile.device
-    );
-    report::warning_line(stderr, &message);
+    Some(format!(
+        "the profile was measured on {profile_device}, but this run uses {opened}"
+    ))
 }
 
 fn finish(run: &RunReport) -> ExitCode {
@@ -148,5 +154,23 @@ fn stop_on_interrupt(cancel: Arc<Cancel>) {
 
     if let Err(error) = installed {
         tracing::warn!(%error, "Ctrl+C will stop the process without flushing the sinks");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_profile_from_the_opened_device_raises_no_warning() {
+        assert_eq!(device_mismatch("vulkan discrete:1", "vulkan discrete:1"), None);
+    }
+
+    #[test]
+    fn a_profile_from_another_device_names_both() {
+        let message = device_mismatch("vulkan discrete:1", "vulkan integrated:0");
+
+        let expected = "the profile was measured on vulkan discrete:1, but this run uses vulkan integrated:0";
+        assert_eq!(message.as_deref(), Some(expected));
     }
 }

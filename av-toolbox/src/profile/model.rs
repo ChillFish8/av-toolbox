@@ -34,6 +34,8 @@ pub(crate) struct Width {
     pub(crate) key: String,
     pub(crate) workers: usize,
     pub(crate) host: Duration,
+    /// Whether the pipeline declares this stage's workers, so a profile cannot change them.
+    pub(crate) declared: bool,
 }
 
 /// The time per frame no width can beat.
@@ -64,6 +66,7 @@ pub(crate) fn suggest(costs: &[NodeCost], max_workers: usize) -> Vec<Width> {
             key: cost.key.clone(),
             workers: workers_for(cost.host, floor, max_workers),
             host: cost.host,
+            declared: false,
         })
         .collect()
 }
@@ -80,13 +83,13 @@ fn workers_for(host: Duration, floor: Duration, max_workers: usize) -> usize {
     rounded.clamp(1, ceiling)
 }
 
-/// Takes one worker from the widest stage, ties going to the larger host time.
+/// Takes one worker from the widest undeclared stage, ties going to the larger host time.
 ///
-/// Returns false once every stage is at one.
+/// Returns false once no undeclared stage is wider than one.
 pub(crate) fn step_down(widths: &mut [Width]) -> bool {
     let widest = widths
         .iter_mut()
-        .filter(|width| width.workers > 1)
+        .filter(|width| width.workers > 1 && !width.declared)
         .max_by(|left, right| {
             let by_workers = left.workers.cmp(&right.workers);
             by_workers.then(left.host.cmp(&right.host))
@@ -128,6 +131,15 @@ mod tests {
     fn workers_of(widths: &[Width], key: &str) -> usize {
         let found = widths.iter().find(|width| width.key == key);
         found.expect("the stage is sized").workers
+    }
+
+    fn width(key: &str, workers: usize, host: u64, declared: bool) -> Width {
+        Width {
+            key: key.to_string(),
+            workers,
+            host: milliseconds(host),
+            declared,
+        }
     }
 
     #[test]
@@ -200,11 +212,13 @@ mod tests {
                 key: "filter.a".to_string(),
                 workers: 3,
                 host: milliseconds(5),
+                declared: false,
             },
             Width {
                 key: "filter.b".to_string(),
                 workers: 3,
                 host: milliseconds(9),
+                declared: false,
             },
         ];
 
@@ -215,11 +229,40 @@ mod tests {
     }
 
     #[test]
+    fn stepping_down_takes_from_the_widest_even_when_a_narrower_stage_is_slower() {
+        let mut widths = vec![
+            width("filter.wide", 3, 5, false),
+            width("filter.slow", 2, 90, false),
+        ];
+
+        assert!(step_down(&mut widths));
+
+        assert_eq!(workers_of(&widths, "filter.wide"), 2);
+        assert_eq!(workers_of(&widths, "filter.slow"), 2);
+    }
+
+    #[test]
+    fn a_declared_wide_stage_is_never_stepped_down() {
+        let mut widths = vec![
+            width("filter.declared", 4, 50, true),
+            width("filter.free", 2, 5, false),
+        ];
+
+        assert!(step_down(&mut widths));
+        assert_eq!(workers_of(&widths, "filter.declared"), 4);
+        assert_eq!(workers_of(&widths, "filter.free"), 1);
+
+        assert!(!step_down(&mut widths));
+        assert_eq!(workers_of(&widths, "filter.declared"), 4);
+    }
+
+    #[test]
     fn stepping_down_stops_once_every_stage_is_at_one() {
         let mut widths = vec![Width {
             key: "filter.a".to_string(),
             workers: 1,
             host: milliseconds(5),
+            declared: false,
         }];
 
         assert!(!step_down(&mut widths));
