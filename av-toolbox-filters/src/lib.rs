@@ -39,6 +39,7 @@ mod deband;
 mod dehalo;
 mod deinterlace;
 mod dering;
+mod ivtc;
 mod lineart;
 mod masked;
 mod padded_warp;

@@ -1,8 +1,18 @@
 mod fixtures;
+mod pipeline;
 mod reference;
 mod synthetic;
 
-pub use self::fixtures::{MapFixture, MaskFixture, excluded_map_fixtures, map_fixtures, mask_fixtures};
+pub use self::fixtures::{
+    DecisionFixture,
+    MapFixture,
+    MaskFixture,
+    excluded_map_fixtures,
+    map_fixtures,
+    mask_fixtures,
+    vfm_decisions,
+};
+pub use self::pipeline::{VfmMetrics, VfmSettings, reference_field_sums, reference_vfm_metrics};
 pub use self::reference::{
     IntPlane,
     reference_chroma_into_luma,

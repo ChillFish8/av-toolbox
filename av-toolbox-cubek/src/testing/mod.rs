@@ -97,10 +97,13 @@ pub use self::eedi3::{
 };
 pub use self::hysteresis::reference_hysteresis;
 pub use self::ivtc::{
+    DecisionFixture,
     IntPlane,
     MapFixture,
     MaskFixture,
     SyntheticClip,
+    VfmMetrics,
+    VfmSettings,
     excluded_map_fixtures,
     map_fixtures,
     mask_fixtures,
@@ -108,11 +111,14 @@ pub use self::ivtc::{
     reference_comb_mask,
     reference_compare_plane,
     reference_difference,
+    reference_field_sums,
     reference_match_weave,
     reference_mic,
+    reference_vfm_metrics,
     reference_weave,
     scene_difference,
     synthetic_clips,
+    vfm_decisions,
 };
 pub use self::lineart::{
     reference_clamped_merge,
