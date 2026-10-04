@@ -1,0 +1,53 @@
+Written by av-denoise at commit dcb9ad9f56e6afe50f427e23ef59840fd133b542 over ../inputs/.
+
+Every sample is normalised as `code_value as f32 / peak as f32`, with peak = 2^bits - 1.
+Every file is little-endian. Frame t is the clip's frame t, numbered from 0. Each clip has 8 frames
+of 128x64 luma.
+
+Settings:
+
+  blk16  blksize 16, overlap 8, search_radius 4, pyramid_levels 2, grid 16x8 blocks
+  blk8   blksize 8,  overlap 4, search_radius 2, pyramid_levels 3, grid 32x16 blocks
+
+Chained runs use refine_radius 2. Confidence uses sad_noise_floor(blksize, 3.0 / 255.0) and
+thsad(blksize, 1.0):
+
+  blk16  sad_noise_floor 3.3984125 (f32 bits 0x40597f97), thsad 5.12 (f32 bits 0x40a3d70a)
+  blk8   sad_noise_floor 0.8496031 (f32 bits 0x3f597f97), thsad 1.28 (f32 bits 0x3fa3d70a)
+
+Files in <clip>/:
+
+  pyramid_1.f32  run_pyramid_build level 1, 64x32 f32 per frame, frames 0 to 7 in order.
+  pyramid_2.f32  run_pyramid_build level 2, 32x16 f32 per frame, frames 0 to 7 in order.
+
+Level 0 is not stored. The harness checks it equals the normalised input exactly. The blk16 run's
+level 1 equals the blk8 run's level 1 exactly.
+
+Files in <clip>/<setting>/, each field one block after another in row order, each block an
+(x, y) pair of i32 in whole pixels, telling where the centre frame's block is found in the
+neighbour:
+
+  direct_1.i32      run_analyse, centre t and neighbour t + 1, for t from 0 to 6.
+  direct_2.i32      run_analyse, centre t and neighbour t + 2, for t from 0 to 5.
+  chained_2.i32     centre t and neighbour t + 2, for t from 0 to 5. run_pair_analyse over frames
+                    t, t + 1 into pair slot 0 and t + 1, t + 2 into pair slot 1, then
+                    nlm_mc_chain_compose with forward true, 2 steps, starting at slot 0, reading
+                    direction 0 of slots 0 then 1, then run_seeded_refine.
+  chained_back_2.i32
+                    centre t + 2 and neighbour t, for t from 0 to 5, over the same pair ring.
+                    nlm_mc_chain_compose with forward false, 2 steps, starting at slot 1, reading
+                    direction 1 of slots 1 then 0, then run_seeded_refine. This is the walk
+                    run_chain_compose takes for k = -2, starting at the gap before the centre.
+                    The vectors keep the same convention as every other field. They point from the
+                    centre block to where it is found in the older neighbour, so a pan of +1.5 px
+                    per frame gives about (-3, -1).
+  confidence_1.f32  the confidence run_analyse writes with write_confidence true, on the direct_1
+                    pairs, one f32 per block. The vectors it writes equal direct_1 exactly.
+  confidence_chained_2.f32
+                    the confidence run_seeded_refine writes with write_confidence true, on the
+                    chained_2 pairs, one f32 per block.
+
+In every pair slot, direction 0 (older to newer) equals the matching direct_1 field, and direction
+1 (newer to older) equals run_analyse with centre t + 1 and neighbour t. The harness checks both.
+
+Run on WgpuDevice::DiscreteGpu(1), RADV.

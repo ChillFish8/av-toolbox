@@ -10,6 +10,7 @@ mod eedi3;
 mod hysteresis;
 mod ivtc;
 mod lineart;
+mod motion;
 mod neighbourhood;
 mod padding;
 mod resize;
@@ -136,6 +137,7 @@ pub use self::lineart::{
     reference_vertical_121,
     reference_vinverse,
 };
+pub use self::motion::{MotionClip, motion_clips, normalised, write_motion_inputs};
 pub use self::neighbourhood::{
     reference_chain,
     reference_extreme,
