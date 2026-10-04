@@ -1,0 +1,432 @@
+drop tff_8 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 32 32 1 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop tff_8 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 32 32 1 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop tff_8 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 32 32 1 3 5 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop tff_8 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 raw 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 raw 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 raw 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop tff_8 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 raw 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop tff_8 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_8 raw 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 raw 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop tff_8 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_8 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop tff_8 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop tff_8 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_8 matched 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_8 matched 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop bff_8 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 raw 32 32 0 3 5 cycle 0 length 5 drop 4 outputs 0 1 2 3
+drop bff_8 raw 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop bff_8 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop bff_8 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_8 raw 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 raw 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop bff_8 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_8 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop bff_8 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop bff_8 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_8 matched 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_8 matched 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop cut_8 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 32 32 1 1.1 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 32 32 1 0.5 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 32 32 1 3 5 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 32 32 0 1.1 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 32 32 0 0.5 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 raw 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 raw 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 16 16 1 1.1 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop cut_8 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 16 16 1 0.5 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop cut_8 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_8 raw 16 16 1 3 5 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_8 raw 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop cut_8 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_8 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop cut_8 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop cut_8 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_8 matched 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_8 matched 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop orphan_8 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 32 32 1 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_8 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 32 32 1 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_8 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 32 32 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_8 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 32 32 0 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_8 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 32 32 0 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_8 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 raw 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 raw 32 32 0 3 5 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_8 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 16 16 1 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_8 raw 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop orphan_8 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 16 16 1 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_8 raw 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop orphan_8 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_8 raw 16 16 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_8 raw 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop orphan_8 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_8 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_8 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 32 32 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_8 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_8 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_8 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 32 32 0 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_8 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_8 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_8 matched 16 16 1 1.1 15 cycle 2 length 2 drop 1 outputs 10
+drop orphan_8 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_8 matched 16 16 1 0.5 15 cycle 2 length 2 drop 1 outputs 10
+drop orphan_8 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_8 matched 16 16 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_8 matched 16 16 1 3 5 cycle 2 length 2 drop 1 outputs 10
+drop tff_10 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 raw 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop tff_10 raw 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 raw 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop tff_10 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop tff_10 matched 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop tff_10 matched 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 32 32 1 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop bff_10 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 32 32 1 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop bff_10 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 32 32 1 3 5 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop bff_10 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 raw 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 raw 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 raw 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop bff_10 raw 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 raw 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop bff_10 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop bff_10 matched 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop bff_10 matched 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 32 32 1 1.1 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 32 32 1 0.5 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 32 32 1 3 5 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 32 32 0 1.1 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 32 32 0 0.5 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 raw 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 16 16 1 1.1 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 16 16 1 0.5 15 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop cut_10 raw 16 16 1 3 5 cycle 1 length 5 drop 1 outputs 5 7 8 9
+drop cut_10 raw 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 32 32 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 32 32 0 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop cut_10 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop cut_10 matched 16 16 1 3 5 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop cut_10 matched 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 32 32 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 32 32 1 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_10 raw 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 32 32 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 32 32 1 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_10 raw 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 32 32 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 32 32 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_10 raw 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 32 32 0 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 32 32 0 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_10 raw 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 32 32 0 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 32 32 0 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_10 raw 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 raw 32 32 0 3 5 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_10 raw 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 16 16 1 1.1 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 16 16 1 1.1 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_10 raw 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 16 16 1 0.5 15 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 16 16 1 0.5 15 cycle 1 length 5 drop 4 outputs 5 6 7 8
+drop orphan_10 raw 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 raw 16 16 1 3 5 cycle 0 length 5 drop 0 outputs 1 2 3 4
+drop orphan_10 raw 16 16 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_10 raw 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 32 32 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 32 32 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_10 matched 32 32 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 32 32 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 32 32 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_10 matched 32 32 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 32 32 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 32 32 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_10 matched 32 32 1 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 32 32 0 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 32 32 0 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_10 matched 32 32 0 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 32 32 0 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 32 32 0 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_10 matched 32 32 0 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 32 32 0 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 32 32 0 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_10 matched 32 32 0 3 5 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 16 16 1 1.1 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 16 16 1 1.1 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_10 matched 16 16 1 1.1 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 16 16 1 0.5 15 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 16 16 1 0.5 15 cycle 1 length 5 drop 2 outputs 5 6 8 9
+drop orphan_10 matched 16 16 1 0.5 15 cycle 2 length 2 drop 0 outputs 11
+drop orphan_10 matched 16 16 1 3 5 cycle 0 length 5 drop 2 outputs 0 1 3 4
+drop orphan_10 matched 16 16 1 3 5 cycle 1 length 5 drop 3 outputs 5 6 7 9
+drop orphan_10 matched 16 16 1 3 5 cycle 2 length 2 drop 0 outputs 11
