@@ -484,15 +484,21 @@ pub fn reference_chain_seed(
 
 /// A block covering a sample along one axis, with where its span starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct AxisBlock {
-    block: u32,
-    start: u32,
+pub(crate) struct AxisBlock {
+    pub(crate) block: u32,
+    pub(crate) start: u32,
 }
 
 /// The blocks covering `position` along one axis of a plane scaled by `shift`, earliest block last.
 ///
 /// Only the block starting at or before the sample and the one before it can cover it.
-fn covering_along(position: u32, count: u32, step: u32, blksize: u32, shift: u32) -> Vec<AxisBlock> {
+pub(crate) fn covering_along(
+    position: u32,
+    count: u32,
+    step: u32,
+    blksize: u32,
+    shift: u32,
+) -> Vec<AxisBlock> {
     let upper = ((((position + 1) << shift) - 1) / step).min(count - 1);
     let length = blksize >> shift;
 

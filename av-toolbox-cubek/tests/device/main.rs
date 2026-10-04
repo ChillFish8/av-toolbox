@@ -5,6 +5,7 @@ mod artcnn;
 mod bilateral;
 mod blur;
 mod deband;
+mod degrain;
 mod dehalo;
 mod deinterlace;
 mod depth;

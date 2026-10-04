@@ -9,12 +9,12 @@ use cubecl::server::Handle;
 use crate::support::{empty, plane, read_f32, upload_f32};
 
 /// One frame's pyramid on the device, level 0 uploaded and the rest left for the pyramid build.
-struct DevicePyramid {
+pub(crate) struct DevicePyramid {
     levels: Vec<(Handle, u32, u32)>,
 }
 
 impl DevicePyramid {
-    fn upload<R: Runtime>(
+    pub(crate) fn upload<R: Runtime>(
         client: &ComputeClient<R>,
         luma: &[f32],
         width: u32,
@@ -31,7 +31,7 @@ impl DevicePyramid {
         Self { levels: buffers }
     }
 
-    fn pyramid(&self) -> Pyramid<'_> {
+    pub(crate) fn pyramid(&self) -> Pyramid<'_> {
         let levels = self
             .levels
             .iter()
@@ -41,7 +41,7 @@ impl DevicePyramid {
         Pyramid { levels }
     }
 
-    fn read<R: Runtime>(&self, client: &ComputeClient<R>) -> Vec<Vec<f32>> {
+    pub(crate) fn read<R: Runtime>(&self, client: &ComputeClient<R>) -> Vec<Vec<f32>> {
         self.levels
             .iter()
             .map(|(handle, _, _)| read_f32(client, handle))
@@ -50,7 +50,7 @@ impl DevicePyramid {
 }
 
 /// One field's buffers on the device.
-struct DeviceField {
+pub(crate) struct DeviceField {
     vectors: Handle,
     sads: Handle,
     confidence: Handle,
@@ -58,7 +58,7 @@ struct DeviceField {
 }
 
 impl DeviceField {
-    fn new<R: Runtime>(client: &ComputeClient<R>, grid: &BlockGrid) -> Self {
+    pub(crate) fn new<R: Runtime>(client: &ComputeClient<R>, grid: &BlockGrid) -> Self {
         let bytes = grid.blocks() * size_of::<f32>();
 
         Self {
@@ -69,7 +69,7 @@ impl DeviceField {
         }
     }
 
-    fn planes(&self, scored: bool) -> FieldPlanes<'_> {
+    pub(crate) fn planes(&self, scored: bool) -> FieldPlanes<'_> {
         let confidence = scored.then(|| plane(&self.confidence, self.grid.across, self.grid.down));
 
         FieldPlanes {
@@ -80,7 +80,7 @@ impl DeviceField {
     }
 
     /// The field as the CPU reference lays it out, its confidence empty unless `scored`.
-    fn read<R: Runtime>(&self, client: &ComputeClient<R>, scored: bool) -> ReferenceField {
+    pub(crate) fn read<R: Runtime>(&self, client: &ComputeClient<R>, scored: bool) -> ReferenceField {
         let vector_bytes = client
             .read_one(self.vectors.clone())
             .expect("the device should hand back the vectors");

@@ -24,9 +24,11 @@ use thiserror::Error;
 
 pub use self::chain::chain;
 pub use self::compensate::{CompensatePlanes, PlaneScale, compensate, window_weight};
+pub(crate) use self::compensate::{block_window, upper_block};
 pub use self::confidence::ConfidenceScores;
 pub use self::pyramid::{Pyramid, build_pyramid, level_dims};
 pub use self::search::{refine_seed, search};
+pub(crate) use self::subpel::half_pel_sample;
 pub use self::subpel::refine_half_pel;
 use crate::DevicePlane;
 
@@ -184,7 +186,7 @@ fn assert_field(field: &FieldPlanes<'_>, grid: &BlockGrid) {
 }
 
 /// Asserts that the blocks of `grid` cover a plane `width` by `height` scaled by `scale`.
-fn assert_blocks(grid: &BlockGrid, (width, height): (u32, u32), scale: PlaneScale) {
+pub(crate) fn assert_blocks(grid: &BlockGrid, (width, height): (u32, u32), scale: PlaneScale) {
     let end_x = (((grid.across - 1) * grid.step) >> scale.shift_x) + (grid.blksize >> scale.shift_x);
     let end_y = (((grid.down - 1) * grid.step) >> scale.shift_y) + (grid.blksize >> scale.shift_y);
 

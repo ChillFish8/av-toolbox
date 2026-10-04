@@ -1,6 +1,7 @@
 mod reference;
 mod synthetic;
 
+pub(crate) use self::reference::covering_along;
 pub use self::reference::{
     ReferenceField,
     half_pel_sample,

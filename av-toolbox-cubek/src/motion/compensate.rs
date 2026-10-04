@@ -51,7 +51,7 @@ pub fn window_weight(position: u32, length: u32, overlap: u32, first: bool, last
 
 /// The same weight as [window_weight], computed with the same operations on the device.
 #[cube]
-fn device_window_weight(position: u32, length: u32, overlap: u32, first: bool, last: bool) -> f32 {
+pub(super) fn device_window_weight(position: u32, length: u32, overlap: u32, first: bool, last: bool) -> f32 {
     let pi = comptime!(std::f32::consts::PI);
     let mut weight = 1.0f32;
 
@@ -71,10 +71,67 @@ fn device_window_weight(position: u32, length: u32, overlap: u32, first: bool, l
     weight
 }
 
-/// Builds each output sample from the blocks covering it, weighting their reads by their windows.
+/// The last block along one axis that can cover the sample at `position`, on a plane scaled by `shift`.
 ///
-/// Only the block starting at or before the sample and the one before it can cover it, as the blocks are
-/// at least half a block apart.
+/// Only that block and the one before it can cover the sample, as the blocks are at least half a block apart.
+#[cube]
+pub(crate) fn upper_block(position: u32, step: u32, count: u32, #[comptime] shift: u32) -> u32 {
+    ((((position + 1) << shift) - 1) / step).min(count - 1)
+}
+
+/// The window weight of block `block_x`, `block_y` at the sample `x`, `y`, or 0 where the block does not
+/// cover it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a kernel helper takes each position and setting as its own argument"
+)]
+#[cube]
+pub(crate) fn block_window(
+    x: u32,
+    y: u32,
+    block_x: u32,
+    block_y: u32,
+    #[comptime] blksize: u32,
+    #[comptime] step: u32,
+    #[comptime] across: u32,
+    #[comptime] down: u32,
+    #[comptime] shift_x: u32,
+    #[comptime] shift_y: u32,
+) -> f32 {
+    let overlap = comptime!(blksize - step);
+    let length_x = comptime!(blksize >> shift_x);
+    let length_y = comptime!(blksize >> shift_y);
+    let overlap_x = comptime!(overlap >> shift_x);
+    let overlap_y = comptime!(overlap >> shift_y);
+
+    let start_x = (block_x * step) >> shift_x;
+    let start_y = (block_y * step) >> shift_y;
+
+    let mut window = 0.0f32;
+    let covered_x = x >= start_x && x < start_x + length_x;
+    let covered_y = y >= start_y && y < start_y + length_y;
+    if covered_x && covered_y {
+        let weight_x = device_window_weight(
+            x - start_x,
+            length_x,
+            overlap_x,
+            block_x == 0,
+            block_x == across - 1,
+        );
+        let weight_y = device_window_weight(
+            y - start_y,
+            length_y,
+            overlap_y,
+            block_y == 0,
+            block_y == down - 1,
+        );
+        window = weight_x * weight_y;
+    }
+
+    window
+}
+
+/// Builds each output sample from the blocks covering it, weighting their reads by their windows.
 #[expect(
     clippy::too_many_arguments,
     reason = "a kernel takes each plane and setting as its own argument"
@@ -101,16 +158,10 @@ fn compensate_kernel(
 
     let x = ABSOLUTE_POS as u32 % width;
     let y = ABSOLUTE_POS as u32 / width;
-
-    let overlap = comptime!(blksize - step);
-    let length_x = comptime!(blksize >> shift_x);
-    let length_y = comptime!(blksize >> shift_y);
-    let overlap_x = comptime!(overlap >> shift_x);
-    let overlap_y = comptime!(overlap >> shift_y);
     let half_units = comptime!((2 / pel) as i32);
 
-    let upper_x = ((((x + 1) << shift_x) - 1) / step).min(across - 1);
-    let upper_y = ((((y + 1) << shift_y) - 1) / step).min(down - 1);
+    let upper_x = upper_block(x, step, across, shift_x);
+    let upper_y = upper_block(y, step, down, shift_y);
 
     let mut weight_sum = 0.0f32;
     let mut value_sum = 0.0f32;
@@ -119,28 +170,11 @@ fn compensate_kernel(
             if upper_x >= back_x && upper_y >= back_y {
                 let block_x = upper_x - back_x;
                 let block_y = upper_y - back_y;
-                let start_x = (block_x * step) >> shift_x;
-                let start_y = (block_y * step) >> shift_y;
+                let weight = block_window(
+                    x, y, block_x, block_y, blksize, step, across, down, shift_x, shift_y,
+                );
 
-                let covered_x = x >= start_x && x < start_x + length_x;
-                let covered_y = y >= start_y && y < start_y + length_y;
-                if covered_x && covered_y {
-                    let weight_x = device_window_weight(
-                        x - start_x,
-                        length_x,
-                        overlap_x,
-                        block_x == 0,
-                        block_x == across - 1,
-                    );
-                    let weight_y = device_window_weight(
-                        y - start_y,
-                        length_y,
-                        overlap_y,
-                        block_y == 0,
-                        block_y == down - 1,
-                    );
-                    let weight = weight_x * weight_y;
-
+                if weight > 0.0f32 {
                     let slot = ((block_y * across + block_x) * 2) as usize;
                     let vector_x = (vectors[slot] >> shift_x as i32) * half_units;
                     let vector_y = (vectors[slot + 1] >> shift_y as i32) * half_units;
