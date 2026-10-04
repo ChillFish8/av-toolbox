@@ -286,7 +286,12 @@ pub fn reference_search(
         search_radius: settings.search_radius,
     };
 
-    fine_search(&window, &grid, seeds.as_deref(), scores)
+    let field = fine_search(&window, &grid, seeds.as_deref(), scores);
+    if settings.pel == 2 {
+        return reference_refine_half_pel(&centre[0], &neighbour[0], width, height, &field, &grid);
+    }
+
+    field
 }
 
 /// Searches `refine_radius` pixels around `seeds` on the CPU, mirroring
@@ -317,6 +322,119 @@ pub fn reference_refine_seed(
     };
 
     fine_search(&window, grid, Some(seeds), scores)
+}
+
+/// The luma of `plane`, `width` by `height`, at the half pixel position `x2`, `y2`, in half pixels.
+///
+/// The position is clamped into the frame. Between two samples it is their mean, between four it is
+/// their mean in the order top left, top right, bottom left, bottom right.
+pub fn half_pel_sample(plane: &[f32], width: usize, height: usize, x2: i32, y2: i32) -> f32 {
+    let odd_x = x2 & 1;
+    let odd_y = y2 & 1;
+    let left = ((x2 - odd_x) / 2).clamp(0, width as i32 - 1);
+    let top = ((y2 - odd_y) / 2).clamp(0, height as i32 - 1);
+    let right = ((x2 - odd_x) / 2 + odd_x).clamp(0, width as i32 - 1);
+    let bottom = ((y2 - odd_y) / 2 + odd_y).clamp(0, height as i32 - 1);
+
+    let at = |column: i32, row: i32| plane[row as usize * width + column as usize];
+    let top_left = at(left, top);
+    let top_right = at(right, top);
+    let bottom_left = at(left, bottom);
+    let bottom_right = at(right, bottom);
+
+    match (odd_x, odd_y) {
+        (0, 0) => top_left,
+        (1, 0) => (top_left + top_right) * 0.5f32,
+        (0, 1) => (top_left + bottom_left) * 0.5f32,
+        _ => (top_left + top_right + bottom_left + bottom_right) * 0.25f32,
+    }
+}
+
+/// The candidates around a half pixel vector, the vector itself first.
+const HALF_PEL_CANDIDATES: [(i32, i32); 9] = [
+    (0, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
+
+/// The SAD of the block at `origin_x`, `origin_y` against `neighbour` shifted by `vector` half pixels.
+fn half_pel_sad(
+    centre: &[f32],
+    neighbour: &[f32],
+    (width, height): (usize, usize),
+    (origin_x, origin_y): (i32, i32),
+    blksize: i32,
+    vector: (i32, i32),
+) -> f32 {
+    let mut sad = 0.0f32;
+    for iy in 0..blksize {
+        for ix in 0..blksize {
+            let cx = clamp_i32(origin_x + ix, width as i32);
+            let cy = clamp_i32(origin_y + iy, height as i32);
+            let centre_value = centre[cy as usize * width + cx as usize];
+
+            let x2 = 2 * (origin_x + ix) + vector.0;
+            let y2 = 2 * (origin_y + iy) + vector.1;
+            let neighbour_value = half_pel_sample(neighbour, width, height, x2, y2);
+
+            let diff = centre_value - neighbour_value;
+            let abs_diff = if diff < 0.0f32 { -diff } else { diff };
+            sad += abs_diff;
+        }
+    }
+
+    sad
+}
+
+/// Refines the whole pixel `field` of `centre` against `neighbour` to half pixels on the CPU, mirroring
+/// [refine_half_pel](crate::motion::refine_half_pel).
+///
+/// `centre` and `neighbour` are full resolution luma, `width` by `height`. The confidence is kept.
+pub fn reference_refine_half_pel(
+    centre: &[f32],
+    neighbour: &[f32],
+    width: u32,
+    height: u32,
+    field: &ReferenceField,
+    grid: &BlockGrid,
+) -> ReferenceField {
+    let mut refined = ReferenceField {
+        vectors: Vec::with_capacity(2 * grid.blocks()),
+        sads: Vec::with_capacity(grid.blocks()),
+        confidence: field.confidence.clone(),
+    };
+
+    for by in 0..grid.down {
+        for bx in 0..grid.across {
+            let block = (by * grid.across + bx) as usize;
+            let start = (2 * field.vectors[2 * block], 2 * field.vectors[2 * block + 1]);
+            let origin = ((bx * grid.step) as i32, (by * grid.step) as i32);
+            let dims = (width as usize, height as usize);
+
+            let mut best = start;
+            let mut best_sad = half_pel_sad(centre, neighbour, dims, origin, grid.blksize as i32, start);
+            for (dx, dy) in &HALF_PEL_CANDIDATES[1..] {
+                let vector = (start.0 + dx, start.1 + dy);
+                let sad = half_pel_sad(centre, neighbour, dims, origin, grid.blksize as i32, vector);
+                if sad < best_sad {
+                    best_sad = sad;
+                    best = vector;
+                }
+            }
+
+            refined.vectors.push(best.0);
+            refined.vectors.push(best.1);
+            refined.sads.push(best_sad);
+        }
+    }
+
+    refined
 }
 
 /// The block of a field nearest `position`, a frame `limit` pixels long and `count` blocks `step` apart.
@@ -382,6 +500,18 @@ mod tests {
 
     /// Every level of every frame of a clip, frame then level.
     type ClipPyramids = Vec<Vec<Vec<f32>>>;
+
+    #[test]
+    fn half_pel_samples_average_their_neighbours_and_clamp() {
+        let plane = [1.0f32, 2.0, 4.0, 8.0];
+
+        assert_eq!(half_pel_sample(&plane, 2, 2, 2, 0), 2.0);
+        assert_eq!(half_pel_sample(&plane, 2, 2, 1, 0), 1.5);
+        assert_eq!(half_pel_sample(&plane, 2, 2, 0, 1), 2.5);
+        assert_eq!(half_pel_sample(&plane, 2, 2, 1, 1), 3.75);
+        assert_eq!(half_pel_sample(&plane, 2, 2, -3, -3), 1.0);
+        assert_eq!(half_pel_sample(&plane, 2, 2, 9, 9), 8.0);
+    }
 
     /// Every clip with its fixtures and each frame's pyramid.
     fn fixture_clips() -> Vec<(MotionClip, &'static MotionFixture, ClipPyramids)> {

@@ -1,6 +1,7 @@
 use cubecl::prelude::*;
 
 use super::confidence::confidence_of;
+use super::subpel::refine_half_pel;
 use super::{
     BlockGrid,
     ConfidenceScores,
@@ -410,7 +411,7 @@ fn launch_coarse<R: Runtime>(
 }
 
 /// Asserts that `centre` and `neighbour` have the same levels, at least `levels` of them.
-fn assert_pyramids(centre: &Pyramid<'_>, neighbour: &Pyramid<'_>, levels: u32) {
+pub(super) fn assert_pyramids(centre: &Pyramid<'_>, neighbour: &Pyramid<'_>, levels: u32) {
     let held = centre.levels.len().min(neighbour.levels.len());
     assert!(
         held >= levels as usize,
@@ -428,6 +429,8 @@ fn assert_pyramids(centre: &Pyramid<'_>, neighbour: &Pyramid<'_>, levels: u32) {
 ///
 /// With more than one level, a search of `search_radius` on the coarsest level seeds a search of the
 /// same radius at full resolution. With one level, the full resolution search starts from zero motion.
+///
+/// With `pel` 2 the result is then refined to half pixels, as [refine_half_pel] does.
 #[expect(
     clippy::too_many_arguments,
     reason = "a search takes both pyramids, its field and each setting"
@@ -474,10 +477,16 @@ pub fn search<R: Runtime>(
         scores,
     };
     launch_fine(client, dispatch, fine);
+
+    if settings.pel == 2 {
+        refine_half_pel(client, dispatch, centre, neighbour, field, grid);
+    }
 }
 
 /// Searches `refine_radius` pixels around the seed already in `field` at full resolution, writing the
 /// refined field over it.
+///
+/// The vectors stay whole pixels. For half pixels, follow it with [refine_half_pel].
 #[expect(
     clippy::too_many_arguments,
     reason = "a search takes both pyramids, its field and each setting"

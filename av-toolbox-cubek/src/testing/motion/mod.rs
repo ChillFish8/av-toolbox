@@ -3,11 +3,13 @@ mod synthetic;
 
 pub use self::reference::{
     ReferenceField,
+    half_pel_sample,
     reference_chain_seed,
     reference_clip_pyramids,
     reference_confidence,
     reference_downscale,
     reference_pyramid,
+    reference_refine_half_pel,
     reference_refine_seed,
     reference_search,
 };

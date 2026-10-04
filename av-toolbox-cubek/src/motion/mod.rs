@@ -7,6 +7,7 @@
 //! - [search] runs a coarse search on the smallest level, seeding a fine search at full resolution.
 //! - [chain] joins two adjacent fields into a seed for a neighbour two frames away.
 //! - [refine_seed] searches a small window around a seed.
+//! - [refine_half_pel] refines whole pixel vectors to half pixels.
 //!
 //! Each search also writes every block's best SAD and, when asked, its confidence.
 
@@ -14,6 +15,7 @@ mod chain;
 mod confidence;
 mod pyramid;
 mod search;
+mod subpel;
 
 use cubecl::prelude::*;
 use thiserror::Error;
@@ -22,6 +24,7 @@ pub use self::chain::chain;
 pub use self::confidence::ConfidenceScores;
 pub use self::pyramid::{Pyramid, build_pyramid, level_dims};
 pub use self::search::{refine_seed, search};
+pub use self::subpel::refine_half_pel;
 use crate::DevicePlane;
 
 /// The largest `blksize`.
@@ -157,7 +160,8 @@ impl BlockGrid {
 /// One field's planes on the device, telling where each block of the centre frame is found in the
 /// neighbour.
 ///
-/// `vectors` holds an `(x, y)` pair of `i32` per block, in whole pixels, so it is `2 * across` wide and
+/// `vectors` holds an `(x, y)` pair of `i32` per block, in whole pixels or, after half pixel refinement,
+/// half pixels, so it is `2 * across` wide and
 /// `down` high. `sads` holds each block's best SAD as `f32`, and `confidence` its score, `across` by
 /// `down`.
 pub struct FieldPlanes<'a> {

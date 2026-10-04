@@ -4,6 +4,7 @@ use av_toolbox_cubek::motion::{
     MotionSettings,
     build_pyramid,
     chain,
+    refine_half_pel,
     refine_seed,
     search,
 };
@@ -17,6 +18,7 @@ use av_toolbox_cubek::testing::{
     normalised,
     reference_chain_seed,
     reference_clip_pyramids,
+    reference_refine_half_pel,
     reference_refine_seed,
     reference_search,
 };
@@ -144,6 +146,16 @@ impl BuildTask for MotionRun {
                 self.refine_radius,
                 self.scores,
             );
+            if self.settings.pel == 2 {
+                refine_half_pel(
+                    client,
+                    &sizing,
+                    &centre_pyramid,
+                    &neighbour_pyramid,
+                    &planes,
+                    &grid,
+                );
+            }
 
             let refined = field.read(client, scored);
             Chained { seed, field: refined }
@@ -231,7 +243,7 @@ fn reference_chained(
     let first = reference_direct(clip, pyramids, settings, setting.scores, centre, middle);
     let second = reference_direct(clip, pyramids, settings, setting.scores, middle, neighbour);
     let seed = reference_chain_seed(&first.vectors, &second.vectors, &grid, width, height);
-    let field = reference_refine_seed(
+    let mut field = reference_refine_seed(
         &pyramids[centre][0],
         &pyramids[neighbour][0],
         width,
@@ -241,6 +253,16 @@ fn reference_chained(
         setting.refine_radius,
         setting.scores,
     );
+    if settings.pel == 2 {
+        field = reference_refine_half_pel(
+            &pyramids[centre][0],
+            &pyramids[neighbour][0],
+            width,
+            height,
+            &field,
+            &grid,
+        );
+    }
 
     Chained { seed, field }
 }
@@ -389,11 +411,26 @@ fn assert_device_matches(clip: &MotionClip, setting: &SettingFixture) {
     let pyramids = reference_clip_pyramids(clip, setting.settings.pyramid_levels);
     let settings = &setting.settings;
 
+    for (centre, found) in outputs.direct_1.iter().enumerate() {
+        let expected = reference_direct(clip, &pyramids, settings, setting.scores, centre, centre + 1);
+        let label = format!("{} direct_1 field {centre}", clip.name);
+
+        assert_same_field(found, &expected, &label);
+    }
+
     for (centre, found) in outputs.direct_2.iter().enumerate() {
         let expected = reference_direct(clip, &pyramids, settings, setting.scores, centre, centre + 2);
         let label = format!("{} direct_2 field {centre}", clip.name);
 
         assert_same_field(found, &expected, &label);
+    }
+
+    for (first, found) in outputs.chained_2.iter().enumerate() {
+        let expected = reference_chained(clip, &pyramids, setting, first, first + 2);
+        let label = format!("{} chained_2 field {first}", clip.name);
+
+        assert_same(&found.seed, &expected.seed, &label);
+        assert_same_field(&found.field, &expected.field, &label);
     }
 
     for (first, found) in outputs.chained_back_2.iter().enumerate() {
@@ -440,4 +477,92 @@ fn a_frame_smaller_than_a_block_has_one_block() {
         let setting = SettingFixture { settings, ..*base };
         assert_device_matches(&clip, &setting);
     }
+}
+
+/// The same fixture setting with half pixel vectors.
+fn half_pel(base: &SettingFixture) -> SettingFixture {
+    let settings = MotionSettings {
+        pel: 2,
+        ..base.settings
+    };
+
+    SettingFixture { settings, ..*base }
+}
+
+#[test]
+fn every_device_half_pel_field_matches_the_reference() {
+    for clip in motion_clips() {
+        for fixture in &MOTION_FIXTURES[0].settings {
+            assert_device_matches(&clip, &half_pel(fixture));
+        }
+    }
+}
+
+/// The share of interior blocks, two blocks in from every edge, of `fields` holding `vector`.
+fn interior_share(fields: &[ReferenceField], grid: &BlockGrid, vector: (i32, i32)) -> f64 {
+    let mut interior = 0usize;
+    let mut matching = 0usize;
+
+    for field in fields {
+        for by in 2..grid.down - 2 {
+            for bx in 2..grid.across - 2 {
+                let slot = 2 * (by * grid.across + bx) as usize;
+
+                interior += 1;
+                if (field.vectors[slot], field.vectors[slot + 1]) == vector {
+                    matching += 1;
+                }
+            }
+        }
+    }
+
+    matching as f64 / interior as f64
+}
+
+#[test]
+fn pel_two_finds_the_half_pixel_pan() {
+    let clip = pan_8();
+    let setting = half_pel(&MOTION_FIXTURES[0].settings[0]);
+    let grid = BlockGrid::new(&setting.settings, clip.width as u32, clip.height as u32);
+    let outputs = backend().build(MotionRun::of_clip(&clip, &setting));
+
+    let share = interior_share(&outputs.direct_1, &grid, (3, 1));
+
+    println!(
+        "pan_8 interior blocks at (3, 1) half pixels: {:.1}%",
+        share * 100.0
+    );
+    assert!(
+        share >= 0.9,
+        "only {:.1}% of interior blocks found (3, 1)",
+        share * 100.0
+    );
+}
+
+#[test]
+fn a_whole_pixel_motion_keeps_its_vector() {
+    let clip = pan_8();
+    let setting = half_pel(&MOTION_FIXTURES[0].settings[0]);
+    let width = clip.width;
+    let centre = normalised(&clip.frames[0][0], clip.bits);
+    let shifted: Vec<f32> = (0..clip.height)
+        .flat_map(|row| {
+            let source = &centre[row * width..(row + 1) * width];
+            (0..width).map(move |column| source[column.saturating_sub(2)])
+        })
+        .collect();
+    let grid = BlockGrid::new(&setting.settings, width as u32, clip.height as u32);
+    let task = MotionRun {
+        frames: vec![centre, shifted],
+        width: width as u32,
+        height: clip.height as u32,
+        settings: setting.settings,
+        refine_radius: setting.refine_radius,
+        scores: setting.scores,
+    };
+    let outputs = backend().build(task);
+
+    let share = interior_share(&outputs.direct_1, &grid, (4, 0));
+
+    assert_eq!(share, 1.0, "{:.1}% of interior blocks kept (4, 0)", share * 100.0);
 }
