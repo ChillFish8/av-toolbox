@@ -1,13 +1,18 @@
 use av_toolbox_cubek::ivtc::{
     ChromaMasks,
     CombPlanes,
+    ComparePass,
+    ComparePlanes,
     DifferencePlanes,
+    FieldSums,
     MicBlocks,
     MicPlanes,
     WeavePlanes,
     chroma_into_luma,
     clear_mics,
     comb_mask,
+    compare_fields,
+    compare_sums_len,
     difference_sums,
     mic,
     mic_count_len,
@@ -15,9 +20,14 @@ use av_toolbox_cubek::ivtc::{
     weave,
 };
 use av_toolbox_cubek::testing::{
+    IntPlane,
+    MapFixture,
     MaskFixture,
     SyntheticClip,
+    excluded_map_fixtures,
+    map_fixtures,
     mask_fixtures,
+    reference_compare_plane,
     reference_difference,
     reference_match_weave,
     synthetic_clips,
@@ -419,4 +429,214 @@ fn a_ten_bit_mask_scales_cthresh() {
 
         assert_masks_match(&group, &masks);
     }
+}
+
+/// One plane's field compare, its previous, current and next frames `width` by `height`.
+struct ComparePlane {
+    frames: [Vec<f32>; 3],
+    width: u32,
+    height: u32,
+    pass: ComparePass,
+}
+
+/// The map and partial sums of one plane's field compare.
+struct CompareOutput {
+    map: Vec<u32>,
+    sums: Vec<u32>,
+}
+
+/// The field compares of several planes, each into buffers of its own.
+struct FieldCompares {
+    planes: Vec<ComparePlane>,
+}
+
+/// Uploads one plane's frames and launches its field compare, handing back every buffer it uses.
+fn launch_compare<R: Runtime>(build: &BuildContext<R>, compare: &ComparePlane) -> [Handle; 6] {
+    let client = build.client();
+    let sizing = Sizing(build.frame_context());
+    let (width, height) = (compare.width, compare.height);
+    let samples = (width * height) as usize;
+    let sums_len = compare_sums_len(width, height);
+
+    let previous = upload_f32(client, &compare.frames[0]);
+    let current = upload_f32(client, &compare.frames[1]);
+    let next = upload_f32(client, &compare.frames[2]);
+    let differences = empty(client, samples / 2 * size_of::<u32>());
+    let map = empty(client, samples * size_of::<u32>());
+    let sums = empty(client, sums_len * size_of::<u32>());
+
+    let planes = ComparePlanes {
+        frames: [
+            plane(&previous, width, height),
+            plane(&current, width, height),
+            plane(&next, width, height),
+        ],
+        differences: plane(&differences, width, height / 2),
+        map: plane(&map, width, height),
+        sums: plane(&sums, sums_len as u32, 1),
+    };
+    compare_fields(client, &sizing, planes, compare.pass);
+
+    [previous, current, next, differences, map, sums]
+}
+
+impl BuildTask for FieldCompares {
+    type Output = Vec<CompareOutput>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let launched: Vec<[Handle; 6]> = self
+            .planes
+            .iter()
+            .map(|compare| launch_compare(build, compare))
+            .collect();
+
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        launched
+            .iter()
+            .map(|[_, _, _, _, map, sums]| CompareOutput {
+                map: read_u32(client, map),
+                sums: read_u32(client, sums),
+            })
+            .collect()
+    }
+}
+
+/// The three planes of `fixture`'s compare, as integer frames for the reference and their settings.
+fn compare_inputs(fixture: &MapFixture) -> Vec<([Vec<i32>; 3], u32, u32, ComparePass)> {
+    let clip = clip_named(&fixture.clip);
+    let mut inputs = Vec::new();
+    for plane_index in 0..3 {
+        let chroma = u32::from(plane_index > 0);
+        let frames = [
+            clip.frames[fixture.frame - 1][plane_index].clone(),
+            clip.frames[fixture.frame][plane_index].clone(),
+            clip.frames[fixture.frame + 1][plane_index].clone(),
+        ];
+        let pass = ComparePass {
+            first: fixture.first,
+            second: fixture.second,
+            field: fixture.field,
+            exclude_from: fixture.exclude_from >> chroma,
+            exclude_to: fixture.exclude_to >> chroma,
+            start_x: 8 >> chroma,
+            shift: clip.bits - 8,
+        };
+        inputs.push((frames, LUMA_WIDTH >> chroma, LUMA_HEIGHT >> chroma, pass));
+    }
+
+    inputs
+}
+
+fn device_compare(fixture: &MapFixture) -> Vec<CompareOutput> {
+    let planes = compare_inputs(fixture)
+        .into_iter()
+        .map(|(frames, width, height, pass)| ComparePlane {
+            frames: frames.map(|frame| to_floats(&frame)),
+            width,
+            height,
+            pass,
+        })
+        .collect();
+
+    backend().build(FieldCompares { planes })
+}
+
+fn reference_sums(frames: &[Vec<i32>; 3], width: u32, height: u32, pass: &ComparePass) -> FieldSums {
+    let planes = frames.each_ref().map(|frame| IntPlane {
+        samples: frame,
+        width: width as usize,
+        height: height as usize,
+    });
+    let (sums, _) = reference_compare_plane(planes, pass);
+
+    sums
+}
+
+fn map_name(fixture: &MapFixture) -> String {
+    format!(
+        "{} frame {} field {} matches {} and {} excluding {} to {}",
+        fixture.clip,
+        fixture.frame,
+        fixture.field,
+        fixture.first,
+        fixture.second,
+        fixture.exclude_from,
+        fixture.exclude_to,
+    )
+}
+
+fn every_map_fixture() -> Vec<MapFixture> {
+    let mut fixtures = map_fixtures();
+    fixtures.extend(excluded_map_fixtures());
+    fixtures
+}
+
+#[test]
+fn every_device_map_matches_the_harness() {
+    for fixture in every_map_fixture() {
+        let outputs = device_compare(&fixture);
+        let expected = [&fixture.luma, &fixture.u, &fixture.v];
+        let name = map_name(&fixture);
+
+        for (plane_index, (output, expected)) in outputs.iter().zip(expected).enumerate() {
+            assert_eq!(&to_bytes(&output.map), expected, "{name} plane {plane_index}");
+        }
+    }
+}
+
+#[test]
+fn device_sums_match_the_reference() {
+    for fixture in every_map_fixture() {
+        let outputs = device_compare(&fixture);
+        let mut found = FieldSums::default();
+        for output in &outputs {
+            let plane_sums = FieldSums::from_partials(&output.sums);
+            found = found.add(plane_sums);
+        }
+
+        let mut expected = FieldSums::default();
+        for (frames, width, height, pass) in compare_inputs(&fixture) {
+            let plane_sums = reference_sums(&frames, width, height, &pass);
+            expected = expected.add(plane_sums);
+        }
+
+        assert_eq!(found, expected, "{}", map_name(&fixture));
+    }
+}
+
+#[test]
+fn a_wide_sixteen_bit_plane_sums_without_overflow() {
+    let width = 7680u32;
+    let height = 8u32;
+    let samples = (width * height) as usize;
+    let frames = [vec![65535; samples], vec![0; samples], vec![0; samples]];
+    let pass = ComparePass {
+        first: 0,
+        second: 1,
+        field: 0,
+        exclude_from: 0,
+        exclude_to: 0,
+        start_x: 8,
+        shift: 8,
+    };
+    let task = FieldCompares {
+        planes: vec![ComparePlane {
+            frames: frames.each_ref().map(|frame| to_floats(frame)),
+            width,
+            height,
+            pass,
+        }],
+    };
+
+    let outputs = backend().build(task);
+    let found = FieldSums::from_partials(&outputs[0].sums);
+    let expected = reference_sums(&frames, width, height, &pass);
+
+    // Both row pairs see the largest difference, `6 * 65535`, on every summed column of the first match.
+    let largest = 2 * (u64::from(width) - 16) * 6 * 65535;
+    assert_eq!(expected.first.combing, largest);
+    assert_eq!(expected.first.motion, largest);
+    assert_eq!(found, expected);
 }

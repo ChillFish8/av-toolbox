@@ -2,11 +2,12 @@ mod fixtures;
 mod reference;
 mod synthetic;
 
-pub use self::fixtures::{MaskFixture, mask_fixtures};
+pub use self::fixtures::{MapFixture, MaskFixture, excluded_map_fixtures, map_fixtures, mask_fixtures};
 pub use self::reference::{
     IntPlane,
     reference_chroma_into_luma,
     reference_comb_mask,
+    reference_compare_plane,
     reference_difference,
     reference_match_weave,
     reference_mic,
@@ -18,6 +19,7 @@ pub use self::synthetic::{SyntheticClip, synthetic_clips};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ivtc::{ComparePass, FieldSums};
 
     const CLIPS: &str = include_str!("../fixtures/ivtc/clips.txt");
     const SCENE: &str = include_str!("../fixtures/ivtc/scene.txt");
@@ -206,5 +208,96 @@ mod tests {
         let mask = reference_comb_mask(plane, -1);
 
         assert_eq!(mask, vec![255; WIDTH * HEIGHT]);
+    }
+
+    /// `compareFieldsSlow` on all three planes of `fixture`'s frame, the sums added and the maps kept.
+    fn reference_compare(fixture: &MapFixture) -> (FieldSums, [Vec<u8>; 3]) {
+        let clip = clip_named(&fixture.clip);
+        let previous = &clip.frames[fixture.frame - 1];
+        let current = &clip.frames[fixture.frame];
+        let next = &clip.frames[fixture.frame + 1];
+
+        let mut sums = FieldSums::default();
+        let mut maps = [Vec::new(), Vec::new(), Vec::new()];
+        for (plane_index, map) in maps.iter_mut().enumerate() {
+            let chroma = u32::from(plane_index > 0);
+            let width = WIDTH >> chroma;
+            let height = HEIGHT >> chroma;
+            let frames = [previous, current, next].map(|frame| IntPlane {
+                samples: &frame[plane_index],
+                width,
+                height,
+            });
+            let pass = ComparePass {
+                first: fixture.first,
+                second: fixture.second,
+                field: fixture.field,
+                exclude_from: fixture.exclude_from >> chroma,
+                exclude_to: fixture.exclude_to >> chroma,
+                start_x: 8 >> chroma,
+                shift: clip.bits - 8,
+            };
+
+            let (plane_sums, plane_map) = reference_compare_plane(frames, &pass);
+            sums = sums.add(plane_sums);
+            *map = plane_map;
+        }
+
+        (sums, maps)
+    }
+
+    fn map_name(fixture: &MapFixture) -> String {
+        format!(
+            "{} frame {} field {} matches {} and {} excluding {} to {}",
+            fixture.clip,
+            fixture.frame,
+            fixture.field,
+            fixture.first,
+            fixture.second,
+            fixture.exclude_from,
+            fixture.exclude_to,
+        )
+    }
+
+    #[test]
+    fn every_map_matches_the_harness() {
+        let fixtures = map_fixtures().into_iter().chain(excluded_map_fixtures());
+        for fixture in fixtures {
+            let (_, [luma, u, v]) = reference_compare(&fixture);
+            let name = map_name(&fixture);
+
+            assert_eq!(luma, fixture.luma, "{name} luma");
+            assert_eq!(u, fixture.u, "{name} U");
+            assert_eq!(v, fixture.v, "{name} V");
+        }
+    }
+
+    #[test]
+    fn excluding_rows_changes_the_sums() {
+        let plain_fixtures = map_fixtures();
+        let mut compared = 0;
+        for excluded in excluded_map_fixtures() {
+            let plain = plain_fixtures
+                .iter()
+                .find(|plain| {
+                    plain.clip == excluded.clip
+                        && plain.frame == excluded.frame
+                        && plain.field == excluded.field
+                        && plain.first == excluded.first
+                        && plain.second == excluded.second
+                })
+                .expect("every excluded map has a plain twin");
+
+            let (plain_sums, _) = reference_compare(plain);
+            let (excluded_sums, _) = reference_compare(&excluded);
+            if plain_sums == FieldSums::default() {
+                continue;
+            }
+
+            assert_ne!(plain_sums, excluded_sums, "{}", map_name(&excluded));
+            compared += 1;
+        }
+
+        assert!(compared > 0, "every plain compare summed to nothing");
     }
 }

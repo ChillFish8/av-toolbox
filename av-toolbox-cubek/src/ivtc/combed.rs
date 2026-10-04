@@ -14,7 +14,7 @@ fn clear_u32_kernel(values: &mut Array<u32>) {
 }
 
 #[cube]
-fn tap(input: &Array<f32>, width: u32, x: u32, y: u32) -> i32 {
+pub(super) fn tap(input: &Array<f32>, width: u32, x: u32, y: u32) -> i32 {
     let index = (y * width + x) as usize;
     i32::cast_from(input[index])
 }
@@ -216,7 +216,7 @@ fn max_count_kernel(counts: &Array<u32>, results: &mut Array<Atomic<u32>>, slot:
     results[slot as usize].fetch_max(counts[ABSOLUTE_POS]);
 }
 
-fn clear<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, plane: DevicePlane<'_>) {
+pub(super) fn clear<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, plane: DevicePlane<'_>) {
     let values = plane.array::<R>();
     let samples = plane.samples();
     let cubes = dispatch.cube_count(samples);

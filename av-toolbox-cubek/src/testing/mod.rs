@@ -98,11 +98,15 @@ pub use self::eedi3::{
 pub use self::hysteresis::reference_hysteresis;
 pub use self::ivtc::{
     IntPlane,
+    MapFixture,
     MaskFixture,
     SyntheticClip,
+    excluded_map_fixtures,
+    map_fixtures,
     mask_fixtures,
     reference_chroma_into_luma,
     reference_comb_mask,
+    reference_compare_plane,
     reference_difference,
     reference_match_weave,
     reference_mic,
@@ -147,6 +151,7 @@ pub use self::sangnom::{
 pub use self::tuning::{failing_kernels, fresh_tune_label};
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
+pub use crate::ivtc::{FieldSums, MatchSums};
 use crate::warp::{BlurKind, WarpParams};
 
 /// Mirrors [reflect](crate::reflect) on the CPU.

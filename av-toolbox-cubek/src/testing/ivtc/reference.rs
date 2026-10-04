@@ -1,3 +1,5 @@
+use crate::ivtc::{ComparePass, FieldSums, MatchSums};
+
 /// One plane of integer code values, `width` samples across.
 #[derive(Debug, Clone, Copy)]
 pub struct IntPlane<'a> {
@@ -246,4 +248,205 @@ pub fn reference_mic(mask: &[u8], width: usize, height: usize, block_x: usize, b
     }
 
     counts.into_iter().max().unwrap_or(0)
+}
+
+/// The absolute differences of two frames' rows `start_row`, `start_row + 2`, and so on, `height / 2` rows.
+fn field_differences(first: IntPlane<'_>, second: IntPlane<'_>, start_row: usize) -> Vec<i32> {
+    let width = first.width;
+    let rows = first.height / 2;
+    let mut differences = Vec::with_capacity(rows * width);
+    for row in 0..rows {
+        let source_row = start_row + 2 * row;
+        for x in 0..width {
+            let difference = first.at(x, source_row) - second.at(x, source_row);
+            differences.push(difference.abs());
+        }
+    }
+
+    differences
+}
+
+/// `buildDiffMap`'s value for difference row `row` and column `x`, 0, 1, 3 or 5.
+fn map_value(differences: &[i32], width: usize, height: usize, row: usize, x: usize, shift: u32) -> u8 {
+    let low = 3 << shift;
+    let high = 19 << shift;
+    let at = |column: usize, line: usize| differences[line * width + column];
+    let difference = at(x, row);
+    if difference <= low {
+        return 0;
+    }
+
+    // `buildDiffMap` stops counting once `count` reaches 2, which only decides `count > 1`.
+    let mut count = 0;
+    let mut column = x - 1;
+    while column < x + 2 && count < 2 {
+        count += u32::from(at(column, row - 1) > low);
+        count += u32::from(at(column, row) > low);
+        count += u32::from(at(column, row + 1) > low);
+        column += 1;
+    }
+
+    if count <= 1 {
+        return 0;
+    }
+
+    let mut value = 1;
+    if difference <= high {
+        return value;
+    }
+
+    // This loop's early exit decides which of `upper` and `lower` get set, so it is kept exactly.
+    let mut upper = false;
+    let mut lower = false;
+    count = 0;
+    column = x - 1;
+    while column < x + 2 && count < 6 {
+        if at(column, row - 1) > high {
+            count += 1;
+            upper = true;
+        }
+
+        if at(column, row) > high {
+            count += 1;
+        }
+
+        if at(column, row + 1) > high {
+            count += 1;
+            lower = true;
+        }
+
+        column += 1;
+    }
+
+    if count <= 3 {
+        return value;
+    }
+
+    if upper && lower {
+        return value + 2;
+    }
+
+    let y = 2 * row;
+    let mut upper_two = false;
+    let mut lower_two = false;
+    let first_column = x.saturating_sub(4);
+    let end_column = usize::min(x + 5, width);
+    for column in first_column..end_column {
+        if y != 2 && at(column, row - 2) > high {
+            upper_two = true;
+        }
+
+        if at(column, row - 1) > high {
+            upper = true;
+        }
+
+        if at(column, row + 1) > high {
+            lower = true;
+        }
+
+        if y != height - 4 && at(column, row + 2) > high {
+            lower_two = true;
+        }
+    }
+
+    if (upper && (lower || upper_two)) || (lower && (upper || lower_two)) {
+        value += 2;
+    } else if count > 5 {
+        value += 4;
+    }
+
+    value
+}
+
+/// Adds one sample's `difference` into `sums` where its map `flags` and VFM's thresholds allow it.
+fn accumulate(sums: &mut MatchSums, difference: i32, flags: u8, shift: u32) {
+    let amount = difference as u64;
+    if difference > 23 << shift && flags & 1 != 0 {
+        sums.combing += amount;
+    }
+
+    if difference > 42 << shift {
+        if flags & 2 != 0 {
+            sums.motion += amount;
+        }
+
+        if flags & 4 != 0 {
+            sums.isolated += amount;
+        }
+    }
+}
+
+/// One plane of VFM's field compare, `compareFieldsSlow` for `pass`, with the map `buildDiffMap` builds.
+///
+/// `frames` are the previous, current and next frames. The map holds one byte per sample.
+pub fn reference_compare_plane(frames: [IntPlane<'_>; 3], pass: &ComparePass) -> (FieldSums, Vec<u8>) {
+    assert!(
+        pass.first < 3 && pass.second < 3,
+        "the field compare takes matches 0, 1 or 2, not {} and {}",
+        pass.first,
+        pass.second,
+    );
+
+    let first = frames[pass.first as usize];
+    let second = frames[pass.second as usize];
+    let current = frames[1];
+    let width = current.width;
+    let height = current.height;
+    let field = pass.field as usize;
+    let other_row = if field == 1 { 1 } else { 2 };
+    let current_row = 3 - field;
+    let mut map = vec![0u8; width * height];
+
+    // `buildDiffMap` is handed rows `other_row` or `other_row + 2` and reads from two rows above them.
+    let (difference_start, map_start) = if field == 0 {
+        (other_row - 2, other_row)
+    } else {
+        (other_row, other_row + 2)
+    };
+    let differences = field_differences(first, second, difference_start);
+    for y in (2..height - 2).step_by(2) {
+        let row = y / 2;
+        let map_row = map_start + y - 2;
+        for x in 1..width - 1 {
+            map[map_row * width + x] = map_value(&differences, width, height, row, x, pass.shift);
+        }
+    }
+
+    let start_x = pass.start_x as usize;
+    let exclude_from = pass.exclude_from as usize;
+    let exclude_to = pass.exclude_to as usize;
+    let mut sums = FieldSums::default();
+    for y in (2..height - 2).step_by(2) {
+        let used = exclude_from == exclude_to || y < exclude_from || y > exclude_to;
+        if !used {
+            continue;
+        }
+
+        let pair = (y - 2) / 2;
+        let matched_row = other_row + 2 * pair;
+        let kept_row = current_row + 2 * pair;
+        for x in start_x..width.saturating_sub(start_x) {
+            let upper_map = map[matched_row * width + x];
+            let lower_map = map[(matched_row + 2) * width + x];
+            if upper_map == 0 && lower_map == 0 {
+                continue;
+            }
+
+            let above = current.at(x, kept_row - 2);
+            let kept = current.at(x, kept_row) << 2;
+            let below = current.at(x, kept_row + 2);
+            let centre = above + kept + below;
+            let flags = upper_map | lower_map;
+
+            let woven = 3 * (first.at(x, matched_row) + first.at(x, matched_row + 2));
+            let difference = (woven - centre).abs();
+            accumulate(&mut sums.first, difference, flags, pass.shift);
+
+            let woven = 3 * (second.at(x, matched_row) + second.at(x, matched_row + 2));
+            let difference = (woven - centre).abs();
+            accumulate(&mut sums.second, difference, flags, pass.shift);
+        }
+    }
+
+    (sums, map)
 }
