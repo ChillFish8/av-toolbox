@@ -137,7 +137,25 @@ pub use self::lineart::{
     reference_vertical_121,
     reference_vinverse,
 };
-pub use self::motion::{MotionClip, motion_clips, normalised, write_motion_inputs};
+pub use self::motion::{
+    MOTION_FIXTURES,
+    MotionClip,
+    MotionFixture,
+    ReferenceField,
+    SettingFixture,
+    fixture_f32s,
+    fixture_i32s,
+    motion_clips,
+    normalised,
+    reference_chain_seed,
+    reference_clip_pyramids,
+    reference_confidence,
+    reference_downscale,
+    reference_pyramid,
+    reference_refine_seed,
+    reference_search,
+    write_motion_inputs,
+};
 pub use self::neighbourhood::{
     reference_chain,
     reference_extreme,
@@ -598,6 +616,26 @@ pub fn reference_narrow(values: &[f32], peak: f32) -> Vec<u16> {
             rounded.clamp(0.0, peak) as u16
         })
         .collect()
+}
+
+/// The position of `value` along the line of every f32, so neighbouring floats are one apart.
+fn ordered_bits(value: f32) -> i64 {
+    let bits = value.to_bits() as i32;
+    let ordered = if bits < 0 { i32::MIN - bits } else { bits };
+
+    i64::from(ordered)
+}
+
+/// Whether `found` is at most `ulps` representable f32 values from `expected`.
+///
+/// Motion confidence ends in an f32 division, and devices lower division differently, so its last bits
+/// differ between devices and from the CPU.
+pub fn within_ulps(found: f32, expected: f32, ulps: u32) -> bool {
+    let found_position = ordered_bits(found);
+    let expected_position = ordered_bits(expected);
+    let distance = (found_position - expected_position).abs();
+
+    distance <= i64::from(ulps)
 }
 
 /// Panics at the first sample of a `width` wide plane where `found` and `expected` differ.
