@@ -1,0 +1,8 @@
+clip tff_8 bits 8 order 1 frames 12 checksum 4938896
+clip bff_8 bits 8 order 0 frames 12 checksum 4939115
+clip cut_8 bits 8 order 1 frames 12 checksum 4902799
+clip orphan_8 bits 8 order 1 frames 12 checksum 4963386
+clip tff_10 bits 10 order 1 frames 12 checksum 19757392
+clip bff_10 bits 10 order 0 frames 12 checksum 19758778
+clip cut_10 bits 10 order 1 frames 12 checksum 19668244
+clip orphan_10 bits 10 order 1 frames 12 checksum 19855399
