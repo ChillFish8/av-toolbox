@@ -120,7 +120,6 @@ impl<R: Runtime> FieldRebuilder<R> {
         }
     }
 
-    #[expect(dead_code, reason = "the ivtc match stage reads it")]
     pub(crate) fn client(&self) -> &ComputeClient<R> {
         &self.client
     }

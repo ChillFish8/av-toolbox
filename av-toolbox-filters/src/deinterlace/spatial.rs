@@ -103,21 +103,21 @@ pub(crate) enum Predictor {
     Sangnom { aa: u32 },
 }
 
-/// The prediction `spatial` names, once its settings are checked.
-pub(crate) fn checked_predictor(spatial: &Spatial) -> Result<Predictor, StageError> {
+/// The prediction `spatial` names, once its settings are checked, refusing them under `stage`.
+pub(crate) fn checked_predictor(stage: &str, spatial: &Spatial) -> Result<Predictor, StageError> {
     let predictor = match spatial {
         Spatial::Cubic {} => Predictor::Cubic,
         Spatial::Eedi2(tuning) => {
-            let arguments = checked_eedi2_tuning(STAGE, tuning)?;
+            let arguments = checked_eedi2_tuning(stage, tuning)?;
             Predictor::Eedi2(arguments)
         },
         Spatial::Eedi3(spatial) => {
             let tuning = spatial.tuning();
-            let arguments = checked_tuning(STAGE, &tuning)?;
+            let arguments = checked_tuning(stage, &tuning)?;
             Predictor::Eedi3(arguments)
         },
         Spatial::Sangnom(tuning) => {
-            let aa = checked_sangnom_tuning(STAGE, tuning)?;
+            let aa = checked_sangnom_tuning(stage, tuning)?;
             Predictor::Sangnom { aa }
         },
     };
@@ -125,8 +125,9 @@ pub(crate) fn checked_predictor(spatial: &Spatial) -> Result<Predictor, StageErr
     Ok(predictor)
 }
 
-/// Refuses a selected plane of `input` that `predictor`'s field pass cannot run on.
+/// Refuses, under `stage`, a selected plane of `input` that `predictor`'s field pass cannot run on.
 pub(crate) fn checked_predictor_planes(
+    stage: &str,
     predictor: Predictor,
     input: &FrameFormat,
     selected: &[bool],
@@ -138,16 +139,16 @@ pub(crate) fn checked_predictor_planes(
         .filter(|(_, is_selected)| **is_selected);
     for (channel, _) in chosen {
         let Some((width, height)) = input.channel_dimensions(*channel) else {
-            return Err(missing_plane(STAGE, *channel));
+            return Err(missing_plane(stage, *channel));
         };
 
         match predictor {
             Predictor::Eedi2(_) => {
-                checked_eedi2_size(STAGE, *channel, Direction::Vertical, width, height)?;
+                checked_eedi2_size(stage, *channel, Direction::Vertical, width, height)?;
             },
             Predictor::Eedi3(arguments) => {
                 checked_eedi3_size(
-                    STAGE,
+                    stage,
                     *channel,
                     Direction::Vertical,
                     arguments.mdis,

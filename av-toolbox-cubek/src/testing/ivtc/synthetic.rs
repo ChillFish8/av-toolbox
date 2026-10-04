@@ -154,18 +154,42 @@ fn video_sample(clip: &ClipSpec, plane: i32, video: i32, x: i32, y: i32) -> i32 
     brighter.min(peak)
 }
 
-fn video_plane(clip: &ClipSpec, plane: i32, video: i32) -> Vec<i32> {
+/// Plane `plane` of a frame, each sample at `x`, `y` given by `sample`.
+fn sampled_plane(plane: i32, sample: impl Fn(i32, i32) -> i32) -> Vec<i32> {
     let width = if plane == 0 { WIDTH } else { WIDTH / 2 };
     let height = if plane == 0 { HEIGHT } else { HEIGHT / 2 };
 
     let mut samples = Vec::with_capacity((width * height) as usize);
     for y in 0..height {
         for x in 0..width {
-            samples.push(video_sample(clip, plane, video, x, y));
+            samples.push(sample(x, y));
         }
     }
 
     samples
+}
+
+fn video_plane(clip: &ClipSpec, plane: i32, video: i32) -> Vec<i32> {
+    sampled_plane(plane, |x, y| video_sample(clip, plane, video, x, y))
+}
+
+fn film_plane(clip: &ClipSpec, plane: i32, film: i32) -> Vec<i32> {
+    sampled_plane(plane, |x, y| film_sample(clip, plane, film, x, y))
+}
+
+/// Every plane of film frame `film` of the synthetic clip `clip_name`, as it was before telecine.
+///
+/// A clip's film frames are numbered from 0 to 9.
+pub fn synthetic_film_frame(clip_name: &str, film: usize) -> [Vec<i32>; 3] {
+    let Some(clip) = CLIPS.iter().find(|clip| clip.name == clip_name) else {
+        panic!("there is no synthetic clip {clip_name}");
+    };
+    assert!(
+        film < FILM_FRAMES as usize,
+        "a synthetic clip has {FILM_FRAMES} film frames, not frame {film}",
+    );
+
+    [0, 1, 2].map(|plane| film_plane(clip, plane, film as i32))
 }
 
 /// The eight synthetic 3:2 telecined clips, 64x32 with 4:2:0 chroma.

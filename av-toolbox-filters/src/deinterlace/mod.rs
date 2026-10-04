@@ -1,6 +1,6 @@
-mod bwdif;
-mod rebuild;
-mod spatial;
+pub(crate) mod bwdif;
+pub(crate) mod rebuild;
+pub(crate) mod spatial;
 #[cfg(test)]
 mod tests;
 

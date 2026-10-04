@@ -279,8 +279,8 @@ impl FilterDefinition for Bwdif {
         let input = checked_input(STAGE, chosen)?;
         resolved_order(STAGE, args.order, &input)?;
         let selected = checked_planes(args, &input)?;
-        let predictor = checked_predictor(&args.spatial)?;
-        checked_predictor_planes(predictor, &input, &selected)?;
+        let predictor = checked_predictor(STAGE, &args.spatial)?;
+        checked_predictor_planes(STAGE, predictor, &input, &selected)?;
 
         let output = output_format(&input, args.rate)?;
         let format = StreamFormat::Frames(output);
@@ -301,8 +301,8 @@ impl FilterDefinition for Bwdif {
         let input = checked_input(STAGE, inputs)?;
         let order = resolved_order(STAGE, args.order, &input)?;
         let selected = checked_planes(&args, &input)?;
-        let predictor = checked_predictor(&args.spatial)?;
-        checked_predictor_planes(predictor, &input, &selected)?;
+        let predictor = checked_predictor(STAGE, &args.spatial)?;
+        checked_predictor_planes(STAGE, predictor, &input, &selected)?;
         let output = output_format(&input, args.rate)?;
 
         let client = context.client().clone();

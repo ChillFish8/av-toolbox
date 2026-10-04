@@ -1,0 +1,103 @@
+use av_toolbox_core::{Filter, Inputs};
+use av_toolbox_gpu::{
+    BuildContext,
+    BuildTask,
+    Frame,
+    FrameFormat,
+    FrameMeta,
+    HostPool,
+    HostStreamItem,
+    StreamItem,
+};
+use cubecl::prelude::Runtime;
+
+/// One frame handed to the filter, its metadata and every plane's bytes.
+#[derive(Clone)]
+pub(crate) struct Input {
+    pub(crate) meta: FrameMeta,
+    pub(crate) planes: Vec<Vec<u8>>,
+}
+
+/// One frame the filter emitted, its metadata and every plane's bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Output {
+    pub(crate) meta: FrameMeta,
+    pub(crate) planes: Vec<Vec<u8>>,
+}
+
+/// Runs every chunk of `chunks` through one filter instance in turn, starting and ending the stream around
+/// each.
+pub(crate) struct Stream {
+    pub(crate) filter: Box<dyn Filter>,
+    pub(crate) input: FrameFormat,
+    pub(crate) output: FrameFormat,
+    pub(crate) chunks: Vec<Vec<Input>>,
+}
+
+fn read_back<R: Runtime>(build: &BuildContext<R>, format: &FrameFormat, emitted: Frame) -> Output {
+    assert_eq!(emitted.format(), format);
+
+    let mut planes = Vec::new();
+    for channel in format.channels() {
+        let plane = emitted.plane(*channel).expect("the output carries this channel");
+        let handle = plane.buffer().handle().clone();
+        let bytes = build
+            .client()
+            .read_one(handle)
+            .expect("the device should hand back the plane");
+        planes.push(bytes.to_vec());
+    }
+
+    Output {
+        meta: emitted.meta().clone(),
+        planes,
+    }
+}
+
+impl BuildTask for Stream {
+    type Output = Vec<Output>;
+
+    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+        let mut context = build.frame_context();
+        let host = HostPool::new();
+        let mut outputs = Vec::new();
+
+        for chunk in self.chunks {
+            self.filter
+                .start_of_stream(&mut context)
+                .expect("should start the stream");
+
+            for input in chunk {
+                let mut frame = host.alloc_frame(&self.input, input.meta);
+                for (index, channel) in self.input.channels().iter().enumerate() {
+                    let plane = frame
+                        .plane_mut(*channel)
+                        .expect("the format carries this channel");
+                    plane.copy_from_slice(&input.planes[index]);
+                }
+
+                let frozen = frame.freeze();
+                let item = HostStreamItem::Frame(frozen);
+                let loaded: StreamItem = context.load_host(&item).expect("the item should load");
+                let inputs = Inputs::new(vec![Some(loaded)]);
+
+                let emitted = self.filter.process(&mut context, inputs).expect("should process");
+                for frame in emitted {
+                    let output = read_back(build, &self.output, frame);
+                    outputs.push(output);
+                }
+            }
+
+            let flushed = self
+                .filter
+                .end_of_stream(&mut context)
+                .expect("should end the stream");
+            for frame in flushed {
+                let output = read_back(build, &self.output, frame);
+                outputs.push(output);
+            }
+        }
+
+        outputs
+    }
+}

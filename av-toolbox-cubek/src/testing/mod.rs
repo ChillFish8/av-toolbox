@@ -118,6 +118,7 @@ pub use self::ivtc::{
     reference_weave,
     scene_difference,
     synthetic_clips,
+    synthetic_film_frame,
     vfm_decisions,
 };
 pub use self::lineart::{

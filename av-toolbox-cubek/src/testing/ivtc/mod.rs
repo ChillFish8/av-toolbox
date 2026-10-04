@@ -24,7 +24,7 @@ pub use self::reference::{
     reference_weave,
     scene_difference,
 };
-pub use self::synthetic::{SyntheticClip, synthetic_clips};
+pub use self::synthetic::{SyntheticClip, synthetic_clips, synthetic_film_frame};
 
 #[cfg(test)]
 mod tests {
