@@ -3,8 +3,8 @@
 use std::io::Write;
 use std::os::fd::{IntoRawFd, RawFd};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::thread;
 use std::thread::JoinHandle;
+use std::{io, thread};
 
 use av_toolbox_core::{
     BoundInputs,
@@ -239,16 +239,30 @@ fn y4m_stream() -> Vec<u8> {
 
 /// Feeds the y4m stream into a new pipe from its own thread, returning the read end's descriptor.
 ///
-/// The write end closes once every byte is written, so the stream can only be read once.
-fn piped_reference() -> (RawFd, JoinHandle<()>) {
+/// The write end closes once every byte is written, so the stream can only be read once. The feeder
+/// hands back how the write went, since a run that refuses its graph closes the stream unread.
+fn piped_reference() -> (RawFd, JoinHandle<io::Result<()>>) {
     let bytes = y4m_stream();
     let (reader, mut writer) = std::io::pipe().expect("a pipe");
-    let feeder = thread::spawn(move || {
-        writer.write_all(&bytes).expect("writes the stream");
-    });
+    let feeder = thread::spawn(move || writer.write_all(&bytes));
     let fd = reader.into_raw_fd();
 
     (fd, feeder)
+}
+
+/// Waits for `feeder` and checks it wrote the whole stream.
+fn wait_for_feeder(feeder: JoinHandle<io::Result<()>>) {
+    let written = feeder.join().expect("the feeder finishes");
+
+    written.expect("writes the stream");
+}
+
+/// Whether a feeder wrote the whole stream, or stopped because the run closed the stream unread.
+fn written_or_unread(written: &io::Result<()>) -> bool {
+    match written {
+        Ok(()) => true,
+        Err(error) => error.kind() == io::ErrorKind::BrokenPipe,
+    }
 }
 
 fn reference_stage(fd: RawFd) -> StageSpec {
@@ -263,7 +277,7 @@ fn format_of_reference() -> FrameFormat {
     let reference = reference_stage(fd);
     let specs = [reference, sink_of("reference")];
     run(&specs).expect("the reference runs alone");
-    feeder.join().expect("the feeder finishes");
+    wait_for_feeder(feeder);
 
     let frames = take_recorded();
 
@@ -344,7 +358,7 @@ fn solid_like_follows_its_reference() {
     let specs = following("solid/like", json!({ "colour": "#000000" }), fd);
 
     let report = run(&specs).expect("should run");
-    feeder.join().expect("the feeder finishes");
+    wait_for_feeder(feeder);
 
     let seen = recorded();
     let indices: Vec<u64> = seen.iter().map(|frame| frame.index).collect();
@@ -381,7 +395,7 @@ fn image_like_follows_its_reference() {
     let specs = following("image/like", json!({ "path": path }), fd);
 
     let report = run(&specs).expect("should run");
-    feeder.join().expect("the feeder finishes");
+    wait_for_feeder(feeder);
 
     let seen = recorded();
     let indices: Vec<u64> = seen.iter().map(|frame| frame.index).collect();
@@ -408,7 +422,9 @@ fn image_like_refuses_an_image_of_another_size() {
     let specs = following("image/like", json!({ "path": path }), fd);
 
     let error = run(&specs).expect_err("8x8 is not 64x64");
-    feeder.join().expect("the feeder finishes");
+    let written = feeder.join().expect("the feeder finishes");
+
+    assert!(written_or_unread(&written), "{written:?}");
 
     assert!(error.contains("resize/"), "{error}");
     assert!(error.contains("8x8"), "{error}");
