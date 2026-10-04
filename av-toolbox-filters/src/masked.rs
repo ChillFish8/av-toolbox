@@ -16,6 +16,7 @@ use av_toolbox_gpu::{
     StreamFormat,
 };
 
+use crate::checks::accepts_frames;
 use crate::planewise::PlaneFilter;
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
@@ -46,22 +47,18 @@ pub(crate) fn accepts_masked_input(
     offered: StreamFormat,
 ) -> Result<FormatSet, StageError> {
     match index {
-        INPUT => accepts_frames(stage, offered),
+        INPUT => accepts_input_frames(stage, offered),
         MASK => accepts_mask(stage, offered),
         _ => Err(unexpected_input(stage, index)),
     }
 }
 
-fn accepts_frames(stage: &str, offered: StreamFormat) -> Result<FormatSet, StageError> {
-    let Some(format) = offered.as_frames() else {
+fn accepts_input_frames(stage: &str, offered: StreamFormat) -> Result<FormatSet, StageError> {
+    let Some(samples) = accepts_frames(offered) else {
         return Err(input_not_frames(stage));
     };
 
-    if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-        return Ok(FormatSet::new());
-    }
-
-    Ok(FormatSet::of([format.sample]))
+    Ok(samples)
 }
 
 fn accepts_mask(stage: &str, offered: StreamFormat) -> Result<FormatSet, StageError> {

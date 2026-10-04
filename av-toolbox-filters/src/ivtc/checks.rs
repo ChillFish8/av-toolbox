@@ -1,9 +1,9 @@
 use av_toolbox_core::StageError;
 
-/// The smallest block either `ivtc` stage counts in, along either axis.
+/// The smallest block size along either axis.
 const SMALLEST_BLOCK: u32 = 4;
 
-/// The largest block either `ivtc` stage counts in, along either axis.
+/// The largest block size along either axis.
 const LARGEST_BLOCK: u32 = 512;
 
 fn not_a_block(stage: &str, name: &str, value: u32) -> StageError {

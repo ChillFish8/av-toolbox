@@ -40,7 +40,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -51,7 +50,7 @@ use serde::Deserialize;
 
 use crate::aa::eedi2::subsampling_shifts;
 use crate::bits::bits_of;
-use crate::checks::between_u32;
+use crate::checks::{accepts_frames, between_u32};
 use crate::deinterlace::rebuild::{channel_plane, widened_plane};
 use crate::ivtc::checks::checked_block;
 use crate::ivtc::decimation::{Thresholds, find_drop, first_cycle_metrics};
@@ -86,7 +85,7 @@ pub(crate) struct DecimateArgs {
     /// How many frames make up each cycle that one frame is dropped from, between 2 and 25.
     #[serde(default = "default_cycle")]
     pub(crate) cycle: u32,
-    /// Whether the chroma planes count towards the differences, set when not given if the stream has chroma.
+    /// Whether the chroma planes count towards the differences, by default whether the stream has chroma.
     #[serde(default)]
     pub(crate) chroma: Option<bool>,
     /// The duplicate threshold, a percentage of one block between 0 and 100.
@@ -243,18 +242,6 @@ fn checked(args: &DecimateArgs, input: &FrameFormat) -> Result<Checked, StageErr
     Ok(Checked { chroma, output })
 }
 
-fn accepts_frames(offered: StreamFormat) -> Result<FormatSet, StageError> {
-    let Some(format) = offered.as_frames() else {
-        return Err(not_frames());
-    };
-
-    if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-        return Ok(FormatSet::new());
-    }
-
-    Ok(FormatSet::of([format.sample]))
-}
-
 /// The half block of each counted plane, VDecimate's half block scaled down by a chroma plane's subsampling.
 fn half_blocks(args: &DecimateArgs, input: &FrameFormat, planes: usize) -> Vec<HalfBlocks> {
     let luma = HalfBlocks {
@@ -328,7 +315,7 @@ impl FilterDefinition for Decimate {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_frames(offered)
+        accepts_frames(offered).ok_or_else(not_frames)
     }
 
     fn produces(

@@ -1,4 +1,15 @@
 use av_toolbox_core::StageError;
+use av_toolbox_gpu::{FormatSet, SampleFormat, StreamFormat};
+
+/// The samples a stage over frames accepts, U8 and U16, or `None` when `offered` is not frames.
+pub(crate) fn accepts_frames(offered: StreamFormat) -> Option<FormatSet> {
+    let format = offered.as_frames()?;
+    if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
+        return Some(FormatSet::new());
+    }
+
+    Some(FormatSet::of([format.sample]))
+}
 
 fn below_minimum(stage: &str, name: &str, value: f32, minimum: f32) -> StageError {
     let message = format!("{stage} needs a finite {name} of at least {minimum}, got {value}");

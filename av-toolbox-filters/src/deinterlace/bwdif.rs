@@ -33,7 +33,6 @@ use av_toolbox_gpu::{
     Plane,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -41,6 +40,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
+use crate::checks::accepts_frames;
 use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane};
 use crate::deinterlace::spatial::{Spatial, SpatialStage, checked_predictor, checked_predictor_planes};
 use crate::masked::{INPUT, checked_input, missing_input};
@@ -220,18 +220,6 @@ fn half_frame(rate: Option<FrameRate>) -> Option<Duration> {
     Some(Duration::from_nanos(nanos))
 }
 
-fn accepts_frames(offered: StreamFormat) -> Result<FormatSet, StageError> {
-    let Some(format) = offered.as_frames() else {
-        return Err(not_frames());
-    };
-
-    if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-        return Ok(FormatSet::new());
-    }
-
-    Ok(FormatSet::of([format.sample]))
-}
-
 /// Rebuilds progressive frames from interlaced fields, the way bwdif does.
 pub(crate) struct Bwdif;
 
@@ -276,7 +264,7 @@ impl FilterDefinition for Bwdif {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_frames(offered)
+        accepts_frames(offered).ok_or_else(not_frames)
     }
 
     fn produces(

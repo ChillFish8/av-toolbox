@@ -36,6 +36,7 @@ use av_toolbox_cubek::testing::{
     reference_chroma_into_luma,
     reference_comb_mask,
     reference_compare_plane,
+    reference_decimate_metric,
     reference_difference,
     reference_match_weave,
     synthetic_clips,
@@ -1017,4 +1018,103 @@ fn the_largest_half_block_of_sixteen_bit_samples_fits_a_cell() {
         total: 4 * cell,
     };
     assert_eq!(found, expected);
+}
+
+/// A plane `width` by `height` with a gradient moved right by `shift` columns, plus noise from `seed`.
+fn moving_plane(width: usize, height: usize, shift: usize, seed: u32) -> Vec<i32> {
+    let noise = scattered_mask(width, height, 2, seed);
+    let mut samples = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let gradient = ((x + shift) * 7 + y * 3) % 200;
+            let speck = i32::from(noise[y * width + x] / 8);
+            samples.push(gradient as i32 + speck);
+        }
+    }
+
+    samples
+}
+
+/// Every plane of a 4:2:0 frame `width` by `height`, with chroma rounded up as the format does.
+fn moving_frame(width: usize, height: usize, shift: usize, seed: u32) -> [Vec<i32>; 3] {
+    let chroma_width = width.div_ceil(2);
+    let chroma_height = height.div_ceil(2);
+
+    [
+        moving_plane(width, height, shift, seed),
+        moving_plane(chroma_width, chroma_height, shift, seed + 1),
+        moving_plane(chroma_width, chroma_height, shift, seed + 2),
+    ]
+}
+
+fn assert_edge_metric_matches(width: usize, height: usize, block: usize, chroma: bool) {
+    let previous = moving_frame(width, height, 0, 11);
+    let current = moving_frame(width, height, 3, 29);
+    let chroma_width = width.div_ceil(2);
+    let chroma_height = height.div_ceil(2);
+    let planes = if chroma { 3 } else { 1 };
+    let dims = [
+        (width, height),
+        (chroma_width, chroma_height),
+        (chroma_width, chroma_height),
+    ];
+
+    let expected = reference_decimate_metric(
+        previous.each_ref().map(|plane| plane.as_slice()),
+        current.each_ref().map(|plane| plane.as_slice()),
+        dims,
+        planes,
+        block,
+        block,
+        (1, 1),
+    );
+
+    let luma_half = HalfBlocks {
+        x: block as u32 / 2,
+        y: block as u32 / 2,
+    };
+    let chroma_half = HalfBlocks {
+        x: luma_half.x / 2,
+        y: luma_half.y / 2,
+    };
+    let task = DecimateCells {
+        previous: previous[..planes]
+            .iter()
+            .map(|samples| to_floats(samples))
+            .collect(),
+        current: current[..planes]
+            .iter()
+            .map(|samples| to_floats(samples))
+            .collect(),
+        dims: dims[..planes]
+            .iter()
+            .map(|(plane_width, plane_height)| (*plane_width as u32, *plane_height as u32))
+            .collect(),
+        halves: [luma_half, chroma_half, chroma_half][..planes].to_vec(),
+    };
+
+    let found = backend().build(task);
+
+    assert_eq!(found, expected, "{width}x{height} blocks {block} chroma {chroma}");
+}
+
+#[test]
+fn cells_cut_short_by_the_edge_match_the_reference_with_32_blocks() {
+    for chroma in [false, true] {
+        assert_edge_metric_matches(66, 34, 32, chroma);
+    }
+}
+
+#[test]
+fn cells_cut_short_by_the_edge_match_the_reference_with_16_blocks() {
+    for chroma in [false, true] {
+        assert_edge_metric_matches(66, 34, 16, chroma);
+    }
+}
+
+#[test]
+fn cells_cut_short_by_the_bottom_of_a_1080_row_frame_match_the_reference() {
+    for chroma in [false, true] {
+        assert_edge_metric_matches(96, 1080, 32, chroma);
+    }
 }

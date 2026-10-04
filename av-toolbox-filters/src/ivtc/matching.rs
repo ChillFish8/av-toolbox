@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     Plane,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -41,7 +40,7 @@ use serde::Deserialize;
 
 use crate::aa::direction::missing_plane;
 use crate::bits::bits_of;
-use crate::checks::{between_i32, between_u32};
+use crate::checks::{accepts_frames, between_i32, between_u32};
 use crate::deinterlace::bwdif::{Order, resolved_order};
 use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane};
 use crate::deinterlace::spatial::{
@@ -339,18 +338,6 @@ fn output_format(input: &FrameFormat) -> FrameFormat {
     }
 }
 
-fn accepts_frames(offered: StreamFormat) -> Result<FormatSet, StageError> {
-    let Some(format) = offered.as_frames() else {
-        return Err(not_frames());
-    };
-
-    if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-        return Ok(FormatSet::new());
-    }
-
-    Ok(FormatSet::of([format.sample]))
-}
-
 /// VFM's field, 1 when the matching field is the top field.
 fn vfm_field(order: Order, field: MatchingField) -> u32 {
     let first = match order {
@@ -408,7 +395,7 @@ impl FilterDefinition for Match {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_frames(offered)
+        accepts_frames(offered).ok_or_else(not_frames)
     }
 
     fn produces(
