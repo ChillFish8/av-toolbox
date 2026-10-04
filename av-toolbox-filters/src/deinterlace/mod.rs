@@ -1,4 +1,5 @@
 mod bwdif;
+mod rebuild;
 mod spatial;
 #[cfg(test)]
 mod tests;

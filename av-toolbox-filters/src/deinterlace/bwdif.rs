@@ -14,16 +14,11 @@ use av_toolbox_core::{
     StreamType,
     Tag,
 };
-use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::aa::{Eedi2Settings, Eedi3DeviceClips, Eedi3Settings, sangnom_aaf, sangnom_max};
-use av_toolbox_cubek::deinterlace::{BWDIF_MIN_ROWS, BwdifField, BwdifPlanes, bwdif_field};
-use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::values::{narrow, widen};
+use av_toolbox_cubek::deinterlace::{BWDIF_MIN_ROWS, BwdifField};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
     DeviceSide,
     FieldOrder,
     FormatSet,
@@ -31,7 +26,6 @@ use av_toolbox_gpu::{
     FrameContext,
     FrameError,
     FrameFormat,
-    FrameLayout,
     FrameMeta,
     FrameRate,
     Offered,
@@ -46,17 +40,12 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::aa::direction::{Direction, FieldPass, checked_dimensions, missing_plane};
-use crate::aa::eedi2::{Eedi2Pass, subsampling_shifts};
-use crate::aa::eedi3::Eedi3FieldPass;
-use crate::aa::sangnom::SangnomPass;
-use crate::bits::bits_of;
-use crate::deinterlace::spatial::{Predictor, Spatial, checked_predictor, checked_predictor_planes};
+use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
+use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane};
+use crate::deinterlace::spatial::{Spatial, checked_predictor, checked_predictor_planes};
 use crate::masked::{INPUT, checked_input, missing_input};
 use crate::planes::ChannelName;
-use crate::scratch::Scratch;
 use crate::selection::{PlaneDefault, selected_planes};
-use crate::sizing::Sizing;
 
 pub(crate) const STAGE: &str = "deinterlace/bwdif";
 
@@ -104,10 +93,10 @@ fn describe_order(found: Option<FieldOrder>) -> String {
     }
 }
 
-fn unusable_order(found: Option<FieldOrder>) -> StageError {
+fn unusable_order(stage: &str, found: Option<FieldOrder>) -> StageError {
     let described = describe_order(found);
     let message =
-        format!("{STAGE} needs `order` set to top or bottom, since the stream's field order is {described}");
+        format!("{stage} needs `order` set to top or bottom, since the stream's field order is {described}");
 
     StageError::msg(message)
 }
@@ -131,12 +120,6 @@ fn not_frames() -> StageError {
     StageError::msg(message)
 }
 
-fn missing_channel(channel: Channel) -> StageError {
-    let message = format!("{STAGE} was handed a frame missing {channel}");
-
-    StageError::msg(message)
-}
-
 fn bad_frame(error: FrameError) -> StageError {
     let message = format!("{STAGE} built a bad frame: {error}");
 
@@ -144,15 +127,19 @@ fn bad_frame(error: FrameError) -> StageError {
 }
 
 /// The field shown first, `order` when given and the stream's own interlaced order otherwise.
-fn checked_order(args: &BwdifArgs, input: &FrameFormat) -> Result<Order, StageError> {
-    if let Some(order) = args.order {
+pub(crate) fn resolved_order(
+    stage: &str,
+    order: Option<Order>,
+    input: &FrameFormat,
+) -> Result<Order, StageError> {
+    if let Some(order) = order {
         return Ok(order);
     }
 
     match input.field_order {
         Some(FieldOrder::TopFirst) => Ok(Order::Top),
         Some(FieldOrder::BottomFirst) => Ok(Order::Bottom),
-        found => Err(unusable_order(found)),
+        found => Err(unusable_order(stage, found)),
     }
 }
 
@@ -290,7 +277,7 @@ impl FilterDefinition for Bwdif {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(STAGE, chosen)?;
-        checked_order(args, &input)?;
+        resolved_order(STAGE, args.order, &input)?;
         let selected = checked_planes(args, &input)?;
         let predictor = checked_predictor(&args.spatial)?;
         checked_predictor_planes(predictor, &input, &selected)?;
@@ -312,27 +299,22 @@ impl FilterDefinition for Bwdif {
     ) -> Result<Box<dyn Filter>, StageError> {
         let inputs = formats.inputs();
         let input = checked_input(STAGE, inputs)?;
-        let order = checked_order(&args, &input)?;
+        let order = resolved_order(STAGE, args.order, &input)?;
         let selected = checked_planes(&args, &input)?;
         let predictor = checked_predictor(&args.spatial)?;
         checked_predictor_planes(predictor, &input, &selected)?;
         let output = output_format(&input, args.rate)?;
 
-        let bits = bits_of(input.sample);
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = ((1u32 << bits) - 1) as f32;
+        let client = context.client().clone();
+        let rebuilder = FieldRebuilder::new(STAGE, client, input, predictor);
         let fields = fields_of(order, args.rate);
         let half_frame = half_frame(input.frame_rate);
 
         let deinterlacer = Deinterlacer {
-            client: context.client().clone(),
+            rebuilder,
             input,
             output,
             selected,
-            predictor,
-            bits,
-            element,
-            peak,
             fields,
             half_frame,
             previous: None,
@@ -364,68 +346,13 @@ fn fields_of(order: Order, rate: Rate) -> Vec<BwdifField> {
     }
 }
 
-/// Runs `pass` on `current` once for each of `fields`, keeping the rows that field keeps.
-///
-/// It gives one new plane per field, in the order of `fields`.
-fn run_fields(
-    pass: &impl FieldPass,
-    context: &FrameContext,
-    current: DevicePlane<'_>,
-    fields: &[BwdifField],
-) -> Vec<Scratch> {
-    let width = current.width();
-    let height = current.height();
-    let outputs: Vec<Scratch> = fields
-        .iter()
-        .map(|_| Scratch::new::<f32>(context, width, height))
-        .collect();
-
-    if let [first, _] = fields {
-        // The pass keeping the even rows serves the field rebuilding the odd rows.
-        let (even, odd) = if first.rebuilt == 1 {
-            (&outputs[0], &outputs[1])
-        } else {
-            (&outputs[1], &outputs[0])
-        };
-
-        pass.run_both(context, current, even.plane(), odd.plane());
-        return outputs;
-    }
-
-    for (field, output) in fields.iter().zip(&outputs) {
-        let kept = 1 - field.rebuilt;
-        pass.run(context, current, output.plane(), kept);
-    }
-
-    outputs
-}
-
-/// The three frames one output reads.
-struct Window<'a> {
-    previous: &'a Frame,
-    current: &'a Frame,
-    next: &'a Frame,
-}
-
-/// A frame's plane for `channel`.
-fn channel_plane(frame: &Frame, channel: Channel) -> Result<&Plane, StageError> {
-    match frame.plane(channel) {
-        Some(plane) => Ok(plane),
-        None => Err(missing_channel(channel)),
-    }
-}
-
 /// Runs `deinterlace/bwdif` over a chunk, emitting each frame's outputs once the frame after it arrives.
 struct Deinterlacer<R: Runtime> {
-    client: ComputeClient<R>,
+    rebuilder: FieldRebuilder<R>,
     input: FrameFormat,
     output: FrameFormat,
     /// Whether each plane, in channel order, is deinterlaced.
     selected: Vec<bool>,
-    predictor: Predictor,
-    bits: u32,
-    element: Element,
-    peak: f32,
     fields: Vec<BwdifField>,
     /// The time from a first field to its second, `None` when the frame rate is unknown.
     half_frame: Option<Duration>,
@@ -457,157 +384,13 @@ impl<R: Runtime> Deinterlacer<R> {
         vec![first, second]
     }
 
-    /// Widens `source` into a new f32 scratch plane.
-    fn widened(&self, context: &FrameContext, source: &Plane) -> Scratch {
-        let (width, height) = source.dimensions();
-        let values = Scratch::new::<f32>(context, width, height);
-        let sizing = Sizing(context);
-
-        let source_handle = source.buffer().handle();
-
-        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let source_plane = unsafe { DevicePlane::new(source_handle, width, height) };
-        let values_plane = values.plane();
-
-        widen(&self.client, &sizing, source_plane, values_plane, self.element);
-
-        values
-    }
-
-    /// Narrows `values` into a new plane of the input's sample format.
-    fn narrowed(
-        &self,
-        context: &FrameContext,
-        values: &Scratch,
-        meta: &FrameMeta,
-    ) -> Result<Plane, StageError> {
-        let device_values = values.plane();
-        let width = device_values.width();
-        let height = device_values.height();
-        let plane_format = FrameFormat {
-            width,
-            height,
-            layout: FrameLayout::Grey,
-            ..self.input
-        };
-        let target = context.alloc_frame(&plane_format, meta.clone());
-        let output = channel_plane(&target, Channel::Y)?;
-        let sizing = Sizing(context);
-
-        let target_handle = output.buffer().handle();
-
-        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let target_plane = unsafe { DevicePlane::new(target_handle, width, height) };
-
-        narrow(
-            &self.client,
-            &sizing,
-            device_values,
-            target_plane,
-            self.element,
-            self.peak,
-        );
-
-        Ok(output.clone())
-    }
-
-    /// Runs the predictor's field pass on `current` for each of `fields`, one plane per field.
-    ///
-    /// The cubic predictor has no field pass and gives no planes.
-    fn predictions(
-        &self,
-        context: &FrameContext,
-        plane_index: usize,
-        current: DevicePlane<'_>,
-        fields: &[BwdifField],
-    ) -> Vec<Scratch> {
-        match self.predictor {
-            Predictor::Cubic => Vec::new(),
-            Predictor::Eedi2(arguments) => {
-                let layout = self.input.layout;
-                let (across, _) = subsampling_shifts(layout, plane_index);
-                let settings = Eedi2Settings::new(&arguments, self.bits, across);
-                let pass = Eedi2Pass {
-                    client: &self.client,
-                    settings,
-                };
-
-                run_fields(&pass, context, current, fields)
-            },
-            Predictor::Eedi3(arguments) => {
-                let settings = Eedi3Settings::new(&arguments, self.bits);
-                let pass = Eedi3FieldPass {
-                    client: &self.client,
-                    settings,
-                    clips: Eedi3DeviceClips::default(),
-                };
-
-                run_fields(&pass, context, current, fields)
-            },
-            Predictor::Sangnom { aa } => {
-                let aaf = sangnom_aaf(aa, self.bits);
-                let max = sangnom_max(self.bits);
-                let pass = SangnomPass {
-                    client: &self.client,
-                    aaf,
-                    max,
-                };
-
-                run_fields(&pass, context, current, fields)
-            },
-        }
-    }
-
-    /// Rebuilds plane `plane_index` of the window's current frame once for each of `fields`.
-    fn rebuild_plane(
-        &self,
-        context: &FrameContext,
-        window: &Window<'_>,
-        plane_index: usize,
-        fields: &[BwdifField],
-    ) -> Result<Vec<Plane>, StageError> {
-        let channels = self.input.channels();
-        let channel = channels[plane_index];
-        let previous_source = channel_plane(window.previous, channel)?;
-        let current_source = channel_plane(window.current, channel)?;
-        let next_source = channel_plane(window.next, channel)?;
-
-        let previous = self.widened(context, previous_source);
-        let current = self.widened(context, current_source);
-        let next = self.widened(context, next_source);
-        let (width, height) = current_source.dimensions();
-        let sizing = Sizing(context);
-        let meta = window.current.meta();
-        let current_plane = current.plane();
-        let predictions = self.predictions(context, plane_index, current_plane, fields);
-
-        let mut rebuilt = Vec::with_capacity(fields.len());
-        for (index, field) in fields.iter().enumerate() {
-            let output = Scratch::new::<f32>(context, width, height);
-            let spatial = predictions.get(index).map(Scratch::plane);
-            let planes = BwdifPlanes {
-                previous: previous.plane(),
-                current: current.plane(),
-                next: next.plane(),
-                spatial,
-                output: output.plane(),
-            };
-            bwdif_field(&self.client, &sizing, planes, *field);
-
-            let plane = self.narrowed(context, &output, meta)?;
-            rebuilt.push(plane);
-        }
-
-        Ok(rebuilt)
-    }
-
     /// Every output of the window's current frame.
     fn deinterlace(&self, context: &FrameContext, window: &Window<'_>) -> Result<Vec<Frame>, StageError> {
         let mut planes: Vec<Vec<Plane>> = vec![Vec::new(); self.fields.len()];
 
         for (plane_index, channel) in self.input.channels().iter().enumerate() {
             if !self.selected[plane_index] {
-                let shared = channel_plane(window.current, *channel)?;
+                let shared = channel_plane(STAGE, window.current, *channel)?;
                 for output_planes in &mut planes {
                     output_planes.push(shared.clone());
                 }
@@ -615,7 +398,9 @@ impl<R: Runtime> Deinterlacer<R> {
                 continue;
             }
 
-            let rebuilt = self.rebuild_plane(context, window, plane_index, &self.fields)?;
+            let rebuilt = self
+                .rebuilder
+                .rebuild_plane(context, window, plane_index, &self.fields)?;
             for (output_planes, plane) in planes.iter_mut().zip(rebuilt) {
                 output_planes.push(plane);
             }

@@ -1,0 +1,271 @@
+use av_toolbox_core::StageError;
+use av_toolbox_cubek::DevicePlane;
+use av_toolbox_cubek::aa::{Eedi2Settings, Eedi3DeviceClips, Eedi3Settings, sangnom_aaf, sangnom_max};
+use av_toolbox_cubek::deinterlace::{BwdifField, BwdifPlanes, bwdif_field};
+use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::values::{narrow, widen};
+use av_toolbox_gpu::{
+    Channel,
+    ComputeClient,
+    Frame,
+    FrameContext,
+    FrameFormat,
+    FrameLayout,
+    FrameMeta,
+    Plane,
+    Runtime,
+};
+
+use crate::aa::direction::FieldPass;
+use crate::aa::eedi2::{Eedi2Pass, subsampling_shifts};
+use crate::aa::eedi3::Eedi3FieldPass;
+use crate::aa::sangnom::SangnomPass;
+use crate::bits::bits_of;
+use crate::deinterlace::spatial::Predictor;
+use crate::scratch::Scratch;
+use crate::sizing::Sizing;
+
+fn missing_channel(stage: &str, channel: Channel) -> StageError {
+    let message = format!("{stage} was handed a frame missing {channel}");
+
+    StageError::msg(message)
+}
+
+/// The three frames one output reads.
+pub(crate) struct Window<'a> {
+    pub(crate) previous: &'a Frame,
+    pub(crate) current: &'a Frame,
+    pub(crate) next: &'a Frame,
+}
+
+/// A frame's plane for `channel`.
+pub(crate) fn channel_plane<'a>(
+    stage: &str,
+    frame: &'a Frame,
+    channel: Channel,
+) -> Result<&'a Plane, StageError> {
+    match frame.plane(channel) {
+        Some(plane) => Ok(plane),
+        None => Err(missing_channel(stage, channel)),
+    }
+}
+
+/// Runs `pass` on `current` once for each of `fields`, keeping the rows that field keeps.
+///
+/// It gives one new plane per field, in the order of `fields`.
+fn run_fields(
+    pass: &impl FieldPass,
+    context: &FrameContext,
+    current: DevicePlane<'_>,
+    fields: &[BwdifField],
+) -> Vec<Scratch> {
+    let width = current.width();
+    let height = current.height();
+    let outputs: Vec<Scratch> = fields
+        .iter()
+        .map(|_| Scratch::new::<f32>(context, width, height))
+        .collect();
+
+    if let [first, _] = fields {
+        // The pass keeping the even rows serves the field rebuilding the odd rows.
+        let (even, odd) = if first.rebuilt == 1 {
+            (&outputs[0], &outputs[1])
+        } else {
+            (&outputs[1], &outputs[0])
+        };
+
+        pass.run_both(context, current, even.plane(), odd.plane());
+        return outputs;
+    }
+
+    for (field, output) in fields.iter().zip(&outputs) {
+        let kept = 1 - field.rebuilt;
+        pass.run(context, current, output.plane(), kept);
+    }
+
+    outputs
+}
+
+/// Rebuilds the planes of interlaced frames the way bwdif does.
+pub(crate) struct FieldRebuilder<R: Runtime> {
+    stage: &'static str,
+    client: ComputeClient<R>,
+    input: FrameFormat,
+    predictor: Predictor,
+    bits: u32,
+    element: Element,
+    peak: f32,
+}
+
+impl<R: Runtime> FieldRebuilder<R> {
+    /// A rebuilder for frames of `input`, whose errors are reported under `stage`.
+    pub(crate) fn new(
+        stage: &'static str,
+        client: ComputeClient<R>,
+        input: FrameFormat,
+        predictor: Predictor,
+    ) -> Self {
+        let bits = bits_of(input.sample);
+        let element = if bits == 8 { Element::U8 } else { Element::U16 };
+        let peak = ((1u32 << bits) - 1) as f32;
+
+        Self {
+            stage,
+            client,
+            input,
+            predictor,
+            bits,
+            element,
+            peak,
+        }
+    }
+
+    #[expect(dead_code, reason = "the ivtc match stage reads it")]
+    pub(crate) fn client(&self) -> &ComputeClient<R> {
+        &self.client
+    }
+
+    /// Widens `source` into a new f32 scratch plane.
+    pub(crate) fn widened(&self, context: &FrameContext, source: &Plane) -> Scratch {
+        let (width, height) = source.dimensions();
+        let values = Scratch::new::<f32>(context, width, height);
+        let sizing = Sizing(context);
+
+        let source_handle = source.buffer().handle();
+
+        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
+        let source_plane = unsafe { DevicePlane::new(source_handle, width, height) };
+        let values_plane = values.plane();
+
+        widen(&self.client, &sizing, source_plane, values_plane, self.element);
+
+        values
+    }
+
+    /// Narrows `values` into a new plane of the input's sample format.
+    pub(crate) fn narrowed(
+        &self,
+        context: &FrameContext,
+        values: &Scratch,
+        meta: &FrameMeta,
+    ) -> Result<Plane, StageError> {
+        let device_values = values.plane();
+        let width = device_values.width();
+        let height = device_values.height();
+        let plane_format = FrameFormat {
+            width,
+            height,
+            layout: FrameLayout::Grey,
+            ..self.input
+        };
+        let target = context.alloc_frame(&plane_format, meta.clone());
+        let output = channel_plane(self.stage, &target, Channel::Y)?;
+        let sizing = Sizing(context);
+
+        let target_handle = output.buffer().handle();
+
+        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
+        let target_plane = unsafe { DevicePlane::new(target_handle, width, height) };
+
+        narrow(
+            &self.client,
+            &sizing,
+            device_values,
+            target_plane,
+            self.element,
+            self.peak,
+        );
+
+        Ok(output.clone())
+    }
+
+    /// Runs the predictor's field pass on `current` for each of `fields`, one plane per field.
+    ///
+    /// The cubic predictor has no field pass and gives no planes.
+    fn predictions(
+        &self,
+        context: &FrameContext,
+        plane_index: usize,
+        current: DevicePlane<'_>,
+        fields: &[BwdifField],
+    ) -> Vec<Scratch> {
+        match self.predictor {
+            Predictor::Cubic => Vec::new(),
+            Predictor::Eedi2(arguments) => {
+                let layout = self.input.layout;
+                let (across, _) = subsampling_shifts(layout, plane_index);
+                let settings = Eedi2Settings::new(&arguments, self.bits, across);
+                let pass = Eedi2Pass {
+                    client: &self.client,
+                    settings,
+                };
+
+                run_fields(&pass, context, current, fields)
+            },
+            Predictor::Eedi3(arguments) => {
+                let settings = Eedi3Settings::new(&arguments, self.bits);
+                let pass = Eedi3FieldPass {
+                    client: &self.client,
+                    settings,
+                    clips: Eedi3DeviceClips::default(),
+                };
+
+                run_fields(&pass, context, current, fields)
+            },
+            Predictor::Sangnom { aa } => {
+                let aaf = sangnom_aaf(aa, self.bits);
+                let max = sangnom_max(self.bits);
+                let pass = SangnomPass {
+                    client: &self.client,
+                    aaf,
+                    max,
+                };
+
+                run_fields(&pass, context, current, fields)
+            },
+        }
+    }
+
+    /// Rebuilds plane `plane_index` of the window's current frame once for each of `fields`.
+    pub(crate) fn rebuild_plane(
+        &self,
+        context: &FrameContext,
+        window: &Window<'_>,
+        plane_index: usize,
+        fields: &[BwdifField],
+    ) -> Result<Vec<Plane>, StageError> {
+        let channels = self.input.channels();
+        let channel = channels[plane_index];
+        let previous_source = channel_plane(self.stage, window.previous, channel)?;
+        let current_source = channel_plane(self.stage, window.current, channel)?;
+        let next_source = channel_plane(self.stage, window.next, channel)?;
+
+        let previous = self.widened(context, previous_source);
+        let current = self.widened(context, current_source);
+        let next = self.widened(context, next_source);
+        let (width, height) = current_source.dimensions();
+        let sizing = Sizing(context);
+        let meta = window.current.meta();
+        let current_plane = current.plane();
+        let predictions = self.predictions(context, plane_index, current_plane, fields);
+
+        let mut rebuilt = Vec::with_capacity(fields.len());
+        for (index, field) in fields.iter().enumerate() {
+            let output = Scratch::new::<f32>(context, width, height);
+            let spatial = predictions.get(index).map(Scratch::plane);
+            let planes = BwdifPlanes {
+                previous: previous.plane(),
+                current: current.plane(),
+                next: next.plane(),
+                spatial,
+                output: output.plane(),
+            };
+            bwdif_field(&self.client, &sizing, planes, *field);
+
+            let plane = self.narrowed(context, &output, meta)?;
+            rebuilt.push(plane);
+        }
+
+        Ok(rebuilt)
+    }
+}
