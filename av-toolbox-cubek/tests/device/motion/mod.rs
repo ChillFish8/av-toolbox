@@ -1,3 +1,4 @@
+mod compensate;
 mod search;
 
 use av_toolbox_cubek::motion::{BlockGrid, FieldPlanes, Pyramid, level_dims};

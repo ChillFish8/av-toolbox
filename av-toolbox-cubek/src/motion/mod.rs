@@ -8,10 +8,12 @@
 //! - [chain] joins two adjacent fields into a seed for a neighbour two frames away.
 //! - [refine_seed] searches a small window around a seed.
 //! - [refine_half_pel] refines whole pixel vectors to half pixels.
+//! - [compensate] lines a neighbour up with the centre frame, blending overlapping blocks.
 //!
 //! Each search also writes every block's best SAD and, when asked, its confidence.
 
 mod chain;
+mod compensate;
 mod confidence;
 mod pyramid;
 mod search;
@@ -21,6 +23,7 @@ use cubecl::prelude::*;
 use thiserror::Error;
 
 pub use self::chain::chain;
+pub use self::compensate::{CompensatePlanes, PlaneScale, compensate, window_weight};
 pub use self::confidence::ConfidenceScores;
 pub use self::pyramid::{Pyramid, build_pyramid, level_dims};
 pub use self::search::{refine_seed, search};
@@ -178,6 +181,17 @@ fn assert_field(field: &FieldPlanes<'_>, grid: &BlockGrid) {
     if let Some(confidence) = &field.confidence {
         crate::assert_plane(confidence, grid.across, grid.down, "confidence");
     }
+}
+
+/// Asserts that the blocks of `grid` cover a plane `width` by `height` scaled by `scale`.
+fn assert_blocks(grid: &BlockGrid, (width, height): (u32, u32), scale: PlaneScale) {
+    let end_x = (((grid.across - 1) * grid.step) >> scale.shift_x) + (grid.blksize >> scale.shift_x);
+    let end_y = (((grid.down - 1) * grid.step) >> scale.shift_y) + (grid.blksize >> scale.shift_y);
+
+    assert!(
+        end_x >= width && end_y >= height,
+        "the grid covers {end_x}x{end_y}, short of the {width}x{height} plane"
+    );
 }
 
 /// `value` clamped into `0..limit`.

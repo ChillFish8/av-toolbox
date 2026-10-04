@@ -1,5 +1,5 @@
 use super::{MotionClip, normalised};
-use crate::motion::{BlockGrid, ConfidenceScores, MotionSettings, level_dims};
+use crate::motion::{BlockGrid, ConfidenceScores, MotionSettings, PlaneScale, level_dims, window_weight};
 
 /// A field worked out on the CPU, laid out as [FieldPlanes](crate::motion::FieldPlanes) lays it out.
 #[derive(Debug, Clone, PartialEq)]
@@ -482,6 +482,146 @@ pub fn reference_chain_seed(
     seeds
 }
 
+/// A block covering a sample along one axis, with where its span starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AxisBlock {
+    block: u32,
+    start: u32,
+}
+
+/// The blocks covering `position` along one axis of a plane scaled by `shift`, earliest block last.
+///
+/// Only the block starting at or before the sample and the one before it can cover it.
+fn covering_along(position: u32, count: u32, step: u32, blksize: u32, shift: u32) -> Vec<AxisBlock> {
+    let upper = ((((position + 1) << shift) - 1) / step).min(count - 1);
+    let length = blksize >> shift;
+
+    let mut blocks = Vec::new();
+    for back in 0..2 {
+        if upper < back {
+            continue;
+        }
+
+        let block = upper - back;
+        let start = (block * step) >> shift;
+        if (start..start + length).contains(&position) {
+            blocks.push(AxisBlock { block, start });
+        }
+    }
+
+    blocks
+}
+
+/// The blocks of `grid` covering the sample `x`, `y` of a plane scaled by `scale`, as `(column, row)`.
+pub fn reference_covering_blocks(x: u32, y: u32, grid: &BlockGrid, scale: PlaneScale) -> Vec<(u32, u32)> {
+    let columns = covering_along(x, grid.across, grid.step, grid.blksize, scale.shift_x);
+    let rows = covering_along(y, grid.down, grid.step, grid.blksize, scale.shift_y);
+
+    let mut blocks = Vec::new();
+    for row in &rows {
+        for column in &columns {
+            blocks.push((column.block, row.block));
+        }
+    }
+
+    blocks
+}
+
+/// Compensates `neighbour`, `width` by `height`, by the luma `vectors` of `grid` on the CPU, mirroring
+/// [compensate](crate::motion::compensate).
+///
+/// `neighbour` is a plane scaled by `scale`.
+pub fn reference_compensate(
+    neighbour: &[f32],
+    (width, height): (usize, usize),
+    vectors: &[i32],
+    grid: &BlockGrid,
+    pel: u32,
+    scale: PlaneScale,
+) -> Vec<f32> {
+    let overlap = grid.blksize - grid.step;
+    let length_x = grid.blksize >> scale.shift_x;
+    let length_y = grid.blksize >> scale.shift_y;
+    let overlap_x = overlap >> scale.shift_x;
+    let overlap_y = overlap >> scale.shift_y;
+    let doubling = (2 / pel) as i32;
+
+    let mut output = Vec::with_capacity(width * height);
+    for y in 0..height as u32 {
+        let rows = covering_along(y, grid.down, grid.step, grid.blksize, scale.shift_y);
+        for x in 0..width as u32 {
+            let columns = covering_along(x, grid.across, grid.step, grid.blksize, scale.shift_x);
+
+            let mut weight_sum = 0.0f32;
+            let mut value_sum = 0.0f32;
+            for row in &rows {
+                for column in &columns {
+                    let weight_x = window_weight(
+                        x - column.start,
+                        length_x,
+                        overlap_x,
+                        column.block == 0,
+                        column.block == grid.across - 1,
+                    );
+                    let weight_y = window_weight(
+                        y - row.start,
+                        length_y,
+                        overlap_y,
+                        row.block == 0,
+                        row.block == grid.down - 1,
+                    );
+                    let weight = weight_x * weight_y;
+
+                    let slot = 2 * (row.block * grid.across + column.block) as usize;
+                    let vector_x = (vectors[slot] >> scale.shift_x) * doubling;
+                    let vector_y = (vectors[slot + 1] >> scale.shift_y) * doubling;
+                    let value = half_pel_sample(
+                        neighbour,
+                        width,
+                        height,
+                        2 * x as i32 + vector_x,
+                        2 * y as i32 + vector_y,
+                    );
+
+                    weight_sum += weight;
+                    value_sum += weight * value;
+                }
+            }
+
+            output.push(value_sum / weight_sum);
+        }
+    }
+
+    output
+}
+
+/// av-denoise's `nlm_mc_warp` at commit `dcb9ad9` on the CPU.
+///
+/// Each sample of `source`, `width` by `height`, takes the whole pixel vector of the block at
+/// `x / step` and `y / step`, and reads the source there clamped into the frame.
+pub fn reference_nlm_mc_warp(
+    source: &[f32],
+    (width, height): (usize, usize),
+    vectors: &[i32],
+    step: u32,
+    (across, down): (u32, u32),
+) -> Vec<f32> {
+    let mut output = Vec::with_capacity(width * height);
+    for y in 0..height as u32 {
+        for x in 0..width as u32 {
+            let block_x = (x / step).min(across - 1);
+            let block_y = (y / step).min(down - 1);
+            let slot = ((block_y * across + block_x) * 2) as usize;
+
+            let source_x = clamp_i32(x as i32 + vectors[slot], width as i32);
+            let source_y = clamp_i32(y as i32 + vectors[slot + 1], height as i32);
+            output.push(source[source_y as usize * width + source_x as usize]);
+        }
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +640,86 @@ mod tests {
 
     /// Every level of every frame of a clip, frame then level.
     type ClipPyramids = Vec<Vec<Vec<f32>>>;
+
+    /// Every block of `grid` whose span, scaled by `scale`, holds the sample `x`, `y`.
+    fn scanned_blocks(x: u32, y: u32, grid: &BlockGrid, scale: PlaneScale) -> Vec<(u32, u32)> {
+        let length_x = grid.blksize >> scale.shift_x;
+        let length_y = grid.blksize >> scale.shift_y;
+
+        let mut blocks = Vec::new();
+        for row in 0..grid.down {
+            for column in 0..grid.across {
+                let start_x = (column * grid.step) >> scale.shift_x;
+                let start_y = (row * grid.step) >> scale.shift_y;
+                if (start_x..start_x + length_x).contains(&x) && (start_y..start_y + length_y).contains(&y) {
+                    blocks.push((column, row));
+                }
+            }
+        }
+
+        blocks
+    }
+
+    #[test]
+    fn every_sample_is_covered_by_the_blocks_found_without_scanning() {
+        let sizes = [(128u32, 64u32), (129, 64), (37, 21), (5, 3), (100, 50), (33, 17)];
+        let settings = [(16u32, 0u32), (16, 4), (16, 8), (8, 4), (8, 1), (6, 3), (4, 2)];
+        let scales = [(0u32, 0u32), (1, 1), (1, 0)];
+
+        for (width, height) in sizes {
+            for (blksize, overlap) in settings {
+                let settings = MotionSettings {
+                    blksize,
+                    overlap,
+                    ..MotionSettings::default()
+                };
+                let grid = BlockGrid::new(&settings, width, height);
+
+                for (shift_x, shift_y) in scales {
+                    let scale = PlaneScale { shift_x, shift_y };
+                    let plane_width = width.div_ceil(1 << shift_x);
+                    let plane_height = height.div_ceil(1 << shift_y);
+
+                    for y in 0..plane_height {
+                        for x in 0..plane_width {
+                            let found = reference_covering_blocks(x, y, &grid, scale);
+                            let mut scanned = scanned_blocks(x, y, &grid, scale);
+                            scanned.sort();
+                            let mut sorted = found.clone();
+                            sorted.sort();
+
+                            let case = format!(
+                                "{width}x{height} blksize {blksize} overlap {overlap} scale \
+                                 {shift_x},{shift_y} sample {x},{y}"
+                            );
+                            assert!(!found.is_empty(), "{case} is covered by no block");
+                            assert_eq!(sorted, scanned, "{case} finds the wrong blocks");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_ramps_over_an_overlap_sum_to_one() {
+        for position in 0..8 {
+            let next_block = window_weight(position, 16, 8, false, false);
+            let previous_block = window_weight(position + 8, 16, 8, false, false);
+
+            assert!(
+                (next_block + previous_block - 1.0).abs() < 1e-6,
+                "ramps at {position} do not sum to 1"
+            );
+        }
+    }
+
+    #[test]
+    fn the_outer_sides_of_the_edge_blocks_have_no_ramp() {
+        assert_eq!(window_weight(0, 16, 8, true, false), 1.0);
+        assert_eq!(window_weight(15, 16, 8, false, true), 1.0);
+        assert_eq!(window_weight(3, 16, 0, false, false), 1.0);
+    }
 
     #[test]
     fn half_pel_samples_average_their_neighbours_and_clamp() {

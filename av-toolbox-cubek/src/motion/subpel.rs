@@ -9,7 +9,7 @@ use crate::Dispatch;
 /// Between two samples it is their mean. Between four it is their mean, summed top left, top right,
 /// bottom left, then bottom right.
 #[cube]
-fn half_pel_sample(
+pub(super) fn half_pel_sample(
     plane: &Array<f32>,
     x2: i32,
     y2: i32,
