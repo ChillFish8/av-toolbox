@@ -5,6 +5,7 @@ const MAPS: &str = include_str!("../fixtures/ivtc/maps.txt");
 const EXCLUDED: &str = include_str!("../fixtures/ivtc/excluded.txt");
 const DECISIONS: &str = include_str!("../fixtures/ivtc/decisions.txt");
 const DECIMATE_METRICS: &str = include_str!("../fixtures/ivtc/decimate_metrics.txt");
+const DECIMATE_DROPS: &str = include_str!("../fixtures/ivtc/decimate_drops.txt");
 const LUMA_SAMPLES: usize = 64 * 32;
 const CHROMA_SAMPLES: usize = 32 * 16;
 
@@ -219,4 +220,49 @@ fn decimate_metric_fixture(line: &str) -> DecimateMetricFixture {
 /// Every VDecimate metric `decimate_metrics.txt` lists.
 pub fn decimate_metric_fixtures() -> Vec<DecimateMetricFixture> {
     DECIMATE_METRICS.lines().map(decimate_metric_fixture).collect()
+}
+
+/// VDecimate's choice for cycle `cycle` of clip `clip`, which has `length` frames.
+///
+/// `matched` is true when VDecimate read VFM's output of the clip. `drop` is the dropped frame's index within
+/// the cycle and `outputs` are the input frame numbers the cycle emits.
+pub struct DecimateDropFixture {
+    pub clip: String,
+    pub matched: bool,
+    pub block_x: usize,
+    pub block_y: usize,
+    pub chroma: bool,
+    pub dupthresh: f64,
+    pub scthresh: f64,
+    pub cycle: usize,
+    pub length: usize,
+    pub drop: usize,
+    pub outputs: Vec<usize>,
+}
+
+fn decimate_drop_fixture(line: &str) -> DecimateDropFixture {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    assert!(words.len() > 15, "a decimate_drops.txt line has outputs: {line}");
+
+    DecimateDropFixture {
+        clip: words[1].to_string(),
+        matched: decimate_source(words[2]),
+        block_x: words[3].parse().expect("blockx"),
+        block_y: words[4].parse().expect("blocky"),
+        chroma: flag(words[5]),
+        dupthresh: words[6].parse().expect("dupthresh"),
+        scthresh: words[7].parse().expect("scthresh"),
+        cycle: words[9].parse().expect("cycle"),
+        length: words[11].parse().expect("length"),
+        drop: words[13].parse().expect("drop"),
+        outputs: words[15..]
+            .iter()
+            .map(|word| word.parse().expect("output"))
+            .collect(),
+    }
+}
+
+/// Every VDecimate cycle choice `decimate_drops.txt` lists.
+pub fn decimate_drop_fixtures() -> Vec<DecimateDropFixture> {
+    DECIMATE_DROPS.lines().map(decimate_drop_fixture).collect()
 }

@@ -1,3 +1,8 @@
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the tests use the drop rule so far")
+)]
+mod decimation;
 mod decision;
 pub(crate) mod matching;
 mod metrics;

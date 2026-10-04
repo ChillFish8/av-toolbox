@@ -4,10 +4,12 @@ mod reference;
 mod synthetic;
 
 pub use self::fixtures::{
+    DecimateDropFixture,
     DecimateMetricFixture,
     DecisionFixture,
     MapFixture,
     MaskFixture,
+    decimate_drop_fixtures,
     decimate_metric_fixtures,
     excluded_map_fixtures,
     map_fixtures,

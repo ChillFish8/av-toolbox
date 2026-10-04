@@ -97,6 +97,7 @@ pub use self::eedi3::{
 };
 pub use self::hysteresis::reference_hysteresis;
 pub use self::ivtc::{
+    DecimateDropFixture,
     DecimateMetricFixture,
     DecisionFixture,
     IntPlane,
@@ -105,6 +106,7 @@ pub use self::ivtc::{
     SyntheticClip,
     VfmMetrics,
     VfmSettings,
+    decimate_drop_fixtures,
     decimate_metric_fixtures,
     excluded_map_fixtures,
     map_fixtures,
