@@ -14,6 +14,7 @@
 //! - [reduce] for the extremes and sums of a plane.
 //! - [histogram] for percentiles.
 //! - [hysteresis] for keeping the connected regions of a mask that hold a seed.
+//! - [ivtc] for the weaves and metrics of inverse telecine, the way VIVTC's VFM and VDecimate compute them.
 //! - [lineart] for the per-pixel steps of the lineart filters.
 //! - [sobel] for image gradients.
 //! - [values] for moving integer planes into f32 code values and back.
@@ -38,6 +39,7 @@ mod dispatch;
 pub mod edges;
 pub mod histogram;
 pub mod hysteresis;
+pub mod ivtc;
 pub mod labels;
 pub mod lineart;
 pub mod neighbourhood;

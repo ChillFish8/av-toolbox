@@ -8,6 +8,7 @@ mod edges;
 mod eedi2;
 mod eedi3;
 mod hysteresis;
+mod ivtc;
 mod lineart;
 mod neighbourhood;
 mod padding;
@@ -95,6 +96,15 @@ pub use self::eedi3::{
     worked_edge_plane,
 };
 pub use self::hysteresis::reference_hysteresis;
+pub use self::ivtc::{
+    IntPlane,
+    SyntheticClip,
+    reference_difference,
+    reference_match_weave,
+    reference_weave,
+    scene_difference,
+    synthetic_clips,
+};
 pub use self::lineart::{
     reference_clamped_merge,
     reference_darken,

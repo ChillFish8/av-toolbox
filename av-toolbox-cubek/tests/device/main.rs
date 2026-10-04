@@ -11,6 +11,7 @@ mod depth;
 mod edges;
 mod histogram;
 mod hysteresis;
+mod ivtc;
 mod labels;
 mod lineart;
 mod neighbourhood;
