@@ -4,20 +4,29 @@ mod reference;
 mod synthetic;
 
 pub use self::fixtures::{
+    DecimateMetricFixture,
     DecisionFixture,
     MapFixture,
     MaskFixture,
+    decimate_metric_fixtures,
     excluded_map_fixtures,
     map_fixtures,
     mask_fixtures,
     vfm_decisions,
 };
-pub use self::pipeline::{VfmMetrics, VfmSettings, reference_field_sums, reference_vfm_metrics};
+pub use self::pipeline::{
+    VfmMetrics,
+    VfmSettings,
+    reference_field_sums,
+    reference_vfm_metrics,
+    vfm_matched_frames,
+};
 pub use self::reference::{
     IntPlane,
     reference_chroma_into_luma,
     reference_comb_mask,
     reference_compare_plane,
+    reference_decimate_metric,
     reference_difference,
     reference_match_weave,
     reference_mic,
@@ -29,7 +38,7 @@ pub use self::synthetic::{SyntheticClip, synthetic_clips, synthetic_film_frame};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ivtc::{ComparePass, FieldSums};
+    use crate::ivtc::{ComparePass, DecimateMetric, FieldSums};
 
     const CLIPS: &str = include_str!("../fixtures/ivtc/clips.txt");
     const SCENE: &str = include_str!("../fixtures/ivtc/scene.txt");
@@ -309,5 +318,63 @@ mod tests {
         }
 
         assert!(compared > 0, "every plain compare summed to nothing");
+    }
+
+    /// The planes of frame `frame` of `frames`, borrowed.
+    fn planes_of(frames: &[[Vec<i32>; 3]], frame: usize) -> [&[i32]; 3] {
+        let planes = &frames[frame];
+
+        [&planes[0], &planes[1], &planes[2]]
+    }
+
+    #[test]
+    fn every_decimate_metric_matches_the_harness() {
+        let fixtures = decimate_metric_fixtures();
+        let dims = [(WIDTH, HEIGHT), (WIDTH / 2, HEIGHT / 2), (WIDTH / 2, HEIGHT / 2)];
+
+        let mut checked = 0;
+        for clip in synthetic_clips() {
+            let matched_frames = vfm_matched_frames(&clip);
+            let clip_fixtures = fixtures.iter().filter(|fixture| fixture.clip == clip.name);
+            for fixture in clip_fixtures {
+                let frames = if fixture.matched {
+                    &matched_frames
+                } else {
+                    &clip.frames
+                };
+                let previous = planes_of(frames, fixture.frame.saturating_sub(1));
+                let current = planes_of(frames, fixture.frame);
+                let planes = if fixture.chroma { 3 } else { 1 };
+
+                let metric = reference_decimate_metric(
+                    previous,
+                    current,
+                    dims,
+                    planes,
+                    fixture.block_x,
+                    fixture.block_y,
+                    (1, 1),
+                );
+
+                let expected = DecimateMetric {
+                    max_block: fixture.max_block,
+                    total: fixture.total,
+                };
+                assert_eq!(
+                    metric,
+                    expected,
+                    "{} matched {} blocks {}x{} chroma {} frame {}",
+                    clip.name,
+                    fixture.matched,
+                    fixture.block_x,
+                    fixture.block_y,
+                    fixture.chroma,
+                    fixture.frame,
+                );
+                checked += 1;
+            }
+        }
+
+        assert_eq!(checked, fixtures.len());
     }
 }

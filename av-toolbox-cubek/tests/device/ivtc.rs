@@ -1,10 +1,13 @@
 use av_toolbox_cubek::ivtc::{
+    BlockPlanes,
     ChromaMasks,
     CombPlanes,
     ComparePass,
     ComparePlanes,
+    DecimateMetric,
     DifferencePlanes,
     FieldSums,
+    HalfBlocks,
     MicBlocks,
     MicPlanes,
     WeavePlanes,
@@ -14,6 +17,8 @@ use av_toolbox_cubek::ivtc::{
     compare_fields,
     compare_sums_len,
     difference_sums,
+    half_block_differences,
+    half_block_grid,
     mic,
     mic_count_len,
     segments,
@@ -24,6 +29,7 @@ use av_toolbox_cubek::testing::{
     MapFixture,
     MaskFixture,
     SyntheticClip,
+    decimate_metric_fixtures,
     excluded_map_fixtures,
     map_fixtures,
     mask_fixtures,
@@ -33,6 +39,7 @@ use av_toolbox_cubek::testing::{
     reference_difference,
     reference_match_weave,
     synthetic_clips,
+    vfm_matched_frames,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -889,4 +896,125 @@ fn a_4_2_2_chroma_plane_compares_as_the_reference_does() {
     }
 
     assert_ne!(summed.first.combing, 0, "no compare saw any combing");
+}
+
+/// One frame against the one before it, on as many planes as `previous` holds, each `dims` across and down.
+struct DecimateCells {
+    previous: Vec<Vec<f32>>,
+    current: Vec<Vec<f32>>,
+    dims: Vec<(u32, u32)>,
+    halves: Vec<HalfBlocks>,
+}
+
+impl BuildTask for DecimateCells {
+    type Output = DecimateMetric;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let (luma_width, luma_height) = self.dims[0];
+        let (across, down) = half_block_grid(luma_width, luma_height, self.halves[0]);
+        let cell_count = across as usize * down as usize;
+
+        let mut cells = vec![0u64; cell_count];
+        for plane_index in 0..self.previous.len() {
+            let (width, height) = self.dims[plane_index];
+            let previous = upload_f32(client, &self.previous[plane_index]);
+            let current = upload_f32(client, &self.current[plane_index]);
+            let plane_cells = empty(client, cell_count * size_of::<u32>());
+
+            let planes = BlockPlanes {
+                previous: plane(&previous, width, height),
+                current: plane(&current, width, height),
+                cells: plane(&plane_cells, across, down),
+            };
+            half_block_differences(client, &sizing, planes, self.halves[plane_index], across);
+
+            cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+            let found = read_u32(client, &plane_cells);
+            for (cell, value) in cells.iter_mut().zip(found) {
+                *cell += u64::from(value);
+            }
+        }
+
+        DecimateMetric::from_cells(&cells, across as usize, down as usize)
+    }
+}
+
+#[test]
+fn device_metrics_match_the_reference() {
+    let fixtures = decimate_metric_fixtures();
+    let dims = [(64, 32), (32, 16), (32, 16)];
+
+    let mut checked = 0;
+    for clip in synthetic_clips() {
+        let matched_frames = vfm_matched_frames(&clip);
+        let clip_fixtures = fixtures.iter().filter(|fixture| fixture.clip == clip.name);
+        for fixture in clip_fixtures {
+            let frames = if fixture.matched {
+                &matched_frames
+            } else {
+                &clip.frames
+            };
+            let planes = if fixture.chroma { 3 } else { 1 };
+            let previous = &frames[fixture.frame.saturating_sub(1)];
+            let current = &frames[fixture.frame];
+            let luma_half = HalfBlocks {
+                x: fixture.block_x as u32 / 2,
+                y: fixture.block_y as u32 / 2,
+            };
+            let chroma_half = HalfBlocks {
+                x: luma_half.x / 2,
+                y: luma_half.y / 2,
+            };
+            let task = DecimateCells {
+                previous: previous[..planes]
+                    .iter()
+                    .map(|samples| to_floats(samples))
+                    .collect(),
+                current: current[..planes]
+                    .iter()
+                    .map(|samples| to_floats(samples))
+                    .collect(),
+                dims: dims[..planes].to_vec(),
+                halves: [luma_half, chroma_half, chroma_half][..planes].to_vec(),
+            };
+
+            let found = backend().build(task);
+
+            let expected = DecimateMetric {
+                max_block: fixture.max_block,
+                total: fixture.total,
+            };
+            assert_eq!(
+                found, expected,
+                "{} matched {} blocks {}x{} chroma {} frame {}",
+                clip.name, fixture.matched, fixture.block_x, fixture.block_y, fixture.chroma, fixture.frame,
+            );
+            checked += 1;
+        }
+    }
+
+    assert_eq!(checked, fixtures.len());
+}
+
+#[test]
+fn the_largest_half_block_of_sixteen_bit_samples_fits_a_cell() {
+    let samples = 512 * 512;
+    let task = DecimateCells {
+        previous: vec![vec![65535.0; samples]],
+        current: vec![vec![0.0; samples]],
+        dims: vec![(512, 512)],
+        halves: vec![HalfBlocks { x: 256, y: 256 }],
+    };
+
+    let found = backend().build(task);
+
+    let cell = 256 * 256 * 65535;
+    let expected = DecimateMetric {
+        max_block: 4 * cell,
+        total: 4 * cell,
+    };
+    assert_eq!(found, expected);
 }

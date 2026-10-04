@@ -4,6 +4,7 @@ const MASKS: &str = include_str!("../fixtures/ivtc/masks.txt");
 const MAPS: &str = include_str!("../fixtures/ivtc/maps.txt");
 const EXCLUDED: &str = include_str!("../fixtures/ivtc/excluded.txt");
 const DECISIONS: &str = include_str!("../fixtures/ivtc/decisions.txt");
+const DECIMATE_METRICS: &str = include_str!("../fixtures/ivtc/decimate_metrics.txt");
 const LUMA_SAMPLES: usize = 64 * 32;
 const CHROMA_SAMPLES: usize = 32 * 16;
 
@@ -137,7 +138,7 @@ fn flag(word: &str) -> bool {
     match word {
         "0" => false,
         "1" => true,
-        _ => panic!("a decisions.txt flag is 0 or 1, not {word}"),
+        _ => panic!("a fixture flag is 0 or 1, not {word}"),
     }
 }
 
@@ -171,4 +172,51 @@ fn decision_fixture(line: &str) -> DecisionFixture {
 /// Every `vfmProcess` run `decisions.txt` lists.
 pub fn vfm_decisions() -> Vec<DecisionFixture> {
     DECISIONS.lines().map(decision_fixture).collect()
+}
+
+/// VDecimate's `calcMetric` of frame `frame` of clip `clip` against the frame before it.
+///
+/// `matched` is true when VDecimate read VFM's output of the clip, and false when it read the clip itself.
+pub struct DecimateMetricFixture {
+    pub clip: String,
+    pub matched: bool,
+    pub block_x: usize,
+    pub block_y: usize,
+    pub chroma: bool,
+    pub frame: usize,
+    pub max_block: i64,
+    pub total: i64,
+}
+
+fn decimate_source(word: &str) -> bool {
+    match word {
+        "raw" => false,
+        "matched" => true,
+        _ => panic!("a decimate_metrics.txt source is raw or matched, not {word}"),
+    }
+}
+
+fn decimate_metric_fixture(line: &str) -> DecimateMetricFixture {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!(
+        words.len(),
+        11,
+        "a decimate_metrics.txt line has 11 words: {line}"
+    );
+
+    DecimateMetricFixture {
+        clip: words[1].to_string(),
+        matched: decimate_source(words[2]),
+        block_x: words[3].parse().expect("blockx"),
+        block_y: words[4].parse().expect("blocky"),
+        chroma: flag(words[5]),
+        frame: words[6].parse().expect("frame"),
+        max_block: words[8].parse().expect("maxbdiff"),
+        total: words[10].parse().expect("totdiff"),
+    }
+}
+
+/// Every VDecimate metric `decimate_metrics.txt` lists.
+pub fn decimate_metric_fixtures() -> Vec<DecimateMetricFixture> {
+    DECIMATE_METRICS.lines().map(decimate_metric_fixture).collect()
 }

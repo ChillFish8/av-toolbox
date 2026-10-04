@@ -1,8 +1,10 @@
+mod blocks;
 mod combed;
 mod compare;
 mod difference;
 mod weave;
 
+pub use self::blocks::{BlockPlanes, DecimateMetric, HalfBlocks, half_block_differences, half_block_grid};
 pub use self::combed::{
     ChromaMasks,
     CombPlanes,

@@ -97,6 +97,7 @@ pub use self::eedi3::{
 };
 pub use self::hysteresis::reference_hysteresis;
 pub use self::ivtc::{
+    DecimateMetricFixture,
     DecisionFixture,
     IntPlane,
     MapFixture,
@@ -104,12 +105,14 @@ pub use self::ivtc::{
     SyntheticClip,
     VfmMetrics,
     VfmSettings,
+    decimate_metric_fixtures,
     excluded_map_fixtures,
     map_fixtures,
     mask_fixtures,
     reference_chroma_into_luma,
     reference_comb_mask,
     reference_compare_plane,
+    reference_decimate_metric,
     reference_difference,
     reference_field_sums,
     reference_match_weave,
@@ -120,6 +123,7 @@ pub use self::ivtc::{
     synthetic_clips,
     synthetic_film_frame,
     vfm_decisions,
+    vfm_matched_frames,
 };
 pub use self::lineart::{
     reference_clamped_merge,

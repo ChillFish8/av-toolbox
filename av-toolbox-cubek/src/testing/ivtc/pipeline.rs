@@ -1,3 +1,4 @@
+use super::fixtures::vfm_decisions;
 use super::reference::{
     IntPlane,
     reference_chroma_into_luma,
@@ -159,4 +160,35 @@ pub fn reference_vfm_metrics(clip: &SyntheticClip, frame: usize, settings: &VfmS
         current_scene,
         next_scene,
     }
+}
+
+/// VFM's output of a synthetic clip, each frame woven with the match VFM chose under its default settings.
+pub fn vfm_matched_frames(clip: &SyntheticClip) -> Vec<[Vec<i32>; 3]> {
+    let decisions: Vec<_> = vfm_decisions()
+        .into_iter()
+        .filter(|decision| decision.clip == clip.name)
+        .filter(|decision| decision.mode == 1 && decision.micmatch == 1 && !decision.opposite)
+        .collect();
+    let field = clip.order as usize;
+
+    let mut matched_frames = Vec::with_capacity(clip.frames.len());
+    for frame in 0..clip.frames.len() {
+        let found = decisions.iter().find(|decision| decision.frame == frame);
+        let Some(decision) = found else {
+            panic!(
+                "decisions.txt has no default decision for {} frame {frame}",
+                clip.name
+            );
+        };
+        let frames = window(clip, frame);
+
+        let woven = std::array::from_fn(|plane_index| {
+            let [previous, current, next] = plane_window(frames, plane_index);
+            let samples = [previous.samples, current.samples, next.samples];
+            reference_match_weave(samples, current.width, current.height, decision.matched, field)
+        });
+        matched_frames.push(woven);
+    }
+
+    matched_frames
 }

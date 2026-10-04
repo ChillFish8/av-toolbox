@@ -1,4 +1,4 @@
-use crate::ivtc::{ComparePass, FieldSums, MatchSums};
+use crate::ivtc::{ComparePass, DecimateMetric, FieldSums, MatchSums};
 
 /// One plane of integer code values, `width` samples across.
 #[derive(Debug, Clone, Copy)]
@@ -450,4 +450,66 @@ pub fn reference_compare_plane(frames: [IntPlane<'_>; 3], pass: &ComparePass) ->
     }
 
     (sums, map)
+}
+
+/// VDecimate's `calcMetric` of `current` against `previous`, over the first `planes` planes.
+///
+/// `dims` holds each plane's width and height, and `shifts` the chroma subsampling across and down. Each
+/// plane sums `|previous - current|` over its half blocks into one grid sized from the luma plane.
+pub fn reference_decimate_metric(
+    previous: [&[i32]; 3],
+    current: [&[i32]; 3],
+    dims: [(usize, usize); 3],
+    planes: usize,
+    block_x: usize,
+    block_y: usize,
+    shifts: (u32, u32),
+) -> DecimateMetric {
+    let (luma_width, luma_height) = dims[0];
+    let across = luma_width.div_ceil(block_x / 2);
+    let down = luma_height.div_ceil(block_y / 2);
+    let mut cells = vec![0i64; across * down];
+
+    for plane_index in 0..planes {
+        let (width, height) = dims[plane_index];
+        let mut half_x = block_x / 2;
+        let mut half_y = block_y / 2;
+        if plane_index > 0 {
+            half_x /= 1 << shifts.0;
+            half_y /= 1 << shifts.1;
+        }
+
+        let previous_plane = previous[plane_index];
+        let current_plane = current[plane_index];
+        for y in 0..height {
+            let row_start = y * width;
+            let cell_row = y / half_y;
+            let starts = (0..width).step_by(half_x).enumerate();
+            for (cell_column, x) in starts {
+                let end = usize::min(width, x + half_x);
+                let mut accumulator = 0i32;
+                for column in x..end {
+                    let index = row_start + column;
+                    let difference = previous_plane[index] - current_plane[index];
+                    accumulator += difference.abs();
+                }
+
+                cells[cell_row * across + cell_column] += i64::from(accumulator);
+            }
+        }
+    }
+
+    let mut max_block = -1i64;
+    for row in 0..down.saturating_sub(1) {
+        for column in 0..across.saturating_sub(1) {
+            let top = row * across + column;
+            let bottom = top + across;
+            let window = cells[top] + cells[top + 1] + cells[bottom] + cells[bottom + 1];
+            max_block = max_block.max(window);
+        }
+    }
+
+    let total = cells.iter().sum();
+
+    DecimateMetric { max_block, total }
 }
