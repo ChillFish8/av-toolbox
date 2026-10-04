@@ -1,14 +1,19 @@
+use std::time::Duration;
+
 use av_toolbox_cubek::deinterlace::BwdifField;
 use av_toolbox_cubek::testing::{
     BwdifReferencePlanes,
+    DecimateDropFixture,
     SyntheticClip,
     VfmSettings,
+    decimate_drop_fixtures,
     reference_bwdif,
     reference_match_weave,
     reference_vfm_metrics,
     synthetic_clips,
     synthetic_film_frame,
     vfm_decisions,
+    vfm_matched_frames,
 };
 use av_toolbox_filters::testing::VfmDecision;
 use av_toolbox_gpu::{
@@ -37,6 +42,7 @@ use crate::support::{
 };
 
 const STAGE: &str = "ivtc/match";
+const DECIMATE: &str = "ivtc/decimate";
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 32;
 const FILM_FRAMES: usize = 10;
@@ -464,4 +470,338 @@ fn a_grey_stream_matches_on_luma_alone() {
     let outputs = run(json!({}), format, vec![inputs]);
 
     assert_matches_the_reference(&clip, &format, &outputs, false);
+}
+
+/// The time of frame `k` at `numerator / denominator` frames a second, truncated to whole nanoseconds.
+fn frame_time(k: u64, numerator: u32, denominator: u32) -> Duration {
+    let nanos = u128::from(k) * u128::from(denominator) * 1_000_000_000 / u128::from(numerator);
+    let nanos = u64::try_from(nanos).expect("the time fits in nanoseconds");
+
+    Duration::from_nanos(nanos)
+}
+
+/// `format` with one frame in five dropped, so 30000/1001 becomes 24000/1001.
+fn decimated(format: FrameFormat) -> FrameFormat {
+    let frame_rate = format
+        .frame_rate
+        .and_then(|rate| FrameRate::new(rate.numerator() * 4, rate.denominator() * 5));
+
+    FrameFormat { frame_rate, ..format }
+}
+
+fn run_decimate(args: serde_json::Value, input: FrameFormat, inputs: Vec<Input>) -> Vec<Output> {
+    let backend = backend();
+    let output = decimated(input);
+    let filter = built_filter(&backend, DECIMATE, input, output, args);
+    let stream = Stream {
+        filter,
+        input,
+        output,
+        chunks: vec![inputs],
+    };
+
+    backend.build(stream)
+}
+
+/// The outputs of one stage as the inputs of the next.
+fn chained(outputs: Vec<Output>) -> Vec<Input> {
+    outputs
+        .into_iter()
+        .map(|output| Input {
+            meta: output.meta,
+            planes: output.planes,
+        })
+        .collect()
+}
+
+/// Each of `frames` as an input of `format`, frame `k` stamped at `timestamp(k)`.
+fn timed_inputs(
+    format: &FrameFormat,
+    frames: &[[Vec<i32>; 3]],
+    timestamp: impl Fn(u64) -> Duration,
+) -> Vec<Input> {
+    let plane_count = format.channels().len();
+
+    frames
+        .iter()
+        .enumerate()
+        .map(|(index, planes)| {
+            let index = index as u64;
+            let meta = FrameMeta {
+                timestamp: Some(timestamp(index)),
+                ..FrameMeta::at(index)
+            };
+
+            Input {
+                meta,
+                planes: planes[..plane_count]
+                    .iter()
+                    .map(|plane| encoded_plane(format, plane))
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// Every input frame `ivtc/decimate` emits for `clip`, in order, by the harness's cycle choices.
+fn harness_outputs(fixtures: &[&DecimateDropFixture]) -> Vec<usize> {
+    let mut cycles = fixtures.to_vec();
+    cycles.sort_by_key(|fixture| fixture.cycle);
+
+    cycles
+        .iter()
+        .flat_map(|fixture| fixture.outputs.iter().copied())
+        .collect()
+}
+
+/// Whether `first` and `second` are drop fixtures of the same clip, source and settings.
+fn same_run(first: &DecimateDropFixture, second: &DecimateDropFixture) -> bool {
+    first.clip == second.clip
+        && first.matched == second.matched
+        && first.block_x == second.block_x
+        && first.block_y == second.block_y
+        && first.chroma == second.chroma
+        && first.dupthresh == second.dupthresh
+        && first.scthresh == second.scthresh
+}
+
+/// The harness's cycle choices for `clip` under VDecimate's defaults, with or without chroma.
+fn default_drops(fixtures: &[DecimateDropFixture], clip: &str, chroma: bool) -> Vec<usize> {
+    let defaults: Vec<&DecimateDropFixture> = fixtures
+        .iter()
+        .filter(|fixture| fixture.clip == clip && fixture.matched && fixture.chroma == chroma)
+        .filter(|fixture| fixture.block_x == 32 && fixture.block_y == 32)
+        .filter(|fixture| fixture.dupthresh == 1.1 && fixture.scthresh == 15.0)
+        .collect();
+    assert!(
+        !defaults.is_empty(),
+        "the harness has no default drops for {clip}"
+    );
+
+    harness_outputs(&defaults)
+}
+
+/// Which input each of `outputs` is, from its timestamp of whole seconds.
+fn source_frames(outputs: &[Output]) -> Vec<usize> {
+    outputs
+        .iter()
+        .map(|output| {
+            let timestamp = output.meta.timestamp.expect("the output keeps its timestamp");
+            timestamp.as_secs() as usize
+        })
+        .collect()
+}
+
+fn assert_shows(format: &FrameFormat, output: &Output, expected: &[Vec<i32>; 3], label: &str) {
+    for (plane_index, bytes) in output.planes.iter().enumerate() {
+        let found = decoded_plane(format, bytes);
+
+        assert_eq!(found, expected[plane_index], "{label} plane {plane_index}");
+    }
+}
+
+/// Runs the matched frames of `clip` through `ivtc/decimate` with `args`, each stamped with its own index
+/// in seconds at an unknown rate, so an output's timestamp names its input.
+fn decimate_matched(clip: &SyntheticClip, grey: bool, args: serde_json::Value) -> (FrameFormat, Vec<Output>) {
+    let format = FrameFormat {
+        frame_rate: None,
+        ..progressive(clip_format(clip, grey))
+    };
+    let matched_frames = vfm_matched_frames(clip);
+    let inputs = timed_inputs(&format, &matched_frames, Duration::from_secs);
+
+    let outputs = run_decimate(args, format, inputs);
+
+    (format, outputs)
+}
+
+#[test]
+fn a_matched_clip_decimates_to_its_film_frames() {
+    let fixtures = decimate_drop_fixtures();
+    let first = Duration::from_secs(3);
+
+    for name in ["tff_8", "bff_8"] {
+        let clip = clip_named(name);
+        let format = clip_format(&clip, false);
+        let frames = &clip.frames;
+        let inputs = timed_inputs(&format, frames, |k| first + frame_time(k, 30000, 1001));
+
+        let matched = run(json!({}), format, vec![inputs]);
+        let tail = matched[10..].to_vec();
+        let progressive_format = progressive(format);
+        let outputs = run_decimate(json!({}), progressive_format, chained(matched));
+
+        assert_eq!(
+            decimated(progressive_format).frame_rate,
+            FrameRate::new(24000, 1001)
+        );
+        assert_eq!(outputs.len(), 9, "{name}");
+
+        for (film, output) in outputs[..8].iter().enumerate() {
+            let film_frame = synthetic_film_frame(name, film);
+            assert_shows(&format, output, &film_frame, &format!("{name} film frame {film}"));
+        }
+
+        let expected_drops = default_drops(&fixtures, name, true);
+        let kept_tail = expected_drops[8] - 10;
+        assert_eq!(outputs[8].planes, tail[kept_tail].planes, "{name} tail");
+
+        for (k, output) in outputs.iter().enumerate() {
+            let expected = first + frame_time(k as u64, 24000, 1001);
+
+            assert_eq!(output.meta.timestamp, Some(expected), "{name} output {k}");
+        }
+    }
+}
+
+#[test]
+fn the_device_drops_the_harness_drops() {
+    let fixtures = decimate_drop_fixtures();
+
+    let mut checked = 0;
+    for clip in synthetic_clips() {
+        let raw_format = FrameFormat {
+            frame_rate: None,
+            ..clip_format(&clip, false)
+        };
+        let raw_inputs = timed_inputs(&raw_format, &clip.frames, Duration::from_secs);
+        let matched_frames = vfm_matched_frames(&clip);
+
+        let heads = fixtures
+            .iter()
+            .filter(|fixture| fixture.clip == clip.name && fixture.cycle == 0);
+        for head in heads {
+            let run_fixtures: Vec<&DecimateDropFixture> = fixtures
+                .iter()
+                .filter(|fixture| same_run(fixture, head))
+                .collect();
+            let expected = harness_outputs(&run_fixtures);
+            let args = json!({
+                "chroma": head.chroma,
+                "dupthresh": head.dupthresh,
+                "scthresh": head.scthresh,
+                "blockx": head.block_x,
+                "blocky": head.block_y,
+            });
+            let label = format!(
+                "{} matched {} blocks {}x{} chroma {} dupthresh {} scthresh {}",
+                clip.name,
+                head.matched,
+                head.block_x,
+                head.block_y,
+                head.chroma,
+                head.dupthresh,
+                head.scthresh,
+            );
+
+            let (format, outputs) = if head.matched {
+                decimate_matched(&clip, false, args)
+            } else {
+                let outputs = run_decimate(args, raw_format, raw_inputs.clone());
+                (raw_format, outputs)
+            };
+
+            let sources = if head.matched {
+                &matched_frames
+            } else {
+                &clip.frames
+            };
+
+            assert_eq!(source_frames(&outputs), expected, "{label}");
+            for (output, source) in outputs.iter().zip(&expected) {
+                assert_shows(&format, output, &sources[*source], &label);
+            }
+
+            checked += run_fixtures.len();
+        }
+    }
+
+    assert_eq!(checked, fixtures.len());
+}
+
+#[test]
+fn a_short_last_cycle_drops_one_frame() {
+    for name in ["tff_8", "bff_8"] {
+        let clip = clip_named(name);
+
+        let (_, outputs) = decimate_matched(&clip, false, json!({}));
+
+        assert_eq!(outputs.len(), 4 + 4 + 1, "{name}");
+    }
+}
+
+#[test]
+fn a_one_frame_tail_is_dropped() {
+    let mut clip = clip_named("tff_8");
+    clip.frames.truncate(11);
+
+    let (_, outputs) = decimate_matched(&clip, false, json!({}));
+
+    assert_eq!(outputs.len(), 4 + 4);
+    assert!(source_frames(&outputs).iter().all(|source| *source < 10));
+}
+
+#[test]
+fn an_unknown_rate_keeps_input_timestamps() {
+    let clip = clip_named("tff_8");
+    let format = FrameFormat {
+        frame_rate: None,
+        ..progressive(clip_format(&clip, false))
+    };
+    let matched_frames = vfm_matched_frames(&clip);
+    let timestamp = |k: u64| Duration::from_millis(500 + 7 * k * k);
+    let inputs = timed_inputs(&format, &matched_frames, timestamp);
+
+    let outputs = run_decimate(json!({}), format, inputs);
+
+    let fixtures = decimate_drop_fixtures();
+    let expected = default_drops(&fixtures, "tff_8", true);
+    assert_eq!(outputs.len(), expected.len());
+    for (output, source) in outputs.iter().zip(expected) {
+        let expected_timestamp = timestamp(source as u64);
+
+        assert_eq!(output.meta.timestamp, Some(expected_timestamp), "input {source}");
+    }
+}
+
+#[test]
+fn a_ten_bit_clip_decimates_like_the_harness() {
+    let clip = clip_named("tff_10");
+    let format = clip_format(&clip, false);
+    let inputs = timed_inputs(&format, &clip.frames, |k| frame_time(k, 30000, 1001));
+
+    let matched = run(json!({}), format, vec![inputs]);
+    let outputs = run_decimate(json!({}), progressive(format), chained(matched));
+
+    let fixtures = decimate_drop_fixtures();
+    let expected = default_drops(&fixtures, "tff_10", true);
+    let matched_frames = vfm_matched_frames(&clip);
+    assert_eq!(outputs.len(), expected.len());
+    for (k, (output, source)) in outputs.iter().zip(expected).enumerate() {
+        let label = format!("output {k} from input {source}");
+        let expected_timestamp = frame_time(k as u64, 24000, 1001);
+
+        assert_shows(&format, output, &matched_frames[source], &label);
+        assert_eq!(output.meta.timestamp, Some(expected_timestamp), "{label}");
+    }
+}
+
+#[test]
+fn a_grey_stream_counts_luma_alone() {
+    let clip = clip_named("tff_8");
+
+    let (format, outputs) = decimate_matched(&clip, true, json!({}));
+
+    let fixtures = decimate_drop_fixtures();
+    let expected = default_drops(&fixtures, "tff_8", false);
+    let matched_frames = vfm_matched_frames(&clip);
+    assert_eq!(source_frames(&outputs), expected);
+    for (output, source) in outputs.iter().zip(&expected) {
+        assert_shows(
+            &format,
+            output,
+            &matched_frames[*source],
+            &format!("input {source}"),
+        );
+    }
 }

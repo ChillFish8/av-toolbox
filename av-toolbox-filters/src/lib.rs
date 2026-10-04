@@ -18,6 +18,8 @@
 //! - `deinterlace/bwdif` rebuilds progressive frames from interlaced fields, the way bwdif does, at the
 //!   input's rate or at one frame per field.
 //! - `ivtc/match` rebuilds telecined film frames by field matching, the way VIVTC's VFM does.
+//! - `ivtc/decimate` drops one frame in every cycle, the one most likely to be a duplicate, the way VIVTC's
+//!   VDecimate does.
 //! - `lineart/darken` darkens thin lines, as vs-jetpack's fast_line_darken does.
 //! - `lineart/thin` warp-sharpens only on lines, to thin them.
 //! - `lineart/toon` darkens lines by a warp-thinned map of how dark they are, as havsfunc's Toon does.
@@ -76,6 +78,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<dering::Hq>()?;
     registry.register_filter::<deinterlace::Bwdif>()?;
     registry.register_filter::<ivtc::Match>()?;
+    registry.register_filter::<ivtc::Decimate>()?;
     registry.register_filter::<lineart::Darken>()?;
     registry.register_filter::<lineart::Thin>()?;
     registry.register_filter::<lineart::Toon>()?;
@@ -127,6 +130,7 @@ mod tests {
         assert!(registered("dering/hq"));
         assert!(registered("deinterlace/bwdif"));
         assert!(registered("ivtc/match"));
+        assert!(registered("ivtc/decimate"));
         assert!(registered("lineart/darken"));
         assert!(registered("lineart/thin"));
         assert!(registered("lineart/toon"));

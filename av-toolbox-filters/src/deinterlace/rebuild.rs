@@ -50,6 +50,28 @@ pub(crate) fn channel_plane<'a>(
     }
 }
 
+/// Widens `source`, whose samples are `element`s, into a new f32 scratch plane.
+pub(crate) fn widened_plane<R: Runtime>(
+    client: &ComputeClient<R>,
+    context: &FrameContext,
+    source: &Plane,
+    element: Element,
+) -> Scratch {
+    let (width, height) = source.dimensions();
+    let values = Scratch::new::<f32>(context, width, height);
+    let sizing = Sizing(context);
+
+    let source_handle = source.buffer().handle();
+
+    // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
+    let source_plane = unsafe { DevicePlane::new(source_handle, width, height) };
+    let values_plane = values.plane();
+
+    widen(client, &sizing, source_plane, values_plane, element);
+
+    values
+}
+
 /// Runs `pass` on `current` once for each of `fields`, keeping the rows that field keeps.
 ///
 /// It gives one new plane per field, in the order of `fields`.
@@ -126,19 +148,7 @@ impl<R: Runtime> FieldRebuilder<R> {
 
     /// Widens `source` into a new f32 scratch plane.
     pub(crate) fn widened(&self, context: &FrameContext, source: &Plane) -> Scratch {
-        let (width, height) = source.dimensions();
-        let values = Scratch::new::<f32>(context, width, height);
-        let sizing = Sizing(context);
-
-        let source_handle = source.buffer().handle();
-
-        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let source_plane = unsafe { DevicePlane::new(source_handle, width, height) };
-        let values_plane = values.plane();
-
-        widen(&self.client, &sizing, source_plane, values_plane, self.element);
-
-        values
+        widened_plane(&self.client, context, source, self.element)
     }
 
     /// Narrows `values` into a new plane of the input's sample format.

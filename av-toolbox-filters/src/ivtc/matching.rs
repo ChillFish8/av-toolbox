@@ -51,6 +51,7 @@ use crate::deinterlace::spatial::{
     checked_predictor,
     checked_predictor_planes,
 };
+use crate::ivtc::checks::checked_block;
 use crate::ivtc::decision::{C, Decision};
 use crate::ivtc::metrics::{Gathered, MetricGatherer, MetricSettings, WindowPlanes};
 use crate::masked::{INPUT, checked_input, missing_input};
@@ -71,12 +72,6 @@ const MIN_ROWS: u32 = 4;
 
 /// The narrowest luma VFM's field compare can leave its 8 edge columns out of.
 const MIN_COLUMNS: u32 = 16;
-
-/// The smallest block a mic counts in, along either axis.
-const SMALLEST_BLOCK: u32 = 4;
-
-/// The largest block a mic counts in, along either axis.
-const LARGEST_BLOCK: u32 = 512;
 
 /// VFM's names for its raw match numbers.
 const MATCH_NAMES: [&str; 5] = ["p", "c", "n", "b", "u"];
@@ -195,14 +190,6 @@ pub(crate) struct MatchArgs {
     pub(crate) fallback: Fallback,
 }
 
-fn not_a_block(name: &str, value: u32) -> StageError {
-    let message = format!(
-        "{STAGE} needs {name} to be a power of 2 between {SMALLEST_BLOCK} and {LARGEST_BLOCK}, got {value}"
-    );
-
-    StageError::msg(message)
-}
-
 fn exclusion_reversed(y0: u32, y1: u32) -> StageError {
     let message = format!("{STAGE} needs y0 to be at most y1, got {y0} and {y1}");
 
@@ -260,22 +247,13 @@ fn bad_frame(error: FrameError) -> StageError {
     StageError::msg(message)
 }
 
-fn checked_block(name: &str, value: u32) -> Result<(), StageError> {
-    let in_range = (SMALLEST_BLOCK..=LARGEST_BLOCK).contains(&value);
-    if in_range && value.is_power_of_two() {
-        return Ok(());
-    }
-
-    Err(not_a_block(name, value))
-}
-
 /// Refuses any argument outside its range.
 fn checked_arguments(args: &MatchArgs) -> Result<(), StageError> {
     between_u32(STAGE, "mode", args.mode, 0, 5)?;
     between_u32(STAGE, "micmatch", args.micmatch, 0, 2)?;
     between_i32(STAGE, "cthresh", args.cthresh, -1, 255)?;
-    checked_block("blockx", args.blockx)?;
-    checked_block("blocky", args.blocky)?;
+    checked_block(STAGE, "blockx", args.blockx)?;
+    checked_block(STAGE, "blocky", args.blocky)?;
 
     let block_samples = args.blockx * args.blocky;
     between_u32(STAGE, "mi", args.mi, 0, block_samples)?;
