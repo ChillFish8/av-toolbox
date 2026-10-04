@@ -42,12 +42,20 @@ use serde::Deserialize;
 
 use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
 use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane};
-use crate::deinterlace::spatial::{Spatial, checked_predictor, checked_predictor_planes};
+use crate::deinterlace::spatial::{Spatial, SpatialStage, checked_predictor, checked_predictor_planes};
 use crate::masked::{INPUT, checked_input, missing_input};
 use crate::planes::ChannelName;
 use crate::selection::{PlaneDefault, selected_planes};
 
 pub(crate) const STAGE: &str = "deinterlace/bwdif";
+
+/// Names `deinterlace/bwdif` in a refusal of its `spatial`.
+#[derive(Debug)]
+pub(crate) struct BwdifSpatial;
+
+impl SpatialStage for BwdifSpatial {
+    const STAGE: &'static str = STAGE;
+}
 
 /// The field a stream shows first.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Deserialize, JsonSchema)]
@@ -83,7 +91,7 @@ pub(crate) struct BwdifArgs {
     pub(crate) planes: Option<Vec<ChannelName>>,
     /// Where each rebuilt row's spatial prediction comes from, bwdif's own cubic when not given.
     #[serde(default)]
-    pub(crate) spatial: Spatial,
+    pub(crate) spatial: Spatial<BwdifSpatial>,
 }
 
 fn describe_order(found: Option<FieldOrder>) -> String {

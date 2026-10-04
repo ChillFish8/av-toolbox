@@ -40,6 +40,8 @@ const STAGE: &str = "ivtc/match";
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 32;
 const FILM_FRAMES: usize = 10;
+/// The video frames of one 3:2 cadence cycle.
+const CYCLE: usize = 5;
 const MATCH_NAMES: [&str; 5] = ["p", "c", "n", "b", "u"];
 
 fn clip_named(name: &str) -> SyntheticClip {
@@ -248,6 +250,23 @@ fn assert_matches_the_reference(
     }
 }
 
+/// How many different frames `outputs` holds.
+fn distinct_frames(format: &FrameFormat, outputs: &[Output]) -> usize {
+    let mut distinct: Vec<Vec<Vec<i32>>> = Vec::new();
+    for output in outputs {
+        let planes: Vec<Vec<i32>> = output
+            .planes
+            .iter()
+            .map(|bytes| decoded_plane(format, bytes))
+            .collect();
+        if !distinct.contains(&planes) {
+            distinct.push(planes);
+        }
+    }
+
+    distinct.len()
+}
+
 #[test]
 fn a_telecined_clip_matches_back_to_its_film_frames() {
     for name in ["tff_8", "bff_8"] {
@@ -273,6 +292,17 @@ fn a_telecined_clip_matches_back_to_its_film_frames() {
             });
 
             assert!(shown, "{name} film frame {film} never comes out");
+        }
+
+        let (cycles, _) = outputs.as_chunks::<CYCLE>();
+        for (cycle, outputs) in cycles.iter().enumerate() {
+            let shown = distinct_frames(&format, outputs);
+
+            assert_eq!(
+                shown,
+                CYCLE - 1,
+                "{name} cycle {cycle} shows {shown} distinct frames"
+            );
         }
     }
 }

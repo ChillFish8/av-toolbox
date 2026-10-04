@@ -267,6 +267,8 @@ fn field_differences(first: IntPlane<'_>, second: IntPlane<'_>, start_row: usize
 }
 
 /// `buildDiffMap`'s value for difference row `row` and column `x`, 0, 1, 3 or 5.
+///
+/// The loops and their early exits follow `buildDiffMap`.
 fn map_value(differences: &[i32], width: usize, height: usize, row: usize, x: usize, shift: u32) -> u8 {
     let low = 3 << shift;
     let high = 19 << shift;
@@ -295,7 +297,6 @@ fn map_value(differences: &[i32], width: usize, height: usize, row: usize, x: us
         return value;
     }
 
-    // This loop's early exit decides which of `upper` and `lower` get set, so it is kept exactly.
     let mut upper = false;
     let mut lower = false;
     count = 0;

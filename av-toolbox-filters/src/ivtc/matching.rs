@@ -44,7 +44,13 @@ use crate::bits::bits_of;
 use crate::checks::{between_i32, between_u32};
 use crate::deinterlace::bwdif::{Order, resolved_order};
 use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane};
-use crate::deinterlace::spatial::{Predictor, Spatial, checked_predictor, checked_predictor_planes};
+use crate::deinterlace::spatial::{
+    Predictor,
+    Spatial,
+    SpatialStage,
+    checked_predictor,
+    checked_predictor_planes,
+};
 use crate::ivtc::decision::{C, Decision};
 use crate::ivtc::metrics::{Gathered, MetricGatherer, MetricSettings, WindowPlanes};
 use crate::masked::{INPUT, checked_input, missing_input};
@@ -52,14 +58,24 @@ use crate::scratch::Scratch;
 
 pub(crate) const STAGE: &str = "ivtc/match";
 
+/// Names `ivtc/match` in a refusal of its fallback's `spatial`.
+#[derive(Debug)]
+pub(crate) struct MatchSpatial;
+
+impl SpatialStage for MatchSpatial {
+    const STAGE: &'static str = STAGE;
+}
+
 /// The fewest rows a plane may have.
 const MIN_ROWS: u32 = 4;
 
-/// The fewest luma columns VFM's field compare can skip its 8 edge columns on either side of.
+/// The narrowest luma VFM's field compare can leave its 8 edge columns out of.
 const MIN_COLUMNS: u32 = 16;
 
-/// The smallest and largest block a mic counts in, along either axis.
+/// The smallest block a mic counts in, along either axis.
 const SMALLEST_BLOCK: u32 = 4;
+
+/// The largest block a mic counts in, along either axis.
 const LARGEST_BLOCK: u32 = 512;
 
 /// VFM's names for its raw match numbers.
@@ -82,8 +98,9 @@ pub(crate) enum MatchingField {
 pub(crate) enum Fallback {
     /// Rebuilt from its matching field by bwdif.
     Bwdif {
+        /// Where each rebuilt row's spatial prediction comes from, bwdif's own cubic when not given.
         #[serde(default)]
-        spatial: Spatial,
+        spatial: Spatial<MatchSpatial>,
     },
     /// Emitted as it is.
     None {},
@@ -164,7 +181,7 @@ pub(crate) struct MatchArgs {
     /// The first luma row of the band the field compare leaves out, at most `y1`.
     #[serde(default = "default_exclusion")]
     pub(crate) y0: u32,
-    /// The last luma row of the band the field compare leaves out. Equal to `y0`, nothing is left out.
+    /// The last luma row of the band the field compare leaves out. Nothing is left out when it equals `y0`.
     #[serde(default = "default_exclusion")]
     pub(crate) y1: u32,
     /// The scene change threshold, a percentage between 0 and 100.
@@ -609,7 +626,8 @@ impl<R: Runtime> Matcher<R> {
         let name = MATCH_NAMES[matched].to_owned();
         meta.attach("match", MetaValue::String(name));
         meta.attach("combed", MetaValue::Bool(combed));
-        meta.attach("mic", MetaValue::Int(i64::from(mic)));
+        let mic_value = i64::from(mic);
+        meta.attach("mic", MetaValue::Int(mic_value));
         meta.attach("scene_change", MetaValue::Bool(metrics.scene_change));
 
         let built = Frame::from_planes(self.output, planes, meta);

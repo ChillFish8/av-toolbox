@@ -36,6 +36,12 @@ pub fn upload_f16<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Hand
     client.create_from_slice(&bytes)
 }
 
+pub fn upload_u32<R: Runtime>(client: &ComputeClient<R>, values: &[u32]) -> Handle {
+    let bytes = u32::as_bytes(values);
+
+    client.create_from_slice(bytes)
+}
+
 pub fn upload_u8<R: Runtime>(client: &ComputeClient<R>, values: &[u8]) -> Handle {
     client.create_from_slice(values)
 }

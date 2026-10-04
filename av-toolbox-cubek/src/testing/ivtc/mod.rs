@@ -249,7 +249,7 @@ mod tests {
             };
 
             let (plane_sums, plane_map) = reference_compare_plane(frames, &pass);
-            sums = sums.add(plane_sums);
+            sums += plane_sums;
             *map = plane_map;
         }
 

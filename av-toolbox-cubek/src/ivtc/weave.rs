@@ -31,8 +31,8 @@ pub struct WeavePlanes<'a> {
     pub output: DevicePlane<'a>,
 }
 
-/// Builds `planes.output` from the rows of parity `matching_parity` of `planes.matching` and the other rows of
-/// `planes.other`.
+/// Builds `planes.output` from the rows of parity `matching_parity` of `planes.matching` and the other
+/// rows of `planes.other`.
 pub fn weave<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,

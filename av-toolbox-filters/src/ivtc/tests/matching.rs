@@ -120,11 +120,11 @@ fn an_unknown_argument_is_refused() {
 
 #[test]
 fn field_takes_same_or_opposite() {
-    assert_eq!(args(json!({ "field": "same" })).field, MatchingField::Same);
-    assert_eq!(
-        args(json!({ "field": "opposite" })).field,
-        MatchingField::Opposite
-    );
+    let same = args(json!({ "field": "same" }));
+    let opposite = args(json!({ "field": "opposite" }));
+
+    assert_eq!(same.field, MatchingField::Same);
+    assert_eq!(opposite.field, MatchingField::Opposite);
 }
 
 #[test]
@@ -291,6 +291,15 @@ fn a_bad_fallback_setting_is_refused_naming_the_stage() {
 
     assert!(message.contains(STAGE), "{message}");
     assert!(message.contains("maxd"), "{message}");
+}
+
+#[test]
+fn a_bad_fallback_threshold_count_names_the_stage() {
+    let value = json!({ "fallback": { "kind": "bwdif", "spatial": { "kind": "eedi3", "vthresh": [1, 2] } } });
+    let parsed = serde_json::from_value::<MatchArgs>(value);
+    let message = parsed.expect_err("two thresholds").to_string();
+
+    assert_eq!(message, format!("{STAGE} needs vthresh of 3 numbers, got 2"));
 }
 
 #[test]

@@ -141,9 +141,9 @@ pub(crate) struct PairSums {
     pub(crate) previous_next: FieldSums,
 }
 
-/// What VFM measures of one frame before it decides.
+/// The field compare sums, mics and scene change flag of one frame.
 ///
-/// `mics` holds each match's mic by raw match number. `scene_change` is only ever set under micmatch 1.
+/// `mics` holds each match's mic by raw match number. `scene_change` marks a frame VFM sees as a new scene.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FrameMetrics {
     pub(crate) pairs: PairSums,

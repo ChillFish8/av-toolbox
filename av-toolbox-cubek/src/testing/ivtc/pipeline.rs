@@ -32,8 +32,8 @@ pub struct VfmSettings {
 
 /// What VFM measures of one frame before it decides.
 ///
-/// `sums` holds the field compare sums of each of the settings' pairs, in order. `mics` holds each match's mic
-/// by raw match number. `current_scene` is the scene measure of the frame against the one before, and
+/// `sums` holds the field compare sums of each of the settings' pairs, in order. `mics` holds each match's
+/// mic by raw match number. `current_scene` is the scene measure of the frame against the one before, and
 /// `next_scene` the same for the next frame.
 pub struct VfmMetrics {
     pub sums: [FieldSums; 3],
@@ -91,7 +91,7 @@ pub fn reference_field_sums(
         let planes = plane_window(frames, plane_index);
 
         let (plane_sums, _) = reference_compare_plane(planes, &pass);
-        sums = sums.add(plane_sums);
+        sums += plane_sums;
     }
 
     sums
@@ -121,9 +121,9 @@ fn weave_mic(clip: &SyntheticClip, frame: usize, settings: &VfmSettings, matched
     let mut masks = masks.into_iter();
     let mut luma = masks.next().expect("a luma mask");
     if settings.chroma {
-        let u = masks.next().expect("a U mask");
-        let v = masks.next().expect("a V mask");
-        reference_chroma_into_luma(&mut luma, WIDTH, &u, &v, WIDTH / 2, HEIGHT / 2, 1, 1);
+        let u_mask = masks.next().expect("a U mask");
+        let v_mask = masks.next().expect("a V mask");
+        reference_chroma_into_luma(&mut luma, WIDTH, &u_mask, &v_mask, WIDTH / 2, HEIGHT / 2, 1, 1);
     }
 
     reference_mic(&luma, WIDTH, HEIGHT, BLOCK, BLOCK)

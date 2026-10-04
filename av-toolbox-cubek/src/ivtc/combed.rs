@@ -359,7 +359,8 @@ pub fn clear_mics<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatc
 /// Raises `results[slot]` to the mic of `planes.mask`, as VIVTC's `calcMI` counts it.
 ///
 /// The mic is the highest count of samples in any block of four offset grids whose mask is set on their own
-/// row and the rows above and below. `results[slot]` must be cleared first, with [clear_mics].
+/// row and the rows above and below. Each side of a block must be a power of 2. `results[slot]` must be
+/// cleared first, with [clear_mics].
 pub fn mic<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -371,8 +372,10 @@ pub fn mic<R: Runtime>(
     let height = planes.mask.height();
     assert!(height >= 3, "a mic needs 3 rows, the mask has {height}");
     assert!(
-        blocks.x > 0 && blocks.y > 0,
-        "a mic needs blocks of at least one sample"
+        blocks.x.is_power_of_two() && blocks.y.is_power_of_two(),
+        "a mic counts as calcMI does only with power of 2 blocks, not {} by {}",
+        blocks.x,
+        blocks.y,
     );
     assert_plane(&planes.mask, width, height, "mask");
 

@@ -6,7 +6,7 @@ use crate::{DevicePlane, Dispatch, assert_plane};
 
 /// How many columns one partial sum covers.
 ///
-/// 1024 columns of 16-bit samples, each up to 786 420 in a field compare, still fit a `u32`.
+/// A sum of 1024 values, each up to 6 × 65535 = 393 210, still fits a `u32`.
 pub const SEGMENT: u32 = 1024;
 
 /// How many partial sums cover one row `width` samples across.
@@ -78,8 +78,8 @@ pub fn difference_sums<R: Runtime>(
     let second = planes.second.array::<R>();
     let sums = planes.sums.array::<R>();
 
-    // Safety: both planes hold `width * height` f32 values, and each unit reads only its own row's segment and
-    // writes only its own sum.
+    // Safety: both planes hold `width * height` f32 values, and each unit reads only its own row's segment
+    // and writes only its own sum.
     unsafe {
         difference_sums_kernel::launch_unchecked::<R>(
             client,

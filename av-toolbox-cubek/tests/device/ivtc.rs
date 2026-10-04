@@ -27,6 +27,8 @@ use av_toolbox_cubek::testing::{
     excluded_map_fixtures,
     map_fixtures,
     mask_fixtures,
+    reference_chroma_into_luma,
+    reference_comb_mask,
     reference_compare_plane,
     reference_difference,
     reference_match_weave,
@@ -36,7 +38,7 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 use cubecl::server::Handle;
 
-use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32};
+use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32, upload_u32};
 
 fn to_floats(samples: &[i32]) -> Vec<f32> {
     samples.iter().map(|sample| *sample as f32).collect()
@@ -590,16 +592,14 @@ fn every_device_map_matches_the_harness() {
 fn device_sums_match_the_reference() {
     for fixture in every_map_fixture() {
         let outputs = device_compare(&fixture);
-        let mut found = FieldSums::default();
-        for output in &outputs {
-            let plane_sums = FieldSums::from_partials(&output.sums);
-            found = found.add(plane_sums);
-        }
+        let found: FieldSums = outputs
+            .iter()
+            .map(|output| FieldSums::from_partials(&output.sums))
+            .sum();
 
         let mut expected = FieldSums::default();
         for (frames, width, height, pass) in compare_inputs(&fixture) {
-            let plane_sums = reference_sums(&frames, width, height, &pass);
-            expected = expected.add(plane_sums);
+            expected += reference_sums(&frames, width, height, &pass);
         }
 
         assert_eq!(found, expected, "{}", map_name(&fixture));
@@ -639,4 +639,254 @@ fn a_wide_sixteen_bit_plane_sums_without_overflow() {
     assert_eq!(expected.first.combing, largest);
     assert_eq!(expected.first.motion, largest);
     assert_eq!(found, expected);
+}
+
+/// A pseudo-random mask with about one sample in `sparseness` set, the same for every `seed`.
+fn scattered_mask(width: usize, height: usize, sparseness: u32, seed: u32) -> Vec<u8> {
+    let mut state = seed.wrapping_mul(0x9e37_79b9) | 1;
+    let mut mask = Vec::with_capacity(width * height);
+    for _ in 0..width * height {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+
+        let is_set = state.is_multiple_of(sparseness);
+        mask.push(if is_set { 255 } else { 0 });
+    }
+
+    mask
+}
+
+fn to_words(mask: &[u8]) -> Vec<u32> {
+    mask.iter().map(|value| u32::from(*value)).collect()
+}
+
+/// One luma mask with U and V masks marked into it, the chroma subsampled by `shift_x` and `shift_y`.
+struct ChromaMarking {
+    luma: Vec<u8>,
+    u_mask: Vec<u8>,
+    v_mask: Vec<u8>,
+    shift_x: u32,
+    shift_y: u32,
+}
+
+impl BuildTask for ChromaMarking {
+    type Output = Vec<u8>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let chroma_width = LUMA_WIDTH >> self.shift_x;
+        let chroma_height = LUMA_HEIGHT >> self.shift_y;
+
+        let luma_words = to_words(&self.luma);
+        let u_words = to_words(&self.u_mask);
+        let v_words = to_words(&self.v_mask);
+        let luma = upload_u32(client, &luma_words);
+        let u_mask = upload_u32(client, &u_words);
+        let v_mask = upload_u32(client, &v_words);
+
+        let masks = ChromaMasks {
+            u: plane(&u_mask, chroma_width, chroma_height),
+            v: plane(&v_mask, chroma_width, chroma_height),
+            luma: plane(&luma, LUMA_WIDTH, LUMA_HEIGHT),
+        };
+        chroma_into_luma(client, &sizing, masks, self.shift_x, self.shift_y);
+
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        let marked = read_u32(client, &luma);
+        to_bytes(&marked)
+    }
+}
+
+#[test]
+fn chroma_marks_luma_as_the_reference_does_at_4_4_4_and_4_2_2() {
+    let luma_width = LUMA_WIDTH as usize;
+    let luma_height = LUMA_HEIGHT as usize;
+
+    for (shift_x, shift_y) in [(0, 0), (1, 0)] {
+        let chroma_width = luma_width >> shift_x;
+        let chroma_height = luma_height >> shift_y;
+        let luma = scattered_mask(luma_width, luma_height, 8, 1);
+        let u_mask = scattered_mask(chroma_width, chroma_height, 4, 2);
+        let v_mask = scattered_mask(chroma_width, chroma_height, 4, 3);
+
+        let mut expected = luma.clone();
+        reference_chroma_into_luma(
+            &mut expected,
+            luma_width,
+            &u_mask,
+            &v_mask,
+            chroma_width,
+            chroma_height,
+            shift_x,
+            shift_y,
+        );
+        assert_ne!(expected, luma, "shifts {shift_x}, {shift_y} mark nothing");
+
+        let task = ChromaMarking {
+            luma,
+            u_mask,
+            v_mask,
+            shift_x,
+            shift_y,
+        };
+        let found = backend().build(task);
+
+        assert_eq!(found, expected, "shifts {shift_x}, {shift_y}");
+    }
+}
+
+/// A plane `width` by `height` whose odd rows sit well above its even rows, with noise from `seed`.
+fn combed_plane(width: usize, height: usize, seed: u32) -> Vec<f32> {
+    let noise = scattered_mask(width, height, 3, seed);
+    let mut samples = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let gradient = (x * 3 + y * 5) % 120 + 40;
+            let comb = if y % 2 == 1 { 60 } else { 0 };
+            let speck = usize::from(noise[y * width + x] / 51);
+            samples.push((gradient + comb + speck) as f32);
+        }
+    }
+
+    samples
+}
+
+/// The comb masks of several planes, each its own width and height.
+struct CombMasks {
+    planes: Vec<(Vec<f32>, u32, u32)>,
+    cthresh: i32,
+}
+
+impl BuildTask for CombMasks {
+    type Output = Vec<Vec<u8>>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+
+        let mut launched = Vec::new();
+        for (samples, width, height) in &self.planes {
+            let bytes = samples.len() * size_of::<u32>();
+            let mask = empty(client, bytes);
+            let input = device_comb_mask(build, samples, &mask, (*width, *height), self.cthresh);
+            launched.push((input, mask));
+        }
+
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        launched
+            .iter()
+            .map(|(_, mask)| {
+                let marked = read_u32(client, mask);
+                to_bytes(&marked)
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn a_negative_cthresh_marks_every_plane_shape_as_the_reference_does() {
+    // Luma, then 4:4:4, 4:2:2 and 4:2:0 chroma.
+    let shapes = [(64, 32), (64, 32), (32, 32), (32, 16)];
+    let planes: Vec<(Vec<f32>, u32, u32)> = shapes
+        .iter()
+        .enumerate()
+        .map(|(seed, (width, height))| {
+            let samples = combed_plane(*width as usize, *height as usize, seed as u32);
+            (samples, *width, *height)
+        })
+        .collect();
+
+    let mut expected = Vec::new();
+    for (samples, width, height) in &planes {
+        let integers: Vec<i32> = samples.iter().map(|sample| *sample as i32).collect();
+        let plane = IntPlane {
+            samples: &integers,
+            width: *width as usize,
+            height: *height as usize,
+        };
+        expected.push(reference_comb_mask(plane, -1));
+    }
+
+    let task = CombMasks { planes, cthresh: -1 };
+    let found = backend().build(task);
+
+    assert_eq!(found, expected);
+}
+
+/// Every other column of luma plane of frame `frame` of `clip`, a 4:2:2 shaped chroma plane.
+fn halved_columns(clip: &SyntheticClip, frame: usize) -> Vec<i32> {
+    let luma = &clip.frames[frame][0];
+    let width = LUMA_WIDTH as usize;
+
+    luma.chunks_exact(width)
+        .flat_map(|row| row.iter().step_by(2))
+        .copied()
+        .collect()
+}
+
+/// Every field, match pair and excluded band a 4:2:2 chroma compare is tried with.
+fn chroma_compare_passes() -> Vec<ComparePass> {
+    let pairs = [(0, 1), (1, 2), (0, 2)];
+    let bands = [(16, 16), (8, 16)];
+
+    let mut passes = Vec::new();
+    for field in 0..2 {
+        for (first, second) in pairs {
+            for (exclude_from, exclude_to) in bands {
+                passes.push(ComparePass {
+                    first,
+                    second,
+                    field,
+                    exclude_from,
+                    exclude_to,
+                    start_x: 4,
+                    shift: 0,
+                });
+            }
+        }
+    }
+
+    passes
+}
+
+#[test]
+fn a_4_2_2_chroma_plane_compares_as_the_reference_does() {
+    let clip = clip_named("tff_8");
+    let width = LUMA_WIDTH / 2;
+    let height = LUMA_HEIGHT;
+
+    let mut summed = FieldSums::default();
+    for current in 1..=3 {
+        let frames = [current - 1, current, current + 1].map(|frame| halved_columns(&clip, frame));
+        for pass in chroma_compare_passes() {
+            let label = format!("frame {current} {pass:?}");
+            let task = FieldCompares {
+                planes: vec![ComparePlane {
+                    frames: frames.each_ref().map(|frame| to_floats(frame)),
+                    width,
+                    height,
+                    pass,
+                }],
+            };
+
+            let outputs = backend().build(task);
+            let found_sums = FieldSums::from_partials(&outputs[0].sums);
+            let planes = frames.each_ref().map(|frame| IntPlane {
+                samples: frame,
+                width: width as usize,
+                height: height as usize,
+            });
+            let (expected_sums, expected_map) = reference_compare_plane(planes, &pass);
+
+            assert_eq!(to_bytes(&outputs[0].map), expected_map, "{label}");
+            assert_eq!(found_sums, expected_sums, "{label}");
+
+            summed += expected_sums;
+        }
+    }
+
+    assert_ne!(summed.first.combing, 0, "no compare saw any combing");
 }

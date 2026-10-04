@@ -1,3 +1,6 @@
+use std::iter::Sum;
+use std::ops::{Add, AddAssign};
+
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
@@ -19,13 +22,27 @@ pub struct MatchSums {
     pub isolated: u64,
 }
 
-impl MatchSums {
+impl Add for MatchSums {
+    type Output = MatchSums;
+
     fn add(self, other: MatchSums) -> MatchSums {
         MatchSums {
             combing: self.combing + other.combing,
             motion: self.motion + other.motion,
             isolated: self.isolated + other.isolated,
         }
+    }
+}
+
+impl AddAssign for MatchSums {
+    fn add_assign(&mut self, other: MatchSums) {
+        *self = *self + other;
+    }
+}
+
+impl Sum for MatchSums {
+    fn sum<I: Iterator<Item = MatchSums>>(sums: I) -> MatchSums {
+        sums.fold(MatchSums::default(), Add::add)
     }
 }
 
@@ -36,18 +53,30 @@ pub struct FieldSums {
     pub second: MatchSums,
 }
 
-impl FieldSums {
-    #[expect(
-        clippy::should_implement_trait,
-        reason = "the sums are added by name, never with an operator"
-    )]
-    pub fn add(self, other: FieldSums) -> FieldSums {
+impl Add for FieldSums {
+    type Output = FieldSums;
+
+    fn add(self, other: FieldSums) -> FieldSums {
         FieldSums {
-            first: self.first.add(other.first),
-            second: self.second.add(other.second),
+            first: self.first + other.first,
+            second: self.second + other.second,
         }
     }
+}
 
+impl AddAssign for FieldSums {
+    fn add_assign(&mut self, other: FieldSums) {
+        *self = *self + other;
+    }
+}
+
+impl Sum for FieldSums {
+    fn sum<I: Iterator<Item = FieldSums>>(sums: I) -> FieldSums {
+        sums.fold(FieldSums::default(), Add::add)
+    }
+}
+
+impl FieldSums {
     /// Adds the partial sums [compare_fields] writes, [FIELD_SUMS] at a time, into one set of sums.
     pub fn from_partials(partials: &[u32]) -> FieldSums {
         assert!(
@@ -144,8 +173,7 @@ fn difference_at(differences: &Array<u32>, width: u32, column: u32, row: u32) ->
 
 /// `buildDiffMap`'s value for difference row `row` and column `x`, 0, 1, 3 or 5.
 ///
-/// The loops and their early exits follow `buildDiffMap`, since the early exits decide which neighbours
-/// count.
+/// The loops and their early exits follow `buildDiffMap`.
 #[cube]
 fn map_value(differences: &Array<u32>, width: u32, height: u32, row: u32, x: u32, shift: u32) -> u32 {
     let low = 3u32 << shift;
@@ -220,6 +248,7 @@ fn wide_value(differences: &Array<u32>, width: u32, height: u32, row: u32, x: u3
             if x > 4 {
                 first_column = x - 4;
             }
+
             let end_column = u32::min(x + 5, width);
 
             // The two outer rows are only read away from the edge rows, so neither read leaves the
@@ -327,6 +356,7 @@ fn field_sums_kernel(
     if field == 1 {
         other_row = 1u32;
     }
+
     let matched_row = other_row + 2 * pair;
     let kept_row = 3 - field + 2 * pair;
     let combing_threshold = 23u32 << shift;

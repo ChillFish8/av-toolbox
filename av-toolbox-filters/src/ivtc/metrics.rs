@@ -74,9 +74,9 @@ pub(crate) struct MetricSettings {
     pub(crate) scthresh: f64,
 }
 
-/// One window's frames as f32 planes, each frame's planes in channel order.
+/// The previous, current and next frames of one window as f32 planes, each frame's planes in channel order.
 ///
-/// `next_is_current` is set when the window's next frame is its current one, at the end of a chunk.
+/// `next_is_current` is set when `next` holds the current frame's own planes.
 pub(crate) struct WindowPlanes {
     pub(crate) previous: Vec<Scratch>,
     pub(crate) current: Vec<Scratch>,
@@ -198,11 +198,9 @@ impl<R: Runtime> MetricGatherer<R> {
             None => current_measure,
         };
 
-        Ok(is_scene_change(
-            current_measure,
-            next_measure,
-            self.settings.scthresh,
-        ))
+        let scene_change = is_scene_change(current_measure, next_measure, self.settings.scthresh);
+
+        Ok(scene_change)
     }
 
     /// The planes the field compare runs on, luma alone or every plane with `mchroma`.
@@ -218,8 +216,9 @@ impl<R: Runtime> MetricGatherer<R> {
     fn pair_sums(&self, context: &FrameContext, planes: &WindowPlanes) -> Result<PairSums, StageError> {
         let [current_previous, current_next, previous_next] = self.settings.pairs;
 
+        let current_previous_sums = self.field_sums(context, planes, current_previous)?;
         let mut sums = PairSums {
-            current_previous: self.field_sums(context, planes, current_previous)?,
+            current_previous: current_previous_sums,
             current_next: FieldSums::default(),
             previous_next: FieldSums::default(),
         };
@@ -286,7 +285,7 @@ impl<R: Runtime> MetricGatherer<R> {
             let read = self.read_u32(sums.plane());
             let partials = read.map_err(unreadable_field_sums)?;
             let plane_sums = FieldSums::from_partials(&partials);
-            total = total.add(plane_sums);
+            total += plane_sums;
         }
 
         Ok(total)

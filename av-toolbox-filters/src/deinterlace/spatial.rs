@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use av_toolbox_core::StageError;
 use av_toolbox_cubek::aa::{Eedi2Arguments, Eedi3Arguments};
 use av_toolbox_gpu::FrameFormat;
@@ -20,23 +22,28 @@ use crate::aa::eedi3::{
     thresholds_for,
 };
 use crate::aa::sangnom::{SangnomTuning, checked_sangnom_tuning};
-use crate::deinterlace::bwdif::STAGE;
 
-/// Where `deinterlace/bwdif` takes the spatial prediction of each rebuilt row from.
+/// The stage whose name a [Spatial] is refused under while it is read.
+pub(crate) trait SpatialStage {
+    const STAGE: &'static str;
+}
+
+/// Where the spatial prediction of each rebuilt row comes from.
 #[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-pub(crate) enum Spatial {
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields, bound = "")]
+#[schemars(rename = "Spatial", bound = "")]
+pub(crate) enum Spatial<S: SpatialStage> {
     /// bwdif's own cubic down each column.
     Cubic {},
     /// EEDI2's edge directed interpolation, with `aa/eedi2`'s defaults.
     Eedi2(Eedi2Tuning),
     /// EEDI3's edge directed interpolation, with `aa/eedi3`'s defaults.
-    Eedi3(Eedi3Spatial),
+    Eedi3(Eedi3Spatial<S>),
     /// SangNom's edge following interpolation, with `aa/sangnom`'s defaults.
     Sangnom(SangnomTuning),
 }
 
-impl Default for Spatial {
+impl<S: SpatialStage> Default for Spatial<S> {
     fn default() -> Self {
         Self::Cubic {}
     }
@@ -47,8 +54,9 @@ impl Default for Spatial {
 /// It is separate from [Eedi3Tuning](crate::aa::based::Eedi3Tuning) because that struct carries `aa/based`'s
 /// defaults.
 #[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Eedi3Spatial {
+#[serde(deny_unknown_fields, bound = "")]
+#[schemars(rename = "Eedi3Spatial", bound = "")]
+pub(crate) struct Eedi3Spatial<S: SpatialStage> {
     /// The weight of the neighbourhood cost, 0 or between 1e-30 and 1.
     #[serde(default = "default_alpha")]
     pub(crate) alpha: f64,
@@ -72,15 +80,20 @@ pub(crate) struct Eedi3Spatial {
     /// The three thresholds of the reliability check, each at least 1e-30.
     ///
     /// The first two are on the 8-bit scale.
-    #[serde(default = "default_vthresh", deserialize_with = "three_thresholds")]
+    #[serde(default = "default_vthresh", deserialize_with = "three_thresholds::<S, _>")]
     pub(crate) vthresh: [f64; 3],
+    #[serde(skip)]
+    #[schemars(skip)]
+    stage: PhantomData<S>,
 }
 
-fn three_thresholds<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[f64; 3], D::Error> {
-    thresholds_for(STAGE, deserializer)
+fn three_thresholds<'de, S: SpatialStage, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[f64; 3], D::Error> {
+    thresholds_for(S::STAGE, deserializer)
 }
 
-impl Eedi3Spatial {
+impl<S: SpatialStage> Eedi3Spatial<S> {
     pub(crate) fn tuning(&self) -> Eedi3Tuning {
         Eedi3Tuning {
             alpha: self.alpha,
@@ -104,7 +117,10 @@ pub(crate) enum Predictor {
 }
 
 /// The prediction `spatial` names, once its settings are checked, refusing them under `stage`.
-pub(crate) fn checked_predictor(stage: &str, spatial: &Spatial) -> Result<Predictor, StageError> {
+pub(crate) fn checked_predictor<S: SpatialStage>(
+    stage: &str,
+    spatial: &Spatial<S>,
+) -> Result<Predictor, StageError> {
     let predictor = match spatial {
         Spatial::Cubic {} => Predictor::Cubic,
         Spatial::Eedi2(tuning) => {
