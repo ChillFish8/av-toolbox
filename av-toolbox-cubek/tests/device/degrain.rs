@@ -35,17 +35,17 @@ const OUTPUT_TOLERANCE: f32 = 1e-3;
 
 /// The centre frame of a clip and the frames around it, as degrain reads them.
 #[derive(Clone)]
-struct Frames {
+pub(crate) struct Frames {
     /// Each frame's luma and first chroma plane, normalised.
     planes: Vec<[Vec<f32>; 2]>,
-    width: u32,
-    height: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     centre: usize,
     neighbours: Vec<usize>,
 }
 
 impl Frames {
-    fn new(clip: &MotionClip, centre: usize, neighbours: &[usize]) -> Self {
+    pub(crate) fn new(clip: &MotionClip, centre: usize, neighbours: &[usize]) -> Self {
         let planes = clip
             .frames
             .iter()
@@ -63,15 +63,15 @@ impl Frames {
 }
 
 /// What the device produced for one degrain run.
-struct Outputs {
+pub(crate) struct Outputs {
     /// Each neighbour's field, centre to neighbour.
-    fields: Vec<ReferenceField>,
-    luma: Vec<f32>,
+    pub(crate) fields: Vec<ReferenceField>,
+    pub(crate) luma: Vec<f32>,
     chroma: Vec<f32>,
 }
 
 /// Searches each neighbour against the centre and degrains the luma and first chroma plane.
-struct DegrainRun {
+pub(crate) struct DegrainRun {
     frames: Frames,
     motion: MotionSettings,
     settings: DegrainSettings,
@@ -79,7 +79,7 @@ struct DegrainRun {
 }
 
 impl DegrainRun {
-    fn new(frames: Frames, motion: MotionSettings, settings: DegrainSettings) -> Self {
+    pub(crate) fn new(frames: Frames, motion: MotionSettings, settings: DegrainSettings) -> Self {
         let weights_on = vec![true; frames.neighbours.len()];
 
         Self {

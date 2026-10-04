@@ -497,6 +497,26 @@ pub fn motion_clips() -> Vec<MotionClip> {
         .collect()
 }
 
+/// Which luma samples of frame `frame` of `clip` an object covers, row after row.
+///
+/// A clip without objects has none covered.
+pub fn object_mask(clip: &MotionClip, frame: usize) -> Vec<bool> {
+    let spec = CLIPS
+        .iter()
+        .find(|spec| spec.name == clip.name)
+        .expect("every clip has a spec");
+
+    let mut mask = Vec::with_capacity(clip.width * clip.height);
+    for row in 0..clip.height {
+        for column in 0..clip.width {
+            let object = covering_object(spec, frame, column as f64, row as f64);
+            mask.push(object.is_some());
+        }
+    }
+
+    mask
+}
+
 /// `samples` as values between 0 and 1, each code value divided by the peak for `bits`.
 pub fn normalised(samples: &[i32], bits: u32) -> Vec<f32> {
     let peak = peak_of(bits);

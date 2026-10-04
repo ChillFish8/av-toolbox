@@ -1,6 +1,8 @@
+mod metrics;
 mod reference;
 mod synthetic;
 
+pub use self::metrics::{psnr, psnr_within, vector_accuracy, write_luma_y4m};
 pub(crate) use self::reference::covering_along;
 pub use self::reference::{
     ReferenceField,
@@ -17,7 +19,7 @@ pub use self::reference::{
     reference_refine_seed,
     reference_search,
 };
-pub use self::synthetic::{MotionClip, motion_clips, normalised, write_motion_inputs};
+pub use self::synthetic::{MotionClip, motion_clips, normalised, object_mask, write_motion_inputs};
 use crate::motion::{ConfidenceScores, MotionEstimation, MotionSettings};
 
 /// The fields av-denoise wrote for one clip at one setting, each as little-endian bytes.

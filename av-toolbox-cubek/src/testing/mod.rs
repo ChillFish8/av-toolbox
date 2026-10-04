@@ -150,6 +150,9 @@ pub use self::motion::{
     half_pel_sample,
     motion_clips,
     normalised,
+    object_mask,
+    psnr,
+    psnr_within,
     reference_chain_seed,
     reference_clip_pyramids,
     reference_compensate,
@@ -161,6 +164,8 @@ pub use self::motion::{
     reference_refine_half_pel,
     reference_refine_seed,
     reference_search,
+    vector_accuracy,
+    write_luma_y4m,
     write_motion_inputs,
 };
 pub use self::neighbourhood::{

@@ -34,7 +34,7 @@ const OUTPUT_TOLERANCE: f32 = 1e-3;
 const WEIGHT_TOLERANCE: f32 = 1e-6;
 
 /// One plane compensated on the device.
-struct Case {
+pub(crate) struct Case {
     neighbour: Vec<f32>,
     width: u32,
     height: u32,
@@ -45,7 +45,7 @@ struct Case {
 }
 
 impl Case {
-    fn new(neighbour: Vec<f32>, size: (u32, u32), vectors: Vec<i32>, grid: BlockGrid) -> Self {
+    pub(crate) fn new(neighbour: Vec<f32>, size: (u32, u32), vectors: Vec<i32>, grid: BlockGrid) -> Self {
         Self {
             neighbour,
             width: size.0,
@@ -57,7 +57,7 @@ impl Case {
         }
     }
 
-    fn pel(self, pel: u32) -> Self {
+    pub(crate) fn pel(self, pel: u32) -> Self {
         Self { pel, ..self }
     }
 
@@ -80,8 +80,8 @@ impl Case {
 }
 
 /// Compensates every case on the device.
-struct CompensateRun {
-    cases: Vec<Case>,
+pub(crate) struct CompensateRun {
+    pub(crate) cases: Vec<Case>,
 }
 
 impl BuildTask for CompensateRun {
