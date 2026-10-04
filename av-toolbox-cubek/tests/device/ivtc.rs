@@ -1,12 +1,30 @@
-use av_toolbox_cubek::ivtc::{DifferencePlanes, WeavePlanes, difference_sums, segments, weave};
+use av_toolbox_cubek::ivtc::{
+    ChromaMasks,
+    CombPlanes,
+    DifferencePlanes,
+    MicBlocks,
+    MicPlanes,
+    WeavePlanes,
+    chroma_into_luma,
+    clear_mics,
+    comb_mask,
+    difference_sums,
+    mic,
+    mic_count_len,
+    segments,
+    weave,
+};
 use av_toolbox_cubek::testing::{
+    MaskFixture,
     SyntheticClip,
+    mask_fixtures,
     reference_difference,
     reference_match_weave,
     synthetic_clips,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
+use cubecl::server::Handle;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32};
 
@@ -186,4 +204,219 @@ fn a_wide_sixteen_bit_difference_fits_its_segments() {
 
     assert_eq!(partial_sums.len(), height as usize * segments(width) as usize);
     assert_eq!(total_of(&partial_sums), 7680 * 2 * 65535);
+}
+
+const LUMA_WIDTH: u32 = 64;
+const LUMA_HEIGHT: u32 = 32;
+const BLOCKS: MicBlocks = MicBlocks { x: 16, y: 16 };
+
+/// The three f32 planes of one match weave.
+struct Weaves {
+    luma: Vec<f32>,
+    u: Vec<f32>,
+    v: Vec<f32>,
+}
+
+/// The luma, U and V comb masks of one weave.
+struct Masks {
+    luma: Vec<u32>,
+    u: Vec<u32>,
+    v: Vec<u32>,
+}
+
+/// The comb masks of up to five weaves, each counted into the mic slot of its index.
+struct CombAndCount {
+    weaves: Vec<Weaves>,
+    cthresh: i32,
+}
+
+/// Builds the comb mask of one plane of a weave into `mask`, handing back the uploaded plane.
+fn device_comb_mask<R: Runtime>(
+    build: &BuildContext<R>,
+    input: &[f32],
+    mask: &Handle,
+    size: (u32, u32),
+    cthresh: i32,
+) -> Handle {
+    let client = build.client();
+    let sizing = Sizing(build.frame_context());
+    let (width, height) = size;
+    let input = upload_f32(client, input);
+
+    let planes = CombPlanes {
+        input: plane(&input, width, height),
+        mask: plane(mask, width, height),
+    };
+    comb_mask(client, &sizing, planes, cthresh);
+
+    input
+}
+
+impl BuildTask for CombAndCount {
+    type Output = (Vec<Masks>, Vec<u32>);
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let luma_size = (LUMA_WIDTH, LUMA_HEIGHT);
+        let chroma_size = (LUMA_WIDTH / 2, LUMA_HEIGHT / 2);
+        let luma_bytes = (LUMA_WIDTH * LUMA_HEIGHT) as usize * size_of::<u32>();
+        let chroma_bytes = luma_bytes / 4;
+        let count_len = mic_count_len(LUMA_WIDTH, LUMA_HEIGHT, BLOCKS);
+        let slots = self.weaves.len() as u32;
+
+        let counts = empty(client, count_len * size_of::<u32>());
+        let results = empty(client, slots as usize * size_of::<u32>());
+        clear_mics(client, &sizing, plane(&results, slots, 1));
+
+        let mut masks = Vec::new();
+        let mut inputs = Vec::new();
+        for (slot, weaves) in self.weaves.iter().enumerate() {
+            let luma = empty(client, luma_bytes);
+            let u = empty(client, chroma_bytes);
+            let v = empty(client, chroma_bytes);
+            inputs.push(device_comb_mask(
+                build,
+                &weaves.luma,
+                &luma,
+                luma_size,
+                self.cthresh,
+            ));
+            inputs.push(device_comb_mask(build, &weaves.u, &u, chroma_size, self.cthresh));
+            inputs.push(device_comb_mask(build, &weaves.v, &v, chroma_size, self.cthresh));
+
+            let chroma_masks = ChromaMasks {
+                u: plane(&u, chroma_size.0, chroma_size.1),
+                v: plane(&v, chroma_size.0, chroma_size.1),
+                luma: plane(&luma, LUMA_WIDTH, LUMA_HEIGHT),
+            };
+            chroma_into_luma(client, &sizing, chroma_masks, 1, 1);
+
+            let mic_planes = MicPlanes {
+                mask: plane(&luma, LUMA_WIDTH, LUMA_HEIGHT),
+                counts: plane(&counts, count_len as u32, 1),
+                results: plane(&results, slots, 1),
+            };
+            mic(client, &sizing, mic_planes, BLOCKS, slot as u32);
+
+            masks.push((luma, u, v));
+        }
+
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        let masks = masks
+            .iter()
+            .map(|(luma, u, v)| Masks {
+                luma: read_u32(client, luma),
+                u: read_u32(client, u),
+                v: read_u32(client, v),
+            })
+            .collect();
+        let mics = read_u32(client, &results);
+
+        (masks, mics)
+    }
+}
+
+/// The f32 planes of `fixture`'s weave, from its clip's synthetic frames.
+fn weaves_of(fixture: &MaskFixture) -> Weaves {
+    let clip = clip_named(&fixture.clip);
+    let mut planes = Vec::new();
+    for plane_index in 0..3 {
+        let frames = [
+            clip.frames[fixture.frame - 1][plane_index].as_slice(),
+            clip.frames[fixture.frame][plane_index].as_slice(),
+            clip.frames[fixture.frame + 1][plane_index].as_slice(),
+        ];
+        let width = if plane_index == 0 { 64 } else { 32 };
+        let height = if plane_index == 0 { 32 } else { 16 };
+        let woven = reference_match_weave(frames, width, height, fixture.matched, fixture.field);
+        planes.push(to_floats(&woven));
+    }
+
+    let [luma, u, v]: [Vec<f32>; 3] = planes.try_into().expect("three planes");
+    Weaves { luma, u, v }
+}
+
+fn fixture_name(fixture: &MaskFixture) -> String {
+    format!(
+        "{} frame {} field {} match {}",
+        fixture.clip, fixture.frame, fixture.field, fixture.matched,
+    )
+}
+
+fn to_bytes(mask: &[u32]) -> Vec<u8> {
+    mask.iter().map(|value| *value as u8).collect()
+}
+
+/// The fixtures in groups of the five matches of one frame and field, in match order.
+fn fixture_groups() -> Vec<Vec<MaskFixture>> {
+    let mut groups: Vec<Vec<MaskFixture>> = Vec::new();
+    for fixture in mask_fixtures() {
+        let starts_group = fixture.matched == 0;
+        if starts_group {
+            groups.push(Vec::new());
+        }
+
+        let group = groups.last_mut().expect("every group starts at match 0");
+        assert_eq!(group.len(), fixture.matched, "{}", fixture_name(&fixture));
+        group.push(fixture);
+    }
+
+    groups
+}
+
+fn comb_and_count(group: &[MaskFixture], cthresh: i32) -> (Vec<Masks>, Vec<u32>) {
+    let weaves = group.iter().map(weaves_of).collect();
+    let task = CombAndCount { weaves, cthresh };
+
+    backend().build(task)
+}
+
+fn assert_masks_match(group: &[MaskFixture], masks: &[Masks]) {
+    for (fixture, found) in group.iter().zip(masks) {
+        let name = fixture_name(fixture);
+
+        assert_eq!(to_bytes(&found.u), fixture.u, "{name} U");
+        assert_eq!(to_bytes(&found.v), fixture.v, "{name} V");
+        assert_eq!(to_bytes(&found.luma), fixture.luma, "{name} luma");
+    }
+}
+
+fn scaled_cthresh(clip: &str) -> i32 {
+    let bits = clip_named(clip).bits;
+    9 << (bits - 8)
+}
+
+#[test]
+fn every_device_mask_matches_the_harness() {
+    for group in fixture_groups() {
+        let cthresh = scaled_cthresh(&group[0].clip);
+        let (masks, _) = comb_and_count(&group, cthresh);
+
+        assert_masks_match(&group, &masks);
+    }
+}
+
+#[test]
+fn every_device_mic_matches_the_harness() {
+    for group in fixture_groups() {
+        let cthresh = scaled_cthresh(&group[0].clip);
+        let (_, mics) = comb_and_count(&group, cthresh);
+        let expected: Vec<u32> = group.iter().map(|fixture| fixture.mic).collect();
+
+        assert_eq!(mics, expected, "{}", fixture_name(&group[0]));
+    }
+}
+
+#[test]
+fn a_ten_bit_mask_scales_cthresh() {
+    let groups = fixture_groups()
+        .into_iter()
+        .filter(|group| group[0].clip == "tff_10");
+    for group in groups {
+        let (masks, _) = comb_and_count(&group, 9 << 2);
+
+        assert_masks_match(&group, &masks);
+    }
 }

@@ -98,9 +98,14 @@ pub use self::eedi3::{
 pub use self::hysteresis::reference_hysteresis;
 pub use self::ivtc::{
     IntPlane,
+    MaskFixture,
     SyntheticClip,
+    mask_fixtures,
+    reference_chroma_into_luma,
+    reference_comb_mask,
     reference_difference,
     reference_match_weave,
+    reference_mic,
     reference_weave,
     scene_difference,
     synthetic_clips,
