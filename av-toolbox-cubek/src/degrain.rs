@@ -1,6 +1,17 @@
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
+use thiserror::Error;
 
-use crate::motion::{BlockGrid, PlaneScale, assert_blocks, block_window, half_pel_sample, upper_block};
+use crate::motion::{
+    BlockGrid,
+    PlaneScale,
+    assert_blocks,
+    block_window,
+    half_pel_component,
+    half_pel_sample,
+    upper_block,
+};
 use crate::{DevicePlane, Dispatch};
 
 /// The most neighbours on each side of the centre frame.
@@ -35,7 +46,52 @@ impl Default for DegrainSettings {
     }
 }
 
+/// A degrain setting outside the range it supports.
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
+pub enum DegrainError {
+    #[error("temporal_radius is {0}, expected 1..={MAX_TEMPORAL_RADIUS}")]
+    TemporalRadius(u32),
+    #[error("thsad is {0}, expected a finite value above 0")]
+    Thsad(f32),
+    #[error("thsad_chroma is {0}, expected a finite value above 0")]
+    ThsadChroma(f32),
+    #[error("thscd1 is {0}, expected a finite value above 0")]
+    Thscd1(f32),
+    #[error("thscd2 is {0}, expected at most 255")]
+    Thscd2(u32),
+}
+
+/// Whether a threshold is finite and above 0.
+fn is_positive_threshold(value: f32) -> bool {
+    value.is_finite() && value > 0.0
+}
+
 impl DegrainSettings {
+    /// Refuses the first setting outside its range.
+    pub fn validate(&self) -> Result<(), DegrainError> {
+        if !(1..=MAX_TEMPORAL_RADIUS).contains(&self.temporal_radius) {
+            return Err(DegrainError::TemporalRadius(self.temporal_radius));
+        }
+
+        if !is_positive_threshold(self.thsad) {
+            return Err(DegrainError::Thsad(self.thsad));
+        }
+
+        if !is_positive_threshold(self.thsad_chroma) {
+            return Err(DegrainError::ThsadChroma(self.thsad_chroma));
+        }
+
+        if !is_positive_threshold(self.thscd1) {
+            return Err(DegrainError::Thscd1(self.thscd1));
+        }
+
+        if self.thscd2 > 255 {
+            return Err(DegrainError::Thscd2(self.thscd2));
+        }
+
+        Ok(())
+    }
+
     /// The luma or chroma threshold as a normalised block SAD.
     pub fn sad_threshold(&self, blksize: u32, chroma: bool) -> f32 {
         let value = if chroma { self.thsad_chroma } else { self.thsad };
@@ -53,8 +109,8 @@ fn normalised_threshold(value: f32, blksize: u32) -> f32 {
 
 /// One neighbour frame and the field finding the centre's blocks in it.
 ///
-/// `vectors` and `sads` are laid out as in [FieldPlanes](crate::motion::FieldPlanes). The field runs from the centre
-/// to the neighbour, for frames before and after the centre alike.
+/// `vectors` and `sads` are laid out as in [FieldPlanes](crate::motion::FieldPlanes). The field runs from
+/// the centre to the neighbour, for frames before and after the centre alike.
 pub struct DegrainNeighbour<'a> {
     pub plane: DevicePlane<'a>,
     pub vectors: DevicePlane<'a>,
@@ -133,7 +189,6 @@ fn degrain_kernel(
 
     let x = ABSOLUTE_POS as u32 % width;
     let y = ABSOLUTE_POS as u32 / width;
-    let half_units = comptime!((2 / pel) as i32);
 
     let upper_x = upper_block(x, step, across, shift_x);
     let upper_y = upper_block(y, step, down, shift_y);
@@ -162,8 +217,10 @@ fn degrain_kernel(
                         let sad = sads.index(index)[block];
                         let weight = window * device_degrain_weight(sad, threshold);
 
-                        let vector_x = (vectors.index(index)[block * 2] >> shift_x as i32) * half_units;
-                        let vector_y = (vectors.index(index)[block * 2 + 1] >> shift_y as i32) * half_units;
+                        let raw_x = vectors.index(index)[block * 2];
+                        let raw_y = vectors.index(index)[block * 2 + 1];
+                        let vector_x = half_pel_component(raw_x, shift_x, pel);
+                        let vector_y = half_pel_component(raw_y, shift_y, pel);
                         let value = half_pel_sample(
                             planes.index(index),
                             2 * x as i32 + vector_x,
@@ -185,11 +242,10 @@ fn degrain_kernel(
 
 /// Averages `centre` with its compensated `neighbours` into `output`.
 ///
-/// Each sample takes the blocks of `grid` covering it. A block
-/// weighs its window times 256 for the centre, and its window times its neighbour's
-/// [degrain_weight] for each neighbour. The sample is the weighted mean of the centre and each neighbour
-/// read at the block's vector. `weights_on` says which neighbours count, and a neighbour that is off weighs
-/// nothing.
+/// Each sample takes the blocks of `grid` covering it. A block weighs its window times 256 for the
+/// centre, and its window times its neighbour's [degrain_weight] for each neighbour. The sample is the
+/// weighted mean of the centre and each neighbour read at the block's vector. `weights_on` says which
+/// neighbours count, and a neighbour that is off weighs nothing.
 ///
 /// `chroma` picks `thsad_chroma` over `thsad`. The vectors and SADs are the luma field's, with `scale`
 /// shrinking the blocks and vectors onto a smaller plane. All the planes read and written share one scale
@@ -213,11 +269,9 @@ pub fn degrain<R: Runtime>(
 ) {
     assert!((1..=2).contains(&pel), "pel is {pel}, expected 1 or 2");
 
+    debug_assert_eq!(settings.validate(), Ok(()));
+
     let radius = settings.temporal_radius;
-    assert!(
-        (1..=MAX_TEMPORAL_RADIUS).contains(&radius),
-        "temporal_radius is {radius}, expected 1..={MAX_TEMPORAL_RADIUS}"
-    );
     assert_eq!(
         neighbours.len(),
         weights_on.len(),
@@ -299,6 +353,123 @@ mod tests {
             across: blocks,
             down: 1,
         }
+    }
+
+    fn refused(settings: DegrainSettings) -> String {
+        let error = settings.validate().expect_err("the settings should be refused");
+
+        error.to_string()
+    }
+
+    #[test]
+    fn the_default_settings_are_valid() {
+        DegrainSettings::default()
+            .validate()
+            .expect("the defaults should be valid");
+    }
+
+    #[test]
+    fn invalid_settings_are_refused_naming_the_setting() {
+        let defaults = DegrainSettings::default();
+        let cases = [
+            (
+                DegrainSettings {
+                    temporal_radius: 0,
+                    ..defaults
+                },
+                "temporal_radius",
+            ),
+            (
+                DegrainSettings {
+                    temporal_radius: MAX_TEMPORAL_RADIUS + 1,
+                    ..defaults
+                },
+                "temporal_radius",
+            ),
+            (
+                DegrainSettings {
+                    thsad: 0.0,
+                    ..defaults
+                },
+                "thsad is",
+            ),
+            (
+                DegrainSettings {
+                    thsad: -1.0,
+                    ..defaults
+                },
+                "thsad is",
+            ),
+            (
+                DegrainSettings {
+                    thsad: f32::NAN,
+                    ..defaults
+                },
+                "thsad is",
+            ),
+            (
+                DegrainSettings {
+                    thsad: f32::INFINITY,
+                    ..defaults
+                },
+                "thsad is",
+            ),
+            (
+                DegrainSettings {
+                    thsad_chroma: 0.0,
+                    ..defaults
+                },
+                "thsad_chroma",
+            ),
+            (
+                DegrainSettings {
+                    thsad_chroma: f32::NAN,
+                    ..defaults
+                },
+                "thsad_chroma",
+            ),
+            (
+                DegrainSettings {
+                    thscd1: 0.0,
+                    ..defaults
+                },
+                "thscd1",
+            ),
+            (
+                DegrainSettings {
+                    thscd1: f32::INFINITY,
+                    ..defaults
+                },
+                "thscd1",
+            ),
+            (
+                DegrainSettings {
+                    thscd2: 256,
+                    ..defaults
+                },
+                "thscd2",
+            ),
+        ];
+
+        for (settings, setting) in cases {
+            let message = refused(settings);
+
+            assert!(
+                message.starts_with(setting),
+                "{settings:?} was refused with `{message}`"
+            );
+        }
+    }
+
+    #[test]
+    fn the_largest_scene_change_share_is_valid() {
+        let settings = DegrainSettings {
+            thscd2: 255,
+            temporal_radius: MAX_TEMPORAL_RADIUS,
+            ..DegrainSettings::default()
+        };
+
+        settings.validate().expect("the largest values should be valid");
     }
 
     #[test]

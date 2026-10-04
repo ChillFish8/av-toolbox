@@ -9,29 +9,21 @@ use av_toolbox_cubek::motion::{
 };
 use av_toolbox_cubek::testing::{
     MotionClip,
+    OUTPUT_TOLERANCE,
     ReferenceField,
     ReferenceNeighbour,
+    largest_difference,
     motion_clips,
     normalised,
     reference_degrain,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 
-use crate::motion::{DeviceField, DevicePyramid};
+use crate::motion::{CHROMA, DeviceField, DevicePyramid};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
-
-const LUMA: PlaneScale = PlaneScale {
-    shift_x: 0,
-    shift_y: 0,
-};
-const CHROMA: PlaneScale = PlaneScale {
-    shift_x: 1,
-    shift_y: 1,
-};
-
-/// How far the device may sit from the CPU on a degrained sample.
-const OUTPUT_TOLERANCE: f32 = 1e-3;
 
 /// The centre frame of a clip and the frames around it, as degrain reads them.
 #[derive(Clone)]
@@ -144,7 +136,7 @@ impl BuildTask for DegrainRun {
         }
 
         let mut outputs = Vec::new();
-        for (index, scale) in [(0, LUMA), (1, CHROMA)] {
+        for (index, scale) in [(0, PlaneScale::LUMA), (1, CHROMA)] {
             let (plane_width, plane_height) = (width >> scale.shift_x, height >> scale.shift_y);
             let centre = upload_f32(client, &frames.planes[frames.centre][index]);
             let uploaded: Vec<_> = frames
@@ -192,23 +184,6 @@ impl BuildTask for DegrainRun {
     }
 }
 
-/// The largest difference between two planes, panicking past `tolerance`.
-fn largest_difference(found: &[f32], expected: &[f32], label: &str) -> f32 {
-    assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
-
-    let mut largest = 0.0f32;
-    for (index, (actual, wanted)) in found.iter().zip(expected).enumerate() {
-        let difference = (actual - wanted).abs();
-        assert!(
-            difference <= OUTPUT_TOLERANCE,
-            "{label} sample {index} was {actual}, expected {wanted} within {OUTPUT_TOLERANCE}"
-        );
-        largest = largest.max(difference);
-    }
-
-    largest
-}
-
 fn motion_of(pel: u32) -> MotionSettings {
     MotionSettings {
         pel,
@@ -223,7 +198,7 @@ fn the_device_matches_the_reference_on_the_noisy_clips() {
         .iter()
         .filter(|clip| clip.name.starts_with("noisy"))
     {
-        for (radius, pel) in [(1, 2), (2, 2), (1, 1)] {
+        for (radius, pel) in [(1, 2), (2, 2), (3, 2), (1, 1)] {
             let around: Vec<usize> = (4 - radius..4).chain(5..=4 + radius).collect();
             let frames = Frames::new(clip, 4, &around);
             let settings = DegrainSettings {
@@ -237,7 +212,9 @@ fn the_device_matches_the_reference_on_the_noisy_clips() {
             let run = DegrainRun::new(frames.clone(), motion, settings);
             let found = backend().build(run);
 
-            for (index, scale, found_plane) in [(0, LUMA, &found.luma), (1, CHROMA, &found.chroma)] {
+            for (index, scale, found_plane) in
+                [(0, PlaneScale::LUMA, &found.luma), (1, CHROMA, &found.chroma)]
+            {
                 let size = (
                     (frames.width >> scale.shift_x) as usize,
                     (frames.height >> scale.shift_y) as usize,
@@ -264,7 +241,9 @@ fn the_device_matches_the_reference_on_the_noisy_clips() {
                 );
 
                 let label = format!("{} radius {radius} pel {pel} plane {index}", clip.name);
-                let difference = largest_difference(found_plane, &expected, &label);
+                let plane_width = size.0 as u32;
+                let difference =
+                    largest_difference(found_plane, &expected, OUTPUT_TOLERANCE, plane_width, &label);
                 largest = largest.max(difference);
 
                 let unchanged = *found_plane == frames.planes[4][index];

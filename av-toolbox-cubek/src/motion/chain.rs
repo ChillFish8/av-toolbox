@@ -1,9 +1,11 @@
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 
 use super::{BlockGrid, FieldPlanes, assert_field, clamp_i32};
 use crate::Dispatch;
 
-/// The block of a grid `count` blocks long and `step` apart nearest `position`, clamped to the grid.
+/// The block of a grid, `count` blocks long and `step` apart, that contains `position` clamped into the grid.
 ///
 /// `span` is `count * step`. Clamping `position` into it finds the same block as clamping it into the
 /// frame, since only the last block reaches past the frame's edge.
@@ -72,7 +74,7 @@ fn chain_kernel(
 /// to `c` in `seed.vectors`.
 ///
 /// Each block follows `first` from its centre, then adds the vector of the block of `second` it lands
-/// in.
+/// in. Both fields must hold whole pixel vectors, as a search with `pel` 1 gives.
 pub fn chain<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,

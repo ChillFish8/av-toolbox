@@ -1,3 +1,5 @@
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 
 /// The two scalars a block's confidence is scored with, both on the normalised SAD scale.

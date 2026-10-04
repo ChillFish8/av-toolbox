@@ -22,7 +22,7 @@ mod sangnom;
 mod tests;
 mod tuning;
 
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 pub use self::artcnn::{
     GOLDEN_R8F64,
@@ -661,6 +661,63 @@ pub fn assert_plane_within(found: &[f32], expected: &[f32], tolerance: f32, widt
     let within = |actual: &f32, wanted: &f32| (actual - wanted).abs() <= tolerance;
 
     assert_first_match(found, expected, width, label, within);
+}
+
+/// How far a motion confidence may sit from another device's or the CPU's, as division rounds differently.
+pub const CONFIDENCE_ULPS: u32 = 2;
+
+/// How far a device may sit from the CPU on a compensated or degrained sample.
+pub const OUTPUT_TOLERANCE: f32 = 1e-3;
+
+/// Panics at the first value where `found` differs from `expected`, naming its field and place in it.
+///
+/// Every field holds `per_field` values.
+pub fn assert_fields<T: PartialEq + Debug>(found: &[T], expected: &[T], per_field: usize, label: &str) {
+    assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
+
+    let differing = found
+        .iter()
+        .zip(expected)
+        .position(|(actual, wanted)| actual != wanted);
+    if let Some(index) = differing {
+        let field = index / per_field;
+        let within = index % per_field;
+        panic!(
+            "{label} differs first in field {field} at value {within}: found {:?}, expected {:?}",
+            found[index], expected[index],
+        );
+    }
+}
+
+/// Panics at the first confidence further than [CONFIDENCE_ULPS] from `expected`.
+///
+/// Every field holds `per_field` confidences.
+pub fn assert_confidences(found: &[f32], expected: &[f32], per_field: usize, label: &str) {
+    assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
+
+    let differing = found
+        .iter()
+        .zip(expected)
+        .position(|(actual, wanted)| !within_ulps(*actual, *wanted, CONFIDENCE_ULPS));
+    if let Some(index) = differing {
+        let field = index / per_field;
+        let within = index % per_field;
+        panic!(
+            "{label} differs first in field {field} at block {within}: found {}, expected {}",
+            found[index], expected[index],
+        );
+    }
+}
+
+/// The largest difference between `found` and `expected`, a `width` wide plane, panicking past `tolerance`.
+pub fn largest_difference(found: &[f32], expected: &[f32], tolerance: f32, width: u32, label: &str) -> f32 {
+    assert_plane_within(found, expected, tolerance, width, label);
+
+    found
+        .iter()
+        .zip(expected)
+        .map(|(actual, wanted)| (actual - wanted).abs())
+        .fold(0.0f32, f32::max)
 }
 
 /// Panics at the first sample of a `width` wide plane where `matches` rejects `found` against `expected`.

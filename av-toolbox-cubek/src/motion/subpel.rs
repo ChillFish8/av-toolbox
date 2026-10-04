@@ -1,10 +1,12 @@
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 
 use super::search::assert_pyramids;
 use super::{BlockGrid, FieldPlanes, Pyramid, assert_field, clamp_i32};
 use crate::Dispatch;
 
-/// The luma of `plane` at the half pixel position `x2`, `y2`, clamped into the frame.
+/// The value of `plane` at the half pixel position `x2`, `y2`, clamped into the frame.
 ///
 /// Between two samples it is their mean. Between four it is their mean, summed top left, top right,
 /// bottom left, then bottom right.

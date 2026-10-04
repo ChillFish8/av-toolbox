@@ -3,7 +3,6 @@ mod reference;
 mod synthetic;
 
 pub use self::metrics::{psnr, psnr_within, vector_accuracy, write_luma_y4m};
-pub(crate) use self::reference::covering_along;
 pub use self::reference::{
     ReferenceField,
     half_pel_sample,
@@ -19,6 +18,7 @@ pub use self::reference::{
     reference_refine_seed,
     reference_search,
 };
+pub(crate) use self::reference::{covering_windows, scaled_vector};
 pub use self::synthetic::{MotionClip, motion_clips, normalised, object_mask, write_motion_inputs};
 use crate::motion::{ConfidenceScores, MotionEstimation, MotionSettings};
 

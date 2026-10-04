@@ -19,12 +19,14 @@ mod pyramid;
 mod search;
 mod subpel;
 
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 use thiserror::Error;
 
 pub use self::chain::chain;
 pub use self::compensate::{CompensatePlanes, PlaneScale, compensate, window_weight};
-pub(crate) use self::compensate::{block_window, upper_block};
+pub(crate) use self::compensate::{block_window, half_pel_component, upper_block};
 pub use self::confidence::ConfidenceScores;
 pub use self::pyramid::{Pyramid, build_pyramid, level_dims};
 pub use self::search::{refine_seed, search};
@@ -165,18 +167,29 @@ impl BlockGrid {
 /// One field's planes on the device, telling where each block of the centre frame is found in the
 /// neighbour.
 ///
-/// `vectors` holds an `(x, y)` pair of `i32` per block, in whole pixels or, after half pixel refinement,
-/// half pixels, so it is `2 * across` wide and
-/// `down` high. `sads` holds each block's best SAD as `f32`, and `confidence` its score, `across` by
-/// `down`.
+/// `vectors` holds an `(x, y)` pair of `i32` per block, in whole pixels or, after half pixel
+/// refinement, half pixels. It is `2 * across` wide and `down` high. `sads` holds each block's best
+/// SAD as `f32`, and `confidence` its score, `across` by `down`.
 pub struct FieldPlanes<'a> {
     pub vectors: DevicePlane<'a>,
     pub sads: DevicePlane<'a>,
     pub confidence: Option<DevicePlane<'a>>,
 }
 
+/// Asserts that `grid` has a step between half its block size and its block size.
+fn assert_grid(grid: &BlockGrid) {
+    let least = grid.blksize.div_ceil(2);
+    assert!(
+        (least..=grid.blksize).contains(&grid.step),
+        "step is {}, expected {least}..={}",
+        grid.step,
+        grid.blksize
+    );
+}
+
 /// Asserts that `field` holds `grid`'s blocks.
 fn assert_field(field: &FieldPlanes<'_>, grid: &BlockGrid) {
+    assert_grid(grid);
     crate::assert_plane(&field.vectors, 2 * grid.across, grid.down, "vectors");
     crate::assert_plane(&field.sads, grid.across, grid.down, "sads");
 
@@ -187,6 +200,14 @@ fn assert_field(field: &FieldPlanes<'_>, grid: &BlockGrid) {
 
 /// Asserts that the blocks of `grid` cover a plane `width` by `height` scaled by `scale`.
 pub(crate) fn assert_blocks(grid: &BlockGrid, (width, height): (u32, u32), scale: PlaneScale) {
+    assert_grid(grid);
+    assert!(
+        scale.shift_x <= 1 && scale.shift_y <= 1,
+        "the shifts are {} and {}, expected at most 1 each",
+        scale.shift_x,
+        scale.shift_y
+    );
+
     let end_x = (((grid.across - 1) * grid.step) >> scale.shift_x) + (grid.blksize >> scale.shift_x);
     let end_y = (((grid.down - 1) * grid.step) >> scale.shift_y) + (grid.blksize >> scale.shift_y);
 
@@ -312,6 +333,45 @@ mod tests {
                 "{settings:?} was refused with `{message}`"
             );
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "the shifts are 2 and 0")]
+    fn a_plane_scale_shift_of_2_is_refused() {
+        let grid = BlockGrid::new(&MotionSettings::default(), 64, 64);
+        let scale = PlaneScale {
+            shift_x: 2,
+            shift_y: 0,
+        };
+
+        assert_blocks(&grid, (16, 64), scale);
+    }
+
+    #[test]
+    #[should_panic(expected = "step is 0")]
+    fn a_grid_with_no_step_is_refused() {
+        let grid = BlockGrid {
+            blksize: 16,
+            step: 0,
+            across: 1,
+            down: 1,
+        };
+
+        assert_blocks(&grid, (16, 16), PlaneScale::LUMA);
+    }
+
+    #[test]
+    fn subsampling_factors_give_the_shifts() {
+        let scale = PlaneScale::from_factors((2, 1));
+
+        assert_eq!((scale.shift_x, scale.shift_y), (1, 0));
+        assert_eq!(PlaneScale::from_factors((1, 1)), PlaneScale::LUMA);
+    }
+
+    #[test]
+    #[should_panic(expected = "factor")]
+    fn a_subsampling_factor_of_4_is_refused() {
+        PlaneScale::from_factors((4, 1));
     }
 
     #[test]

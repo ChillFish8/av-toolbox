@@ -2,12 +2,18 @@ mod compensate;
 mod quality;
 mod search;
 
-use av_toolbox_cubek::motion::{BlockGrid, FieldPlanes, Pyramid, level_dims};
-use av_toolbox_cubek::testing::{ReferenceField, within_ulps};
+use av_toolbox_cubek::motion::{BlockGrid, FieldPlanes, PlaneScale, Pyramid, level_dims};
+use av_toolbox_cubek::testing::{ReferenceField, assert_same_plane};
+use av_toolbox_gpu::Subsampling;
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
 use crate::support::{empty, plane, read_f32, upload_f32};
+
+/// The scale of the chroma planes of a 4:2:0 frame.
+pub(crate) const CHROMA: PlaneScale = PlaneScale::from_factors(Subsampling::Yuv420.factors());
 
 /// One frame's pyramid on the device, level 0 uploaded and the rest left for the pyramid build.
 pub(crate) struct DevicePyramid {
@@ -99,46 +105,11 @@ impl DeviceField {
     }
 }
 
-/// Panics at the first value where `found` differs from `expected`.
-fn assert_same<T: PartialEq + std::fmt::Debug>(found: &[T], expected: &[T], label: &str) {
-    assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
-
-    let differing = found
-        .iter()
-        .zip(expected)
-        .position(|(actual, wanted)| actual != wanted);
-    if let Some(index) = differing {
-        panic!(
-            "{label} differs first at value {index}: found {:?}, expected {:?}",
-            found[index], expected[index],
-        );
-    }
-}
-
-/// Panics where the vectors or SADs of `found` differ from `expected`.
-fn assert_same_field(found: &ReferenceField, expected: &ReferenceField, label: &str) {
+/// Panics where the vectors or SADs of `found` differ from `expected`, a field `across` blocks wide.
+fn assert_same_field(found: &ReferenceField, expected: &ReferenceField, across: u32, label: &str) {
     let vectors_label = format!("{label} vectors");
     let sads_label = format!("{label} sads");
 
-    assert_same(&found.vectors, &expected.vectors, &vectors_label);
-    assert_same(&found.sads, &expected.sads, &sads_label);
-}
-
-/// How far a confidence may sit from another device's or the CPU's, as division rounds differently.
-const CONFIDENCE_ULPS: u32 = 2;
-
-/// Panics at the first confidence further than [CONFIDENCE_ULPS] from `expected`.
-fn assert_close_confidences(found: &[f32], expected: &[f32], label: &str) {
-    assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
-
-    let differing = found
-        .iter()
-        .zip(expected)
-        .position(|(actual, wanted)| !within_ulps(*actual, *wanted, CONFIDENCE_ULPS));
-    if let Some(index) = differing {
-        panic!(
-            "{label} differs first at block {index}: found {}, expected {}",
-            found[index], expected[index],
-        );
-    }
+    assert_same_plane(&found.vectors, &expected.vectors, 2 * across, &vectors_label);
+    assert_same_plane(&found.sads, &expected.sads, across, &sads_label);
 }

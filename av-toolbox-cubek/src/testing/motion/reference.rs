@@ -166,7 +166,8 @@ impl Window<'_> {
     }
 }
 
-/// The coarse search on `pyramid`'s coarsest level, giving every block of `grid` its scaled seed.
+/// The coarse search on the coarsest level of `centre` and `neighbour`, giving every block of `grid` its
+/// scaled seed.
 fn coarse_seeds(
     centre: &[Vec<f32>],
     neighbour: &[Vec<f32>],
@@ -324,7 +325,7 @@ pub fn reference_refine_seed(
     fine_search(&window, grid, Some(seeds), scores)
 }
 
-/// The luma of `plane`, `width` by `height`, at the half pixel position `x2`, `y2`, in half pixels.
+/// The value of `plane`, `width` by `height`, at the half pixel position `x2`, `y2`, in half pixels.
 ///
 /// The position is clamped into the frame. Between two samples it is their mean, between four it is
 /// their mean in the order top left, top right, bottom left, bottom right.
@@ -437,7 +438,8 @@ pub fn reference_refine_half_pel(
     refined
 }
 
-/// The block of a field nearest `position`, a frame `limit` pixels long and `count` blocks `step` apart.
+/// The block that contains `position` clamped into a frame `limit` pixels long, with `count` blocks `step`
+/// apart.
 fn block_at(position: i32, limit: u32, step: u32, count: u32) -> u32 {
     let clamped = clamp_i32(position, limit as i32) as u32;
 
@@ -518,6 +520,63 @@ pub(crate) fn covering_along(
     blocks
 }
 
+/// A block covering a sample, with its window weight there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CoveringWindow {
+    pub(crate) block: usize,
+    pub(crate) window: f32,
+}
+
+/// The blocks of `grid` covering the sample `x`, `y` of a plane scaled by `scale`, each with its window
+/// weight, rows outer, columns inner.
+pub(crate) fn covering_windows(x: u32, y: u32, grid: &BlockGrid, scale: PlaneScale) -> Vec<CoveringWindow> {
+    let overlap = grid.blksize - grid.step;
+    let length_x = grid.blksize >> scale.shift_x;
+    let length_y = grid.blksize >> scale.shift_y;
+    let overlap_x = overlap >> scale.shift_x;
+    let overlap_y = overlap >> scale.shift_y;
+    let rows = covering_along(y, grid.down, grid.step, grid.blksize, scale.shift_y);
+    let columns = covering_along(x, grid.across, grid.step, grid.blksize, scale.shift_x);
+
+    let mut windows = Vec::new();
+    for row in &rows {
+        for column in &columns {
+            let weight_x = window_weight(
+                x - column.start,
+                length_x,
+                overlap_x,
+                column.block == 0,
+                column.block == grid.across - 1,
+            );
+            let weight_y = window_weight(
+                y - row.start,
+                length_y,
+                overlap_y,
+                row.block == 0,
+                row.block == grid.down - 1,
+            );
+
+            let block = (row.block * grid.across + column.block) as usize;
+            windows.push(CoveringWindow {
+                block,
+                window: weight_x * weight_y,
+            });
+        }
+    }
+
+    windows
+}
+
+/// The vector of `block` in the luma `vectors`, shifted onto a plane scaled by `scale` and put in half
+/// pixels.
+pub(crate) fn scaled_vector(vectors: &[i32], block: usize, pel: u32, scale: PlaneScale) -> (i32, i32) {
+    let half_units = (2 / pel) as i32;
+    let vector_x = (vectors[2 * block] >> scale.shift_x) * half_units;
+    let vector_y = (vectors[2 * block + 1] >> scale.shift_y) * half_units;
+
+    (vector_x, vector_y)
+}
+
 /// The blocks of `grid` covering the sample `x`, `y` of a plane scaled by `scale`, as `(column, row)`.
 pub fn reference_covering_blocks(x: u32, y: u32, grid: &BlockGrid, scale: PlaneScale) -> Vec<(u32, u32)> {
     let columns = covering_along(x, grid.across, grid.step, grid.blksize, scale.shift_x);
@@ -545,53 +604,23 @@ pub fn reference_compensate(
     pel: u32,
     scale: PlaneScale,
 ) -> Vec<f32> {
-    let overlap = grid.blksize - grid.step;
-    let length_x = grid.blksize >> scale.shift_x;
-    let length_y = grid.blksize >> scale.shift_y;
-    let overlap_x = overlap >> scale.shift_x;
-    let overlap_y = overlap >> scale.shift_y;
-    let doubling = (2 / pel) as i32;
-
     let mut output = Vec::with_capacity(width * height);
     for y in 0..height as u32 {
-        let rows = covering_along(y, grid.down, grid.step, grid.blksize, scale.shift_y);
         for x in 0..width as u32 {
-            let columns = covering_along(x, grid.across, grid.step, grid.blksize, scale.shift_x);
-
             let mut weight_sum = 0.0f32;
             let mut value_sum = 0.0f32;
-            for row in &rows {
-                for column in &columns {
-                    let weight_x = window_weight(
-                        x - column.start,
-                        length_x,
-                        overlap_x,
-                        column.block == 0,
-                        column.block == grid.across - 1,
-                    );
-                    let weight_y = window_weight(
-                        y - row.start,
-                        length_y,
-                        overlap_y,
-                        row.block == 0,
-                        row.block == grid.down - 1,
-                    );
-                    let weight = weight_x * weight_y;
+            for covering in covering_windows(x, y, grid, scale) {
+                let (vector_x, vector_y) = scaled_vector(vectors, covering.block, pel, scale);
+                let value = half_pel_sample(
+                    neighbour,
+                    width,
+                    height,
+                    2 * x as i32 + vector_x,
+                    2 * y as i32 + vector_y,
+                );
 
-                    let slot = 2 * (row.block * grid.across + column.block) as usize;
-                    let vector_x = (vectors[slot] >> scale.shift_x) * doubling;
-                    let vector_y = (vectors[slot + 1] >> scale.shift_y) * doubling;
-                    let value = half_pel_sample(
-                        neighbour,
-                        width,
-                        height,
-                        2 * x as i32 + vector_x,
-                        2 * y as i32 + vector_y,
-                    );
-
-                    weight_sum += weight;
-                    value_sum += weight * value;
-                }
+                weight_sum += covering.window;
+                value_sum += covering.window * value;
             }
 
             output.push(value_sum / weight_sum);
@@ -639,7 +668,7 @@ mod tests {
         fixture_i32s,
         motion_clips,
     };
-    use crate::testing::within_ulps;
+    use crate::testing::{assert_confidences, assert_fields};
 
     /// The deepest pyramid any fixture setting searches.
     const LEVELS: u32 = 3;
@@ -708,26 +737,6 @@ mod tests {
     }
 
     #[test]
-    fn the_two_ramps_over_an_overlap_sum_to_one() {
-        for position in 0..8 {
-            let next_block = window_weight(position, 16, 8, false, false);
-            let previous_block = window_weight(position + 8, 16, 8, false, false);
-
-            assert!(
-                (next_block + previous_block - 1.0).abs() < 1e-6,
-                "ramps at {position} do not sum to 1"
-            );
-        }
-    }
-
-    #[test]
-    fn the_outer_sides_of_the_edge_blocks_have_no_ramp() {
-        assert_eq!(window_weight(0, 16, 8, true, false), 1.0);
-        assert_eq!(window_weight(15, 16, 8, false, true), 1.0);
-        assert_eq!(window_weight(3, 16, 0, false, false), 1.0);
-    }
-
-    #[test]
     fn half_pel_samples_average_their_neighbours_and_clamp() {
         let plane = [1.0f32, 2.0, 4.0, 8.0];
 
@@ -750,29 +759,6 @@ mod tests {
                 (clip, fixture, pyramids)
             })
             .collect()
-    }
-
-    /// Panics at the first value where `found` differs from `expected`, naming the field and block.
-    fn assert_fields<T: PartialEq + std::fmt::Debug>(
-        found: &[T],
-        expected: &[T],
-        per_field: usize,
-        label: &str,
-    ) {
-        assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
-
-        let differing = found
-            .iter()
-            .zip(expected)
-            .position(|(actual, wanted)| actual != wanted);
-        if let Some(index) = differing {
-            let field = index / per_field;
-            let within = index % per_field;
-            panic!(
-                "{label} differs first in field {field} at value {within}: found {:?}, expected {:?}",
-                found[index], expected[index],
-            );
-        }
     }
 
     fn grid_of(clip: &MotionClip, setting: &SettingFixture) -> BlockGrid {
@@ -890,27 +876,6 @@ mod tests {
                 let backward_label = format!("{} {} chained_back_2", clip.name, setting.label);
                 assert_fields(&backward, &expected_backward, per_field, &backward_label);
             }
-        }
-    }
-
-    /// How far a confidence may sit from av-denoise's, as its division rounds differently by device.
-    const CONFIDENCE_ULPS: u32 = 2;
-
-    /// Panics at the first confidence further than [CONFIDENCE_ULPS] from `expected`.
-    fn assert_confidences(found: &[f32], expected: &[f32], per_field: usize, label: &str) {
-        assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
-
-        let differing = found
-            .iter()
-            .zip(expected)
-            .position(|(actual, wanted)| !within_ulps(*actual, *wanted, CONFIDENCE_ULPS));
-        if let Some(index) = differing {
-            let field = index / per_field;
-            let within = index % per_field;
-            panic!(
-                "{label} differs first in field {field} at block {within}: found {}, expected {}",
-                found[index], expected[index],
-            );
         }
     }
 

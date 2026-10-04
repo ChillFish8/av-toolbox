@@ -1,3 +1,5 @@
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 
 use super::confidence::confidence_of;
@@ -322,13 +324,17 @@ fn launch_fine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, 
     let unit = dispatch.cube_dim();
     let use_seed = u32::from(search.use_seed);
 
-    // Without confidence the kernel never reads its confidence argument, so a single value stands in.
-    let placeholder = client.empty(size_of::<f32>());
     let write_confidence = search.field.confidence.is_some();
     let confidence = match &search.field.confidence {
         Some(plane) => plane.array::<R>(),
-        // Safety: the placeholder holds one f32 and is never indexed.
-        None => unsafe { ArrayArg::from_raw_parts(placeholder.clone(), 1) },
+        None => {
+            // Without confidence the kernel never reads its confidence argument, so a single value
+            // stands in.
+            let placeholder = client.empty(size_of::<f32>());
+
+            // Safety: the placeholder holds one f32 and is never indexed.
+            unsafe { ArrayArg::from_raw_parts(placeholder, 1) }
+        },
     };
 
     let centre = search.centre.array::<R>();
@@ -410,6 +416,15 @@ fn launch_coarse<R: Runtime>(
     }
 }
 
+/// Asserts that `scores` can score a block.
+fn assert_scores(scores: &ConfidenceScores) {
+    assert!(
+        scores.thsad.is_finite() && scores.thsad > 0.0,
+        "thsad is {}, expected a finite value above 0",
+        scores.thsad
+    );
+}
+
 /// Asserts that `centre` and `neighbour` have the same levels, at least `levels` of them.
 pub(super) fn assert_pyramids(centre: &Pyramid<'_>, neighbour: &Pyramid<'_>, levels: u32) {
     let held = centre.levels.len().min(neighbour.levels.len());
@@ -445,8 +460,10 @@ pub fn search<R: Runtime>(
     settings: &MotionSettings,
     scores: ConfidenceScores,
 ) {
+    debug_assert_eq!(settings.validate(), Ok(()));
     assert_pyramids(centre, neighbour, settings.pyramid_levels);
     assert_field(field, grid);
+    assert_scores(&scores);
 
     let expected = BlockGrid::new(settings, centre.width(), centre.height());
     assert_eq!(*grid, expected, "the grid does not match the settings");
@@ -503,6 +520,7 @@ pub fn refine_seed<R: Runtime>(
 ) {
     assert_pyramids(centre, neighbour, 1);
     assert_field(field, grid);
+    assert_scores(&scores);
     assert!(
         refine_radius <= MAX_SEARCH_RADIUS,
         "refine_radius is {refine_radius}, expected at most {MAX_SEARCH_RADIUS}"

@@ -1,3 +1,5 @@
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 
 use super::subpel::half_pel_sample;
@@ -21,6 +23,29 @@ pub struct CompensatePlanes<'a> {
 pub struct PlaneScale {
     pub shift_x: u32,
     pub shift_y: u32,
+}
+
+impl PlaneScale {
+    /// A plane the size of luma.
+    pub const LUMA: Self = Self {
+        shift_x: 0,
+        shift_y: 0,
+    };
+
+    /// The scale of a plane that is `factor_x` by `factor_y` times smaller than luma.
+    ///
+    /// Each factor is 1 or 2, as a chroma subsampling gives them.
+    pub const fn from_factors((factor_x, factor_y): (u32, u32)) -> Self {
+        assert!(
+            matches!(factor_x, 1 | 2) && matches!(factor_y, 1 | 2),
+            "a subsampling factor is 1 or 2"
+        );
+
+        Self {
+            shift_x: factor_x.trailing_zeros(),
+            shift_y: factor_y.trailing_zeros(),
+        }
+    }
 }
 
 /// The raised-cosine weight of sample `position` along one axis of a block `length` long.
@@ -77,6 +102,16 @@ pub(super) fn device_window_weight(position: u32, length: u32, overlap: u32, fir
 #[cube]
 pub(crate) fn upper_block(position: u32, step: u32, count: u32, #[comptime] shift: u32) -> u32 {
     ((((position + 1) << shift) - 1) / step).min(count - 1)
+}
+
+/// One component of a block's vector, shifted onto a plane scaled by `shift` and put in half pixels.
+///
+/// The vector is in units of `1 / pel` pixel, and the shift rounds towards negative infinity.
+#[cube]
+pub(crate) fn half_pel_component(vector: i32, #[comptime] shift: u32, #[comptime] pel: u32) -> i32 {
+    let half_units = comptime!((2 / pel) as i32);
+
+    (vector >> shift as i32) * half_units
 }
 
 /// The window weight of block `block_x`, `block_y` at the sample `x`, `y`, or 0 where the block does not
@@ -158,7 +193,6 @@ fn compensate_kernel(
 
     let x = ABSOLUTE_POS as u32 % width;
     let y = ABSOLUTE_POS as u32 / width;
-    let half_units = comptime!((2 / pel) as i32);
 
     let upper_x = upper_block(x, step, across, shift_x);
     let upper_y = upper_block(y, step, down, shift_y);
@@ -176,8 +210,8 @@ fn compensate_kernel(
 
                 if weight > 0.0f32 {
                     let slot = ((block_y * across + block_x) * 2) as usize;
-                    let vector_x = (vectors[slot] >> shift_x as i32) * half_units;
-                    let vector_y = (vectors[slot + 1] >> shift_y as i32) * half_units;
+                    let vector_x = half_pel_component(vectors[slot], shift_x, pel);
+                    let vector_y = half_pel_component(vectors[slot + 1], shift_y, pel);
                     let value = half_pel_sample(
                         neighbour,
                         2 * x as i32 + vector_x,
@@ -248,5 +282,30 @@ pub fn compensate<R: Runtime>(
             scale.shift_x,
             scale.shift_y,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_two_ramps_over_an_overlap_sum_to_one() {
+        for position in 0..8 {
+            let next_block = window_weight(position, 16, 8, false, false);
+            let previous_block = window_weight(position + 8, 16, 8, false, false);
+
+            assert!(
+                (next_block + previous_block - 1.0).abs() < 1e-6,
+                "ramps at {position} do not sum to 1"
+            );
+        }
+    }
+
+    #[test]
+    fn the_outer_sides_of_the_edge_blocks_have_no_ramp() {
+        assert_eq!(window_weight(0, 16, 8, true, false), 1.0);
+        assert_eq!(window_weight(15, 16, 8, false, true), 1.0);
+        assert_eq!(window_weight(3, 16, 0, false, false), 1.0);
     }
 }

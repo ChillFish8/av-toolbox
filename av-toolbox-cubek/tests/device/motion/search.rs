@@ -4,6 +4,7 @@ use av_toolbox_cubek::motion::{
     MotionSettings,
     build_pyramid,
     chain,
+    level_dims,
     refine_half_pel,
     refine_seed,
     search,
@@ -13,6 +14,8 @@ use av_toolbox_cubek::testing::{
     MotionClip,
     ReferenceField,
     SettingFixture,
+    assert_confidences,
+    assert_same_plane,
     fixture_f32s,
     motion_clips,
     normalised,
@@ -25,7 +28,7 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use super::{DeviceField, DevicePyramid, assert_close_confidences, assert_same, assert_same_field};
+use super::{DeviceField, DevicePyramid, assert_same_field};
 use crate::support::{Sizing, backend};
 
 /// A chained field and the seed it was refined from.
@@ -277,7 +280,9 @@ fn every_device_pyramid_matches_the_reference() {
                 for (level, (found_level, wanted_level)) in found.iter().zip(wanted).enumerate() {
                     let label = format!("{} {} frame {frame} level {level}", clip.name, setting.label);
 
-                    assert_same(found_level, wanted_level, &label);
+                    let (level_width, _) = level_dims(clip.width as u32, clip.height as u32, level as u32);
+
+                    assert_same_plane(found_level, wanted_level, level_width, &label);
                 }
             }
         }
@@ -290,13 +295,14 @@ fn every_device_direct_field_matches_the_reference() {
         for (setting, outputs) in runs {
             let pyramids = reference_clip_pyramids(&clip, setting.settings.pyramid_levels);
             let settings = &setting.settings;
+            let across = BlockGrid::new(settings, clip.width as u32, clip.height as u32).across;
 
             for (centre, found) in outputs.direct_1.iter().enumerate() {
                 let expected =
                     reference_direct(&clip, &pyramids, settings, setting.scores, centre, centre + 1);
                 let label = format!("{} {} direct_1 field {centre}", clip.name, setting.label);
 
-                assert_same_field(found, &expected, &label);
+                assert_same_field(found, &expected, across, &label);
             }
 
             for (centre, found) in outputs.direct_2.iter().enumerate() {
@@ -304,7 +310,7 @@ fn every_device_direct_field_matches_the_reference() {
                     reference_direct(&clip, &pyramids, settings, setting.scores, centre, centre + 2);
                 let label = format!("{} {} direct_2 field {centre}", clip.name, setting.label);
 
-                assert_same_field(found, &expected, &label);
+                assert_same_field(found, &expected, across, &label);
             }
         }
     }
@@ -315,14 +321,15 @@ fn every_device_chained_field_matches_the_reference() {
     for (clip, runs) in every_run() {
         for (setting, outputs) in runs {
             let pyramids = reference_clip_pyramids(&clip, setting.settings.pyramid_levels);
+            let across = BlockGrid::new(&setting.settings, clip.width as u32, clip.height as u32).across;
 
             for (first, found) in outputs.chained_2.iter().enumerate() {
                 let expected = reference_chained(&clip, &pyramids, setting, first, first + 2);
                 let seed_label = format!("{} {} chained_2 seed {first}", clip.name, setting.label);
                 let field_label = format!("{} {} chained_2 field {first}", clip.name, setting.label);
 
-                assert_same(&found.seed, &expected.seed, &seed_label);
-                assert_same_field(&found.field, &expected.field, &field_label);
+                assert_same_plane(&found.seed, &expected.seed, 2 * across, &seed_label);
+                assert_same_field(&found.field, &expected.field, across, &field_label);
             }
 
             for (first, found) in outputs.chained_back_2.iter().enumerate() {
@@ -330,8 +337,8 @@ fn every_device_chained_field_matches_the_reference() {
                 let seed_label = format!("{} {} chained_back_2 seed {first}", clip.name, setting.label);
                 let field_label = format!("{} {} chained_back_2 field {first}", clip.name, setting.label);
 
-                assert_same(&found.seed, &expected.seed, &seed_label);
-                assert_same_field(&found.field, &expected.field, &field_label);
+                assert_same_plane(&found.seed, &expected.seed, 2 * across, &seed_label);
+                assert_same_field(&found.field, &expected.field, across, &field_label);
             }
         }
     }
@@ -343,6 +350,7 @@ fn every_device_confidence_matches_av_denoise_and_the_reference() {
         for (setting, outputs) in runs {
             let pyramids = reference_clip_pyramids(&clip, setting.settings.pyramid_levels);
             let settings = &setting.settings;
+            let blocks = BlockGrid::new(settings, clip.width as u32, clip.height as u32).blocks();
 
             let direct: Vec<f32> = outputs
                 .direct_1
@@ -357,8 +365,8 @@ fn every_device_confidence_matches_av_denoise_and_the_reference() {
                 .collect();
             let expected_direct = fixture_f32s(setting.confidence_1);
             let direct_label = format!("{} {} confidence_1", clip.name, setting.label);
-            assert_close_confidences(&direct, &expected_direct, &direct_label);
-            assert_close_confidences(&direct, &reference_direct_scores, &direct_label);
+            assert_confidences(&direct, &expected_direct, blocks, &direct_label);
+            assert_confidences(&direct, &reference_direct_scores, blocks, &direct_label);
 
             let chained: Vec<f32> = outputs
                 .chained_2
@@ -374,8 +382,8 @@ fn every_device_confidence_matches_av_denoise_and_the_reference() {
                 .collect();
             let expected_chained = fixture_f32s(setting.confidence_chained_2);
             let chained_label = format!("{} {} confidence_chained_2", clip.name, setting.label);
-            assert_close_confidences(&chained, &expected_chained, &chained_label);
-            assert_close_confidences(&chained, &reference_chained_scores, &chained_label);
+            assert_confidences(&chained, &expected_chained, blocks, &chained_label);
+            assert_confidences(&chained, &reference_chained_scores, blocks, &chained_label);
         }
     }
 }
@@ -410,35 +418,36 @@ fn assert_device_matches(clip: &MotionClip, setting: &SettingFixture) {
     let outputs = backend().build(task);
     let pyramids = reference_clip_pyramids(clip, setting.settings.pyramid_levels);
     let settings = &setting.settings;
+    let across = BlockGrid::new(settings, clip.width as u32, clip.height as u32).across;
 
     for (centre, found) in outputs.direct_1.iter().enumerate() {
         let expected = reference_direct(clip, &pyramids, settings, setting.scores, centre, centre + 1);
         let label = format!("{} direct_1 field {centre}", clip.name);
 
-        assert_same_field(found, &expected, &label);
+        assert_same_field(found, &expected, across, &label);
     }
 
     for (centre, found) in outputs.direct_2.iter().enumerate() {
         let expected = reference_direct(clip, &pyramids, settings, setting.scores, centre, centre + 2);
         let label = format!("{} direct_2 field {centre}", clip.name);
 
-        assert_same_field(found, &expected, &label);
+        assert_same_field(found, &expected, across, &label);
     }
 
     for (first, found) in outputs.chained_2.iter().enumerate() {
         let expected = reference_chained(clip, &pyramids, setting, first, first + 2);
         let label = format!("{} chained_2 field {first}", clip.name);
 
-        assert_same(&found.seed, &expected.seed, &label);
-        assert_same_field(&found.field, &expected.field, &label);
+        assert_same_plane(&found.seed, &expected.seed, 2 * across, &label);
+        assert_same_field(&found.field, &expected.field, across, &label);
     }
 
     for (first, found) in outputs.chained_back_2.iter().enumerate() {
         let expected = reference_chained(clip, &pyramids, setting, first + 2, first);
         let label = format!("{} chained_back_2 field {first}", clip.name);
 
-        assert_same(&found.seed, &expected.seed, &label);
-        assert_same_field(&found.field, &expected.field, &label);
+        assert_same_plane(&found.seed, &expected.seed, 2 * across, &label);
+        assert_same_field(&found.field, &expected.field, across, &label);
     }
 }
 

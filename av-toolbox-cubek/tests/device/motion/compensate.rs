@@ -8,30 +8,26 @@ use av_toolbox_cubek::motion::{
 };
 use av_toolbox_cubek::testing::{
     MotionClip,
+    OUTPUT_TOLERANCE,
+    largest_difference,
     motion_clips,
     normalised,
     reference_compensate,
     reference_nlm_mc_warp,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
+// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
+// by name.
 use cubecl::prelude::*;
 
+use super::CHROMA;
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
-
-const LUMA: PlaneScale = PlaneScale {
-    shift_x: 0,
-    shift_y: 0,
-};
-const CHROMA: PlaneScale = PlaneScale {
-    shift_x: 1,
-    shift_y: 1,
-};
-
-/// How far the device may sit from the CPU on a compensated sample.
-const OUTPUT_TOLERANCE: f32 = 1e-3;
 
 /// How far the device may sit from the CPU on a window weight.
 const WEIGHT_TOLERANCE: f32 = 1e-6;
+
+/// How far a clamped edge sample may sit from the corner value it copies.
+const EDGE_TOLERANCE: f32 = 1e-6;
 
 /// One plane compensated on the device.
 pub(crate) struct Case {
@@ -53,7 +49,7 @@ impl Case {
             vectors,
             grid,
             pel: 1,
-            scale: LUMA,
+            scale: PlaneScale::LUMA,
         }
     }
 
@@ -112,23 +108,6 @@ impl BuildTask for CompensateRun {
     }
 }
 
-/// The largest difference seen between a device output and its reference.
-fn largest_difference(found: &[f32], expected: &[f32], label: &str, tolerance: f32) -> f32 {
-    assert_eq!(found.len(), expected.len(), "{label} has the wrong length");
-
-    let mut largest = 0.0f32;
-    for (index, (actual, wanted)) in found.iter().zip(expected).enumerate() {
-        let difference = (actual - wanted).abs();
-        assert!(
-            difference <= tolerance,
-            "{label} sample {index} was {actual}, expected {wanted} within {tolerance}"
-        );
-        largest = largest.max(difference);
-    }
-
-    largest
-}
-
 /// A vector for each block of `grid` that is varied, negative and odd.
 fn varied_vectors(grid: &BlockGrid) -> Vec<i32> {
     let mut vectors = Vec::with_capacity(2 * grid.blocks());
@@ -161,7 +140,7 @@ fn clip_planes(clip: &MotionClip, frame: usize) -> Vec<(Vec<f32>, (u32, u32), Pl
         (
             normalised(&clip.frames[frame][0], clip.bits),
             (width, height),
-            LUMA,
+            PlaneScale::LUMA,
         ),
         (
             normalised(&clip.frames[frame][1], clip.bits),
@@ -194,12 +173,14 @@ fn every_clip_matches_the_reference_at_every_setting() {
     }
 
     let expected: Vec<Vec<f32>> = cases.iter().map(Case::reference).collect();
+    let widths: Vec<u32> = cases.iter().map(|case| case.width).collect();
     let found = backend().build(CompensateRun { cases });
 
     let mut largest = 0.0f32;
     for (index, (output, wanted)) in found.iter().zip(&expected).enumerate() {
         let label = format!("case {index}");
-        largest = largest.max(largest_difference(output, wanted, &label, OUTPUT_TOLERANCE));
+        let difference = largest_difference(output, wanted, OUTPUT_TOLERANCE, widths[index], &label);
+        largest = largest.max(difference);
     }
 
     println!(
@@ -287,7 +268,7 @@ fn a_vector_past_the_frame_compensates_from_its_edge() {
     for (pel, output) in [1, 2].into_iter().zip(&found) {
         let label = format!("pel {pel}");
         let flat = vec![top_right; output.len()];
-        largest_difference(output, &flat, &label, WEIGHT_TOLERANCE);
+        largest_difference(output, &flat, EDGE_TOLERANCE, size.0, &label);
     }
 }
 
@@ -295,7 +276,7 @@ fn a_vector_past_the_frame_compensates_from_its_edge() {
 ///
 /// The neighbour is 0 along its first column or row and 1 along its last. Blocks alternate between reading
 /// the first and the last, so where the first two overlap the output is the second block's share of the
-/// weight. Returns the plane, its width and the grid's step.
+/// weight. Returns the plane and the grid's step.
 fn device_ramp(blksize: u32, overlap: u32, transposed: bool) -> (Vec<f32>, u32) {
     let step = blksize - overlap;
     let length = 3 * step;
