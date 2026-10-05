@@ -181,7 +181,14 @@ pub use self::neighbourhood::{
 };
 pub use self::normalise::reference_normalise;
 pub use self::padding::{reference_crop, reference_pad};
-pub use self::qtgmc::{FixturePlane, QtgmcFixture, qtgmc_fixture, reference_bob, write_qtgmc_inputs};
+pub use self::qtgmc::{
+    FixturePlane,
+    QtgmcFixture,
+    qtgmc_fixture,
+    reference_bob,
+    reference_tr0,
+    write_qtgmc_inputs,
+};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};
 pub use self::retinex::{
     reference_log_response,

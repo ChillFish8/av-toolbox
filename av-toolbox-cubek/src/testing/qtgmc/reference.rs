@@ -29,3 +29,55 @@ pub fn reference_bob(frame: &[f32], (width, height): (usize, usize), parity: Par
 
     output
 }
+
+/// The bob at `index`, or the nearest bob when `index` falls outside `bobs`.
+fn clamped_bob(bobs: &[Vec<f32>], index: isize) -> &[f32] {
+    let last = bobs.len() as isize - 1;
+
+    &bobs[index.clamp(0, last) as usize]
+}
+
+/// The mean of the bobs within `radius` of `centre`.
+fn average_frames(bobs: &[Vec<f32>], centre: usize, radius: isize, length: usize) -> Vec<f32> {
+    let count = (2 * radius + 1) as f32;
+
+    let mut total = vec![0.0f32; length];
+    for offset in -radius..=radius {
+        let bob = clamped_bob(bobs, centre as isize + offset);
+        for (sum, sample) in total.iter_mut().zip(bob) {
+            *sum += sample;
+        }
+    }
+
+    total.iter().map(|sum| sum / count).collect()
+}
+
+/// `first * (1 - weight) + second * weight`.
+fn merge(first: &[f32], second: &[f32], weight: f32) -> Vec<f32> {
+    first
+        .iter()
+        .zip(second)
+        .map(|(first_sample, second_sample)| first_sample * (1.0 - weight) + second_sample * weight)
+        .collect()
+}
+
+/// QTGMC's TR0 temporal average of the bob at `centre`, as the two averages and merges it is built from.
+///
+/// Bobs before the first or after the last repeat the nearest, and the result is not rounded.
+pub fn reference_tr0(bobs: &[Vec<f32>], centre: usize, tr0: u32, width: usize, height: usize) -> Vec<f32> {
+    let length = width * height;
+    let bob = &bobs[centre];
+    if tr0 == 0 {
+        return bob.clone();
+    }
+
+    let ts1 = average_frames(bobs, centre, 1, length);
+    if tr0 == 1 {
+        return merge(&ts1, bob, 0.25);
+    }
+
+    let ts2 = average_frames(bobs, centre, 2, length);
+    let smoothed = merge(&ts1, &ts2, 0.357);
+
+    merge(&smoothed, bob, 0.125)
+}
