@@ -1,4 +1,5 @@
 mod conventions;
+mod formats;
 mod reference;
 
 use std::cell::RefCell;
@@ -24,6 +25,7 @@ use av_toolbox_gpu::{
     BuildContext,
     BuildTask,
     ChromaLocation,
+    Depth,
     FieldOrder,
     FrameFormat,
     FrameLayout,
@@ -35,7 +37,7 @@ use av_toolbox_gpu::{
 use cubecl::prelude::Runtime;
 
 use crate::stream::{Input, Output, run_chunk};
-use crate::support::{backend, element_of, frame, from_bytes, peak_of, ten_bit, to_bytes};
+use crate::support::{backend, element_of, frame, from_bytes, ten_bit, to_bytes};
 
 /// How far an output sample may sit from the CPU reference, in code values.
 const TOLERANCE: u16 = 1;
@@ -51,10 +53,13 @@ const NEAR_TIE_SAD: f32 = 1e-5;
 /// The share of the blocks a field's searches cover whose vector may differ from the reference on a near-tie.
 const NEAR_TIE_SHARE: f64 = 0.01;
 
+/// The largest difference from the reference any output sample may have, in 8-bit code values.
+const LARGEST_8_BIT: u16 = 8;
+
 /// The furthest direction QTGMC's EEDI3 searches.
 const QTGMC_MDIS: u32 = 8;
 
-/// An interlaced clip, top field first, as Y, U and V code values at 4:2:0.
+/// An interlaced clip, top field first, as Y, U and V code values.
 ///
 /// A gray clip has empty chroma planes.
 #[derive(Clone)]
@@ -63,6 +68,7 @@ pub(super) struct Clip {
     pub(super) bits: u32,
     pub(super) width: usize,
     pub(super) height: usize,
+    pub(super) subsampling: Subsampling,
     pub(super) frames: Vec<[Vec<i32>; 3]>,
 }
 
@@ -80,6 +86,7 @@ impl Clip {
             bits: found.bits,
             width: found.width,
             height: found.height,
+            subsampling: Subsampling::Yuv420,
             frames: found.frames,
         }
     }
@@ -118,7 +125,11 @@ impl Clip {
     pub(super) fn sample(&self) -> SampleFormat {
         match self.bits {
             8 => SampleFormat::U8,
-            _ => ten_bit(),
+            10 => ten_bit(),
+            bits => {
+                let depth = Depth::new(bits as u8).expect("the clip has a supported depth");
+                SampleFormat::U16 { depth }
+            },
         }
     }
 
@@ -133,7 +144,7 @@ pub(super) fn interlaced(clip: &Clip, order: FieldOrder) -> FrameFormat {
         FrameLayout::Grey
     } else {
         FrameLayout::Yuv {
-            subsampling: Subsampling::Yuv420,
+            subsampling: clip.subsampling,
         }
     };
     let base = frame(
@@ -449,10 +460,34 @@ struct Closeness {
     plane: usize,
 }
 
+/// The bit depth of `sample`, an integer format.
+pub(super) fn depth_of(sample: SampleFormat) -> u32 {
+    match sample {
+        SampleFormat::U8 => 8,
+        SampleFormat::U16 { depth } => u32::from(depth.bits()),
+        other => panic!("{other:?} is not an integer format"),
+    }
+}
+
+/// The largest code value of `sample`, an integer format.
+pub(super) fn peak_code(sample: SampleFormat) -> u16 {
+    let depth = depth_of(sample);
+
+    ((1u32 << depth) - 1) as u16
+}
+
+/// The largest difference from the reference a sample of `sample` may have, [LARGEST_8_BIT] scaled to its
+/// depth.
+fn largest_allowed(sample: SampleFormat) -> u16 {
+    let depth = depth_of(sample);
+
+    LARGEST_8_BIT << (depth - 8)
+}
+
 /// How far plane `plane` of output `field` sits from `wanted`, narrowed to `sample`.
 fn closeness(found: &[u8], wanted: &[f32], sample: SampleFormat, field: usize, plane: usize) -> Closeness {
     let element = element_of(sample);
-    let peak = peak_of(sample) as f32;
+    let peak = f32::from(peak_code(sample));
     let codes = from_bytes(found, element);
     assert_eq!(
         codes.len(),
@@ -491,6 +526,8 @@ fn assert_paired_outputs<'a>(
     sample: SampleFormat,
     label: &str,
 ) -> Closeness {
+    let ceiling = largest_allowed(sample);
+
     let mut worst = Closeness::default();
     for (field, output, wanted) in pairs {
         for (plane, found) in output.planes.iter().enumerate() {
@@ -499,6 +536,11 @@ fn assert_paired_outputs<'a>(
                 found_closeness.share <= OUTLIER_SHARE,
                 "{label}: {:.3} % of field {field} plane {plane} is over {TOLERANCE} code, the largest {}",
                 found_closeness.share * 100.0,
+                found_closeness.largest
+            );
+            assert!(
+                found_closeness.largest <= ceiling,
+                "{label}: field {field} plane {plane} has a sample {} codes off, over {ceiling}",
                 found_closeness.largest
             );
 

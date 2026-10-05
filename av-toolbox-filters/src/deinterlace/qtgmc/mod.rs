@@ -297,7 +297,8 @@ impl<R: Runtime> Deinterlacer<R> {
         }
 
         let outputs = self.cache.take_outputs();
-        self.cache.release(self.chain.settings.reach());
+        let reach = self.chain.settings.reach();
+        self.cache.release(reach);
 
         Ok(outputs)
     }

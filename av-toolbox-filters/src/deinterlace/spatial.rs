@@ -35,8 +35,10 @@ pub(crate) trait SpatialStage {
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields, bound = "")]
 #[schemars(rename = "Spatial", bound = "")]
 pub(crate) enum Spatial<S: SpatialStage> {
-    /// The stage's plain interpolation. bwdif's own cubic down each column for `deinterlace/bwdif`, and a
-    /// bicubic resize of each field for `deinterlace/qtgmc`.
+    /// The stage's plain interpolation.
+    ///
+    /// `deinterlace/bwdif` and the bwdif fallback of `ivtc/match` run bwdif's own cubic down each column.
+    /// `deinterlace/qtgmc` runs a bicubic resize of each field.
     Cubic {},
     /// EEDI2's edge directed interpolation, with `aa/eedi2`'s defaults.
     Eedi2(Eedi2Tuning),

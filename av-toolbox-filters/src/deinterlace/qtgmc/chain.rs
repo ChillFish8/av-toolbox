@@ -86,6 +86,14 @@ fn state_of(cache: &FieldCache, field: usize) -> Result<&FieldState, StageError>
     }
 }
 
+fn edi_of(state: &FieldState) -> &Option<Vec<Scratch>> {
+    &state.edi
+}
+
+fn limited_of(state: &FieldState) -> &Option<Vec<Scratch>> {
+    &state.limited
+}
+
 /// The offsets of a field's motion neighbours up to `radius` fields away, nearest first and the later
 /// field of each pair first.
 fn neighbour_deltas(radius: u32) -> Vec<i32> {
@@ -586,21 +594,19 @@ impl<R: Runtime> Chain<R> {
         edi: DevicePlane<'_>,
         plane: usize,
     ) -> Result<Option<Scratch>, StageError> {
-        let settings = &self.settings.tr1_degrain;
-        let pick_edi: fn(&FieldState) -> &Option<Vec<Scratch>> = |state| &state.edi;
-
         if self.settings.tr1 == 0 {
             return Ok(None);
         }
 
-        let near = self.degrain_neighbours(cache, motion, |delta| delta.abs() == 1, pick_edi, plane)?;
+        let settings = &self.settings.tr1_degrain;
+        let near = self.degrain_neighbours(cache, motion, |delta| delta.abs() == 1, edi_of, plane)?;
         let first = self.degrained(context, edi, &near, settings, plane);
         if self.settings.tr1 == 1 {
             let smoothed = self.merged(context, first.plane(), edi, TR1_EDI_WEIGHT_1, plane);
             return Ok(Some(smoothed));
         }
 
-        let far = self.degrain_neighbours(cache, motion, |delta| delta.abs() == 2, pick_edi, plane)?;
+        let far = self.degrain_neighbours(cache, motion, |delta| delta.abs() == 2, edi_of, plane)?;
         let second = self.degrained(context, edi, &far, settings, plane);
         let blended = self.merged(context, first.plane(), second.plane(), TR1_SECOND_WEIGHT, plane);
         let smoothed = self.merged(context, blended.plane(), edi, TR1_EDI_WEIGHT_2, plane);
@@ -744,9 +750,8 @@ impl<R: Runtime> Chain<R> {
         let stable = match radius {
             0 => None,
             _ => {
-                let pick_limited: fn(&FieldState) -> &Option<Vec<Scratch>> = |state| &state.limited;
                 let within = |delta: i32| delta.abs() <= radius;
-                let neighbours = self.degrain_neighbours(cache, motion, within, pick_limited, plane)?;
+                let neighbours = self.degrain_neighbours(cache, motion, within, limited_of, plane)?;
                 let settings = &self.settings.tr2_degrain;
                 let degrained = self.degrained(context, limited, &neighbours, settings, plane);
                 Some(degrained)
