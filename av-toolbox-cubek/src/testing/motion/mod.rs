@@ -2,7 +2,7 @@ mod metrics;
 mod reference;
 mod synthetic;
 
-pub use self::metrics::{psnr, psnr_within, vector_accuracy, write_luma_y4m};
+pub use self::metrics::{Interlace, psnr, psnr_within, vector_accuracy, write_luma_y4m, write_y4m};
 pub use self::reference::{
     ReferenceField,
     half_pel_sample,

@@ -110,6 +110,54 @@ pub fn vector_accuracy(
     accurate as f64 / interior as f64
 }
 
+/// How the fields of a y4m's frames are laid out.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Interlace {
+    Progressive,
+    TopFirst,
+}
+
+impl Interlace {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Progressive => "Ip",
+            Self::TopFirst => "It",
+        }
+    }
+}
+
+/// Writes `frames`, each its Y, U and V code values at 4:2:0, as a y4m at `rate` frames per second.
+///
+/// Samples take one byte when `bits` is 8, and two little-endian bytes above.
+pub fn write_y4m(
+    path: &Path,
+    frames: &[[Vec<i32>; 3]],
+    (width, height): (usize, usize),
+    bits: u32,
+    rate: u32,
+    interlace: Interlace,
+) -> io::Result<()> {
+    let wide = bits > 8;
+    let suffix = if wide { format!("p{bits}") } else { String::new() };
+    let tag = interlace.tag();
+    let header = format!("YUV4MPEG2 W{width} H{height} F{rate}:1 {tag} A1:1 C420{suffix}\n");
+
+    let mut bytes = header.into_bytes();
+    for planes in frames {
+        bytes.extend_from_slice(b"FRAME\n");
+        for code in planes.iter().flatten() {
+            if wide {
+                bytes.extend_from_slice(&(*code as u16).to_le_bytes());
+            } else {
+                bytes.push(*code as u8);
+            }
+        }
+    }
+
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(&bytes)
+}
+
 /// Writes `frames`, each a luma plane normalised to between 0 and 1, as a 4:2:0 y4m with flat chroma.
 ///
 /// Samples take one byte when `bits` is 8, and two little-endian bytes above.
@@ -120,14 +168,11 @@ pub fn write_luma_y4m(
     bits: u32,
     frames: &[Vec<f32>],
 ) -> io::Result<()> {
-    let wide = bits > 8;
     let peak = ((1u32 << bits) - 1) as f32;
-    let suffix = if wide { format!("p{bits}") } else { String::new() };
-    let header = format!("YUV4MPEG2 W{width} H{height} F24:1 Ip A1:1 C420{suffix}\n");
-
-    let mut bytes = header.into_bytes();
+    let flat = 1i32 << (bits - 1);
     let chroma_samples = (width / 2) * (height / 2);
-    let flat = 1u32 << (bits - 1);
+
+    let mut coded = Vec::with_capacity(frames.len());
     for frame in frames {
         assert_eq!(
             frame.len(),
@@ -135,22 +180,14 @@ pub fn write_luma_y4m(
             "a frame does not fit {width}x{height}"
         );
 
-        bytes.extend_from_slice(b"FRAME\n");
         let luma = frame
             .iter()
-            .map(|sample| (sample * peak).round().clamp(0.0, peak) as u32);
-        let chroma = std::iter::repeat_n(flat, 2 * chroma_samples);
-        for code in luma.chain(chroma) {
-            if wide {
-                bytes.extend_from_slice(&(code as u16).to_le_bytes());
-            } else {
-                bytes.push(code as u8);
-            }
-        }
+            .map(|sample| (sample * peak).round().clamp(0.0, peak) as i32)
+            .collect();
+        coded.push([luma, vec![flat; chroma_samples], vec![flat; chroma_samples]]);
     }
 
-    let mut file = std::fs::File::create(path)?;
-    file.write_all(&bytes)
+    write_y4m(path, &coded, (width, height), bits, 24, Interlace::Progressive)
 }
 
 #[cfg(test)]

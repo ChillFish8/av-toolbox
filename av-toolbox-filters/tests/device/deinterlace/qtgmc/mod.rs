@@ -58,17 +58,17 @@ const QTGMC_MDIS: u32 = 8;
 ///
 /// A gray clip has empty chroma planes.
 #[derive(Clone)]
-struct Clip {
-    name: String,
-    bits: u32,
-    width: usize,
-    height: usize,
-    frames: Vec<[Vec<i32>; 3]>,
+pub(super) struct Clip {
+    pub(super) name: String,
+    pub(super) bits: u32,
+    pub(super) width: usize,
+    pub(super) height: usize,
+    pub(super) frames: Vec<[Vec<i32>; 3]>,
 }
 
 impl Clip {
     /// The field clip called `name`.
-    fn named(name: &str) -> Self {
+    pub(super) fn named(name: &str) -> Self {
         let clips = field_clips();
         let found = clips
             .into_iter()
@@ -115,7 +115,7 @@ impl Clip {
         self.frames[0][1].is_empty()
     }
 
-    fn sample(&self) -> SampleFormat {
+    pub(super) fn sample(&self) -> SampleFormat {
         match self.bits {
             8 => SampleFormat::U8,
             _ => ten_bit(),
@@ -128,7 +128,7 @@ impl Clip {
 }
 
 /// The 25 frames per second format of `clip`, with its fields in `order`.
-fn interlaced(clip: &Clip, order: FieldOrder) -> FrameFormat {
+pub(super) fn interlaced(clip: &Clip, order: FieldOrder) -> FrameFormat {
     let layout = if clip.is_gray() {
         FrameLayout::Grey
     } else {
@@ -152,7 +152,7 @@ fn interlaced(clip: &Clip, order: FieldOrder) -> FrameFormat {
 }
 
 /// The format `deinterlace/qtgmc` emits for `input`, at twice its rate when `double` is set.
-fn deinterlaced(input: FrameFormat, double: bool) -> FrameFormat {
+pub(super) fn deinterlaced(input: FrameFormat, double: bool) -> FrameFormat {
     let frame_rate = match (double, input.frame_rate) {
         (true, Some(rate)) => FrameRate::new(rate.numerator() * 2, rate.denominator()),
         (_, unchanged) => unchanged,
@@ -166,7 +166,7 @@ fn deinterlaced(input: FrameFormat, double: bool) -> FrameFormat {
 }
 
 /// The frames of `clip` as inputs of `format`, numbered from `first` and 40 ms apart.
-fn inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input> {
+pub(super) fn inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input> {
     let element = element_of(format.sample);
     let plane_count = format.channels().len();
 
@@ -194,8 +194,8 @@ fn inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input> {
 }
 
 /// What the stage gave for one chunk, its outputs and every motion search it ran.
-struct ChunkRun {
-    outputs: Vec<Output>,
+pub(super) struct ChunkRun {
+    pub(super) outputs: Vec<Output>,
     motion: Vec<QtgmcMotion>,
 }
 
@@ -246,7 +246,7 @@ fn run_chunks(
 }
 
 /// Runs `clip` at double rate, top field first, as one chunk.
-fn run_clip(args: serde_json::Value, clip: &Clip) -> ChunkRun {
+pub(super) fn run_clip(args: serde_json::Value, clip: &Clip) -> ChunkRun {
     let input = interlaced(clip, FieldOrder::TopFirst);
     let output = deinterlaced(input, true);
     let chunk = inputs(clip, &input, 0);

@@ -65,7 +65,7 @@ fn deinterlaced(input: FrameFormat, double: bool) -> FrameFormat {
     }
 }
 
-fn run(
+pub(super) fn run(
     args: serde_json::Value,
     input: FrameFormat,
     output: FrameFormat,

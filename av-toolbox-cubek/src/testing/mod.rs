@@ -142,6 +142,7 @@ pub use self::lineart::{
     reference_vinverse,
 };
 pub use self::motion::{
+    Interlace,
     MOTION_FIXTURES,
     MotionClip,
     MotionFixture,
@@ -169,6 +170,7 @@ pub use self::motion::{
     vector_accuracy,
     write_luma_y4m,
     write_motion_inputs,
+    write_y4m,
 };
 pub use self::neighbourhood::{
     reference_chain,
