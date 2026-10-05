@@ -3,6 +3,7 @@ use av_toolbox_gpu::{
     BuildContext,
     BuildTask,
     Frame,
+    FrameContext,
     FrameFormat,
     FrameMeta,
     HostPool,
@@ -54,48 +55,60 @@ fn read_back<R: Runtime>(build: &BuildContext<R>, format: &FrameFormat, emitted:
     }
 }
 
+/// Runs one chunk through `filter`, starting and ending the stream around it.
+pub(crate) fn run_chunk<R: Runtime>(
+    build: &BuildContext<R>,
+    context: &mut FrameContext,
+    filter: &mut dyn Filter,
+    formats: (&FrameFormat, &FrameFormat),
+    chunk: Vec<Input>,
+) -> Vec<Output> {
+    let (input_format, output_format) = formats;
+    let host = HostPool::new();
+    let mut outputs = Vec::new();
+
+    filter.start_of_stream(context).expect("should start the stream");
+
+    for input in chunk {
+        let mut frame = host.alloc_frame(input_format, input.meta);
+        for (index, channel) in input_format.channels().iter().enumerate() {
+            let plane = frame
+                .plane_mut(*channel)
+                .expect("the format carries this channel");
+            plane.copy_from_slice(&input.planes[index]);
+        }
+
+        let frozen = frame.freeze();
+        let item = HostStreamItem::Frame(frozen);
+        let loaded: StreamItem = context.load_host(&item).expect("the item should load");
+        let inputs = Inputs::new(vec![Some(loaded)]);
+
+        let emitted = filter.process(context, inputs).expect("should process");
+        for frame in emitted {
+            let output = read_back(build, output_format, frame);
+            outputs.push(output);
+        }
+    }
+
+    let flushed = filter.end_of_stream(context).expect("should end the stream");
+    for frame in flushed {
+        let output = read_back(build, output_format, frame);
+        outputs.push(output);
+    }
+
+    outputs
+}
+
 impl BuildTask for Stream {
     type Output = Vec<Output>;
 
     fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
         let mut context = build.frame_context();
-        let host = HostPool::new();
         let mut outputs = Vec::new();
-
         for chunk in self.chunks {
-            self.filter
-                .start_of_stream(&mut context)
-                .expect("should start the stream");
-
-            for input in chunk {
-                let mut frame = host.alloc_frame(&self.input, input.meta);
-                for (index, channel) in self.input.channels().iter().enumerate() {
-                    let plane = frame
-                        .plane_mut(*channel)
-                        .expect("the format carries this channel");
-                    plane.copy_from_slice(&input.planes[index]);
-                }
-
-                let frozen = frame.freeze();
-                let item = HostStreamItem::Frame(frozen);
-                let loaded: StreamItem = context.load_host(&item).expect("the item should load");
-                let inputs = Inputs::new(vec![Some(loaded)]);
-
-                let emitted = self.filter.process(&mut context, inputs).expect("should process");
-                for frame in emitted {
-                    let output = read_back(build, &self.output, frame);
-                    outputs.push(output);
-                }
-            }
-
-            let flushed = self
-                .filter
-                .end_of_stream(&mut context)
-                .expect("should end the stream");
-            for frame in flushed {
-                let output = read_back(build, &self.output, frame);
-                outputs.push(output);
-            }
+            let formats = (&self.input, &self.output);
+            let emitted = run_chunk(build, &mut context, self.filter.as_mut(), formats, chunk);
+            outputs.extend(emitted);
         }
 
         outputs

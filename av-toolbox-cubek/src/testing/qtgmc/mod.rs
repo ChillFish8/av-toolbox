@@ -8,11 +8,14 @@ mod tests;
 pub use self::chain::{
     Interpolate,
     QtgmcFieldSteps,
+    QtgmcReferenceRun,
     QtgmcReferenceSettings,
     ReferenceMotion,
+    ReferenceSearch,
     qtgmc_deltas,
     reference_qtgmc,
     reference_qtgmc_field,
+    reference_qtgmc_run,
 };
 pub use self::fields::{FieldClip, field_clips};
 pub use self::fixtures::{FixturePlane, QtgmcFixture, qtgmc_fixture, write_qtgmc_inputs};

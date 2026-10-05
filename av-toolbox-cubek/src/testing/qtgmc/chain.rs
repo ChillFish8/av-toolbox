@@ -579,9 +579,59 @@ pub fn reference_qtgmc(
     settings: &QtgmcReferenceSettings,
     interpolate: Interpolate<'_>,
 ) -> Vec<[Vec<f32>; 3]> {
-    let run = chain(frames, (width, height), bits, settings, interpolate).run();
+    let run = reference_qtgmc_run(frames, (width, height), bits, settings, interpolate);
 
     run.output
+}
+
+/// One search from a field to a neighbour that exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReferenceSearch {
+    /// How many fields after the centre the neighbour is, negative for fields before it.
+    pub delta: i32,
+    /// The search from the centre to the neighbour, in half pixels.
+    pub field: ReferenceField,
+    /// Whether the field is a scene change.
+    pub flagged: bool,
+}
+
+/// Every output field of the chain, with every field's searches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QtgmcReferenceRun {
+    pub output: Vec<[Vec<f32>; 3]>,
+    /// Each field's searches, in [qtgmc_deltas] order.
+    pub motion: Vec<Vec<ReferenceSearch>>,
+}
+
+/// The same as [reference_qtgmc](crate::testing::reference_qtgmc), also giving every field's searches.
+pub fn reference_qtgmc_run(
+    frames: &[[Vec<f32>; 3]],
+    luma: (usize, usize),
+    bits: u32,
+    settings: &QtgmcReferenceSettings,
+    interpolate: Interpolate<'_>,
+) -> QtgmcReferenceRun {
+    let run = chain(frames, luma, bits, settings, interpolate).run();
+
+    let motion = run
+        .motion
+        .into_iter()
+        .map(|searches| {
+            searches
+                .into_iter()
+                .map(|found| ReferenceSearch {
+                    delta: found.delta,
+                    field: found.field,
+                    flagged: found.flagged,
+                })
+                .collect()
+        })
+        .collect();
+
+    QtgmcReferenceRun {
+        output: run.output,
+        motion,
+    }
 }
 
 /// Every intermediate of field `centre` of [reference_qtgmc](crate::testing::reference_qtgmc) over the
