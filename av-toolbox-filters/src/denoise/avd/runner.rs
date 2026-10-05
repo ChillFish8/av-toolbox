@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use av_denoise_core::{Engine, Geometry, Nl4d, Nlmeans};
 use av_toolbox_core::{Filter, Inputs, StageError, StageInstance};
 use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::values::offset;
 use av_toolbox_cubek::words::copy_plane;
 use av_toolbox_gpu::{
     BuildContext,
@@ -19,6 +20,7 @@ use av_toolbox_gpu::{
     Runtime,
     SampleFormat,
 };
+use cubecl::server::Handle;
 
 use super::args::{AvdArgs, EngineOptions};
 use super::planes::{EngineSpec, engine_sample, engine_specs, needs_padding};
@@ -104,12 +106,49 @@ fn built_engine<R: Runtime>(
     }
 }
 
+/// Where av-denoise reads neutral float chroma, which av-toolbox stores at 0.
+const CHROMA_CENTRE: f32 = 0.5;
+
+/// How one plane reaches its engine and comes back.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Staging {
+    /// The frame's own plane is bound.
+    Direct,
+    /// The plane falls short of whole words, so it goes through scratch rounded up to them.
+    Padded,
+    /// Float chroma goes through scratch shifted by [CHROMA_CENTRE], since av-denoise reads it from 0 to 1.
+    Centred,
+}
+
+/// How the plane at `plane_index` of `format` reaches an engine of `spec`'s size.
+fn staging_of(format: &FrameFormat, spec: &EngineSpec, plane_index: usize) -> Staging {
+    let channel = format.channels()[plane_index];
+    let is_chroma = matches!(channel, Channel::U | Channel::V);
+    if format.sample == SampleFormat::F32 && is_chroma {
+        return Staging::Centred;
+    }
+
+    if needs_padding(format.sample, spec.width, spec.height) {
+        return Staging::Padded;
+    }
+
+    Staging::Direct
+}
+
+/// The scratch handle when a plane was staged, otherwise the plane's own.
+fn bound_handle<'a>(plane: &'a Plane, staged: &'a Option<PlaneBuffer>) -> &'a Handle {
+    match staged {
+        Some(scratch) => scratch.handle(),
+        None => plane.buffer().handle(),
+    }
+}
+
 /// One av-denoise engine and the planes it denoises.
 struct PlaneEngine {
     engine: Box<dyn Engine>,
     spec: EngineSpec,
-    /// Whether its planes fall short of whole words and go through padded scratch.
-    padded: bool,
+    /// How each of its planes is staged, in the engine's plane order.
+    staging: Vec<Staging>,
 }
 
 impl PlaneEngine {
@@ -158,9 +197,17 @@ impl<R: Runtime> AvdFilter<R> {
 
             let built = built_engine(client, options, geometry);
             let engine = built.map_err(|error| unbuildable(A::STAGE, &spec, error))?;
-            let padded = needs_padding(input.sample, spec.width, spec.height);
+            let staging = spec
+                .planes
+                .iter()
+                .map(|plane_index| staging_of(&input, &spec, *plane_index))
+                .collect();
 
-            engines.push(PlaneEngine { engine, spec, padded });
+            engines.push(PlaneEngine {
+                engine,
+                spec,
+                staging,
+            });
         }
 
         Ok(Self {
@@ -201,6 +248,71 @@ impl<R: Runtime> AvdFilter<R> {
         scratch
     }
 
+    /// Writes `source` plus `amount` into `target`, two f32 planes of the same size.
+    fn shifted(&self, context: &FrameContext, source: &Handle, target: &Handle, samples: u32, amount: f32) {
+        let sizing = Sizing(context);
+
+        // Safety: both buffers hold `samples` f32 values.
+        let source_plane = unsafe { av_toolbox_cubek::DevicePlane::new(source, samples, 1) };
+
+        // Safety: both buffers hold `samples` f32 values.
+        let target_plane = unsafe { av_toolbox_cubek::DevicePlane::new(target, samples, 1) };
+
+        offset(&self.client, &sizing, source_plane, target_plane, amount);
+    }
+
+    /// Copies float chroma into scratch, moved from centred on 0 to centred on [CHROMA_CENTRE].
+    fn centred_copy(&self, context: &FrameContext, plane: &Plane) -> PlaneBuffer {
+        let scratch = context.scratch(plane.buffer().bytes());
+        let samples = plane.samples() as u32;
+
+        self.shifted(
+            context,
+            plane.buffer().handle(),
+            scratch.handle(),
+            samples,
+            CHROMA_CENTRE,
+        );
+
+        scratch
+    }
+
+    /// The scratch `plane` is staged through on its way into an engine, if it needs any.
+    fn staged_input(
+        &self,
+        context: &FrameContext,
+        engine: &PlaneEngine,
+        plane: &Plane,
+        staging: Staging,
+    ) -> Option<PlaneBuffer> {
+        match staging {
+            Staging::Direct => None,
+            Staging::Padded => Some(self.padded_copy(context, engine, plane)),
+            Staging::Centred => Some(self.centred_copy(context, plane)),
+        }
+    }
+
+    /// Empty scratch for an engine to write a plane into before it is restored, if it needs any.
+    fn staged_output(
+        &self,
+        context: &FrameContext,
+        engine: &PlaneEngine,
+        staging: Staging,
+    ) -> Option<PlaneBuffer> {
+        match staging {
+            Staging::Direct => None,
+            Staging::Padded => {
+                let bytes = engine.padded_bytes(self.format.sample);
+                Some(context.scratch(bytes))
+            },
+            Staging::Centred => {
+                let samples = engine.spec.width as usize * engine.spec.height as usize;
+                let bytes = samples * self.format.sample.bytes();
+                Some(context.scratch(bytes))
+            },
+        }
+    }
+
     /// Pushes `frame` into every engine and returns how many frames are ready.
     fn push(&mut self, context: &FrameContext, frame: &Frame) -> Result<usize, StageError> {
         let mut ready = None;
@@ -233,18 +345,17 @@ impl<R: Runtime> AvdFilter<R> {
             sources.push(plane);
         }
 
-        let staged: Vec<PlaneBuffer> = match engine.padded {
-            true => sources
-                .iter()
-                .map(|plane| self.padded_copy(context, engine, plane))
-                .collect(),
-            false => Vec::new(),
-        };
+        let mut staged = Vec::with_capacity(sources.len());
+        for (plane, staging) in sources.iter().zip(&engine.staging) {
+            let scratch = self.staged_input(context, engine, plane, *staging);
+            staged.push(scratch);
+        }
 
-        let handles: Vec<_> = match engine.padded {
-            true => staged.iter().map(PlaneBuffer::handle).collect(),
-            false => sources.iter().map(|plane| plane.buffer().handle()).collect(),
-        };
+        let handles: Vec<_> = sources
+            .iter()
+            .zip(&staged)
+            .map(|(plane, scratch)| bound_handle(plane, scratch))
+            .collect();
         let planes: Vec<av_denoise_core::DevicePlane<'_>> = handles
             .iter()
             .map(|handle| av_denoise_core::DevicePlane::new(handle, width, height))
@@ -294,18 +405,17 @@ impl<R: Runtime> AvdFilter<R> {
             outputs.push(plane);
         }
 
-        let staged: Vec<PlaneBuffer> = match engine.padded {
-            true => {
-                let bytes = engine.padded_bytes(self.format.sample);
-                outputs.iter().map(|_| context.scratch(bytes)).collect()
-            },
-            false => Vec::new(),
-        };
+        let mut staged = Vec::with_capacity(outputs.len());
+        for staging in &engine.staging {
+            let scratch = self.staged_output(context, engine, *staging);
+            staged.push(scratch);
+        }
 
-        let handles: Vec<_> = match engine.padded {
-            true => staged.iter().map(PlaneBuffer::handle).collect(),
-            false => outputs.iter().map(|plane| plane.buffer().handle()).collect(),
-        };
+        let handles: Vec<_> = outputs
+            .iter()
+            .zip(&staged)
+            .map(|(plane, scratch)| bound_handle(plane, scratch))
+            .collect();
         let planes: Vec<av_denoise_core::DevicePlane<'_>> = handles
             .iter()
             .map(|handle| av_denoise_core::DevicePlane::new(handle, width, height))
@@ -315,31 +425,52 @@ impl<R: Runtime> AvdFilter<R> {
         let emitted = self.engines[index].engine.emit_into(&planes);
         emitted.map_err(|error| refused(stage, error))?;
 
-        if self.engines[index].padded {
-            self.unpad(context, &staged, &outputs);
+        let staging = self.engines[index].staging.clone();
+        for ((output, scratch), staging) in outputs.iter().zip(&staged).zip(staging) {
+            let Some(scratch) = scratch else {
+                continue;
+            };
+
+            self.restore(context, staging, scratch, output);
         }
 
         Ok(outputs)
     }
 
-    /// Copies each padded scratch plane back into its output plane.
-    fn unpad(&self, context: &FrameContext, staged: &[PlaneBuffer], outputs: &[Plane]) {
+    /// Writes a staged scratch plane back into its output plane, undoing the staging.
+    fn restore(&self, context: &FrameContext, staging: Staging, scratch: &PlaneBuffer, output: &Plane) {
+        let samples = output.samples() as u32;
+
+        match staging {
+            Staging::Direct => {},
+            Staging::Padded => self.unpad(context, scratch, output),
+            Staging::Centred => {
+                let amount = -CHROMA_CENTRE;
+                self.shifted(
+                    context,
+                    scratch.handle(),
+                    output.buffer().handle(),
+                    samples,
+                    amount,
+                );
+            },
+        }
+    }
+
+    /// Copies a padded scratch plane back into its output plane.
+    fn unpad(&self, context: &FrameContext, scratch: &PlaneBuffer, output: &Plane) {
         let element = element_of(self.format.sample);
         let sizing = Sizing(context);
+        let samples = output.samples() as u32;
+        let padded_samples = (scratch.bytes() / self.format.sample.bytes()) as u32;
 
-        for (scratch, output) in staged.iter().zip(outputs) {
-            let (width, height) = output.dimensions();
-            let samples = width * height;
-            let padded_samples = (scratch.bytes() / self.format.sample.bytes()) as u32;
+        // Safety: the scratch holds `padded_samples` samples of the frame's sample format.
+        let source = unsafe { av_toolbox_cubek::DevicePlane::new(scratch.handle(), padded_samples, 1) };
 
-            // Safety: the scratch holds `padded_samples` samples of the frame's sample format.
-            let source = unsafe { av_toolbox_cubek::DevicePlane::new(scratch.handle(), padded_samples, 1) };
+        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
+        let target = unsafe { av_toolbox_cubek::DevicePlane::new(output.buffer().handle(), samples, 1) };
 
-            // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-            let target = unsafe { av_toolbox_cubek::DevicePlane::new(output.buffer().handle(), samples, 1) };
-
-            copy_plane(&self.client, &sizing, source, target, element);
-        }
+        copy_plane(&self.client, &sizing, source, target, element);
     }
 
     /// Builds the output of the oldest held frame from every engine's planes and the held frame's other planes.

@@ -32,7 +32,7 @@ use cubecl::prelude::Runtime;
 use cubecl::server::Handle;
 use serde_json::json;
 
-use super::{noisy_clip, run, yuv420};
+use super::{float_clip, noisy_clip, run, yuv420};
 use crate::stream::{Input, Output};
 use crate::support::{backend, frame};
 
@@ -298,6 +298,22 @@ fn ten_bit_clip(format: &FrameFormat, frames: u64) -> Vec<Input> {
     clip
 }
 
+/// Adds `amount` to every chroma sample of a frame's float planes.
+fn shift_chroma(planes: &mut [Vec<u8>], amount: f32) {
+    for plane in planes.iter_mut().skip(1) {
+        let (words, _) = plane.as_chunks::<4>();
+
+        let mut bytes = Vec::with_capacity(plane.len());
+        for word in words {
+            let value = f32::from_le_bytes(*word);
+            let shifted = value + amount;
+            bytes.extend_from_slice(&shifted.to_le_bytes());
+        }
+
+        *plane = bytes;
+    }
+}
+
 fn assert_same(stage: &str, found: &[Output], expected: &[Vec<Vec<u8>>]) {
     assert_eq!(found.len(), expected.len(), "{stage}");
 
@@ -489,4 +505,40 @@ fn a_wide_search_radius_builds() {
     );
 
     assert_eq!(outputs.len(), 1);
+}
+
+#[test]
+fn centred_float_chroma_matches_the_engine() {
+    let format = yuv420(64, 32, SampleFormat::F32);
+    let clip = float_clip(&format, 6);
+
+    let mut uncentred = clip.clone();
+    for input in &mut uncentred {
+        shift_chroma(&mut input.planes, 0.5);
+    }
+
+    let hq = NlmeansHqOptions {
+        nlm: base_nlmeans(),
+        hq: HqParams::default(),
+    };
+    let stages = [
+        (
+            "av-denoise/nlmeans-hq",
+            ReferenceOptions::Nlmeans(NlmeansAlgorithm::Hq(hq)),
+        ),
+        ("av-denoise/nl4d", ReferenceOptions::Nl4d(base_nl4d())),
+    ];
+
+    for (stage, options) in stages {
+        let engines = split_engines(&format, options, options);
+
+        let mut expected = reference(engines, &format, uncentred.clone());
+        for planes in &mut expected {
+            shift_chroma(planes, -0.5);
+        }
+
+        let found = run(stage, json!({}), format, vec![clip.clone()]);
+
+        assert_same(stage, &found, &expected);
+    }
 }

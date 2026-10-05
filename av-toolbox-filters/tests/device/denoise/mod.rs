@@ -43,6 +43,28 @@ pub(super) fn noisy_clip(format: &FrameFormat, frames: u64) -> Vec<Input> {
         .collect()
 }
 
+/// `noisy_clip`'s samples as normalised floats, with chroma centred on 0 the way av-toolbox stores it.
+pub(super) fn float_clip(format: &FrameFormat, frames: u64) -> Vec<Input> {
+    let mut clip = noisy_clip(format, frames);
+
+    for input in &mut clip {
+        for (index, plane) in input.planes.iter_mut().enumerate() {
+            let centre = if index == 0 { 0.0 } else { 0.5 };
+
+            let mut bytes = Vec::with_capacity(plane.len() * 4);
+            for code in plane.iter() {
+                let normalised = f32::from(*code) / 255.0;
+                let value = normalised - centre;
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+
+            *plane = bytes;
+        }
+    }
+
+    clip
+}
+
 pub(super) fn run(
     stage: &str,
     args: serde_json::Value,

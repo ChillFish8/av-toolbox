@@ -1,6 +1,6 @@
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::testing::reference_narrow;
-use av_toolbox_cubek::values::{narrow, widen};
+use av_toolbox_cubek::values::{narrow, offset, widen};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -112,5 +112,46 @@ fn narrowing_rounds_and_clamps_like_the_reference() {
         let expected = reference_narrow(&values, peak);
 
         assert_eq!(narrowed, expected, "peak {peak}");
+    }
+}
+
+struct Offset {
+    input: Vec<f32>,
+    amount: f32,
+}
+
+impl BuildTask for Offset {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let samples = self.input.len() as u32;
+        let output_bytes = self.input.len() * size_of::<f32>();
+
+        let input = upload_f32(client, &self.input);
+        let output = empty(client, output_bytes);
+        let input_plane = plane(&input, samples, 1);
+        let output_plane = plane(&output, samples, 1);
+        offset(client, &sizing, input_plane, output_plane, self.amount);
+
+        read_f32(client, &output)
+    }
+}
+
+#[test]
+fn offsetting_adds_the_amount_to_every_sample() {
+    let values = vec![-0.5, -0.25, 0.0, 0.125, 0.5];
+
+    for amount in [0.5, -0.5] {
+        let task = Offset {
+            input: values.clone(),
+            amount,
+        };
+        let offsetted = backend().build(task);
+        let expected: Vec<f32> = values.iter().map(|value| value + amount).collect();
+
+        assert_eq!(offsetted, expected, "amount {amount}");
     }
 }

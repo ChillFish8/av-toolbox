@@ -26,6 +26,15 @@ fn narrow_kernel<E: Int>(input: &Array<f32>, output: &mut Array<E>, peak: f32) {
     output[ABSOLUTE_POS] = E::cast_from(clamped);
 }
 
+#[cube(launch_unchecked)]
+fn offset_kernel(input: &Array<f32>, output: &mut Array<f32>, amount: f32) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    output[ABSOLUTE_POS] = input[ABSOLUTE_POS] + amount;
+}
+
 /// Copies an integer plane into f32 code values.
 pub fn widen<R: Runtime>(
     client: &ComputeClient<R>,
@@ -89,5 +98,25 @@ fn launch_narrow<E: Int, R: Runtime>(
     // Safety: the input holds `samples` f32 values and the output as many values of `E`.
     unsafe {
         narrow_kernel::launch_unchecked::<E, R>(client, cubes, unit, input_array, output_array, peak);
+    }
+}
+
+/// Adds `amount` to every sample of an f32 plane, writing the result into `output`.
+pub fn offset<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    input: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+    amount: f32,
+) {
+    let samples = output.samples();
+    let input_array = input.array::<R>();
+    let output_array = output.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the input and the output each hold `samples` f32 values.
+    unsafe {
+        offset_kernel::launch_unchecked::<R>(client, cubes, unit, input_array, output_array, amount);
     }
 }

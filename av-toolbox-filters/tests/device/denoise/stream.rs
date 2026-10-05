@@ -1,11 +1,11 @@
 use std::error::Error;
 
 use av_toolbox_core::{InputArgument, PipelineRegistry, PreparedStage, StageHandle, StageKind, StreamType};
-use av_toolbox_gpu::{ResolvedFormats, SampleFormat, StreamFormat};
+use av_toolbox_gpu::{ChromaLocation, FrameLayout, ResolvedFormats, SampleFormat, StreamFormat, Subsampling};
 use serde_json::json;
 
-use super::{noisy_clip, run, yuv420};
-use crate::support::backend;
+use super::{float_clip, noisy_clip, run, yuv420};
+use crate::support::{backend, frame};
 
 fn error_chain(error: &dyn Error) -> String {
     let mut message = error.to_string();
@@ -137,4 +137,38 @@ fn nl4d_refuses_chroma_below_its_patch_size() {
     let message = error_chain(&error);
     assert!(message.contains("av-denoise/nl4d"), "{message}");
     assert!(message.contains("must be at least"), "{message}");
+}
+
+#[test]
+fn unselected_float_chroma_is_the_input() {
+    let format = yuv420(64, 32, SampleFormat::F32);
+    let clip = float_clip(&format, 4);
+
+    let outputs = run(
+        "av-denoise/nlmeans",
+        json!({ "planes": ["y"] }),
+        format,
+        vec![clip.clone()],
+    );
+
+    for (output, input) in outputs.iter().zip(&clip) {
+        assert_eq!(output.planes[1], input.planes[1]);
+        assert_eq!(output.planes[2], input.planes[2]);
+    }
+}
+
+/// The stream runner checks every emitted frame's format, so a lost chroma location fails there.
+#[test]
+fn every_stage_keeps_the_chroma_location() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let format = frame(64, 32, layout, SampleFormat::U8, ChromaLocation::TopLeft);
+    let clip = noisy_clip(&format, 4);
+
+    for stage in ["av-denoise/nlmeans", "av-denoise/nlmeans-hq", "av-denoise/nl4d"] {
+        let outputs = run(stage, json!({}), format, vec![clip.clone()]);
+
+        assert_eq!(outputs.len(), clip.len(), "{stage}");
+    }
 }

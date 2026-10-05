@@ -19,7 +19,7 @@
 //! - [lineart] for the per-pixel steps of the lineart filters.
 //! - [motion] for searching how each block of a frame moved between frames.
 //! - [sobel] for image gradients.
-//! - [values] for moving integer planes into f32 code values and back.
+//! - [values] for moving integer planes into f32 code values and back, and offsetting f32 planes.
 //! - [labels] for connected components.
 //! - [neighbourhood] for 3x3 maximum, minimum, blurs, medians, Prewitt, MinBlur, inflate and deflate.
 //! - [padding] for growing a plane by repeating its edges, and cropping it back.
