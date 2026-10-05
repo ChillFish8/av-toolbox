@@ -216,7 +216,7 @@ pub fn centred_taps(input_len: u32, output_len: u32, kernel: &Kernel) -> Taps {
 pub struct Weights {
     starts: Handle,
     weights: Handle,
-    count: u32,
+    pub(crate) count: u32,
     outputs: u32,
 }
 
@@ -235,7 +235,7 @@ pub fn upload<R: Runtime>(client: &ComputeClient<R>, taps: &Taps) -> Weights {
 }
 
 impl Weights {
-    fn starts<R: Runtime>(&self) -> ArrayArg<R> {
+    pub(crate) fn starts<R: Runtime>(&self) -> ArrayArg<R> {
         let handle = self.starts.clone();
         let len = self.outputs as usize;
 
@@ -243,7 +243,7 @@ impl Weights {
         unsafe { ArrayArg::from_raw_parts(handle, len) }
     }
 
-    fn weights<R: Runtime>(&self) -> ArrayArg<R> {
+    pub(crate) fn weights<R: Runtime>(&self) -> ArrayArg<R> {
         let handle = self.weights.clone();
         let len = (self.outputs * self.count) as usize;
 

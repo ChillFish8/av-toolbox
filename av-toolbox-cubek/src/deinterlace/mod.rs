@@ -1,4 +1,5 @@
 mod bwdif;
+pub mod qtgmc;
 
 pub use self::bwdif::{BWDIF_MIN_ROWS, BwdifField, BwdifPlanes, bwdif_field};
 #[cfg(any(test, feature = "test-support"))]
