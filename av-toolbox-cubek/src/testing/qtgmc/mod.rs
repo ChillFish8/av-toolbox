@@ -24,10 +24,13 @@ pub use self::reference::{
     reference_bob,
     reference_clamp,
     reference_clamped_difference,
+    reference_repair_blend,
     reference_resharpen,
+    reference_sad_mask,
     reference_search_clip,
     reference_search_inputs,
     reference_shimmer,
     reference_temporal_limits,
     reference_tr0,
+    reference_vertical_blur,
 };

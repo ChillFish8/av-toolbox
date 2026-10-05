@@ -206,12 +206,15 @@ pub use self::qtgmc::{
     reference_qtgmc,
     reference_qtgmc_field,
     reference_qtgmc_run,
+    reference_repair_blend,
     reference_resharpen,
+    reference_sad_mask,
     reference_search_clip,
     reference_search_inputs,
     reference_shimmer,
     reference_temporal_limits,
     reference_tr0,
+    reference_vertical_blur,
     write_qtgmc_inputs,
 };
 pub use self::resize::{

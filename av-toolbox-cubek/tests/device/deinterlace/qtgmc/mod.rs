@@ -4,6 +4,7 @@ mod chain;
 mod difference;
 mod limits;
 mod pointwise;
+mod repair;
 mod shimmer;
 mod steps;
 

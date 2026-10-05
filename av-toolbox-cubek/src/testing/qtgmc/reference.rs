@@ -8,6 +8,15 @@ use crate::deinterlace::qtgmc::{
     restore_limits,
     search_levels,
 };
+use crate::motion::{
+    BlockGrid,
+    WEIGHT_HALF,
+    WEIGHT_MAX,
+    WEIGHT_SHIFT,
+    covered_area,
+    sad_byte,
+    simple_resize_tables,
+};
 use crate::neighbourhood::{Edge, Extreme, Shape, Smooth};
 use crate::testing::{
     reference_chain_with_edge,
@@ -316,4 +325,120 @@ pub fn reference_temporal_limits(centre: &[f32], neighbours: &[&[f32]]) -> (Vec<
     }
 
     (upper, lower)
+}
+
+/// `(first × (max − weight) + second × weight + half) >> shift`, one of `SimpleResize`'s blends.
+fn simple_blend(first: u32, second: u32, weight: u32) -> u32 {
+    let first_weight = WEIGHT_MAX - weight;
+
+    (first * first_weight + second * weight + WEIGHT_HALF) >> WEIGHT_SHIFT
+}
+
+/// MVTools' `Mask(kind=1)` of a field's `sads` on the CPU, mirroring [sad_mask](crate::motion::sad_mask).
+///
+/// The lines cited are vapoursynth-mvtools' `src/` at master.
+///
+/// - A `flagged` field is not usable, so every sample is `ysc = 0` (`MVMask.cpp` 193 to 200).
+/// - Each block's SAD becomes a byte through `ByteNorm` with `dSADNormFactor = 4 × (1 / ml) / blksize²`
+///   (`MVMask.cpp` 143 and 304, `MaskFun.cpp` 128 to 132). At `time = 100`, `MakeSADMaskTime` reads every
+///   block's own SAD (`MaskFun.cpp` 135 to 159).
+/// - The bytes are resized to the covered area, `nWidthB` by `nHeightB` (`MVMask.cpp` 309, 310 and 331),
+///   through `InitTables` (`SimpleResize.cpp` 26 to 55). Each row blends two block rows into a byte, then
+///   each sample blends two of those, both in fixed point with 14 bits of weight (`SimpleResize.cpp` 76 to
+///   117, `SimpleResize.h` 27 to 31).
+/// - Columns and rows past the covered area repeat its last column and row (`MVMask.cpp` 164 to 170).
+///
+/// A byte is stored as its value times `1 / 255`.
+pub fn reference_sad_mask(
+    sads: &[f32],
+    grid: &BlockGrid,
+    flagged: bool,
+    ml: f32,
+    (width, height): (usize, usize),
+) -> Vec<f32> {
+    if flagged {
+        return vec![0.0; width * height];
+    }
+
+    let across = grid.across as usize;
+    let down = grid.down as usize;
+    let small_mask: Vec<u32> = sads.iter().map(|sad| sad_byte(*sad, ml, grid.blksize)).collect();
+
+    let (covered_width, covered_height) = covered_area(grid);
+    let (horizontal_offsets, horizontal_weights) = simple_resize_tables(covered_width, grid.across);
+    let (vertical_offsets, vertical_weights) = simple_resize_tables(covered_height, grid.down);
+    let (covered_width, covered_height) = (covered_width as usize, covered_height as usize);
+
+    // A read clamped into the grid only moves one that weighs 0.
+    let block_row = |offset: i32| offset.clamp(0, down as i32 - 1) as usize;
+    let block_column = |offset: i32| offset.clamp(0, across as i32 - 1) as usize;
+
+    let mut covered = vec![0u32; covered_width * covered_height];
+    for y in 0..covered_height {
+        let weight_bottom = vertical_weights[y];
+        let first_row = block_row(vertical_offsets[y]);
+        let second_row = block_row(vertical_offsets[y] + 1);
+
+        let work: Vec<u32> = (0..across)
+            .map(|x| {
+                let top = small_mask[first_row * across + x];
+                let bottom = small_mask[second_row * across + x];
+                simple_blend(top, bottom, weight_bottom)
+            })
+            .collect();
+
+        for x in 0..covered_width {
+            let weight_right = horizontal_weights[x];
+            let left = work[block_column(horizontal_offsets[x])];
+            let right = work[block_column(horizontal_offsets[x] + 1)];
+
+            covered[y * covered_width + x] = simple_blend(left, right, weight_right);
+        }
+    }
+
+    let inverse_peak = 1.0f32 / 255.0;
+    let mut output = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let source_row = y.min(covered_height - 1);
+
+        for x in 0..width {
+            let source_column = x.min(covered_width - 1);
+            let byte = covered[source_row * covered_width + source_column];
+
+            output.push(byte as f32 * inverse_peak);
+        }
+    }
+
+    output
+}
+
+/// `(above + 2 × centre + below) / 4` with the border clamped on the CPU, mirroring
+/// [vertical_blur](crate::deinterlace::qtgmc::vertical_blur).
+pub fn reference_vertical_blur(input: &[f32], width: usize, height: usize) -> Vec<f32> {
+    let mut output = Vec::with_capacity(input.len());
+    for row in 0..height {
+        let above = row.saturating_sub(1);
+        let below = (row + 1).min(height - 1);
+
+        for column in 0..width {
+            let top = input[above * width + column];
+            let centre = input[row * width + column];
+            let bottom = input[below * width + column];
+
+            output.push((top + 2.0 * centre + bottom) * 0.25);
+        }
+    }
+
+    output
+}
+
+/// `original + (rebuilt − original) × mask` on the CPU, mirroring
+/// [repair_blend](crate::deinterlace::qtgmc::repair_blend).
+pub fn reference_repair_blend(original: &[f32], rebuilt: &[f32], mask: &[f32]) -> Vec<f32> {
+    original
+        .iter()
+        .zip(rebuilt)
+        .zip(mask)
+        .map(|((kept, rebuild), weight)| kept + (rebuild - kept) * weight)
+        .collect()
 }

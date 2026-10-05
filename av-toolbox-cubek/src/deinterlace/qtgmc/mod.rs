@@ -10,6 +10,7 @@
 //! - [search_clip_from_repaired], [smode2_resharpen] and [back_blend] compose those into QTGMC's steps.
 //! - [QtgmcTables] holds the tables those steps resize with.
 //! - [vertical_midpoint] builds the plane SMode 2 blurs before resharpening.
+//! - [vertical_blur] and [repair_blend] are the steps repair mode adds.
 //! - [sharpness_strength] gives the strength [resharpen] is run with.
 //! - [fmtc_gauss_taps] builds the gaussian QTGMC blurs with.
 //! - [havsfunc_scale] converts a level given for 8 bit video to a code value.
@@ -19,6 +20,7 @@ mod bob;
 mod difference;
 mod limits;
 mod pointwise;
+mod repair;
 mod shimmer;
 mod steps;
 mod tables;
@@ -39,6 +41,7 @@ pub use self::pointwise::{
     subtract,
     vertical_midpoint,
 };
+pub use self::repair::{repair_blend, vertical_blur};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use self::shimmer::{NEGATIVE_STEPS, POSITIVE_STEPS, restore_limits};
 pub use self::shimmer::{ShimmerPlanes, shimmer};

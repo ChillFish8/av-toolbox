@@ -10,6 +10,7 @@
 //! - [refine_half_pel] refines whole pixel vectors to half pixels.
 //! - [scene_change_flags] marks the fields that are scene changes.
 //! - [compensate] lines a neighbour up with the centre frame, blending overlapping blocks.
+//! - [sad_mask] turns a field's SADs into MVTools' SAD mask.
 //! - [normalise] stretches luma code values to between 0 and 1 for searching.
 //!
 //! Each search also writes every block's best SAD and, when asked, its confidence.
@@ -18,6 +19,7 @@ mod buffers;
 mod chain;
 mod compensate;
 mod confidence;
+mod mask;
 mod normalise;
 mod pyramid;
 mod scene;
@@ -34,6 +36,16 @@ pub use self::chain::chain;
 pub use self::compensate::{CompensatePlanes, PlaneScale, compensate, window_weight};
 pub(crate) use self::compensate::{block_window, half_pel_component, upper_block};
 pub use self::confidence::ConfidenceScores;
+pub use self::mask::{PROGRESSIVE_SAD_MASK, sad_mask};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use self::mask::{
+    WEIGHT_HALF,
+    WEIGHT_MAX,
+    WEIGHT_SHIFT,
+    covered_area,
+    sad_byte,
+    simple_resize_tables,
+};
 pub use self::normalise::normalise;
 pub use self::pyramid::{Pyramid, build_pyramid, level_dims};
 pub use self::scene::{SceneChange, SceneFlag, scene_change_flags};

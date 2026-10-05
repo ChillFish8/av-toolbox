@@ -1,5 +1,6 @@
 mod buffers;
 mod compensate;
+mod mask;
 mod normalise;
 mod quality;
 mod scene;
