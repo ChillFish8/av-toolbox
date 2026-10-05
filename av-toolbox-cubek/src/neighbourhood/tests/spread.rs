@@ -1,5 +1,5 @@
-use crate::neighbourhood::Spread;
-use crate::testing::reference_spread;
+use crate::neighbourhood::{Edge, Spread};
+use crate::testing::{reference_spread, reference_spread_with_edge};
 
 #[test]
 fn inflate_lifts_a_dip_to_its_neighbours_mean() {
@@ -64,4 +64,36 @@ fn a_mixed_neighbourhood_moves_by_the_mean() {
     // The same 5 sits below the mean, so deflate keeps it, since taking the smaller of the two
     // keeps the centre rather than the larger mean.
     assert_eq!(deflated[4], 5.0);
+}
+
+/// A 3x3 plane of 1 to 9, row by row.
+fn counted_plane() -> Vec<f32> {
+    (1..=9).map(|value| value as f32).collect()
+}
+
+#[test]
+fn clamp_repeats_the_edge_at_a_corner() {
+    // The corner holds 1. Clamped its neighbours are 1, 1, 2, 1, 2, 4, 4, 5, a mean of 2.5.
+    // Reflected they are 5, 4, 5, 2, 2, 5, 4, 5, a mean of 4.
+    let plane = counted_plane();
+
+    let clamped = reference_spread_with_edge(&plane, 3, 3, Spread::Inflate, Edge::Clamp);
+    let reflected = reference_spread_with_edge(&plane, 3, 3, Spread::Inflate, Edge::Reflect);
+
+    assert_eq!(clamped[0], 2.5);
+    assert_eq!(reflected[0], 4.0);
+    assert_eq!(reflected, reference_spread(&plane, 3, 3, Spread::Inflate));
+}
+
+#[test]
+fn clamp_repeats_the_edge_on_a_side() {
+    // The top middle holds 2. Clamped its neighbours are 1, 2, 3, 1, 3, 4, 5, 6, a mean of 3.125.
+    // Reflected they are 4, 5, 6, 1, 3, 4, 5, 6, a mean of 4.25.
+    let plane = counted_plane();
+
+    let clamped = reference_spread_with_edge(&plane, 3, 3, Spread::Inflate, Edge::Clamp);
+    let reflected = reference_spread_with_edge(&plane, 3, 3, Spread::Inflate, Edge::Reflect);
+
+    assert_eq!(clamped[1], 3.125);
+    assert_eq!(reflected[1], 4.25);
 }

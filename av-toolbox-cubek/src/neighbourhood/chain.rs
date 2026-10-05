@@ -1,6 +1,6 @@
 use cubecl::prelude::{ComputeClient, Runtime};
 
-use super::{Extreme, NeighbourPlanes, Shape, Spread, extreme, spread};
+use super::{Edge, Extreme, NeighbourPlanes, Shape, Spread, extreme, spread_with_edge};
 use crate::{DevicePlane, Dispatch};
 
 /// One 3x3 pass of a [chain](crate::neighbourhood::chain).
@@ -46,6 +46,17 @@ pub fn chain<R: Runtime>(
     planes: ChainPlanes<'_>,
     steps: &[Step],
 ) {
+    chain_with_edge(client, dispatch, planes, steps, Edge::Reflect);
+}
+
+/// The same as [chain], reading past the plane's edge as `edge` says in each spread step.
+pub fn chain_with_edge<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ChainPlanes<'_>,
+    steps: &[Step],
+    edge: Edge,
+) {
     debug_assert!(!steps.is_empty(), "a chain needs at least one step");
     debug_assert!(planes.are_distinct(), "a chain needs three distinct planes");
 
@@ -65,7 +76,7 @@ pub fn chain<R: Runtime>(
         };
         match *step {
             Step::Extreme(which, shape) => extreme(client, dispatch, pass_planes, which, shape),
-            Step::Spread(which) => spread(client, dispatch, pass_planes, which),
+            Step::Spread(which) => spread_with_edge(client, dispatch, pass_planes, which, edge),
         }
 
         source = destination;

@@ -9,7 +9,7 @@ mod tests;
 // by name.
 use cubecl::prelude::*;
 
-pub use self::chain::{ChainPlanes, Step, chain};
+pub use self::chain::{ChainPlanes, Step, chain, chain_with_edge};
 pub use self::median::median;
 pub use self::min_blur::{MinBlurPlanes, median_of_three, median_of_three_sample, min_blur};
 pub use self::prewitt::prewitt;
@@ -73,6 +73,15 @@ pub enum Spread {
     Deflate,
 }
 
+/// What a 3x3 pass reads past the edge of a plane.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Edge {
+    /// Folds back without repeating the edge sample, as `std.Minimum` and `std.Maximum` read.
+    Reflect,
+    /// Repeats the edge sample, as `std.Deflate` and `std.Inflate` read.
+    Clamp,
+}
+
 /// How a run of maximum or minimum passes grows a region, as havsfunc's `mt_expand_multi` does.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Expansion {
@@ -112,6 +121,19 @@ pub fn expansion_passes(horizontal: u32, vertical: u32, expansion: Expansion) ->
 fn read(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f32 {
     let x = reflect(column, width as i32);
     let y = reflect(row, height as i32);
+    let index = y as u32 * width + x as u32;
+
+    input[index as usize]
+}
+
+#[cube]
+fn read_edge(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32, clamp: u32) -> f32 {
+    let mut x = reflect(column, width as i32);
+    let mut y = reflect(row, height as i32);
+    if clamp == 1u32 {
+        x = i32::clamp(column, 0, width as i32 - 1);
+        y = i32::clamp(row, 0, height as i32 - 1);
+    }
     let index = y as u32 * width + x as u32;
 
     input[index as usize]
@@ -203,7 +225,14 @@ fn smooth_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height
 }
 
 #[cube(launch_unchecked)]
-fn spread_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, inflate: u32) {
+fn spread_kernel(
+    input: &Array<f32>,
+    output: &mut Array<f32>,
+    width: u32,
+    height: u32,
+    inflate: u32,
+    clamp: u32,
+) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -220,7 +249,7 @@ fn spread_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height
             let offset_y = step_y as i32 - 1;
 
             if offset_x != 0 || offset_y != 0 {
-                total += read(input, width, height, x + offset_x, y + offset_y);
+                total += read_edge(input, width, height, x + offset_x, y + offset_y, clamp);
             }
         }
     }
@@ -290,17 +319,31 @@ pub fn spread<R: Runtime>(
     planes: NeighbourPlanes<'_>,
     spread: Spread,
 ) {
+    spread_with_edge(client, dispatch, planes, spread, Edge::Reflect);
+}
+
+/// The same as [spread], reading past the plane's edge as `edge` says.
+pub fn spread_with_edge<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: NeighbourPlanes<'_>,
+    spread: Spread,
+    edge: Edge,
+) {
     let width = planes.input.width();
     let height = planes.input.height();
     let samples = planes.output.samples();
     let inflate = u32::from(spread == Spread::Inflate);
+    let clamp = u32::from(edge == Edge::Clamp);
     let input = planes.input.array::<R>();
     let output = planes.output.array::<R>();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
+    // Safety: both planes hold `samples` f32 values, and every read is inside the plane.
     unsafe {
-        spread_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, inflate);
+        spread_kernel::launch_unchecked::<R>(
+            client, cubes, unit, input, output, width, height, inflate, clamp,
+        );
     }
 }

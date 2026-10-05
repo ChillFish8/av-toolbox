@@ -1,4 +1,6 @@
-use crate::deinterlace::qtgmc::{Parity, bob_taps};
+use crate::deinterlace::qtgmc::{NEGATIVE_STEPS, POSITIVE_STEPS, Parity, bob_taps, restore_limits};
+use crate::neighbourhood::Edge;
+use crate::testing::reference_chain_with_edge;
 
 /// Bobs the field of `parity` in `frame` to a full-height plane on the CPU, mirroring
 /// [bob](crate::deinterlace::qtgmc::bob).
@@ -80,4 +82,48 @@ pub fn reference_tr0(bobs: &[Vec<f32>], centre: usize, tr0: u32, width: usize, h
     let smoothed = merge(&ts1, &ts2, 0.357);
 
     merge(&smoothed, bob, 0.125)
+}
+
+/// Keeps only thin horizontal differences between `input` and `reference` on the CPU, mirroring
+/// [shimmer](crate::deinterlace::qtgmc::shimmer).
+///
+/// The result is not rounded.
+pub fn reference_shimmer(
+    input: &[f32],
+    reference: &[f32],
+    width: usize,
+    height: usize,
+    bits: u32,
+) -> Vec<f32> {
+    let neutral = (1u32 << (bits - 1)) as f32;
+    let peak = ((1u32 << bits) - 1) as f32;
+    let (above, below) = restore_limits(bits);
+
+    let difference: Vec<f32> = reference
+        .iter()
+        .zip(input)
+        .map(|(wanted, found)| (wanted - found).clamp(-neutral, peak - neutral))
+        .collect();
+    let (columns, rows) = (width as u32, height as u32);
+    let positive = reference_chain_with_edge(&difference, columns, rows, &POSITIVE_STEPS, Edge::Clamp);
+    let negative = reference_chain_with_edge(&difference, columns, rows, &NEGATIVE_STEPS, Edge::Clamp);
+
+    let mut output = Vec::with_capacity(input.len());
+    for position in 0..input.len() {
+        let original = difference[position];
+
+        let mut restored = original;
+        if original >= above {
+            restored = positive[position].max(0.0);
+        }
+
+        let mut result = restored;
+        if restored <= below {
+            result = negative[position].min(0.0);
+        }
+
+        output.push((input[position] + result).clamp(0.0, peak));
+    }
+
+    output
 }

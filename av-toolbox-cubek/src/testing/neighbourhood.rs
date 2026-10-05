@@ -1,5 +1,5 @@
 use super::reflect;
-use crate::neighbourhood::{Extreme, Shape, Smooth, Spread, Step, median_of_three_sample};
+use crate::neighbourhood::{Edge, Extreme, Shape, Smooth, Spread, Step, median_of_three_sample};
 
 /// The value at `column`, `row`, read through reflection.
 pub(super) fn read_reflected(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
@@ -81,9 +81,28 @@ pub fn reference_smooth(input: &[f32], width: u32, height: u32, smooth: Smooth) 
     output
 }
 
+/// The value at `column`, `row`, with the edge sample repeated past the plane.
+fn read_clamped(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
+    let x = column.clamp(0, width as i32 - 1);
+    let y = row.clamp(0, height as i32 - 1);
+
+    input[(y as u32 * width + x as u32) as usize]
+}
+
 /// Moves each sample toward its 8 neighbours' mean on the CPU, mirroring
 /// [spread](crate::neighbourhood::spread).
 pub fn reference_spread(input: &[f32], width: u32, height: u32, spread: Spread) -> Vec<f32> {
+    reference_spread_with_edge(input, width, height, spread, Edge::Reflect)
+}
+
+/// The same as [reference_spread], mirroring [spread_with_edge](crate::neighbourhood::spread_with_edge).
+pub fn reference_spread_with_edge(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    spread: Spread,
+    edge: Edge,
+) -> Vec<f32> {
     let mut output = Vec::with_capacity(input.len());
 
     for y in 0..height as i32 {
@@ -97,7 +116,10 @@ pub fn reference_spread(input: &[f32], width: u32, height: u32, spread: Spread) 
                         continue;
                     }
 
-                    total += read_reflected(input, width, height, x + offset_x, y + offset_y);
+                    total += match edge {
+                        Edge::Reflect => read_reflected(input, width, height, x + offset_x, y + offset_y),
+                        Edge::Clamp => read_clamped(input, width, height, x + offset_x, y + offset_y),
+                    };
                 }
             }
 
@@ -116,12 +138,23 @@ pub fn reference_spread(input: &[f32], width: u32, height: u32, spread: Spread) 
 
 /// Runs each of `steps` in turn on the CPU, mirroring [chain](crate::neighbourhood::chain).
 pub fn reference_chain(input: &[f32], width: u32, height: u32, steps: &[Step]) -> Vec<f32> {
+    reference_chain_with_edge(input, width, height, steps, Edge::Reflect)
+}
+
+/// The same as [reference_chain], mirroring [chain_with_edge](crate::neighbourhood::chain_with_edge).
+pub fn reference_chain_with_edge(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    steps: &[Step],
+    edge: Edge,
+) -> Vec<f32> {
     let mut plane = input.to_vec();
 
     for step in steps {
         plane = match *step {
             Step::Extreme(extreme, shape) => reference_extreme(&plane, width, height, extreme, shape),
-            Step::Spread(spread) => reference_spread(&plane, width, height, spread),
+            Step::Spread(spread) => reference_spread_with_edge(&plane, width, height, spread, edge),
         };
     }
 

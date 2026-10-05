@@ -172,12 +172,14 @@ pub use self::motion::{
 };
 pub use self::neighbourhood::{
     reference_chain,
+    reference_chain_with_edge,
     reference_extreme,
     reference_median,
     reference_min_blur,
     reference_prewitt,
     reference_smooth,
     reference_spread,
+    reference_spread_with_edge,
 };
 pub use self::normalise::reference_normalise;
 pub use self::padding::{reference_crop, reference_pad};
@@ -186,6 +188,7 @@ pub use self::qtgmc::{
     QtgmcFixture,
     qtgmc_fixture,
     reference_bob,
+    reference_shimmer,
     reference_tr0,
     write_qtgmc_inputs,
 };
