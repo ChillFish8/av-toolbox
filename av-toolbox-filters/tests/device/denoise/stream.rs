@@ -1,8 +1,23 @@
-use av_toolbox_gpu::SampleFormat;
+use std::error::Error;
+
+use av_toolbox_core::{InputArgument, PipelineRegistry, PreparedStage, StageHandle, StageKind, StreamType};
+use av_toolbox_gpu::{ResolvedFormats, SampleFormat, StreamFormat};
 use serde_json::json;
 
 use super::{noisy_clip, run, yuv420};
 use crate::support::backend;
+
+fn error_chain(error: &dyn Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+
+    message
+}
 
 #[test]
 fn every_stage_keeps_frame_count_order_and_metadata() {
@@ -32,6 +47,12 @@ fn every_stage_changes_the_selected_planes() {
             .zip(&clip)
             .any(|(output, input)| output.planes[0] != input.planes[0]);
         assert!(changed, "{stage} left luma untouched");
+
+        let chroma_changed = outputs
+            .iter()
+            .zip(&clip)
+            .any(|(output, input)| output.planes[1] != input.planes[1]);
+        assert!(chroma_changed, "{stage} left chroma untouched");
     }
 }
 
@@ -82,7 +103,7 @@ fn each_chunk_is_denoised_on_its_own() {
     let opening = clip[..3].to_vec();
     let closing = clip[3..].to_vec();
 
-    for stage in ["av-denoise/nlmeans", "av-denoise/nl4d"] {
+    for stage in ["av-denoise/nlmeans", "av-denoise/nlmeans-hq", "av-denoise/nl4d"] {
         let together = run(stage, json!({}), format, vec![opening.clone(), closing.clone()]);
         let alone = run(stage, json!({}), format, vec![closing.clone()]);
 
@@ -93,16 +114,6 @@ fn each_chunk_is_denoised_on_its_own() {
 
 #[test]
 fn nl4d_refuses_chroma_below_its_patch_size() {
-    use av_toolbox_core::{
-        InputArgument,
-        PipelineRegistry,
-        PreparedStage,
-        StageHandle,
-        StageKind,
-        StreamType,
-    };
-    use av_toolbox_gpu::{ResolvedFormats, StreamFormat};
-
     let format = yuv420(12, 12, SampleFormat::U8);
     let backend = backend();
     let mut registry = PipelineRegistry::new();
@@ -123,6 +134,7 @@ fn nl4d_refuses_chroma_below_its_patch_size() {
         panic!("a 6x6 chroma plane should be refused");
     };
 
-    let message = error.to_string();
+    let message = error_chain(&error);
     assert!(message.contains("av-denoise/nl4d"), "{message}");
+    assert!(message.contains("must be at least"), "{message}");
 }

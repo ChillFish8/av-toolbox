@@ -364,16 +364,22 @@ pub(crate) struct Nl4dArgs {
     /// The half-width of the search around each neighbour's predicted position.
     #[serde(default)]
     pub(crate) refine: Option<u32>,
+    /// Scales the luma threshold by how noisy each brightness level is, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) noise_map: Option<bool>,
+    /// How much harder flat, grainy areas are filtered, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) flat_boost: Option<f32>,
+    /// The same as `flat_boost` for the chroma planes, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) chroma_flat_boost: Option<f32>,
+    /// How much more gently textured dark areas are filtered, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) shadow_soften: Option<f32>,
+    /// How strongly grain may line up before a flat area counts as texture, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) flat_texture_cut: Option<f32>,
+    /// Judges each coefficient together with its frequency neighbours, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) pooled_threshold: Option<bool>,
 }

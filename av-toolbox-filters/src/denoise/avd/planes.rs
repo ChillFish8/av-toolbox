@@ -20,6 +20,15 @@ fn unsupported_layout(stage: &str, layout: FrameLayout) -> StageError {
     StageError::msg(message)
 }
 
+/// Refuses a layout that is neither YUV nor Gray.
+pub(crate) fn checked_layout(stage: &str, layout: FrameLayout) -> Result<(), StageError> {
+    if !matches!(layout, FrameLayout::Yuv { .. } | FrameLayout::Grey) {
+        return Err(unsupported_layout(stage, layout));
+    }
+
+    Ok(())
+}
+
 fn half_chroma(stage: &str) -> StageError {
     let message = format!("{stage} denoises U and V together, so planes must list both or neither");
 
@@ -86,9 +95,7 @@ pub(crate) fn engine_specs(
     fused: bool,
     input: &FrameFormat,
 ) -> Result<Vec<EngineSpec>, StageError> {
-    if !matches!(input.layout, FrameLayout::Yuv { .. } | FrameLayout::Grey) {
-        return Err(unsupported_layout(stage, input.layout));
-    }
+    checked_layout(stage, input.layout)?;
 
     let selected = selected_planes(stage, planes, input.layout, PlaneDefault::Every)?;
 

@@ -148,7 +148,8 @@ fn emitted<R: Runtime>(
 
     for (engine, spec) in built.iter_mut().zip(specs) {
         let bytes = spec.plane_bytes(sample_bytes);
-        let handles: Vec<Handle> = spec.planes.iter().map(|_| client.empty(rounded(bytes))).collect();
+        let padded_bytes = rounded(bytes);
+        let handles: Vec<Handle> = spec.planes.iter().map(|_| client.empty(padded_bytes)).collect();
         let device_planes: Vec<DevicePlane<'_>> = handles
             .iter()
             .map(|handle| DevicePlane::new(handle, spec.width, spec.height))
@@ -361,6 +362,24 @@ fn nlmeans_hq_matches_the_engine_at_10_bit_420() {
     let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
     let format = yuv420(64, 32, ten_bit);
     let clip = ten_bit_clip(&format, 6);
+    let hq = NlmeansHqOptions {
+        nlm: base_nlmeans(),
+        hq: HqParams::default(),
+    };
+    let options = ReferenceOptions::Nlmeans(NlmeansAlgorithm::Hq(hq));
+    let engines = split_engines(&format, options, options);
+
+    let expected = reference(engines, &format, clip.clone());
+    let found = run("av-denoise/nlmeans-hq", json!({}), format, vec![clip]);
+
+    assert_same("av-denoise/nlmeans-hq", &found, &expected);
+}
+
+#[test]
+fn an_odd_sized_ten_bit_clip_matches_the_engine() {
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+    let format = yuv420(33, 17, ten_bit);
+    let clip = ten_bit_clip(&format, 5);
     let hq = NlmeansHqOptions {
         nlm: base_nlmeans(),
         hq: HqParams::default(),

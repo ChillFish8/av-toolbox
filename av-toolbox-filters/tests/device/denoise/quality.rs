@@ -95,7 +95,10 @@ fn decoded_luma(bytes: &[u8], bits: u32) -> Vec<f32> {
             let (pairs, _) = bytes.as_chunks::<2>();
             pairs
                 .iter()
-                .map(|pair| f32::from(u16::from_le_bytes(*pair)))
+                .map(|pair| {
+                    let code = u16::from_le_bytes(*pair);
+                    f32::from(code)
+                })
                 .collect()
         },
     }
