@@ -5,6 +5,7 @@ mod blend;
 mod deband;
 mod dehalo;
 mod deinterlace;
+mod denoise;
 mod dering;
 mod ivtc;
 mod lineart;

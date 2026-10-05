@@ -1,5 +1,7 @@
 //! Filters that change the frames of a stream
 //!
+//! - `av-denoise/nlmeans`, `av-denoise/nlmeans-hq` and `av-denoise/nl4d` denoise frames with av-denoise's
+//!   engines, run directly on the device planes.
 //! - `aa/based` anti-aliases luma by running EEDI3 on an ArtCNN supersample and merging the result
 //!   back through an edge mask, the way vs-jetpack's based_aa does.
 //! - `aa/eedi2` anti-aliases by re-interpolating each field along a smoothed map of edge directions, the
@@ -63,11 +65,15 @@ mod warp;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
+use self::denoise::{Denoise, Nl4dArgs, NlmeansArgs, NlmeansHqArgs};
 use self::resample::{Chroma, Depth};
 use self::resize::{Bicubic, Bilinear, Lanczos, Point, Resize, Spline16, Spline36, Spline64};
 
 /// Registers every filter this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
+    registry.register_filter::<Denoise<NlmeansArgs>>()?;
+    registry.register_filter::<Denoise<NlmeansHqArgs>>()?;
+    registry.register_filter::<Denoise<Nl4dArgs>>()?;
     registry.register_filter::<aa::Based>()?;
     registry.register_filter::<aa::Eedi2>()?;
     registry.register_filter::<aa::Eedi3>()?;
@@ -121,6 +127,9 @@ mod tests {
 
     #[test]
     fn every_filter_is_registered() {
+        assert!(registered("av-denoise/nlmeans"));
+        assert!(registered("av-denoise/nlmeans-hq"));
+        assert!(registered("av-denoise/nl4d"));
         assert!(registered("aa/based"));
         assert!(registered("aa/eedi2"));
         assert!(registered("aa/eedi3"));
