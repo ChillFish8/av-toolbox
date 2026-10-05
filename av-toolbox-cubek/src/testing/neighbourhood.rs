@@ -51,6 +51,18 @@ pub fn reference_extreme(input: &[f32], width: u32, height: u32, extreme: Extrem
 
 /// Blurs a plane with a 3x3 kernel on the CPU, mirroring [smooth](crate::neighbourhood::smooth).
 pub fn reference_smooth(input: &[f32], width: u32, height: u32, smooth: Smooth) -> Vec<f32> {
+    reference_smooth_with_edge(input, width, height, smooth, Edge::Reflect)
+}
+
+/// The same as [reference_smooth], mirroring
+/// [smooth_with_edge](crate::neighbourhood::smooth_with_edge).
+pub fn reference_smooth_with_edge(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    smooth: Smooth,
+    edge: Edge,
+) -> Vec<f32> {
     let mut output = Vec::with_capacity(input.len());
 
     for y in 0..height as i32 {
@@ -59,7 +71,11 @@ pub fn reference_smooth(input: &[f32], width: u32, height: u32, smooth: Smooth) 
 
             for offset_y in -1..=1 {
                 for offset_x in -1..=1 {
-                    let value = read_reflected(input, width, height, x + offset_x, y + offset_y);
+                    let (column, row) = (x + offset_x, y + offset_y);
+                    let value = match edge {
+                        Edge::Reflect => read_reflected(input, width, height, column, row),
+                        Edge::Clamp => read_clamped(input, width, height, column, row),
+                    };
                     let weight = match smooth {
                         Smooth::Binomial => ((2 - offset_x.abs()) * (2 - offset_y.abs())) as f32,
                         Smooth::Box => 1.0,

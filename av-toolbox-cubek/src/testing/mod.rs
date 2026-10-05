@@ -178,6 +178,7 @@ pub use self::neighbourhood::{
     reference_min_blur,
     reference_prewitt,
     reference_smooth,
+    reference_smooth_with_edge,
     reference_spread,
     reference_spread_with_edge,
 };
@@ -187,12 +188,22 @@ pub use self::qtgmc::{
     FixturePlane,
     QtgmcFixture,
     qtgmc_fixture,
+    reference_back_blend,
     reference_bob,
+    reference_clamp,
+    reference_resharpen,
+    reference_search_clip,
+    reference_search_inputs,
     reference_shimmer,
     reference_tr0,
     write_qtgmc_inputs,
 };
-pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};
+pub use self::resize::{
+    reference_resize,
+    reference_resize_float,
+    reference_resize_float_with_edge,
+    reference_resize_wide,
+};
 pub use self::retinex::{
     reference_log_response,
     reference_percentile,

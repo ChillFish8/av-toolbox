@@ -3,6 +3,7 @@
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
+use crate::neighbourhood::Edge;
 use crate::{DevicePlane, Dispatch, reflect};
 
 /// How much an input sample weighs by its distance from where an output sample lands.
@@ -415,6 +416,17 @@ fn launch<E: Int, R: Runtime>(
     }
 }
 
+/// Brings a tap position inside `length` samples, by clamping when `clamp` is 1 and reflecting otherwise.
+#[cube]
+fn fold(index: i32, length: i32, clamp: u32) -> i32 {
+    let mut folded = reflect(index, length);
+    if clamp == 1u32 {
+        folded = i32::clamp(index, 0, length - 1);
+    }
+
+    folded
+}
+
 #[cube(launch_unchecked)]
 fn resize_rows_float(
     input: &Array<f32>,
@@ -424,6 +436,7 @@ fn resize_rows_float(
     in_width: u32,
     out_width: u32,
     count: u32,
+    clamp: u32,
 ) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
@@ -436,7 +449,7 @@ fn resize_rows_float(
 
     let mut total = 0.0f32;
     for step in 0..count {
-        let source = reflect(start + step as i32, in_width as i32);
+        let source = fold(start + step as i32, in_width as i32, clamp);
         let sample = input[(row * in_width + source as u32) as usize];
         let weight = weights[(column * count + step) as usize];
         total += sample * weight;
@@ -454,6 +467,7 @@ fn resize_columns_float(
     width: u32,
     in_height: u32,
     count: u32,
+    clamp: u32,
 ) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
@@ -466,7 +480,7 @@ fn resize_columns_float(
 
     let mut total = 0.0f32;
     for step in 0..count {
-        let source = reflect(start + step as i32, in_height as i32);
+        let source = fold(start + step as i32, in_height as i32, clamp);
         let sample = input[(source as u32 * width + column) as usize];
         let weight = weights[(row * count + step) as usize];
         total += sample * weight;
@@ -483,6 +497,19 @@ pub fn apply_float<R: Runtime>(
     across: &Weights,
     down: &Weights,
 ) {
+    apply_float_with_edge(client, dispatch, planes, across, down, Edge::Reflect);
+}
+
+/// The same as [apply_float], reading taps past the plane's edge as `edge` says.
+pub fn apply_float_with_edge<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ResizePlanes<'_>,
+    across: &Weights,
+    down: &Weights,
+    edge: Edge,
+) {
+    let clamp = u32::from(edge == Edge::Clamp);
     let in_width = planes.input.width();
     let in_height = planes.input.height();
     let out_width = planes.output.width();
@@ -510,6 +537,7 @@ pub fn apply_float<R: Runtime>(
             in_width,
             out_width,
             across.count,
+            clamp,
         );
     }
 
@@ -526,7 +554,7 @@ pub fn apply_float<R: Runtime>(
     // every tap is folded back inside its column before it is read.
     unsafe {
         resize_columns_float::launch_unchecked::<R>(
-            client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count,
+            client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count, clamp,
         );
     }
 }

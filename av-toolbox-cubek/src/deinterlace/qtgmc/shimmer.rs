@@ -38,7 +38,7 @@ pub struct ShimmerPlanes<'a> {
 ///
 /// havsfunc defines `scale(value, peak)` as `cround(value * peak / 255)` for a `peak` other than 1, and
 /// `cround` rounds half away from zero.
-fn scale(level: f32, peak: f32) -> f32 {
+pub(super) fn scale(level: f32, peak: f32) -> f32 {
     let scaled = level * peak / 255.0;
 
     if scaled > 0.0 {

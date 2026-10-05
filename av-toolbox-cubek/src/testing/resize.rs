@@ -1,4 +1,5 @@
 use super::reflect;
+use crate::neighbourhood::Edge;
 use crate::resize::Taps;
 
 /// Applies `across` then `down` on the CPU, rounding to U8 at the end, mirroring
@@ -30,6 +31,14 @@ pub fn reference_resize_wide(
         .collect()
 }
 
+/// The tap position brought inside `length` samples as `edge` says.
+fn fold(tap: i32, length: u32, edge: Edge) -> u32 {
+    match edge {
+        Edge::Reflect => reflect(tap, length as i32) as u32,
+        Edge::Clamp => tap.clamp(0, length as i32 - 1) as u32,
+    }
+}
+
 /// Applies `across` then `down` on the CPU in f32, mirroring [apply_float](crate::resize::apply_float).
 pub fn reference_resize_float(
     input: &[f32],
@@ -37,6 +46,19 @@ pub fn reference_resize_float(
     height: u32,
     across: &Taps,
     down: &Taps,
+) -> Vec<f32> {
+    reference_resize_float_with_edge(input, width, height, across, down, Edge::Reflect)
+}
+
+/// The same as [reference_resize_float], mirroring
+/// [apply_float_with_edge](crate::resize::apply_float_with_edge).
+pub fn reference_resize_float_with_edge(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    across: &Taps,
+    down: &Taps,
+    edge: Edge,
 ) -> Vec<f32> {
     let out_width = across.starts.len() as u32;
     let out_height = down.starts.len() as u32;
@@ -47,7 +69,7 @@ pub fn reference_resize_float(
             let mut total = 0.0f32;
             for step in 0..across.count {
                 let tap = across.starts[column as usize] + step as i32;
-                let source = reflect(tap, width as i32) as u32;
+                let source = fold(tap, width, edge);
                 let weight = across.weights[(column * across.count + step) as usize];
                 total += input[(row * width + source) as usize] * weight;
             }
@@ -62,7 +84,7 @@ pub fn reference_resize_float(
             let mut total = 0.0f32;
             for step in 0..down.count {
                 let tap = down.starts[row as usize] + step as i32;
-                let source = reflect(tap, height as i32) as u32;
+                let source = fold(tap, height, edge);
                 let weight = down.weights[(row * down.count + step) as usize];
                 total += rows[(source * out_width + column) as usize] * weight;
             }

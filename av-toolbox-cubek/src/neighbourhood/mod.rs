@@ -189,7 +189,14 @@ fn extreme_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn smooth_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, binomial: u32) {
+fn smooth_kernel(
+    input: &Array<f32>,
+    output: &mut Array<f32>,
+    width: u32,
+    height: u32,
+    binomial: u32,
+    clamp: u32,
+) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -203,7 +210,7 @@ fn smooth_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height
         for step_x in 0..3u32 {
             let offset_x = step_x as i32 - 1;
             let offset_y = step_y as i32 - 1;
-            let value = read(input, width, height, x + offset_x, y + offset_y);
+            let value = read_edge(input, width, height, x + offset_x, y + offset_y, clamp);
 
             let mut weight = 1.0f32;
             if binomial == 1u32 {
@@ -296,6 +303,18 @@ pub fn smooth<R: Runtime>(
     planes: NeighbourPlanes<'_>,
     smooth: Smooth,
 ) {
+    smooth_with_edge(client, dispatch, planes, smooth, Edge::Reflect);
+}
+
+/// The same as [smooth], reading past the plane's edge as `edge` says.
+pub fn smooth_with_edge<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: NeighbourPlanes<'_>,
+    smooth: Smooth,
+    edge: Edge,
+) {
+    let clamp = u32::from(edge == Edge::Clamp);
     let width = planes.input.width();
     let height = planes.input.height();
     let samples = planes.output.samples();
@@ -305,9 +324,11 @@ pub fn smooth<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
+    // Safety: both planes hold `samples` f32 values, and every read is inside the plane.
     unsafe {
-        smooth_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, binomial);
+        smooth_kernel::launch_unchecked::<R>(
+            client, cubes, unit, input, output, width, height, binomial, clamp,
+        );
     }
 }
 

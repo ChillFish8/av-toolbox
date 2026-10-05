@@ -1,0 +1,675 @@
+use av_toolbox_cubek::deinterlace::qtgmc::{
+    clamp_between,
+    fmtc_gauss_taps,
+    merge,
+    resharpen,
+    search_clip,
+    sharpness_strength,
+    subtract,
+    vertical_midpoint,
+};
+use av_toolbox_cubek::neighbourhood::{Edge, Extreme, NeighbourPlanes, Shape, Smooth, smooth_with_edge};
+use av_toolbox_cubek::resize::{ResizePlanes, apply_float_with_edge, upload};
+use av_toolbox_cubek::testing::{
+    QtgmcFixture,
+    assert_plane_within,
+    qtgmc_fixture,
+    reference_back_blend,
+    reference_clamp,
+    reference_extreme,
+    reference_resharpen,
+    reference_resize_float_with_edge,
+    reference_search_clip,
+    reference_search_inputs,
+};
+use av_toolbox_gpu::{BuildContext, BuildTask};
+use cubecl::prelude::Runtime;
+
+use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, codes, peak};
+use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
+
+/// The largest distance between a rounded reference plane and havsfunc's.
+fn largest_fixture_difference(found: &[f32], expected: &[i32], ceiling: f32) -> i32 {
+    found
+        .iter()
+        .zip(expected)
+        .map(|(value, wanted)| (value.round().clamp(0.0, ceiling) as i32 - wanted).abs())
+        .max()
+        .unwrap_or(0)
+}
+
+/// The largest difference seen for each clip and plane of one step.
+#[derive(Default)]
+struct StepDifferences {
+    largest: Vec<(String, i32)>,
+}
+
+impl StepDifferences {
+    fn record(&mut self, label: String, difference: i32) {
+        match self.largest.iter_mut().find(|(known, _)| *known == label) {
+            Some((_, seen)) => *seen = (*seen).max(difference),
+            None => self.largest.push((label, difference)),
+        }
+    }
+
+    /// Prints each largest difference and panics if any is over [FIXTURE_TOLERANCE].
+    fn assert_within_tolerance(&self) {
+        for (label, difference) in &self.largest {
+            println!("{label}: largest difference {difference}");
+        }
+
+        let over: Vec<_> = self
+            .largest
+            .iter()
+            .filter(|(_, difference)| *difference > FIXTURE_TOLERANCE)
+            .collect();
+        assert!(
+            over.is_empty(),
+            "differences over {FIXTURE_TOLERANCE} from havsfunc: {over:?}"
+        );
+    }
+}
+
+/// The planes of one frame of a fixture as code values.
+fn frame_codes(fixture: &QtgmcFixture, frame: usize) -> Vec<Vec<f32>> {
+    fixture.frames[frame]
+        .iter()
+        .map(|source| codes(&source.samples))
+        .collect()
+}
+
+/// The size of the luma plane of a fixture.
+fn luma_size(fixture: &QtgmcFixture) -> (usize, usize) {
+    (fixture.frames[0][0].width, fixture.frames[0][0].height)
+}
+
+/// How close to the threshold, in 8 bit codes, a sample is a tie that f32 rounding decides.
+const TIE_GAP: f32 = 1e-3;
+
+/// How close to the `scale(7)` threshold, in codes, a search clip sample may sit and be allowed more room.
+const THRESHOLD_BAND: f32 = 1.5;
+
+/// The share of a frame's samples that may differ from havsfunc by more than [FIXTURE_TOLERANCE].
+const FLIP_SHARE_LIMIT: f32 = 0.03;
+
+/// havsfunc's `scale(value, peak)`.
+fn scale(value: f32, peak: f32) -> f32 {
+    (value * peak / 255.0 + 0.5).floor()
+}
+
+// The search clip compares its blur with the bob at a hard threshold. fmtc's fixed-point gaussian differs
+// from the f32 one by about a code, which flips the branch for samples near the threshold. Those may
+// differ by up to `ceil(1.5 * scale(1)) + 1` and the rest by 1. No more than 3% of a frame may differ by
+// more than 1.
+#[test]
+fn the_search_clip_matches_havsfunc() {
+    let repaired = qtgmc_fixture("shimmer", "out");
+    let bobs = qtgmc_fixture("bob", "out");
+    let outputs = qtgmc_fixture("search", "out");
+
+    for ((repair, bob_fixture), output) in repaired.iter().zip(&bobs).zip(&outputs) {
+        let ceiling = peak(output);
+        let (width, height) = luma_size(output);
+        let threshold = scale(7.0, ceiling);
+        let band_tolerance = (THRESHOLD_BAND * scale(1.0, ceiling)).ceil() as i32 + FIXTURE_TOLERANCE;
+
+        let mut largest = 0;
+        let mut largest_share = 0.0f32;
+        let mut flipped_total = 0;
+        for frame in 0..output.frames.len() {
+            let repaired_luma = &frame_codes(repair, frame)[0];
+            let bob_luma = &frame_codes(bob_fixture, frame)[0];
+            let found = reference_search_clip(repaired_luma, bob_luma, width, height, output.bits);
+            let (blur, tweaked) =
+                reference_search_inputs(repaired_luma, bob_luma, width, height, output.bits);
+
+            let expected = &output.frames[frame][0].samples;
+            let mut flipped = 0;
+            for (position, (value, wanted)) in found.iter().zip(expected).enumerate() {
+                let difference = (value.round().clamp(0.0, ceiling) as i32 - wanted).abs();
+                let gap = ((tweaked[position] - blur[position]).abs() - threshold).abs();
+
+                let allowed = if gap <= THRESHOLD_BAND {
+                    band_tolerance
+                } else {
+                    FIXTURE_TOLERANCE
+                };
+                largest = largest.max(difference);
+                if difference > FIXTURE_TOLERANCE {
+                    flipped += 1;
+                }
+                assert!(
+                    difference <= allowed,
+                    "{} frame {frame}: sample {position} is {value}, havsfunc has {wanted}, \
+                     allowed {allowed}",
+                    output.clip,
+                );
+            }
+
+            flipped_total += flipped;
+            let share = flipped as f32 / found.len() as f32;
+            largest_share = largest_share.max(share);
+        }
+
+        println!(
+            "{} search: largest difference {largest}, largest flip share {largest_share}, \
+             {flipped_total} flipped",
+            output.clip
+        );
+        assert!(
+            largest_share < FLIP_SHARE_LIMIT,
+            "{}: {largest_share} of a frame's samples differ by more than {FIXTURE_TOLERANCE}",
+            output.clip,
+        );
+    }
+}
+
+#[test]
+fn resharpen_matches_havsfunc() {
+    let inputs = qtgmc_fixture("average", "tr2_yuv");
+    let outputs = qtgmc_fixture("resharpen", "out");
+    let strength = sharpness_strength(1.0, 2, 1);
+    let mut differences = StepDifferences::default();
+
+    for (input, output) in inputs.iter().zip(&outputs) {
+        let ceiling = peak(output);
+
+        for frame in 0..output.frames.len() {
+            for (plane_index, source) in output.frames[frame].iter().enumerate() {
+                let plane_codes = &frame_codes(input, frame)[plane_index];
+                let found =
+                    reference_resharpen(plane_codes, source.width, source.height, strength, output.bits);
+
+                let largest = largest_fixture_difference(&found, &source.samples, ceiling);
+                differences.record(format!("{} resharpen plane {plane_index}", output.clip), largest);
+            }
+        }
+    }
+
+    differences.assert_within_tolerance();
+}
+
+#[test]
+fn back_blend_matches_havsfunc() {
+    let sharpened = qtgmc_fixture("resharpen", "out");
+    let unsharpened = qtgmc_fixture("average", "tr2_yuv");
+    let outputs = qtgmc_fixture("backblend", "out");
+    let mut differences = StepDifferences::default();
+
+    for ((thin, lossed), output) in sharpened.iter().zip(&unsharpened).zip(&outputs) {
+        let ceiling = peak(output);
+        let (width, height) = luma_size(output);
+
+        for frame in 0..output.frames.len() {
+            let thin_luma = &frame_codes(thin, frame)[0];
+            let lossed_luma = &frame_codes(lossed, frame)[0];
+            let found = reference_back_blend(thin_luma, lossed_luma, width, height, output.bits);
+
+            let expected = &output.frames[frame][0].samples;
+            let largest = largest_fixture_difference(&found, expected, ceiling);
+            differences.record(format!("{} back blend luma", output.clip), largest);
+        }
+    }
+
+    differences.assert_within_tolerance();
+}
+
+#[test]
+fn clamp_matches_havsfunc() {
+    let inputs = qtgmc_fixture("resharpen", "out");
+    let uppers = qtgmc_fixture("clamp", "max");
+    let lowers = qtgmc_fixture("clamp", "min");
+    let outputs = qtgmc_fixture("clamp", "out");
+    let mut differences = StepDifferences::default();
+
+    for (((input, upper), lower), output) in inputs.iter().zip(&uppers).zip(&lowers).zip(&outputs) {
+        let ceiling = peak(output);
+
+        for frame in 0..output.frames.len() {
+            let planes = frame_codes(input, frame);
+            let highs = frame_codes(upper, frame);
+            let lows = frame_codes(lower, frame);
+
+            for (plane_index, source) in output.frames[frame].iter().enumerate() {
+                let found = reference_clamp(&planes[plane_index], &highs[plane_index], &lows[plane_index]);
+
+                let largest = largest_fixture_difference(&found, &source.samples, ceiling);
+                differences.record(format!("{} clamp plane {plane_index}", output.clip), largest);
+            }
+        }
+    }
+
+    differences.assert_within_tolerance();
+}
+
+/// The kernels a [PointwiseRun] chains.
+#[derive(Clone, Copy)]
+enum Pointwise {
+    /// Blur, merge with the repaired plane, then the search clip's expressions.
+    Search,
+    /// The vertical midpoint, its blur, then resharpening.
+    Resharpen,
+    /// The blur of a difference, then the subtraction.
+    BackBlend,
+    Midpoint,
+    Subtract,
+    Clamp,
+    Merge,
+}
+
+/// Planes put through one chain of pointwise kernels on the device.
+struct PointwiseRun {
+    operation: Pointwise,
+    planes: Vec<Vec<f32>>,
+    width: u32,
+    height: u32,
+    bits: u32,
+}
+
+impl PointwiseRun {
+    fn new(operation: Pointwise, planes: Vec<Vec<f32>>, size: (usize, usize), bits: u32) -> Self {
+        Self {
+            operation,
+            planes,
+            width: size.0 as u32,
+            height: size.1 as u32,
+            bits,
+        }
+    }
+}
+
+/// The strength every resharpen test uses.
+const STRENGTH: f32 = 1.5;
+
+impl BuildTask for PointwiseRun {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let bytes = self.planes[0].len() * size_of::<f32>();
+        let peak = ((1u32 << self.bits) - 1) as f32;
+        let (width, height) = (self.width, self.height);
+
+        let inputs: Vec<_> = self
+            .planes
+            .iter()
+            .map(|values| upload_f32(client, values))
+            .collect();
+        let first = plane(&inputs[0], width, height);
+        let scratch = empty(client, bytes);
+        let blurred = empty(client, bytes);
+        let output = empty(client, bytes);
+        let across = upload(client, &fmtc_gauss_taps(width, 2.0));
+        let down = upload(client, &fmtc_gauss_taps(height, 2.0));
+        let wide_across = upload(client, &fmtc_gauss_taps(width, 5.0));
+        let wide_down = upload(client, &fmtc_gauss_taps(height, 5.0));
+
+        match self.operation {
+            Pointwise::Search => {
+                let smoothing = NeighbourPlanes {
+                    input: first,
+                    output: plane(&blurred, width, height),
+                };
+                smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
+
+                let spread = empty(client, bytes);
+                let resizing = ResizePlanes {
+                    input: plane(&blurred, width, height),
+                    scratch: plane(&scratch, width, height),
+                    output: plane(&spread, width, height),
+                };
+                apply_float_with_edge(client, &sizing, resizing, &across, &down, Edge::Clamp);
+
+                let merged = empty(client, bytes);
+                let (spread_plane, merged_plane) =
+                    (plane(&spread, width, height), plane(&merged, width, height));
+                merge(client, &sizing, spread_plane, first, merged_plane, 0.1);
+
+                let bob = plane(&inputs[1], width, height);
+                let search = plane(&output, width, height);
+                search_clip(client, &sizing, merged_plane, first, bob, search, self.bits);
+            },
+            Pointwise::Resharpen => {
+                let midpoint = empty(client, bytes);
+                vertical_midpoint(client, &sizing, first, plane(&midpoint, width, height));
+
+                let smoothing = NeighbourPlanes {
+                    input: plane(&midpoint, width, height),
+                    output: plane(&blurred, width, height),
+                };
+                smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
+
+                let blurred_plane = plane(&blurred, width, height);
+                resharpen(
+                    client,
+                    &sizing,
+                    first,
+                    blurred_plane,
+                    plane(&output, width, height),
+                    STRENGTH,
+                    peak,
+                );
+            },
+            Pointwise::BackBlend => {
+                let smoothing = NeighbourPlanes {
+                    input: plane(&inputs[1], width, height),
+                    output: plane(&blurred, width, height),
+                };
+                smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
+
+                let spread = empty(client, bytes);
+                let resizing = ResizePlanes {
+                    input: plane(&blurred, width, height),
+                    scratch: plane(&scratch, width, height),
+                    output: plane(&spread, width, height),
+                };
+                apply_float_with_edge(client, &sizing, resizing, &wide_across, &wide_down, Edge::Clamp);
+
+                let spread_plane = plane(&spread, width, height);
+                subtract(
+                    client,
+                    &sizing,
+                    first,
+                    spread_plane,
+                    plane(&output, width, height),
+                    peak,
+                );
+            },
+            Pointwise::Midpoint => {
+                vertical_midpoint(client, &sizing, first, plane(&output, width, height));
+            },
+            Pointwise::Subtract => {
+                let second = plane(&inputs[1], width, height);
+                subtract(
+                    client,
+                    &sizing,
+                    first,
+                    second,
+                    plane(&output, width, height),
+                    peak,
+                );
+            },
+            Pointwise::Clamp => {
+                let upper = plane(&inputs[1], width, height);
+                let lower = plane(&inputs[2], width, height);
+                clamp_between(
+                    client,
+                    &sizing,
+                    first,
+                    upper,
+                    lower,
+                    plane(&output, width, height),
+                );
+            },
+            Pointwise::Merge => {
+                let second = plane(&inputs[1], width, height);
+                merge(client, &sizing, first, second, plane(&output, width, height), 0.3);
+            },
+        }
+
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        read_f32(client, &output)
+    }
+}
+
+/// The frame 3 planes of the `pan_8` clip of a fixture step, as the device tests' input.
+fn pan_frame(step: &str, name: &str) -> Vec<Vec<f32>> {
+    let fixture = qtgmc_fixture(step, name).remove(0);
+
+    frame_codes(&fixture, 3)
+}
+
+const PAN_SIZE: (usize, usize) = (128, 64);
+
+#[test]
+fn the_device_search_clip_matches_the_reference() {
+    let repaired = pan_frame("shimmer", "out").remove(0);
+    let bob_plane = pan_frame("bob", "out").remove(0);
+    let (width, height) = PAN_SIZE;
+    let expected = reference_search_clip(&repaired, &bob_plane, width, height, 8);
+
+    let task = PointwiseRun::new(Pointwise::Search, vec![repaired, bob_plane], PAN_SIZE, 8);
+    let found = backend().build(task);
+
+    assert_plane_within(&found, &expected, DEVICE_TOLERANCE, width as u32, "search clip");
+}
+
+#[test]
+fn the_device_resharpen_matches_the_reference() {
+    let (width, height) = PAN_SIZE;
+
+    for (plane_index, input) in pan_frame("average", "tr2_yuv").into_iter().enumerate() {
+        let size = if plane_index == 0 {
+            PAN_SIZE
+        } else {
+            (width / 2, height / 2)
+        };
+        let expected = reference_resharpen(&input, size.0, size.1, STRENGTH, 8);
+
+        let found = backend().build(PointwiseRun::new(Pointwise::Resharpen, vec![input], size, 8));
+
+        let label = format!("resharpen plane {plane_index}");
+        assert_plane_within(&found, &expected, DEVICE_TOLERANCE, size.0 as u32, &label);
+    }
+}
+
+#[test]
+fn the_device_back_blend_matches_the_reference() {
+    let thin = pan_frame("resharpen", "out").remove(0);
+    let lossed = pan_frame("average", "tr2_yuv").remove(0);
+    let (width, height) = PAN_SIZE;
+    let expected = reference_back_blend(&thin, &lossed, width, height, 8);
+
+    let difference: Vec<f32> = thin
+        .iter()
+        .zip(&lossed)
+        .map(|(sharp, plain)| (sharp - plain).clamp(-128.0, 127.0))
+        .collect();
+    let task = PointwiseRun::new(Pointwise::BackBlend, vec![thin, difference], PAN_SIZE, 8);
+    let found = backend().build(task);
+
+    assert_plane_within(&found, &expected, DEVICE_TOLERANCE, width as u32, "back blend");
+}
+
+#[test]
+fn the_device_vertical_midpoint_matches_the_reference() {
+    let input = pan_frame("average", "tr2_yuv").remove(0);
+    let (width, height) = (PAN_SIZE.0 as u32, PAN_SIZE.1 as u32);
+    let largest = reference_extreme(&input, width, height, Extreme::Maximum, Shape::Vertical);
+    let smallest = reference_extreme(&input, width, height, Extreme::Minimum, Shape::Vertical);
+    let expected: Vec<f32> = largest
+        .iter()
+        .zip(&smallest)
+        .map(|(high, low)| ((high + low) / 2.0 + 0.5).floor())
+        .collect();
+
+    let found = backend().build(PointwiseRun::new(Pointwise::Midpoint, vec![input], PAN_SIZE, 8));
+
+    assert_plane_within(&found, &expected, 0.0, width, "vertical midpoint");
+}
+
+#[test]
+fn the_device_subtract_matches_the_reference() {
+    let first = vec![10.0f32, 200.0, 255.0, 0.0, 128.0, 90.0, 5.0, 250.0];
+    let second = vec![20.0f32, 100.0, 0.0, 10.0, 128.0, 91.0, 5.0, 300.0];
+    let expected = vec![0.0f32, 100.0, 255.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+    let task = PointwiseRun::new(Pointwise::Subtract, vec![first, second], (4, 2), 8);
+    let found = backend().build(task);
+
+    assert_plane_within(&found, &expected, 0.0, 4, "subtract");
+}
+
+#[test]
+fn the_device_clamp_matches_the_reference_and_the_lower_bound_wins() {
+    let input = vec![10.0f32, 50.0, 90.0, 50.0, 50.0, 50.0, 200.0, 0.0];
+    let upper = vec![20.0f32, 60.0, 80.0, 40.0, 30.0, 100.0, 255.0, 0.0];
+    let lower = vec![5.0f32, 55.0, 70.0, 45.0, 35.0, 10.0, 210.0, 1.0];
+    let expected = reference_clamp(&input, &upper, &lower);
+
+    assert_eq!(expected, vec![10.0, 55.0, 80.0, 45.0, 35.0, 50.0, 210.0, 1.0]);
+
+    let task = PointwiseRun::new(Pointwise::Clamp, vec![input, upper, lower], (4, 2), 8);
+    let found = backend().build(task);
+
+    assert_plane_within(&found, &expected, 0.0, 4, "clamp");
+}
+
+#[test]
+fn the_device_merge_weighs_the_second_plane_by_the_weight() {
+    let first = vec![0.0f32, 100.0, 255.0, 40.0];
+    let second = vec![100.0f32, 100.0, 0.0, 140.0];
+    let expected = vec![30.0f32, 100.0, 178.5, 70.0];
+
+    let task = PointwiseRun::new(Pointwise::Merge, vec![first, second], (2, 2), 8);
+    let found = backend().build(task);
+
+    assert_plane_within(&found, &expected, DEVICE_TOLERANCE, 2, "merge");
+}
+
+/// One axis of a plane resized on the device with the gaussian taps and a clamped edge.
+struct GaussianRun {
+    input: Vec<f32>,
+    width: u32,
+    height: u32,
+}
+
+impl BuildTask for GaussianRun {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let bytes = self.input.len() * size_of::<f32>();
+
+        let input = upload_f32(client, &self.input);
+        let scratch = empty(client, bytes);
+        let output = empty(client, bytes);
+        let across = upload(client, &fmtc_gauss_taps(self.width, 2.0));
+        let down = upload(client, &fmtc_gauss_taps(self.height, 2.0));
+
+        let planes = ResizePlanes {
+            input: plane(&input, self.width, self.height),
+            scratch: plane(&scratch, self.width, self.height),
+            output: plane(&output, self.width, self.height),
+        };
+        apply_float_with_edge(client, &sizing, planes, &across, &down, Edge::Clamp);
+
+        cubecl::future::block_on(client.sync()).expect("the device should finish");
+
+        read_f32(client, &output)
+    }
+}
+
+#[test]
+fn the_device_gaussian_matches_the_reference_with_a_clamped_edge() {
+    let input = pan_frame("average", "tr2_yuv").remove(0);
+    let (width, height) = PAN_SIZE;
+    let across = fmtc_gauss_taps(width as u32, 2.0);
+    let down = fmtc_gauss_taps(height as u32, 2.0);
+    let expected =
+        reference_resize_float_with_edge(&input, width as u32, height as u32, &across, &down, Edge::Clamp);
+
+    let task = GaussianRun {
+        input,
+        width: width as u32,
+        height: height as u32,
+    };
+    let found = backend().build(task);
+
+    assert_plane_within(&found, &expected, DEVICE_TOLERANCE, width as u32, "gaussian");
+}
+
+#[test]
+fn fmtc_gauss_taps_sum_to_one_and_peak_on_their_own_sample() {
+    for sharpness in [2.0, 5.0] {
+        let table = fmtc_gauss_taps(32, sharpness);
+        let count = table.count as usize;
+
+        for (index, row) in table.weights.chunks(count).enumerate() {
+            let total: f32 = row.iter().sum();
+            assert!(
+                (total - 1.0).abs() < 1e-6,
+                "a1 {sharpness} row {index} sums to {total}"
+            );
+
+            let peak_tap = row
+                .iter()
+                .enumerate()
+                .max_by(|first, second| first.1.total_cmp(second.1))
+                .map(|(tap, _)| tap)
+                .expect("a row has taps");
+            assert_eq!(
+                table.starts[index] + peak_tap as i32,
+                index as i32,
+                "a1 {sharpness} row {index}"
+            );
+        }
+    }
+}
+
+// fmtc reads one sample further on the far side of a sample than the near side, once the first few samples
+// are past. The first 4 samples read 4 either way.
+#[test]
+fn fmtc_gauss_taps_read_one_sample_further_ahead_after_the_start() {
+    let table = fmtc_gauss_taps(32, 2.0);
+    let count = table.count as usize;
+    let reach = |index: usize| {
+        let row = &table.weights[index * count..(index + 1) * count];
+        let first = row.iter().position(|weight| *weight > 0.0).expect("a weight") as i32;
+        let last = row.iter().rposition(|weight| *weight > 0.0).expect("a weight") as i32;
+
+        (
+            index as i32 - (table.starts[index] + first),
+            table.starts[index] + last - index as i32,
+        )
+    };
+
+    assert_eq!(reach(0), (4, 4));
+    assert_eq!(reach(3), (4, 4));
+    assert_eq!(reach(4), (3, 4));
+    assert_eq!(reach(31), (3, 4));
+}
+
+#[test]
+fn the_default_sharpness_is_one_and_a_half() {
+    assert!((sharpness_strength(1.0, 2, 1) - 1.5).abs() < 1e-6);
+}
+
+#[test]
+fn sixteen_bit_thresholds_scale_with_the_depth() {
+    let repaired = qtgmc_fixture("shimmer", "out").remove(0);
+    let bobs = qtgmc_fixture("bob", "out").remove(0);
+    let (width, height) = PAN_SIZE;
+
+    // 257 is exactly 65535 / 255, so the thresholds scale exactly. A sample exactly on the threshold is
+    // left out, as f32 rounding decides which side it falls on at each depth.
+    let mut largest = 0.0f32;
+    for frame in 0..repaired.frames.len() {
+        let repaired_luma = &frame_codes(&repaired, frame)[0];
+        let bob_luma = &frame_codes(&bobs, frame)[0];
+        let eight_bit = reference_search_clip(repaired_luma, bob_luma, width, height, 8);
+
+        let wide_repaired: Vec<f32> = repaired_luma.iter().map(|sample| sample * 257.0).collect();
+        let wide_bob: Vec<f32> = bob_luma.iter().map(|sample| sample * 257.0).collect();
+        let sixteen_bit = reference_search_clip(&wide_repaired, &wide_bob, width, height, 16);
+
+        let (blur, tweaked) = reference_search_inputs(repaired_luma, bob_luma, width, height, 8);
+        for (position, (wide, narrow)) in sixteen_bit.iter().zip(&eight_bit).enumerate() {
+            let gap = ((tweaked[position] - blur[position]).abs() - scale(7.0, 255.0)).abs();
+            if gap < TIE_GAP {
+                continue;
+            }
+
+            largest = largest.max((wide - narrow * 257.0).abs());
+        }
+    }
+
+    println!("sixteen bit search clip: largest difference {largest}");
+    assert!(
+        largest <= 1.0,
+        "the largest difference is {largest}, expected at most 1"
+    );
+}

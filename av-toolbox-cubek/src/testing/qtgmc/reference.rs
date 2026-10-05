@@ -1,6 +1,19 @@
-use crate::deinterlace::qtgmc::{NEGATIVE_STEPS, POSITIVE_STEPS, Parity, bob_taps, restore_limits};
-use crate::neighbourhood::Edge;
-use crate::testing::reference_chain_with_edge;
+use crate::deinterlace::qtgmc::{
+    NEGATIVE_STEPS,
+    POSITIVE_STEPS,
+    Parity,
+    bob_taps,
+    fmtc_gauss_taps,
+    restore_limits,
+    search_levels,
+};
+use crate::neighbourhood::{Edge, Extreme, Shape, Smooth};
+use crate::testing::{
+    reference_chain_with_edge,
+    reference_extreme,
+    reference_resize_float_with_edge,
+    reference_smooth_with_edge,
+};
 
 /// Bobs the field of `parity` in `frame` to a full-height plane on the CPU, mirroring
 /// [bob](crate::deinterlace::qtgmc::bob).
@@ -126,4 +139,150 @@ pub fn reference_shimmer(
     }
 
     output
+}
+
+/// Blurs a plane with fmtc's gaussian of `a1 = sharpness` on both axes.
+fn gaussian(input: &[f32], width: usize, height: usize, sharpness: f32) -> Vec<f32> {
+    let across = fmtc_gauss_taps(width as u32, sharpness);
+    let down = fmtc_gauss_taps(height as u32, sharpness);
+
+    reference_resize_float_with_edge(input, width as u32, height as u32, &across, &down, Edge::Clamp)
+}
+
+/// The two clips the search clip's final expressions compare, as `(blur, tweaked)`.
+///
+/// `blur` is `repaired` smoothed and merged with itself, and `tweaked` is `bob` held within a few codes of
+/// `repaired`. Neither is rounded.
+pub fn reference_search_inputs(
+    repaired: &[f32],
+    bob: &[f32],
+    width: usize,
+    height: usize,
+    bits: u32,
+) -> (Vec<f32>, Vec<f32>) {
+    let peak = ((1u32 << bits) - 1) as f32;
+    let (tolerance, _, _) = search_levels(bits);
+
+    let blurred = reference_smooth_with_edge(
+        repaired,
+        width as u32,
+        height as u32,
+        Smooth::Binomial,
+        Edge::Clamp,
+    );
+    let spread = gaussian(&blurred, width, height, 2.0);
+    let blur = merge(&spread, repaired, 0.1);
+
+    let tweaked = repaired
+        .iter()
+        .zip(bob)
+        .map(|(centre, bob_sample)| {
+            bob_sample
+                .clamp(centre - tolerance, centre + tolerance)
+                .clamp(0.0, peak)
+        })
+        .collect();
+
+    (blur, tweaked)
+}
+
+/// The search clip's final expressions on the CPU, mirroring
+/// [search_clip](crate::deinterlace::qtgmc::search_clip) after QTGMC's blur of `repaired`.
+///
+/// The result is not rounded.
+pub fn reference_search_clip(
+    repaired: &[f32],
+    bob: &[f32],
+    width: usize,
+    height: usize,
+    bits: u32,
+) -> Vec<f32> {
+    let peak = ((1u32 << bits) - 1) as f32;
+    let (_, far, near) = search_levels(bits);
+    let (blur, tweaked) = reference_search_inputs(repaired, bob, width, height, bits);
+
+    let mut output = Vec::with_capacity(repaired.len());
+    for (smoothed, wanted) in blur.iter().zip(&tweaked) {
+        let mut result = (smoothed * 51.0 + wanted * 49.0) / 100.0;
+        if smoothed + far < *wanted {
+            result = smoothed + near;
+        }
+        if smoothed - far > *wanted {
+            result = smoothed - near;
+        }
+
+        output.push(result.clamp(0.0, peak));
+    }
+
+    output
+}
+
+/// QTGMC's resharpen on the CPU, mirroring [resharpen](crate::deinterlace::qtgmc::resharpen) after the
+/// blur of [vertical_midpoint](crate::deinterlace::qtgmc::vertical_midpoint), which rounds its midpoint.
+///
+/// The result is not rounded.
+pub fn reference_resharpen(input: &[f32], width: usize, height: usize, strength: f32, bits: u32) -> Vec<f32> {
+    let peak = ((1u32 << bits) - 1) as f32;
+    let (columns, rows) = (width as u32, height as u32);
+
+    let largest = reference_extreme(input, columns, rows, Extreme::Maximum, Shape::Vertical);
+    let smallest = reference_extreme(input, columns, rows, Extreme::Minimum, Shape::Vertical);
+    let midpoint: Vec<f32> = merge(&largest, &smallest, 0.5)
+        .iter()
+        .map(|sample| (sample + 0.5).floor())
+        .collect();
+    let blurred = reference_smooth_with_edge(&midpoint, columns, rows, Smooth::Binomial, Edge::Clamp);
+
+    input
+        .iter()
+        .zip(&blurred)
+        .map(|(sample, blurred_sample)| (sample + (sample - blurred_sample) * strength).clamp(0.0, peak))
+        .collect()
+}
+
+/// QTGMC's luma back-blend on the CPU, mirroring
+/// [subtract](crate::deinterlace::qtgmc::subtract) after its blurs.
+///
+/// The difference between `sharpened` and `unsharpened` is clamped as an integer `MakeDiff` stores it. The
+/// result is not rounded.
+pub fn reference_back_blend(
+    sharpened: &[f32],
+    unsharpened: &[f32],
+    width: usize,
+    height: usize,
+    bits: u32,
+) -> Vec<f32> {
+    let peak = ((1u32 << bits) - 1) as f32;
+    let (lowest, highest) = ((peak + 1.0) / -2.0, (peak - 1.0) / 2.0);
+
+    let difference: Vec<f32> = sharpened
+        .iter()
+        .zip(unsharpened)
+        .map(|(sharp, plain)| (sharp - plain).clamp(lowest, highest))
+        .collect();
+    let blurred = reference_smooth_with_edge(
+        &difference,
+        width as u32,
+        height as u32,
+        Smooth::Binomial,
+        Edge::Clamp,
+    );
+    let spread = gaussian(&blurred, width, height, 5.0);
+
+    sharpened
+        .iter()
+        .zip(&spread)
+        .map(|(sharp, back)| (sharp - back).clamp(0.0, peak))
+        .collect()
+}
+
+/// Clamps `input` between `lower` and `upper` on the CPU, mirroring
+/// [clamp_between](crate::deinterlace::qtgmc::clamp_between).
+pub fn reference_clamp(input: &[f32], upper: &[f32], lower: &[f32]) -> Vec<f32> {
+    input
+        .iter()
+        .zip(upper)
+        .zip(lower)
+        .map(|((sample, high), low)| sample.min(*high).max(*low))
+        .collect()
 }
