@@ -1,4 +1,5 @@
 mod parity;
+mod quality;
 mod stream;
 
 use av_toolbox_gpu::{ChromaLocation, FrameFormat, FrameLayout, FrameMeta, SampleFormat, Subsampling};
