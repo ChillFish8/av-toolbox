@@ -3,8 +3,7 @@
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-use crate::neighbourhood::Edge;
-use crate::{DevicePlane, Dispatch, reflect};
+use crate::{DevicePlane, Dispatch, Edge, assert_plane, reflect};
 
 /// How much an input sample weighs by its distance from where an output sample lands.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -217,7 +216,7 @@ pub fn centred_taps(input_len: u32, output_len: u32, kernel: &Kernel) -> Taps {
 pub struct Weights {
     starts: Handle,
     weights: Handle,
-    pub(crate) count: u32,
+    count: u32,
     outputs: u32,
 }
 
@@ -236,6 +235,16 @@ pub fn upload<R: Runtime>(client: &ComputeClient<R>, taps: &Taps) -> Weights {
 }
 
 impl Weights {
+    /// How many output samples the table has taps for.
+    pub(crate) fn outputs(&self) -> u32 {
+        self.outputs
+    }
+
+    /// How many input samples each output reads.
+    pub(crate) fn count(&self) -> u32 {
+        self.count
+    }
+
     pub(crate) fn starts<R: Runtime>(&self) -> ArrayArg<R> {
         let handle = self.starts.clone();
         let len = self.outputs as usize;
@@ -393,7 +402,7 @@ fn launch<E: Int, R: Runtime>(
             rows,
             in_width,
             out_width,
-            across.count,
+            across.count(),
         );
     }
 
@@ -411,7 +420,17 @@ fn launch<E: Int, R: Runtime>(
     // read.
     unsafe {
         resize_columns::launch_unchecked::<E, R>(
-            client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count, largest,
+            client,
+            cubes,
+            unit,
+            rows,
+            starts,
+            weights,
+            output,
+            out_width,
+            in_height,
+            down.count(),
+            largest,
         );
     }
 }
@@ -513,6 +532,22 @@ pub fn apply_float_with_edge<R: Runtime>(
     let in_width = planes.input.width();
     let in_height = planes.input.height();
     let out_width = planes.output.width();
+    let out_height = planes.output.height();
+    assert_plane(&planes.input, in_width, in_height, "input");
+    assert_plane(&planes.scratch, out_width, in_height, "scratch");
+    assert_plane(&planes.output, out_width, out_height, "output");
+    assert_eq!(
+        across.outputs(),
+        out_width,
+        "the across table has {} outputs, expected {out_width}",
+        across.outputs()
+    );
+    assert_eq!(
+        down.outputs(),
+        out_height,
+        "the down table has {} outputs, expected {out_height}",
+        down.outputs()
+    );
 
     let input = planes.input.array::<R>();
     let starts = across.starts::<R>();
@@ -536,7 +571,7 @@ pub fn apply_float_with_edge<R: Runtime>(
             rows,
             in_width,
             out_width,
-            across.count,
+            across.count(),
             clamp,
         );
     }
@@ -554,7 +589,17 @@ pub fn apply_float_with_edge<R: Runtime>(
     // every tap is folded back inside its column before it is read.
     unsafe {
         resize_columns_float::launch_unchecked::<R>(
-            client, cubes, unit, rows, starts, weights, output, out_width, in_height, down.count, clamp,
+            client,
+            cubes,
+            unit,
+            rows,
+            starts,
+            weights,
+            output,
+            out_width,
+            in_height,
+            down.count(),
+            clamp,
         );
     }
 }

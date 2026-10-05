@@ -1,5 +1,5 @@
 use super::reflect;
-use crate::neighbourhood::Edge;
+use crate::Edge;
 use crate::resize::Taps;
 
 /// Applies `across` then `down` on the CPU, rounding to U8 at the end, mirroring

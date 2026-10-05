@@ -3,7 +3,7 @@
 use cubecl::prelude::*;
 
 use super::search::assert_pyramids;
-use super::{MotionField, Pyramid, assert_field, assert_refinable, clamp_i32};
+use super::{MotionField, Pyramid, assert_field, assert_whole_pel_field, clamp_i32};
 use crate::Dispatch;
 
 /// The value of `plane` at the half pixel position `x2`, `y2`, clamped into the frame.
@@ -164,7 +164,7 @@ pub fn refine_half_pel<R: Runtime>(
 ) {
     assert_pyramids(centre, neighbour, 1);
     assert_field(field);
-    assert_refinable(field);
+    assert_whole_pel_field(field, "refine_half_pel");
 
     let grid = &field.grid;
 

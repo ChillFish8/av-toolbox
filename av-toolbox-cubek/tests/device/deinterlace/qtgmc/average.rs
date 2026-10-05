@@ -3,7 +3,7 @@ use av_toolbox_cubek::testing::{QtgmcFixture, assert_plane_within, qtgmc_fixture
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, codes, peak};
+use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 /// The luma plane of every bob frame of a clip.
@@ -79,15 +79,8 @@ fn tr0_matches_havsfunc() {
                 let found = reference_tr0(bobs, centre, tr0, width, height);
                 let target = &wanted.frames[centre][0].samples;
 
-                for (position, (value, code)) in found.iter().zip(target).enumerate() {
-                    let rounded = value.round().clamp(0.0, ceiling) as i32;
-                    assert!(
-                        (rounded - code).abs() <= FIXTURE_TOLERANCE,
-                        "{} tr0 {tr0} centre {centre}: sample {position} is {value} (rounded {rounded}), \
-                         havsfunc has {code}",
-                        fixture.clip,
-                    );
-                }
+                let label = format!("{} tr0 {tr0} centre {centre}", fixture.clip);
+                assert_fixture_within(&found, target, ceiling, |_| FIXTURE_TOLERANCE, &label);
             }
         }
     }

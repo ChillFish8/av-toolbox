@@ -13,7 +13,8 @@ pub use self::chain::{ChainPlanes, Step, chain, chain_with_edge};
 pub use self::median::median;
 pub use self::min_blur::{MinBlurPlanes, median_of_three, median_of_three_sample, min_blur};
 pub use self::prewitt::prewitt;
-use crate::{DevicePlane, Dispatch, reflect};
+pub use crate::Edge;
+use crate::{DevicePlane, Dispatch, assert_plane, reflect};
 
 /// The plane one neighbourhood operation reads and the plane it writes, both f32 and one size.
 #[derive(Debug, Clone, Copy)]
@@ -73,15 +74,6 @@ pub enum Spread {
     Deflate,
 }
 
-/// What a 3x3 pass reads past the edge of a plane.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Edge {
-    /// Folds back without repeating the edge sample, as `std.Minimum` and `std.Maximum` read.
-    Reflect,
-    /// Repeats the edge sample, as `std.Deflate` and `std.Inflate` read.
-    Clamp,
-}
-
 /// How a run of maximum or minimum passes grows a region, as havsfunc's `mt_expand_multi` does.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Expansion {
@@ -128,12 +120,16 @@ fn read(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f
 
 #[cube]
 fn read_edge(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32, clamp: u32) -> f32 {
-    let mut x = reflect(column, width as i32);
-    let mut y = reflect(row, height as i32);
-    if clamp == 1u32 {
-        x = i32::clamp(column, 0, width as i32 - 1);
-        y = i32::clamp(row, 0, height as i32 - 1);
-    }
+    let x = if clamp == 1u32 {
+        i32::clamp(column, 0, width as i32 - 1)
+    } else {
+        reflect(column, width as i32)
+    };
+    let y = if clamp == 1u32 {
+        i32::clamp(row, 0, height as i32 - 1)
+    } else {
+        reflect(row, height as i32)
+    };
     let index = y as u32 * width + x as u32;
 
     input[index as usize]
@@ -280,6 +276,8 @@ pub fn extreme<R: Runtime>(
 ) {
     let width = planes.input.width();
     let height = planes.input.height();
+    assert_plane(&planes.input, width, height, "input");
+    assert_plane(&planes.output, width, height, "output");
     let samples = planes.output.samples();
     let shape_code = shape.code();
     let maximum = u32::from(extreme == Extreme::Maximum);
@@ -288,7 +286,8 @@ pub fn extreme<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
+    // Safety: both planes hold `width` by `height` f32 samples, and every read is reflected inside the
+    // plane.
     unsafe {
         extreme_kernel::launch_unchecked::<R>(
             client, cubes, unit, input, output, width, height, shape_code, maximum,
@@ -317,6 +316,8 @@ pub fn smooth_with_edge<R: Runtime>(
     let clamp = u32::from(edge == Edge::Clamp);
     let width = planes.input.width();
     let height = planes.input.height();
+    assert_plane(&planes.input, width, height, "input");
+    assert_plane(&planes.output, width, height, "output");
     let samples = planes.output.samples();
     let binomial = u32::from(smooth == Smooth::Binomial);
     let input = planes.input.array::<R>();
@@ -324,7 +325,8 @@ pub fn smooth_with_edge<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: both planes hold `samples` f32 values, and every read is inside the plane.
+    // Safety: both planes hold `width` by `height` f32 samples, and every read is folded inside the
+    // plane.
     unsafe {
         smooth_kernel::launch_unchecked::<R>(
             client, cubes, unit, input, output, width, height, binomial, clamp,
@@ -353,6 +355,8 @@ pub fn spread_with_edge<R: Runtime>(
 ) {
     let width = planes.input.width();
     let height = planes.input.height();
+    assert_plane(&planes.input, width, height, "input");
+    assert_plane(&planes.output, width, height, "output");
     let samples = planes.output.samples();
     let inflate = u32::from(spread == Spread::Inflate);
     let clamp = u32::from(edge == Edge::Clamp);
@@ -361,7 +365,8 @@ pub fn spread_with_edge<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: both planes hold `samples` f32 values, and every read is inside the plane.
+    // Safety: both planes hold `width` by `height` f32 samples, and every read is folded inside the
+    // plane.
     unsafe {
         spread_kernel::launch_unchecked::<R>(
             client, cubes, unit, input, output, width, height, inflate, clamp,

@@ -62,7 +62,7 @@ fn weighted_sum_kernel(
     output[ABSOLUTE_POS] = total;
 }
 
-/// Writes `Σ weights[i] × planes[i]` into `output`. The weights already sum to 1.
+/// Writes `Σ weights[i] × planes[i]` into `output`.
 ///
 /// The same plane may appear more than once, to weigh it again.
 pub fn weighted_sum<R: Runtime>(

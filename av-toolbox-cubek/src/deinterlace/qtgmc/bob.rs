@@ -78,11 +78,17 @@ pub fn bob<R: Runtime>(
     let height = planes.frame.height();
     assert!(
         height.is_multiple_of(2) && height >= 2,
-        "the frame is {height} rows, expected an even count"
+        "the frame is {height} rows, expected an even count of at least 2"
     );
     assert!(parity < 2, "the parity is {parity}, expected 0 or 1");
     assert_plane(&planes.frame, width, height, "frame");
     assert_plane(&planes.output, width, height, "output");
+    assert_eq!(
+        down.outputs(),
+        height,
+        "the table has {} outputs, expected {height}",
+        down.outputs()
+    );
 
     let frame = planes.frame.array::<R>();
     let starts = down.starts::<R>();
@@ -104,7 +110,7 @@ pub fn bob<R: Runtime>(
             output,
             width,
             height / 2,
-            down.count,
+            down.count(),
             parity,
         );
     }

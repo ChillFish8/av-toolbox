@@ -27,3 +27,12 @@ pub fn reflect(index: i32, length: i32) -> i32 {
 
     reflected
 }
+
+/// What a pass reads past the edge of a plane.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Edge {
+    /// Folds back without repeating the edge sample.
+    Reflect,
+    /// Repeats the edge sample.
+    Clamp,
+}

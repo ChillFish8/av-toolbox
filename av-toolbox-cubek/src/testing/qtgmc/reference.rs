@@ -2,6 +2,7 @@ use crate::deinterlace::qtgmc::{
     NEGATIVE_STEPS,
     POSITIVE_STEPS,
     Parity,
+    assert_bits,
     bob_taps,
     fmtc_gauss_taps,
     restore_limits,
@@ -108,6 +109,8 @@ pub fn reference_shimmer(
     height: usize,
     bits: u32,
 ) -> Vec<f32> {
+    assert_bits(bits);
+
     let neutral = (1u32 << (bits - 1)) as f32;
     let peak = ((1u32 << bits) - 1) as f32;
     let (above, below) = restore_limits(bits);
@@ -151,8 +154,8 @@ fn gaussian(input: &[f32], width: usize, height: usize, sharpness: f32) -> Vec<f
 
 /// The two clips the search clip's final expressions compare, as `(blur, tweaked)`.
 ///
-/// `blur` is `repaired` smoothed and merged with itself, and `tweaked` is `bob` held within a few codes of
-/// `repaired`. Neither is rounded.
+/// `blur` is `repaired` smoothed, then merged back with `repaired`, and `tweaked` is `bob` held within a few
+/// codes of `repaired`. Neither is rounded.
 pub fn reference_search_inputs(
     repaired: &[f32],
     bob: &[f32],
@@ -160,6 +163,8 @@ pub fn reference_search_inputs(
     height: usize,
     bits: u32,
 ) -> (Vec<f32>, Vec<f32>) {
+    assert_bits(bits);
+
     let peak = ((1u32 << bits) - 1) as f32;
     let (tolerance, _, _) = search_levels(bits);
 
@@ -197,6 +202,8 @@ pub fn reference_search_clip(
     height: usize,
     bits: u32,
 ) -> Vec<f32> {
+    assert_bits(bits);
+
     let peak = ((1u32 << bits) - 1) as f32;
     let (_, far, near) = search_levels(bits);
     let (blur, tweaked) = reference_search_inputs(repaired, bob, width, height, bits);
@@ -222,6 +229,8 @@ pub fn reference_search_clip(
 ///
 /// The result is not rounded.
 pub fn reference_resharpen(input: &[f32], width: usize, height: usize, strength: f32, bits: u32) -> Vec<f32> {
+    assert_bits(bits);
+
     let peak = ((1u32 << bits) - 1) as f32;
     let (columns, rows) = (width as u32, height as u32);
 
@@ -252,6 +261,8 @@ pub fn reference_back_blend(
     height: usize,
     bits: u32,
 ) -> Vec<f32> {
+    assert_bits(bits);
+
     let peak = ((1u32 << bits) - 1) as f32;
     let (lowest, highest) = ((peak + 1.0) / -2.0, (peak - 1.0) / 2.0);
 

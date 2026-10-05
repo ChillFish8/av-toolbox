@@ -1,6 +1,7 @@
 use av_toolbox_cubek::deinterlace::qtgmc::{
     clamp_between,
     fmtc_gauss_taps,
+    havsfunc_scale,
     merge,
     resharpen,
     search_clip,
@@ -25,18 +26,8 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, codes, peak};
+use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
-
-/// The largest distance between a rounded reference plane and havsfunc's.
-fn largest_fixture_difference(found: &[f32], expected: &[i32], ceiling: f32) -> i32 {
-    found
-        .iter()
-        .zip(expected)
-        .map(|(value, wanted)| (value.round().clamp(0.0, ceiling) as i32 - wanted).abs())
-        .max()
-        .unwrap_or(0)
-}
 
 /// The largest difference seen for each clip and plane of one step.
 #[derive(Default)]
@@ -52,21 +43,10 @@ impl StepDifferences {
         }
     }
 
-    /// Prints each largest difference and panics if any is over [FIXTURE_TOLERANCE].
-    fn assert_within_tolerance(&self) {
+    fn print_largest(&self) {
         for (label, difference) in &self.largest {
             println!("{label}: largest difference {difference}");
         }
-
-        let over: Vec<_> = self
-            .largest
-            .iter()
-            .filter(|(_, difference)| *difference > FIXTURE_TOLERANCE)
-            .collect();
-        assert!(
-            over.is_empty(),
-            "differences over {FIXTURE_TOLERANCE} from havsfunc: {over:?}"
-        );
     }
 }
 
@@ -92,11 +72,6 @@ const THRESHOLD_BAND: f32 = 1.5;
 /// The share of a frame's samples that may differ from havsfunc by more than [FIXTURE_TOLERANCE].
 const FLIP_SHARE_LIMIT: f32 = 0.03;
 
-/// havsfunc's `scale(value, peak)`.
-fn scale(value: f32, peak: f32) -> f32 {
-    (value * peak / 255.0 + 0.5).floor()
-}
-
 // The search clip compares its blur with the bob at a hard threshold. fmtc's fixed-point gaussian differs
 // from the f32 one by about a code, which flips the branch for samples near the threshold. Those may
 // differ by up to `ceil(1.5 * scale(1)) + 1` and the rest by 1. No more than 3% of a frame may differ by
@@ -110,8 +85,9 @@ fn the_search_clip_matches_havsfunc() {
     for ((repair, bob_fixture), output) in repaired.iter().zip(&bobs).zip(&outputs) {
         let ceiling = peak(output);
         let (width, height) = luma_size(output);
-        let threshold = scale(7.0, ceiling);
-        let band_tolerance = (THRESHOLD_BAND * scale(1.0, ceiling)).ceil() as i32 + FIXTURE_TOLERANCE;
+        let threshold = havsfunc_scale(7.0, ceiling);
+        let band_tolerance =
+            (THRESHOLD_BAND * havsfunc_scale(1.0, ceiling)).ceil() as i32 + FIXTURE_TOLERANCE;
 
         let mut largest = 0;
         let mut largest_share = 0.0f32;
@@ -124,30 +100,21 @@ fn the_search_clip_matches_havsfunc() {
                 reference_search_inputs(repaired_luma, bob_luma, width, height, output.bits);
 
             let expected = &output.frames[frame][0].samples;
-            let mut flipped = 0;
-            for (position, (value, wanted)) in found.iter().zip(expected).enumerate() {
-                let difference = (value.round().clamp(0.0, ceiling) as i32 - wanted).abs();
+            let allowed = |position: usize| {
                 let gap = ((tweaked[position] - blur[position]).abs() - threshold).abs();
 
-                let allowed = if gap <= THRESHOLD_BAND {
+                if gap <= THRESHOLD_BAND {
                     band_tolerance
                 } else {
                     FIXTURE_TOLERANCE
-                };
-                largest = largest.max(difference);
-                if difference > FIXTURE_TOLERANCE {
-                    flipped += 1;
                 }
-                assert!(
-                    difference <= allowed,
-                    "{} frame {frame}: sample {position} is {value}, havsfunc has {wanted}, \
-                     allowed {allowed}",
-                    output.clip,
-                );
-            }
+            };
+            let label = format!("{} frame {frame}", output.clip);
+            let report = assert_fixture_within(&found, expected, ceiling, allowed, &label);
 
-            flipped_total += flipped;
-            let share = flipped as f32 / found.len() as f32;
+            largest = largest.max(report.largest);
+            flipped_total += report.over_tolerance;
+            let share = report.over_tolerance as f32 / found.len() as f32;
             largest_share = largest_share.max(share);
         }
 
@@ -180,13 +147,15 @@ fn resharpen_matches_havsfunc() {
                 let found =
                     reference_resharpen(plane_codes, source.width, source.height, strength, output.bits);
 
-                let largest = largest_fixture_difference(&found, &source.samples, ceiling);
-                differences.record(format!("{} resharpen plane {plane_index}", output.clip), largest);
+                let label = format!("{} resharpen plane {plane_index}", output.clip);
+                let report =
+                    assert_fixture_within(&found, &source.samples, ceiling, |_| FIXTURE_TOLERANCE, &label);
+                differences.record(label, report.largest);
             }
         }
     }
 
-    differences.assert_within_tolerance();
+    differences.print_largest();
 }
 
 #[test]
@@ -206,12 +175,13 @@ fn back_blend_matches_havsfunc() {
             let found = reference_back_blend(thin_luma, lossed_luma, width, height, output.bits);
 
             let expected = &output.frames[frame][0].samples;
-            let largest = largest_fixture_difference(&found, expected, ceiling);
-            differences.record(format!("{} back blend luma", output.clip), largest);
+            let label = format!("{} back blend luma", output.clip);
+            let report = assert_fixture_within(&found, expected, ceiling, |_| FIXTURE_TOLERANCE, &label);
+            differences.record(label, report.largest);
         }
     }
 
-    differences.assert_within_tolerance();
+    differences.print_largest();
 }
 
 #[test]
@@ -233,13 +203,15 @@ fn clamp_matches_havsfunc() {
             for (plane_index, source) in output.frames[frame].iter().enumerate() {
                 let found = reference_clamp(&planes[plane_index], &highs[plane_index], &lows[plane_index]);
 
-                let largest = largest_fixture_difference(&found, &source.samples, ceiling);
-                differences.record(format!("{} clamp plane {plane_index}", output.clip), largest);
+                let label = format!("{} clamp plane {plane_index}", output.clip);
+                let report =
+                    assert_fixture_within(&found, &source.samples, ceiling, |_| FIXTURE_TOLERANCE, &label);
+                differences.record(label, report.largest);
             }
         }
     }
 
-    differences.assert_within_tolerance();
+    differences.print_largest();
 }
 
 /// The kernels a [PointwiseRun] chains.
@@ -288,7 +260,6 @@ impl BuildTask for PointwiseRun {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let bytes = self.planes[0].len() * size_of::<f32>();
-        let peak = ((1u32 << self.bits) - 1) as f32;
         let (width, height) = (self.width, self.height);
 
         let inputs: Vec<_> = self
@@ -341,14 +312,15 @@ impl BuildTask for PointwiseRun {
                 smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
 
                 let blurred_plane = plane(&blurred, width, height);
+                let output_plane = plane(&output, width, height);
                 resharpen(
                     client,
                     &sizing,
                     first,
                     blurred_plane,
-                    plane(&output, width, height),
+                    output_plane,
                     STRENGTH,
-                    peak,
+                    self.bits,
                 );
             },
             Pointwise::BackBlend => {
@@ -367,28 +339,16 @@ impl BuildTask for PointwiseRun {
                 apply_float_with_edge(client, &sizing, resizing, &wide_across, &wide_down, Edge::Clamp);
 
                 let spread_plane = plane(&spread, width, height);
-                subtract(
-                    client,
-                    &sizing,
-                    first,
-                    spread_plane,
-                    plane(&output, width, height),
-                    peak,
-                );
+                let output_plane = plane(&output, width, height);
+                subtract(client, &sizing, first, spread_plane, output_plane, self.bits);
             },
             Pointwise::Midpoint => {
                 vertical_midpoint(client, &sizing, first, plane(&output, width, height));
             },
             Pointwise::Subtract => {
                 let second = plane(&inputs[1], width, height);
-                subtract(
-                    client,
-                    &sizing,
-                    first,
-                    second,
-                    plane(&output, width, height),
-                    peak,
-                );
+                let output_plane = plane(&output, width, height);
+                subtract(client, &sizing, first, second, output_plane, self.bits);
             },
             Pointwise::Clamp => {
                 let upper = plane(&inputs[1], width, height);
@@ -658,7 +618,7 @@ fn sixteen_bit_thresholds_scale_with_the_depth() {
 
         let (blur, tweaked) = reference_search_inputs(repaired_luma, bob_luma, width, height, 8);
         for (position, (wide, narrow)) in sixteen_bit.iter().zip(&eight_bit).enumerate() {
-            let gap = ((tweaked[position] - blur[position]).abs() - scale(7.0, 255.0)).abs();
+            let gap = ((tweaked[position] - blur[position]).abs() - havsfunc_scale(7.0, 255.0)).abs();
             if gap < TIE_GAP {
                 continue;
             }

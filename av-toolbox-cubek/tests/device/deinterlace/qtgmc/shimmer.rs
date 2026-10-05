@@ -3,7 +3,7 @@ use av_toolbox_cubek::testing::{assert_plane_within, qtgmc_fixture, reference_sh
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use super::{FIXTURE_TOLERANCE, codes};
+use super::{FIXTURE_TOLERANCE, assert_fixture_within, codes};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 /// One plane repaired by `shimmer` on the device.
@@ -27,8 +27,8 @@ impl BuildTask for ShimmerRun {
         let reference = upload_f32(client, &self.reference);
         let difference = empty(client, bytes);
         let first = empty(client, bytes);
-        let second = empty(client, bytes);
-        let choke = empty(client, bytes);
+        let positive_choke = empty(client, bytes);
+        let negative_choke = empty(client, bytes);
         let output = empty(client, bytes);
 
         let planes = ShimmerPlanes {
@@ -36,8 +36,8 @@ impl BuildTask for ShimmerRun {
             reference: plane(&reference, self.width, self.height),
             difference: plane(&difference, self.width, self.height),
             first: plane(&first, self.width, self.height),
-            second: plane(&second, self.width, self.height),
-            choke: plane(&choke, self.width, self.height),
+            positive_choke: plane(&positive_choke, self.width, self.height),
+            negative_choke: plane(&negative_choke, self.width, self.height),
             output: plane(&output, self.width, self.height),
         };
         shimmer(client, &sizing, planes, self.bits);
@@ -92,18 +92,15 @@ fn shimmer_matches_havsfunc() {
         let ceiling = ((1u32 << case.bits) - 1) as f32;
         let found = reference_shimmer(&case.input, &case.reference, width, height, case.bits);
 
-        let mut largest = 0;
-        for (position, (value, wanted)) in found.iter().zip(&case.expected).enumerate() {
-            let rounded = value.round().clamp(0.0, ceiling) as i32;
-            largest = largest.max((rounded - wanted).abs());
-            assert!(
-                (rounded - wanted).abs() <= FIXTURE_TOLERANCE,
-                "{}: sample {position} is {value} (rounded {rounded}), havsfunc has {wanted}",
-                case.label,
-            );
-        }
+        let report = assert_fixture_within(
+            &found,
+            &case.expected,
+            ceiling,
+            |_| FIXTURE_TOLERANCE,
+            &case.label,
+        );
 
-        println!("{}: largest difference {largest}", case.label);
+        println!("{}: largest difference {}", case.label, report.largest);
     }
 }
 

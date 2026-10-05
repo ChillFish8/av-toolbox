@@ -4,7 +4,7 @@ use av_toolbox_cubek::testing::{assert_plane_within, qtgmc_fixture, reference_bo
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, codes, peak};
+use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 /// One frame bobbed on the device.
@@ -88,15 +88,8 @@ fn the_bob_reference_matches_havsfunc() {
                     let found = reference_bob(&frame, size, parity);
                     let expected = &output.frames[2 * index + parity as usize][plane_index];
 
-                    for (position, (value, wanted)) in found.iter().zip(&expected.samples).enumerate() {
-                        let rounded = value.round().clamp(0.0, ceiling) as i32;
-                        assert!(
-                            (rounded - wanted).abs() <= FIXTURE_TOLERANCE,
-                            "{} frame {index} plane {plane_index} parity {parity}: sample {position} is \
-                             {value} (rounded {rounded}), havsfunc has {wanted}",
-                            input.clip,
-                        );
-                    }
+                    let label = format!("{} frame {index} plane {plane_index} parity {parity}", input.clip);
+                    assert_fixture_within(&found, &expected.samples, ceiling, |_| FIXTURE_TOLERANCE, &label);
                 }
             }
         }

@@ -2,9 +2,9 @@
 // by name.
 use cubecl::prelude::*;
 
-use super::shimmer::scale;
+use super::{assert_bits, havsfunc_scale};
 use crate::resize::Taps;
-use crate::{DevicePlane, Dispatch, assert_plane, reflect};
+use crate::{DevicePlane, Dispatch, assert_plane};
 
 /// How many samples each side of a sample fmtc's gaussian reaches at its default `taps` of 4.
 const GAUSS_REACH: f64 = 4.0;
@@ -18,6 +18,7 @@ const GAUSS_SLACK: f64 = 1e-6;
 /// A sample `x` away is weighed by `2^(-p / 10 * x^2)` with `p` limited to `1..=100`, and zero beyond
 /// `x` of 4 (`ContFirGauss.cpp`, constructor and `do_get_val`, and the default `taps` of 4 in
 /// `Resample_vs.cpp`).
+///
 /// Each output's weights are scaled to sum to 1. Taps past the plane's edge count toward the edge sample, so
 /// apply these with a clamped edge.
 ///
@@ -128,8 +129,9 @@ fn midpoint_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, heig
     let column = position % width;
     let row = (position / width) as i32;
 
-    let above = reflect(row - 1, height as i32) as u32;
-    let below = reflect(row + 1, height as i32) as u32;
+    let last = height as i32 - 1;
+    let above = i32::clamp(row - 1, 0, last) as u32;
+    let below = i32::clamp(row + 1, 0, last) as u32;
     let top = input[(above * width + column) as usize];
     let centre = input[ABSOLUTE_POS];
     let bottom = input[(below * width + column) as usize];
@@ -170,12 +172,14 @@ fn merge_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>
 }
 
 /// The code values `scale(3)`, `scale(7)` and `scale(2)` for `bits` deep samples.
-///
-/// havsfunc defines `scale(value, peak)` as `cround(value * peak / 255)`.
 pub(crate) fn search_levels(bits: u32) -> (f32, f32, f32) {
     let peak = ((1u32 << bits) - 1) as f32;
 
-    (scale(3.0, peak), scale(7.0, peak), scale(2.0, peak))
+    (
+        havsfunc_scale(3.0, peak),
+        havsfunc_scale(7.0, peak),
+        havsfunc_scale(2.0, peak),
+    )
 }
 
 /// The search clip's final expressions, as QTGMC builds the clip motion is searched on.
@@ -191,7 +195,7 @@ pub fn search_clip<R: Runtime>(
     output: DevicePlane<'_>,
     bits: u32,
 ) {
-    assert!((1..=16).contains(&bits), "{bits} bits, expected 1..=16");
+    assert_bits(bits);
 
     let (width, height) = (output.width(), output.height());
     assert_plane(&blur, width, height, "blur");
@@ -203,6 +207,10 @@ pub fn search_clip<R: Runtime>(
     let (tolerance, far, near) = search_levels(bits);
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
+    let blur_array = blur.array::<R>();
+    let repaired_array = repaired.array::<R>();
+    let bob_array = bob.array::<R>();
+    let output_array = output.array::<R>();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
@@ -211,10 +219,10 @@ pub fn search_clip<R: Runtime>(
             client,
             cubes,
             unit,
-            blur.array::<R>(),
-            repaired.array::<R>(),
-            bob.array::<R>(),
-            output.array::<R>(),
+            blur_array,
+            repaired_array,
+            bob_array,
+            output_array,
             tolerance,
             near,
             far,
@@ -223,7 +231,7 @@ pub fn search_clip<R: Runtime>(
     }
 }
 
-/// `x + (x − blurred) × strength`, clamped to `0..=peak`.
+/// `x + (x − blurred) × strength`, clamped to the code values of `bits` deep samples.
 pub fn resharpen<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -231,15 +239,21 @@ pub fn resharpen<R: Runtime>(
     blurred: DevicePlane<'_>,
     output: DevicePlane<'_>,
     strength: f32,
-    peak: f32,
+    bits: u32,
 ) {
+    assert_bits(bits);
+
     let (width, height) = (output.width(), output.height());
     assert_plane(&input, width, height, "input");
     assert_plane(&blurred, width, height, "blurred");
     assert_plane(&output, width, height, "output");
 
+    let peak = ((1u32 << bits) - 1) as f32;
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
+    let input_array = input.array::<R>();
+    let blurred_array = blurred.array::<R>();
+    let output_array = output.array::<R>();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
@@ -248,9 +262,9 @@ pub fn resharpen<R: Runtime>(
             client,
             cubes,
             unit,
-            input.array::<R>(),
-            blurred.array::<R>(),
-            output.array::<R>(),
+            input_array,
+            blurred_array,
+            output_array,
             strength,
             peak,
         );
@@ -274,38 +288,38 @@ pub fn vertical_midpoint<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
+    let input_array = input.array::<R>();
+    let output_array = output.array::<R>();
 
-    // Safety: both planes hold `width` by `height` f32 samples, and every row read is reflected inside
+    // Safety: both planes hold `width` by `height` f32 samples, and every row read is clamped inside
     // the plane.
     unsafe {
-        midpoint_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            input.array::<R>(),
-            output.array::<R>(),
-            width,
-            height,
-        );
+        midpoint_kernel::launch_unchecked::<R>(client, cubes, unit, input_array, output_array, width, height);
     }
 }
 
-/// `x − blurred`, the back-blend's final subtraction, clamped to `0..=peak`.
+/// `x − blurred`, the back-blend's final subtraction, clamped to the code values of `bits` deep samples.
 pub fn subtract<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     blurred: DevicePlane<'_>,
     output: DevicePlane<'_>,
-    peak: f32,
+    bits: u32,
 ) {
+    assert_bits(bits);
+
     let (width, height) = (output.width(), output.height());
     assert_plane(&input, width, height, "input");
     assert_plane(&blurred, width, height, "blurred");
     assert_plane(&output, width, height, "output");
 
+    let peak = ((1u32 << bits) - 1) as f32;
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
+    let input_array = input.array::<R>();
+    let blurred_array = blurred.array::<R>();
+    let output_array = output.array::<R>();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
@@ -314,9 +328,9 @@ pub fn subtract<R: Runtime>(
             client,
             cubes,
             unit,
-            input.array::<R>(),
-            blurred.array::<R>(),
-            output.array::<R>(),
+            input_array,
+            blurred_array,
+            output_array,
             peak,
         );
     }
@@ -339,6 +353,10 @@ pub fn clamp_between<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
+    let input_array = input.array::<R>();
+    let upper_array = upper.array::<R>();
+    let lower_array = lower.array::<R>();
+    let output_array = output.array::<R>();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
@@ -347,30 +365,33 @@ pub fn clamp_between<R: Runtime>(
             client,
             cubes,
             unit,
-            input.array::<R>(),
-            upper.array::<R>(),
-            lower.array::<R>(),
-            output.array::<R>(),
+            input_array,
+            upper_array,
+            lower_array,
+            output_array,
         );
     }
 }
 
-/// `a × (1 − weight) + b × weight`.
+/// `first × (1 − weight) + second × weight`.
 pub fn merge<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    a: DevicePlane<'_>,
-    b: DevicePlane<'_>,
+    first: DevicePlane<'_>,
+    second: DevicePlane<'_>,
     output: DevicePlane<'_>,
     weight: f32,
 ) {
     let (width, height) = (output.width(), output.height());
-    assert_plane(&a, width, height, "a");
-    assert_plane(&b, width, height, "b");
+    assert_plane(&first, width, height, "first");
+    assert_plane(&second, width, height, "second");
     assert_plane(&output, width, height, "output");
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
+    let first_array = first.array::<R>();
+    let second_array = second.array::<R>();
+    let output_array = output.array::<R>();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
@@ -379,9 +400,9 @@ pub fn merge<R: Runtime>(
             client,
             cubes,
             unit,
-            a.array::<R>(),
-            b.array::<R>(),
-            output.array::<R>(),
+            first_array,
+            second_array,
+            output_array,
             weight,
         );
     }

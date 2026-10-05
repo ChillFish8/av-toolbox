@@ -2,6 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
+use super::{assert_bits, havsfunc_scale};
 use crate::neighbourhood::{ChainPlanes, Edge, Extreme, Shape, Spread, Step, chain_with_edge};
 use crate::{DevicePlane, Dispatch, assert_plane};
 
@@ -23,28 +24,35 @@ pub(crate) const NEGATIVE_STEPS: [Step; 5] = [
     Step::Extreme(Extreme::Minimum, Shape::Vertical),
 ];
 
-/// The scratch planes one shimmer repair passes through, all one size.
+/// The planes one shimmer repair reads, passes through and writes, all one size and all separate.
 pub struct ShimmerPlanes<'a> {
     pub input: DevicePlane<'a>,
     pub reference: DevicePlane<'a>,
     pub difference: DevicePlane<'a>,
     pub first: DevicePlane<'a>,
-    pub second: DevicePlane<'a>,
-    pub choke: DevicePlane<'a>,
+    pub positive_choke: DevicePlane<'a>,
+    pub negative_choke: DevicePlane<'a>,
     pub output: DevicePlane<'a>,
 }
 
-/// The code value of a level given for 8 bit video, as havsfunc's `scale` rounds it.
-///
-/// havsfunc defines `scale(value, peak)` as `cround(value * peak / 255)` for a `peak` other than 1, and
-/// `cround` rounds half away from zero.
-pub(super) fn scale(level: f32, peak: f32) -> f32 {
-    let scaled = level * peak / 255.0;
+impl ShimmerPlanes<'_> {
+    /// Whether every plane is held by a separate handle.
+    fn are_distinct(&self) -> bool {
+        let handles = [
+            self.input.handle(),
+            self.reference.handle(),
+            self.difference.handle(),
+            self.first.handle(),
+            self.positive_choke.handle(),
+            self.negative_choke.handle(),
+            self.output.handle(),
+        ];
 
-    if scaled > 0.0 {
-        (scaled + 0.5).floor()
-    } else {
-        (scaled - 0.5).ceil()
+        handles.iter().enumerate().all(|(index, handle)| {
+            handles[index + 1..]
+                .iter()
+                .all(|other| !std::ptr::eq(*handle, *other))
+        })
     }
 }
 
@@ -55,7 +63,10 @@ pub(crate) fn restore_limits(bits: u32) -> (f32, f32) {
     let neutral = (1u32 << (bits - 1)) as f32;
     let peak = ((1u32 << bits) - 1) as f32;
 
-    (scale(129.0, peak) - neutral, scale(127.0, peak) - neutral)
+    (
+        havsfunc_scale(129.0, peak) - neutral,
+        havsfunc_scale(127.0, peak) - neutral,
+    )
 }
 
 #[cube(launch_unchecked)]
@@ -109,14 +120,14 @@ fn restore_kernel(
 /// `KeepOnlyBobShimmerFixes` does at Rep 4.
 ///
 /// Differences more than a couple of rows high are restored to `reference`. `bits` is the sample depth
-/// the planes hold values for.
+/// the planes hold values for, between 8 and 16.
 pub fn shimmer<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: ShimmerPlanes<'_>,
     bits: u32,
 ) {
-    assert!((1..=16).contains(&bits), "{bits} bits, expected 1..=16");
+    assert_bits(bits);
 
     let width = planes.input.width();
     let height = planes.input.height();
@@ -124,15 +135,20 @@ pub fn shimmer<R: Runtime>(
     assert_plane(&planes.reference, width, height, "reference");
     assert_plane(&planes.difference, width, height, "difference");
     assert_plane(&planes.first, width, height, "first");
-    assert_plane(&planes.second, width, height, "second");
-    assert_plane(&planes.choke, width, height, "choke");
+    assert_plane(&planes.positive_choke, width, height, "positive choke");
+    assert_plane(&planes.negative_choke, width, height, "negative choke");
     assert_plane(&planes.output, width, height, "output");
+    debug_assert!(planes.are_distinct(), "the shimmer planes must all be separate");
 
     let neutral = (1u32 << (bits - 1)) as f32;
     let peak = ((1u32 << bits) - 1) as f32;
     let (above, below) = restore_limits(bits);
     let cubes = dispatch.cube_count(planes.output.samples());
     let unit = dispatch.cube_dim();
+
+    let difference_input = planes.input.array::<R>();
+    let difference_reference = planes.reference.array::<R>();
+    let difference_output = planes.difference.array::<R>();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
@@ -141,9 +157,9 @@ pub fn shimmer<R: Runtime>(
             client,
             cubes.clone(),
             unit,
-            planes.input.array::<R>(),
-            planes.reference.array::<R>(),
-            planes.difference.array::<R>(),
+            difference_input,
+            difference_reference,
+            difference_output,
             -neutral,
             peak - neutral,
         );
@@ -152,16 +168,22 @@ pub fn shimmer<R: Runtime>(
     let positive = ChainPlanes {
         input: planes.difference,
         scratch: planes.first,
-        output: planes.choke,
+        output: planes.positive_choke,
     };
     chain_with_edge(client, dispatch, positive, &POSITIVE_STEPS, Edge::Clamp);
 
     let negative = ChainPlanes {
         input: planes.difference,
         scratch: planes.first,
-        output: planes.second,
+        output: planes.negative_choke,
     };
     chain_with_edge(client, dispatch, negative, &NEGATIVE_STEPS, Edge::Clamp);
+
+    let input = planes.input.array::<R>();
+    let difference = planes.difference.array::<R>();
+    let positive_choke = planes.positive_choke.array::<R>();
+    let negative_choke = planes.negative_choke.array::<R>();
+    let output = planes.output.array::<R>();
 
     // Safety: as above, and the choke planes are only read.
     unsafe {
@@ -169,11 +191,11 @@ pub fn shimmer<R: Runtime>(
             client,
             cubes,
             unit,
-            planes.input.array::<R>(),
-            planes.difference.array::<R>(),
-            planes.choke.array::<R>(),
-            planes.second.array::<R>(),
-            planes.output.array::<R>(),
+            input,
+            difference,
+            positive_choke,
+            negative_choke,
+            output,
             above,
             below,
             peak,

@@ -146,12 +146,12 @@ impl BuildTask for DegrainRun {
                 .iter()
                 .zip(&fields)
                 .enumerate()
-                .map(|(flag, (handle, field))| DegrainNeighbour {
+                .map(|(index, (handle, field))| DegrainNeighbour {
                     plane: plane(handle, plane_width, plane_height),
                     field: field.field(false, self.motion.pel),
                     flag: SceneFlag {
                         flags: flag_plane,
-                        index: flag as u32,
+                        index: index as u32,
                     },
                 })
                 .collect();

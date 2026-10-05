@@ -59,6 +59,6 @@ pub mod testing;
 pub mod values;
 pub mod warp;
 
-pub use self::border::reflect;
+pub use self::border::{Edge, reflect};
 pub use self::dispatch::Dispatch;
 pub use self::plane::{DevicePlane, assert_plane};

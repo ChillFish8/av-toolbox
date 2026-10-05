@@ -246,11 +246,6 @@ pub(crate) fn assert_whole_pel_field(field: &MotionField<'_>, operation: &str) {
     assert_whole_pel(field.pel, operation);
 }
 
-/// Asserts that `field` can be refined to half pixels.
-pub(crate) fn assert_refinable(field: &MotionField<'_>) {
-    assert_whole_pel(field.pel, "refine_half_pel");
-}
-
 /// Asserts that scores are given exactly when the field has a confidence plane to write them to.
 fn assert_scoring(has_confidence: bool, has_scores: bool) {
     assert!(
