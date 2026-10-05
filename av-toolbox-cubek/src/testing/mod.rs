@@ -14,6 +14,7 @@ mod lineart;
 mod motion;
 mod neighbourhood;
 mod padding;
+mod qtgmc;
 mod resize;
 mod retinex;
 mod rgvs;
@@ -178,6 +179,7 @@ pub use self::neighbourhood::{
     reference_spread,
 };
 pub use self::padding::{reference_crop, reference_pad};
+pub use self::qtgmc::{FixturePlane, QtgmcFixture, qtgmc_fixture, write_qtgmc_inputs};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};
 pub use self::retinex::{
     reference_log_response,
