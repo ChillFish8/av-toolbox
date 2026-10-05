@@ -1,4 +1,10 @@
 mod args;
+mod cache;
+mod chain;
+#[cfg(feature = "test-support")]
+mod testing;
+
+use std::time::Duration;
 
 use av_toolbox_core::{
     BoundInputs,
@@ -14,6 +20,8 @@ use av_toolbox_core::{
     StreamType,
     Tag,
 };
+use av_toolbox_cubek::deinterlace::qtgmc::{Parity, QtgmcTables, sharpness_strength};
+use av_toolbox_cubek::motion::{BlockGrid, PlaneScale};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -33,11 +41,17 @@ use av_toolbox_gpu::{
 };
 
 pub(crate) use self::args::QtgmcArgs;
-use self::args::checked_field_size;
-use crate::aa::direction::{Direction, checked_dimensions};
+use self::args::{checked_field_size, degrain_settings, motion_settings, scene_change};
+use self::cache::FieldCache;
+use self::chain::{Chain, ChainSettings, PlaneShape};
+#[cfg(feature = "test-support")]
+pub use self::testing::{QtgmcMotion, QtgmcMotionLog, qtgmc_with_motion_log};
+use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
+use crate::bits::bits_of;
 use crate::checks::accepts_frames;
-use crate::deinterlace::bwdif::{output_format, resolved_order};
-use crate::deinterlace::spatial::{checked_predictor, checked_predictor_planes};
+use crate::deinterlace::bwdif::{Order, Rate, half_frame, output_format, output_metas, resolved_order};
+use crate::deinterlace::rebuild::FieldRebuilder;
+use crate::deinterlace::spatial::{Predictor, checked_predictor, checked_predictor_planes};
 use crate::masked::{INPUT, checked_input, missing_input};
 
 pub(crate) const STAGE: &str = "deinterlace/qtgmc";
@@ -57,12 +71,6 @@ fn unsupported_format(input: &FrameFormat) -> StageError {
     StageError::msg(message)
 }
 
-fn not_processing() -> StageError {
-    let message = format!("{STAGE} cannot process frames yet, its processing step is not written");
-
-    StageError::msg(message)
-}
-
 /// Refuses a format that is not integer YUV or Gray.
 fn checked_format(input: &FrameFormat) -> Result<(), StageError> {
     let is_integer = matches!(input.sample, SampleFormat::U8 | SampleFormat::U16 { .. });
@@ -75,7 +83,7 @@ fn checked_format(input: &FrameFormat) -> Result<(), StageError> {
 }
 
 /// Refuses `args` that `input` cannot run with.
-fn checked_stage(args: &QtgmcArgs, input: &FrameFormat) -> Result<(), StageError> {
+fn checked_stage(args: &QtgmcArgs, input: &FrameFormat) -> Result<Predictor, StageError> {
     args.checked_values()?;
     resolved_order(STAGE, args.order, input)?;
     checked_format(input)?;
@@ -85,7 +93,92 @@ fn checked_stage(args: &QtgmcArgs, input: &FrameFormat) -> Result<(), StageError
     checked_field_size(input)?;
 
     let predictor = checked_predictor(STAGE, &args.spatial)?;
-    checked_predictor_planes(STAGE, predictor, input, &selected)
+    checked_predictor_planes(STAGE, predictor, input, &selected)?;
+
+    Ok(predictor)
+}
+
+/// The shape of every plane of `input`, in channel order.
+fn plane_shapes(input: &FrameFormat) -> Result<Vec<PlaneShape>, StageError> {
+    let luma_width = input.width;
+    let luma_height = input.height;
+
+    let mut shapes = Vec::with_capacity(input.channels().len());
+    for channel in input.channels() {
+        let Some((width, height)) = input.channel_dimensions(*channel) else {
+            return Err(missing_plane(STAGE, *channel));
+        };
+
+        let scale = PlaneScale {
+            shift_x: u32::from(width < luma_width),
+            shift_y: u32::from(height < luma_height),
+        };
+        shapes.push(PlaneShape { width, height, scale });
+    }
+
+    Ok(shapes)
+}
+
+/// The settings of every step, from `args`.
+fn chain_settings(args: &QtgmcArgs) -> ChainSettings {
+    let strength = sharpness_strength(args.sharpness, args.tr1, args.tr2);
+
+    ChainSettings {
+        tr0: args.tr0,
+        tr1: args.tr1,
+        tr2: args.tr2,
+        max_tr: args.max_tr(),
+        strength: (args.sharpness > 0.0).then_some(strength),
+        motion: motion_settings(),
+        scene_change: scene_change(),
+        tr1_degrain: degrain_settings(1, args.thsad1),
+        tr2_degrain: degrain_settings(args.tr2.max(1), args.thsad2),
+    }
+}
+
+/// The deinterlacer `args` describe for `input`, with its tables built.
+fn deinterlacer<R: Runtime>(
+    context: &BuildContext<R>,
+    args: &QtgmcArgs,
+    input: FrameFormat,
+) -> Result<Deinterlacer<R>, StageError> {
+    let predictor = checked_stage(args, &input)?;
+    let order = resolved_order(STAGE, args.order, &input)?;
+    let output = output_format(&input, args.rate)?;
+    let shapes = plane_shapes(&input)?;
+
+    let client = context.client();
+    let sizes: Vec<(u32, u32)> = shapes.iter().map(|shape| (shape.width, shape.height)).collect();
+    let tables = QtgmcTables::new(client, &sizes);
+    let settings = chain_settings(args);
+    let grid = BlockGrid::new(&settings.motion, input.width, input.height);
+    let rebuilder = FieldRebuilder::new(STAGE, client.clone(), input, predictor);
+
+    let chain = Chain {
+        rebuilder,
+        predictor,
+        tables,
+        input,
+        output,
+        shapes,
+        grid,
+        settings,
+        bits: bits_of(input.sample),
+    };
+    let first = match order {
+        Order::Top => Parity::Top,
+        Order::Bottom => Parity::Bottom,
+    };
+
+    Ok(Deinterlacer {
+        chain,
+        cache: FieldCache::new(),
+        parities: [first, first.other()],
+        doubled: args.rate == Rate::Double,
+        half_frame: half_frame(input.frame_rate),
+        #[cfg(feature = "test-support")]
+        log: None,
+    })
 }
 
 /// Rebuilds progressive frames from interlaced fields, the way QTGMC does.
@@ -153,30 +246,109 @@ impl FilterDefinition for Qtgmc {
     }
 
     fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+        context: &BuildContext<R>,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter>, StageError> {
         let inputs = formats.inputs();
         let input = checked_input(STAGE, inputs)?;
-        checked_stage(&args, &input)?;
+        let deinterlacer = deinterlacer(context, &args, input)?;
 
-        Ok(Box::new(Deinterlacer))
+        Ok(Box::new(deinterlacer))
     }
 }
 
-/// Runs `deinterlace/qtgmc` over a chunk.
-struct Deinterlacer;
+/// Runs `deinterlace/qtgmc` over a chunk, emitting each field once every step its output reads has run.
+struct Deinterlacer<R: Runtime> {
+    chain: Chain<R>,
+    cache: FieldCache,
+    /// The parity of each field of a frame, in the order they are shown.
+    parities: [Parity; 2],
+    /// Whether both fields of each frame are shown, rather than only the first.
+    doubled: bool,
+    /// The time from a first field to its second, `None` when the frame rate is unknown.
+    half_frame: Option<Duration>,
+    /// Where each motion search is recorded, for tests.
+    #[cfg(feature = "test-support")]
+    log: Option<QtgmcMotionLog>,
+}
 
-impl StageInstance for Deinterlacer {}
+impl<R: Runtime> Deinterlacer<R> {
+    /// Runs every step that has become ready, in the chain's order, and takes the outputs now due.
+    fn advance(&mut self, context: &FrameContext) -> Result<Vec<Frame>, StageError> {
+        for field in self.cache.held() {
+            self.chain.search_clip(context, &mut self.cache, field)?;
+        }
 
-impl Filter for Deinterlacer {
-    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
-        let Some(_next) = inputs.take_frame(INPUT) else {
+        for field in self.cache.held() {
+            let found = self.chain.find_motion(context, &mut self.cache, field)?;
+            if found {
+                self.record_motion(field)?;
+            }
+        }
+
+        for field in self.cache.held() {
+            self.chain.limit(context, &mut self.cache, field)?;
+        }
+
+        for field in self.cache.held() {
+            self.chain.finish(context, &mut self.cache, field)?;
+        }
+
+        let outputs = self.cache.take_outputs();
+        self.cache.release(self.chain.settings.reach());
+
+        Ok(outputs)
+    }
+
+    /// Records the motion of `field` in the test log, when there is one.
+    #[cfg(feature = "test-support")]
+    fn record_motion(&self, field: usize) -> Result<(), StageError> {
+        let Some(log) = &self.log else {
+            return Ok(());
+        };
+
+        log.record(&self.chain, &self.cache, field)
+    }
+
+    #[cfg(not(feature = "test-support"))]
+    fn record_motion(&self, _field: usize) -> Result<(), StageError> {
+        Ok(())
+    }
+}
+
+impl<R: Runtime> StageInstance for Deinterlacer<R> {
+    fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
+        self.cache.restart();
+
+        Ok(())
+    }
+}
+
+impl<R: Runtime> Filter for Deinterlacer<R> {
+    fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let Some(next) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));
         };
 
-        Err(not_processing())
+        let metas = output_metas(next.meta(), self.half_frame, self.doubled);
+        let mut shown = metas.into_iter();
+        let field_metas = [shown.next(), shown.next()];
+
+        let fields = self.chain.fields_of(context, &next, self.parities, field_metas)?;
+        for state in fields {
+            self.cache.push(state);
+        }
+
+        self.advance(context)
+    }
+
+    fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
+        self.cache.end();
+        let outputs = self.advance(context)?;
+        self.cache.restart();
+
+        Ok(outputs)
     }
 }

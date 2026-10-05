@@ -235,6 +235,28 @@ impl<R: Runtime> FieldRebuilder<R> {
         }
     }
 
+    /// Runs the predictor's field pass on `current` for both its fields, the field keeping the even
+    /// rows first.
+    ///
+    /// The cubic predictor has no field pass and gives no planes.
+    pub(crate) fn both_fields(
+        &self,
+        context: &FrameContext,
+        plane_index: usize,
+        current: DevicePlane<'_>,
+    ) -> Vec<Scratch> {
+        let even_kept = BwdifField {
+            rebuilt: 1,
+            first: true,
+        };
+        let odd_kept = BwdifField {
+            rebuilt: 0,
+            first: false,
+        };
+
+        self.predictions(context, plane_index, current, &[even_kept, odd_kept])
+    }
+
     /// Rebuilds plane `plane_index` of the window's current frame once for each of `fields`.
     pub(crate) fn rebuild_plane(
         &self,

@@ -1,6 +1,6 @@
 use av_toolbox_core::StageError;
 use av_toolbox_cubek::degrain::{DegrainError, DegrainSettings};
-use av_toolbox_cubek::motion::{MotionError, MotionSettings, level_dims};
+use av_toolbox_cubek::motion::{MotionError, MotionSettings, SceneChange, level_dims};
 use av_toolbox_gpu::FrameFormat;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -125,6 +125,14 @@ fn pyramid_too_small(levels: u32, width: u32, height: u32) -> StageError {
     StageError::msg(message)
 }
 
+/// The scene-change rule of the compensation and both degrains.
+pub(crate) const fn scene_change() -> SceneChange {
+    SceneChange {
+        thscd1: SCENE_CHANGE_SAD,
+        thscd2: SCENE_CHANGE_BLOCKS,
+    }
+}
+
 /// The motion search settings every QTGMC search runs with.
 pub(crate) fn motion_settings() -> MotionSettings {
     MotionSettings::default()
@@ -148,10 +156,11 @@ impl QtgmcArgs {
     }
 
     /// How many fields the output trails the input by.
+    ///
+    /// A field's output waits on the limits of the fields `tr2` after it, and they wait on their motion
+    /// search, which reaches `max_tr` fields further, on search clips that average `tr0` fields further.
     pub(crate) fn lag(&self) -> u32 {
-        let smoothed = self.tr2 + self.tr1.max(1);
-
-        self.tr0 + smoothed.max(self.max_tr())
+        self.tr0 + self.tr2 + self.max_tr()
     }
 
     /// How many input frames the stage holds.

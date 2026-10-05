@@ -330,7 +330,7 @@ fn it_holds_frames_by_the_lag_and_runs_by_chunk() {
     assert_eq!(Qtgmc::parallelism(&defaults), Parallelism::Chunk);
 
     let widest = args(json!({ "tr0": 2, "tr1": 2, "tr2": 3 }));
-    assert_eq!(widest.lag(), 7);
-    assert_eq!(Qtgmc::held_frames(&widest, &formats), 5);
+    assert_eq!(widest.lag(), 8);
+    assert_eq!(Qtgmc::held_frames(&widest, &formats), 6);
     assert_eq!(Qtgmc::parallelism(&widest), Parallelism::Chunk);
 }
