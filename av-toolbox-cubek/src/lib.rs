@@ -27,6 +27,7 @@
 //! - [retinex] for the recursive Gaussian and the multi-scale retinex.
 //! - [rgvs] for RGVS's Repair and RemoveGrain modes.
 //! - [warp] for aWarpSharp2's edge mask, mask blurs and warp.
+//! - [words] for copying a plane into one rounded up to whole 4-byte words, and back.
 
 pub mod aa;
 pub mod artcnn;
@@ -58,6 +59,7 @@ pub mod sobel;
 pub mod testing;
 pub mod values;
 pub mod warp;
+pub mod words;
 
 pub use self::border::{Edge, reflect};
 pub use self::dispatch::Dispatch;
