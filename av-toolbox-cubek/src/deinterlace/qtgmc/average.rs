@@ -40,6 +40,20 @@ pub fn tr0_weights(tr0: u32) -> [f32; MAX_AVERAGED] {
     weights
 }
 
+/// The live taps of TR0 as offsets from the centre bob and their weights.
+///
+/// The same weights as [tr0_weights], without the zero ones.
+pub fn tr0_taps(tr0: u32) -> Vec<(i32, f32)> {
+    let centre = (MAX_AVERAGED / 2) as i32;
+
+    tr0_weights(tr0)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, weight)| *weight != 0.0)
+        .map(|(index, weight)| (index as i32 - centre, weight))
+        .collect()
+}
+
 #[cube(launch_unchecked)]
 fn weighted_sum_kernel(
     planes: &Sequence<Array<f32>>,

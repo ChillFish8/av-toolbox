@@ -3,13 +3,11 @@ use av_toolbox_cubek::deinterlace::qtgmc::{
     fmtc_gauss_taps,
     havsfunc_scale,
     merge,
-    resharpen,
-    search_clip,
     sharpness_strength,
     subtract,
     vertical_midpoint,
 };
-use av_toolbox_cubek::neighbourhood::{Edge, Extreme, NeighbourPlanes, Shape, Smooth, smooth_with_edge};
+use av_toolbox_cubek::neighbourhood::{Edge, Extreme, Shape};
 use av_toolbox_cubek::resize::{ResizePlanes, apply_float_with_edge, upload};
 use av_toolbox_cubek::testing::{
     QtgmcFixture,
@@ -26,6 +24,7 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
+use super::steps::{STRENGTH, Step, luma_frames, run_step};
 use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
@@ -63,8 +62,8 @@ fn luma_size(fixture: &QtgmcFixture) -> (usize, usize) {
     (fixture.frames[0][0].width, fixture.frames[0][0].height)
 }
 
-/// How close to the threshold, in 8 bit codes, a sample is a tie that f32 rounding decides.
-const TIE_GAP: f32 = 1e-3;
+/// How close to the threshold, in code values, a sample is a tie that f32 rounding decides.
+pub(super) const TIE_GAP: f32 = 1e-3;
 
 /// How close to the `scale(7)` threshold, in codes, a search clip sample may sit and be allowed more room.
 const THRESHOLD_BAND: f32 = 1.5;
@@ -78,26 +77,35 @@ const FLIP_SHARE_LIMIT: f32 = 0.03;
 // more than 1.
 #[test]
 fn the_search_clip_matches_havsfunc() {
-    let repaired = qtgmc_fixture("shimmer", "out");
-    let bobs = qtgmc_fixture("bob", "out");
+    let repaired = luma_frames("shimmer", "out");
+    let bobs = luma_frames("bob", "out");
     let outputs = qtgmc_fixture("search", "out");
 
-    for ((repair, bob_fixture), output) in repaired.iter().zip(&bobs).zip(&outputs) {
+    for ((output, repaired_frames), bob_frames) in outputs.iter().zip(&repaired).zip(&bobs) {
         let ceiling = peak(output);
         let (width, height) = luma_size(output);
         let threshold = havsfunc_scale(7.0, ceiling);
         let band_tolerance =
             (THRESHOLD_BAND * havsfunc_scale(1.0, ceiling)).ceil() as i32 + FIXTURE_TOLERANCE;
 
+        let inputs = repaired_frames
+            .iter()
+            .zip(bob_frames)
+            .map(|(repair, bob)| vec![repair.clone(), bob.clone()])
+            .collect();
+        let device = run_step(Step::Search, inputs, (width, height), output.bits);
+
         let mut largest = 0;
         let mut largest_share = 0.0f32;
         let mut flipped_total = 0;
-        for frame in 0..output.frames.len() {
-            let repaired_luma = &frame_codes(repair, frame)[0];
-            let bob_luma = &frame_codes(bob_fixture, frame)[0];
-            let found = reference_search_clip(repaired_luma, bob_luma, width, height, output.bits);
-            let (blur, tweaked) =
-                reference_search_inputs(repaired_luma, bob_luma, width, height, output.bits);
+        for (frame, found) in device.iter().enumerate() {
+            let (blur, tweaked) = reference_search_inputs(
+                &repaired_frames[frame],
+                &bob_frames[frame],
+                width,
+                height,
+                output.bits,
+            );
 
             let expected = &output.frames[frame][0].samples;
             let allowed = |position: usize| {
@@ -109,13 +117,23 @@ fn the_search_clip_matches_havsfunc() {
                     FIXTURE_TOLERANCE
                 }
             };
-            let label = format!("{} frame {frame}", output.clip);
-            let report = assert_fixture_within(&found, expected, ceiling, allowed, &label);
+            let reference = reference_search_clip(
+                &repaired_frames[frame],
+                &bob_frames[frame],
+                width,
+                height,
+                output.bits,
+            );
 
-            largest = largest.max(report.largest);
-            flipped_total += report.over_tolerance;
-            let share = report.over_tolerance as f32 / found.len() as f32;
-            largest_share = largest_share.max(share);
+            for (source, plane_found) in [("device", found), ("reference", &reference)] {
+                let label = format!("{} {source} frame {frame}", output.clip);
+                let report = assert_fixture_within(plane_found, expected, ceiling, allowed, &label);
+
+                largest = largest.max(report.largest);
+                flipped_total += report.over_tolerance;
+                let share = report.over_tolerance as f32 / plane_found.len() as f32;
+                largest_share = largest_share.max(share);
+            }
         }
 
         println!(
@@ -135,22 +153,31 @@ fn the_search_clip_matches_havsfunc() {
 fn resharpen_matches_havsfunc() {
     let inputs = qtgmc_fixture("average", "tr2_yuv");
     let outputs = qtgmc_fixture("resharpen", "out");
-    let strength = sharpness_strength(1.0, 2, 1);
     let mut differences = StepDifferences::default();
 
     for (input, output) in inputs.iter().zip(&outputs) {
         let ceiling = peak(output);
 
-        for frame in 0..output.frames.len() {
-            for (plane_index, source) in output.frames[frame].iter().enumerate() {
-                let plane_codes = &frame_codes(input, frame)[plane_index];
-                let found =
-                    reference_resharpen(plane_codes, source.width, source.height, strength, output.bits);
+        for plane_index in 0..output.frames[0].len() {
+            let source = &output.frames[0][plane_index];
+            let size = (source.width, source.height);
+            let frames = (0..output.frames.len())
+                .map(|frame| vec![frame_codes(input, frame).swap_remove(plane_index)])
+                .collect();
+            let device = run_step(Step::Resharpen, frames, size, output.bits);
 
-                let label = format!("{} resharpen plane {plane_index}", output.clip);
-                let report =
-                    assert_fixture_within(&found, &source.samples, ceiling, |_| FIXTURE_TOLERANCE, &label);
-                differences.record(label, report.largest);
+            for (frame, found) in device.iter().enumerate() {
+                let expected = &output.frames[frame][plane_index].samples;
+
+                let reference_input = &frame_codes(input, frame)[plane_index];
+                let reference = reference_resharpen(reference_input, size.0, size.1, STRENGTH, output.bits);
+
+                for (source, plane_found) in [("device", found), ("reference", &reference)] {
+                    let label = format!("{} {source} resharpen plane {plane_index}", output.clip);
+                    let report =
+                        assert_fixture_within(plane_found, expected, ceiling, |_| FIXTURE_TOLERANCE, &label);
+                    differences.record(label, report.largest);
+                }
             }
         }
     }
@@ -160,24 +187,37 @@ fn resharpen_matches_havsfunc() {
 
 #[test]
 fn back_blend_matches_havsfunc() {
-    let sharpened = qtgmc_fixture("resharpen", "out");
-    let unsharpened = qtgmc_fixture("average", "tr2_yuv");
+    let sharpened = luma_frames("resharpen", "out");
+    let unsharpened = luma_frames("average", "tr2_yuv");
     let outputs = qtgmc_fixture("backblend", "out");
     let mut differences = StepDifferences::default();
 
-    for ((thin, lossed), output) in sharpened.iter().zip(&unsharpened).zip(&outputs) {
+    for ((output, thin_frames), lossed_frames) in outputs.iter().zip(&sharpened).zip(&unsharpened) {
         let ceiling = peak(output);
-        let (width, height) = luma_size(output);
+        let size = luma_size(output);
+        let inputs = thin_frames
+            .iter()
+            .zip(lossed_frames)
+            .map(|(thin, lossed)| vec![thin.clone(), lossed.clone()])
+            .collect();
+        let device = run_step(Step::BackBlend, inputs, size, output.bits);
 
-        for frame in 0..output.frames.len() {
-            let thin_luma = &frame_codes(thin, frame)[0];
-            let lossed_luma = &frame_codes(lossed, frame)[0];
-            let found = reference_back_blend(thin_luma, lossed_luma, width, height, output.bits);
-
+        for (frame, found) in device.iter().enumerate() {
             let expected = &output.frames[frame][0].samples;
-            let label = format!("{} back blend luma", output.clip);
-            let report = assert_fixture_within(&found, expected, ceiling, |_| FIXTURE_TOLERANCE, &label);
-            differences.record(label, report.largest);
+            let reference = reference_back_blend(
+                &thin_frames[frame],
+                &lossed_frames[frame],
+                size.0,
+                size.1,
+                output.bits,
+            );
+
+            for (source, plane_found) in [("device", found), ("reference", &reference)] {
+                let label = format!("{} {source} back blend luma", output.clip);
+                let report =
+                    assert_fixture_within(plane_found, expected, ceiling, |_| FIXTURE_TOLERANCE, &label);
+                differences.record(label, report.largest);
+            }
         }
     }
 
@@ -214,22 +254,16 @@ fn clamp_matches_havsfunc() {
     differences.print_largest();
 }
 
-/// The kernels a [PointwiseRun] chains.
+/// The kernels a [PointwiseRun] runs.
 #[derive(Clone, Copy)]
 enum Pointwise {
-    /// Blur, merge with the repaired plane, then the search clip's expressions.
-    Search,
-    /// The vertical midpoint, its blur, then resharpening.
-    Resharpen,
-    /// The blur of a difference, then the subtraction.
-    BackBlend,
     Midpoint,
     Subtract,
     Clamp,
     Merge,
 }
 
-/// Planes put through one chain of pointwise kernels on the device.
+/// Planes put through one pointwise kernel on the device.
 struct PointwiseRun {
     operation: Pointwise,
     planes: Vec<Vec<f32>>,
@@ -250,9 +284,6 @@ impl PointwiseRun {
     }
 }
 
-/// The strength every resharpen test uses.
-const STRENGTH: f32 = 1.5;
-
 impl BuildTask for PointwiseRun {
     type Output = Vec<f32>;
 
@@ -268,80 +299,9 @@ impl BuildTask for PointwiseRun {
             .map(|values| upload_f32(client, values))
             .collect();
         let first = plane(&inputs[0], width, height);
-        let scratch = empty(client, bytes);
-        let blurred = empty(client, bytes);
         let output = empty(client, bytes);
-        let across = upload(client, &fmtc_gauss_taps(width, 2.0));
-        let down = upload(client, &fmtc_gauss_taps(height, 2.0));
-        let wide_across = upload(client, &fmtc_gauss_taps(width, 5.0));
-        let wide_down = upload(client, &fmtc_gauss_taps(height, 5.0));
 
         match self.operation {
-            Pointwise::Search => {
-                let smoothing = NeighbourPlanes {
-                    input: first,
-                    output: plane(&blurred, width, height),
-                };
-                smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
-
-                let spread = empty(client, bytes);
-                let resizing = ResizePlanes {
-                    input: plane(&blurred, width, height),
-                    scratch: plane(&scratch, width, height),
-                    output: plane(&spread, width, height),
-                };
-                apply_float_with_edge(client, &sizing, resizing, &across, &down, Edge::Clamp);
-
-                let merged = empty(client, bytes);
-                let (spread_plane, merged_plane) =
-                    (plane(&spread, width, height), plane(&merged, width, height));
-                merge(client, &sizing, spread_plane, first, merged_plane, 0.1);
-
-                let bob = plane(&inputs[1], width, height);
-                let search = plane(&output, width, height);
-                search_clip(client, &sizing, merged_plane, first, bob, search, self.bits);
-            },
-            Pointwise::Resharpen => {
-                let midpoint = empty(client, bytes);
-                vertical_midpoint(client, &sizing, first, plane(&midpoint, width, height));
-
-                let smoothing = NeighbourPlanes {
-                    input: plane(&midpoint, width, height),
-                    output: plane(&blurred, width, height),
-                };
-                smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
-
-                let blurred_plane = plane(&blurred, width, height);
-                let output_plane = plane(&output, width, height);
-                resharpen(
-                    client,
-                    &sizing,
-                    first,
-                    blurred_plane,
-                    output_plane,
-                    STRENGTH,
-                    self.bits,
-                );
-            },
-            Pointwise::BackBlend => {
-                let smoothing = NeighbourPlanes {
-                    input: plane(&inputs[1], width, height),
-                    output: plane(&blurred, width, height),
-                };
-                smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
-
-                let spread = empty(client, bytes);
-                let resizing = ResizePlanes {
-                    input: plane(&blurred, width, height),
-                    scratch: plane(&scratch, width, height),
-                    output: plane(&spread, width, height),
-                };
-                apply_float_with_edge(client, &sizing, resizing, &wide_across, &wide_down, Edge::Clamp);
-
-                let spread_plane = plane(&spread, width, height);
-                let output_plane = plane(&output, width, height);
-                subtract(client, &sizing, first, spread_plane, output_plane, self.bits);
-            },
             Pointwise::Midpoint => {
                 vertical_midpoint(client, &sizing, first, plane(&output, width, height));
             },
@@ -382,56 +342,6 @@ fn pan_frame(step: &str, name: &str) -> Vec<Vec<f32>> {
 }
 
 const PAN_SIZE: (usize, usize) = (128, 64);
-
-#[test]
-fn the_device_search_clip_matches_the_reference() {
-    let repaired = pan_frame("shimmer", "out").remove(0);
-    let bob_plane = pan_frame("bob", "out").remove(0);
-    let (width, height) = PAN_SIZE;
-    let expected = reference_search_clip(&repaired, &bob_plane, width, height, 8);
-
-    let task = PointwiseRun::new(Pointwise::Search, vec![repaired, bob_plane], PAN_SIZE, 8);
-    let found = backend().build(task);
-
-    assert_plane_within(&found, &expected, DEVICE_TOLERANCE, width as u32, "search clip");
-}
-
-#[test]
-fn the_device_resharpen_matches_the_reference() {
-    let (width, height) = PAN_SIZE;
-
-    for (plane_index, input) in pan_frame("average", "tr2_yuv").into_iter().enumerate() {
-        let size = if plane_index == 0 {
-            PAN_SIZE
-        } else {
-            (width / 2, height / 2)
-        };
-        let expected = reference_resharpen(&input, size.0, size.1, STRENGTH, 8);
-
-        let found = backend().build(PointwiseRun::new(Pointwise::Resharpen, vec![input], size, 8));
-
-        let label = format!("resharpen plane {plane_index}");
-        assert_plane_within(&found, &expected, DEVICE_TOLERANCE, size.0 as u32, &label);
-    }
-}
-
-#[test]
-fn the_device_back_blend_matches_the_reference() {
-    let thin = pan_frame("resharpen", "out").remove(0);
-    let lossed = pan_frame("average", "tr2_yuv").remove(0);
-    let (width, height) = PAN_SIZE;
-    let expected = reference_back_blend(&thin, &lossed, width, height, 8);
-
-    let difference: Vec<f32> = thin
-        .iter()
-        .zip(&lossed)
-        .map(|(sharp, plain)| (sharp - plain).clamp(-128.0, 127.0))
-        .collect();
-    let task = PointwiseRun::new(Pointwise::BackBlend, vec![thin, difference], PAN_SIZE, 8);
-    let found = backend().build(task);
-
-    assert_plane_within(&found, &expected, DEVICE_TOLERANCE, width as u32, "back blend");
-}
 
 #[test]
 fn the_device_vertical_midpoint_matches_the_reference() {

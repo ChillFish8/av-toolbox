@@ -7,6 +7,8 @@
 //! - [shimmer] keeps only thin horizontal differences from a reference.
 //! - [search_clip] builds the clip motion is searched on.
 //! - [resharpen], [subtract], [clamp_between] and [merge] are QTGMC's other per-pixel steps.
+//! - [search_clip_from_repaired], [smode2_resharpen] and [back_blend] compose those into QTGMC's steps.
+//! - [QtgmcTables] holds the tables those steps resize with.
 //! - [vertical_midpoint] builds the plane SMode 2 blurs before resharpening.
 //! - [sharpness_strength] gives the strength [resharpen] is run with.
 //! - [fmtc_gauss_taps] builds the gaussian QTGMC blurs with.
@@ -18,8 +20,10 @@ mod difference;
 mod limits;
 mod pointwise;
 mod shimmer;
+mod steps;
+mod tables;
 
-pub use self::average::{MAX_AVERAGED, tr0_weights, weighted_sum};
+pub use self::average::{MAX_AVERAGED, tr0_taps, tr0_weights, weighted_sum};
 pub use self::bob::{BobPlanes, Parity, bob, bob_taps};
 pub use self::difference::clamped_difference;
 pub use self::limits::temporal_limits;
@@ -38,6 +42,15 @@ pub use self::pointwise::{
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use self::shimmer::{NEGATIVE_STEPS, POSITIVE_STEPS, restore_limits};
 pub use self::shimmer::{ShimmerPlanes, shimmer};
+pub use self::steps::{
+    BackBlendPlanes,
+    SearchPlanes,
+    StepScratch,
+    back_blend,
+    search_clip_from_repaired,
+    smode2_resharpen,
+};
+pub use self::tables::{BobWeights, QtgmcTables};
 
 /// The code value of a level given for 8 bit video, as havsfunc's `scale` rounds it.
 ///

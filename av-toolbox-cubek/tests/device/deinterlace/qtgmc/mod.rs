@@ -4,6 +4,7 @@ mod difference;
 mod limits;
 mod pointwise;
 mod shimmer;
+mod steps;
 
 use av_toolbox_cubek::testing::QtgmcFixture;
 

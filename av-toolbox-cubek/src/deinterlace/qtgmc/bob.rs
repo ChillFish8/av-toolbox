@@ -2,7 +2,8 @@
 // by name.
 use cubecl::prelude::*;
 
-use crate::resize::{Kernel, Taps, Weights, taps};
+use super::tables::BobWeights;
+use crate::resize::{Kernel, Taps, taps};
 use crate::{DevicePlane, Dispatch, assert_plane};
 
 /// The field of a frame, by the rows it holds.
@@ -88,14 +89,16 @@ fn bob_kernel(
 
 /// Bobs the field of `parity` in `frame` to a full-height plane.
 ///
-/// `down` is [bob_taps] of the same parity. Rows past the field's ends read its first and last rows.
+/// `weights` holds the taps of the field's parity. Rows past the field's ends read its first and last rows.
 pub fn bob<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: BobPlanes<'_>,
-    down: &Weights,
-    parity: Parity,
+    weights: &BobWeights,
 ) {
+    let down = weights.taps();
+    let parity = weights.parity();
+
     let width = planes.frame.width();
     let height = planes.frame.height();
     assert!(
@@ -113,7 +116,7 @@ pub fn bob<R: Runtime>(
 
     let frame = planes.frame.array::<R>();
     let starts = down.starts::<R>();
-    let weights = down.weights::<R>();
+    let tap_weights = down.weights::<R>();
     let output = planes.output.array::<R>();
     let cubes = dispatch.cube_count(planes.output.samples());
     let unit = dispatch.cube_dim();
@@ -127,7 +130,7 @@ pub fn bob<R: Runtime>(
             unit,
             frame,
             starts,
-            weights,
+            tap_weights,
             output,
             width,
             height / 2,

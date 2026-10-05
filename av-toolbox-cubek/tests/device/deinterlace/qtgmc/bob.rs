@@ -1,5 +1,4 @@
-use av_toolbox_cubek::deinterlace::qtgmc::{BobPlanes, Parity, bob, bob_taps};
-use av_toolbox_cubek::resize::upload;
+use av_toolbox_cubek::deinterlace::qtgmc::{BobPlanes, BobWeights, Parity, bob};
 use av_toolbox_cubek::testing::{assert_plane_within, qtgmc_fixture, reference_bob};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -24,14 +23,13 @@ impl BuildTask for BobRun {
 
         let frame = upload_f32(client, &self.frame);
         let output = empty(client, self.frame.len() * size_of::<f32>());
-        let table = bob_taps(self.height / 2, self.parity);
-        let down = upload(client, &table);
+        let weights = BobWeights::new(client, self.height, self.parity);
 
         let planes = BobPlanes {
             frame: plane(&frame, self.width, self.height),
             output: plane(&output, self.width, self.height),
         };
-        bob(client, &sizing, planes, &down, self.parity);
+        bob(client, &sizing, planes, &weights);
 
         cubecl::future::block_on(client.sync()).expect("the device should finish");
 
