@@ -107,6 +107,9 @@ const FILES: &[[FixtureFile; 3]] = &[
     fixture_files!("clamp", "max", Planes::Full, 2),
     fixture_files!("clamp", "min", Planes::Full, 2),
     fixture_files!("clamp", "out", Planes::Full, 2),
+    fixture_files!("vblur", "out", Planes::Full, 1),
+    fixture_files!("repair", "tff", Planes::Full, 1),
+    fixture_files!("repair", "bff", Planes::Full, 1),
 ];
 
 /// The width, height, bit depth and frame count the input listing gives for `clip`.
@@ -298,6 +301,68 @@ mod tests {
                 .max();
 
             assert!(largest.is_some_and(|value| value <= peak), "{}", fixture.clip);
+        }
+    }
+
+    #[test]
+    fn every_new_fixture_loads_with_one_frame_per_frame() {
+        let inputs = qtgmc_fixture("inputs", "frames");
+
+        for (step, name) in [("vblur", "out"), ("repair", "tff"), ("repair", "bff")] {
+            let outputs = qtgmc_fixture(step, name);
+            assert_eq!(outputs.len(), inputs.len());
+
+            for (input, output) in inputs.iter().zip(&outputs) {
+                assert_eq!(input.clip, output.clip);
+                assert_eq!(
+                    output.frames.len(),
+                    input.frames.len(),
+                    "{step}/{name} {}",
+                    input.clip
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_repair_fixture_keeps_parity_n_mod_2() {
+        let inputs = qtgmc_fixture("inputs", "frames");
+
+        // Top field first keeps the top field of frame 0, bottom field first keeps the bottom field.
+        for (name, first_parity) in [("tff", 0), ("bff", 1)] {
+            let outputs = qtgmc_fixture("repair", name);
+
+            for (input, output) in inputs.iter().zip(&outputs) {
+                // A last frame without a partner field is not a kept field, so only whole pairs are checked.
+                let paired_frames = input.frames.len() / 2 * 2;
+
+                for index in 0..paired_frames {
+                    let parity = (index + first_parity) % 2;
+
+                    for (plane, expected) in output.frames[index].iter().zip(&input.frames[index]) {
+                        let kept_rows = plane.samples.chunks(plane.width).skip(parity).step_by(2);
+                        let input_rows = expected.samples.chunks(expected.width).skip(parity).step_by(2);
+
+                        assert!(
+                            kept_rows.eq(input_rows),
+                            "repair/{name} {} frame {index} does not keep parity {parity}",
+                            input.clip,
+                        );
+                    }
+
+                    let other_parity = 1 - parity;
+                    let output_luma = &output.frames[index][0];
+                    let input_luma = &input.frames[index][0];
+                    let other_output_rows = output_luma.samples.chunks(output_luma.width).skip(other_parity);
+                    let other_input_rows = input_luma.samples.chunks(input_luma.width).skip(other_parity);
+
+                    assert!(
+                        !other_output_rows.step_by(2).eq(other_input_rows.step_by(2)),
+                        "repair/{name} {} frame {index} also matches parity {other_parity}",
+                        input.clip,
+                    );
+                }
+            }
         }
     }
 }
