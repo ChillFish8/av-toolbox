@@ -1,5 +1,6 @@
+use crate::deinterlace::qtgmc::Parity;
 use crate::testing::motion::motion_clips;
-use crate::testing::qtgmc::{FieldClip, field_clips};
+use crate::testing::qtgmc::{FieldClip, ProgressiveClip, badly_clips, field_clips, reference_bob};
 
 const MOTION_INPUTS: [(&str, &[u8]); 6] = [
     ("pan_8", include_bytes!("../../fixtures/motion/inputs/pan_8.y")),
@@ -182,5 +183,138 @@ fn clean_differs_from_truth_only_by_noise_on_noisy_clips() {
             "{} moves a sample by {largest}, over {bound}",
             clip.name
         );
+    }
+}
+
+/// An FNV-1a hash of every sample of `frames`, in order.
+fn hash_frames(hash: u64, frames: &[[Vec<i32>; 3]]) -> u64 {
+    let samples = frames.iter().flatten().flatten();
+
+    samples.fold(hash, |state, sample| {
+        let mixed = state ^ (*sample as u32 as u64);
+        mixed.wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+fn field_clips_hash() -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    for clip in field_clips() {
+        hash = hash_frames(hash, &clip.frames);
+        hash = hash_frames(hash, &clip.truth);
+        hash = hash_frames(hash, &clip.clean);
+    }
+
+    hash
+}
+
+/// The hash of [field_clips] before the progressive clips were added.
+const FIELD_CLIPS_HASH: u64 = 0x4d43_dd75_67e3_8dc1;
+
+fn clip_named(name: &str) -> FieldClip {
+    field_clips()
+        .into_iter()
+        .find(|clip| clip.name == name)
+        .expect("the field clip exists")
+}
+
+fn badly_clip(name: &str) -> ProgressiveClip {
+    badly_clips()
+        .into_iter()
+        .find(|clip| clip.name == name)
+        .expect("the badly deinterlaced clip exists")
+}
+
+#[test]
+fn badly_clips_are_deterministic_and_the_existing_clips_are_unchanged() {
+    let first = badly_clips();
+    let second = badly_clips();
+
+    let names: Vec<&str> = first.iter().map(|clip| clip.name).collect();
+    assert_eq!(
+        names,
+        [
+            "badly_pan_8",
+            "badly_objects_8",
+            "badly_static_8",
+            "badly_pan_8_reversed",
+            "badly_static_8_reversed"
+        ]
+    );
+    for (built, rebuilt) in first.iter().zip(&second) {
+        assert_eq!(built.frames, rebuilt.frames, "{} frames", built.name);
+        assert_eq!(built.clean, rebuilt.clean, "{} clean", built.name);
+    }
+
+    assert_eq!(field_clips_hash(), FIELD_CLIPS_HASH, "the field clips changed");
+}
+
+#[test]
+fn badly_clips_hold_one_frame_and_one_truth_per_frame() {
+    for clip in badly_clips() {
+        assert_eq!(
+            (clip.width, clip.height, clip.bits),
+            (128, 64, 8),
+            "{}",
+            clip.name
+        );
+        assert_eq!(clip.frames.len(), 8, "{}", clip.name);
+        assert_eq!(clip.clean.len(), 8, "{}", clip.name);
+
+        let sizes = clip.frames[0].each_ref().map(Vec::len);
+        assert_eq!(sizes, [128 * 64, 64 * 32, 64 * 32], "{}", clip.name);
+    }
+}
+
+#[test]
+fn a_badly_clip_s_truth_is_the_field_clip_s_render_at_frame_times() {
+    let fields = clip_named("field_pan_8");
+    let badly = badly_clip("badly_pan_8");
+
+    for (index, clean) in badly.clean.iter().enumerate() {
+        assert_eq!(*clean, fields.clean[2 * index], "frame {index}");
+    }
+}
+
+#[test]
+fn a_badly_clip_shimmers_and_its_reversed_clip_keeps_the_other_field() {
+    let normal = badly_clip("badly_static_8");
+    let reversed = badly_clip("badly_static_8_reversed");
+
+    assert_ne!(normal.frames[0][0], normal.clean[0][0]);
+    assert_ne!(normal.frames[0][0], normal.frames[1][0], "a still clip shimmers");
+    assert_eq!(normal.frames[0], reversed.frames[1]);
+    assert_eq!(normal.frames[1], reversed.frames[0]);
+}
+
+/// The field of `parity` in `planes` bobbed to full height, rounded and clamped to 8-bit codes.
+fn rounded_bob(planes: &[Vec<i32>; 3], width: usize, parity: Parity) -> [Vec<i32>; 3] {
+    [0, 1, 2].map(|plane| {
+        let plane_width = if plane == 0 { width } else { width / 2 };
+        let plane_height = planes[plane].len() / plane_width;
+        let samples: Vec<f32> = planes[plane].iter().map(|sample| *sample as f32).collect();
+
+        let bobbed = reference_bob(&samples, (plane_width, plane_height), parity);
+        bobbed
+            .iter()
+            .map(|sample| (sample + 0.5).floor().clamp(0.0, 255.0) as i32)
+            .collect()
+    })
+}
+
+#[test]
+fn each_badly_frame_is_the_bob_of_one_field_of_its_truth() {
+    for (name, first_parity) in [("badly_pan_8", 0), ("badly_pan_8_reversed", 1)] {
+        let clip = badly_clip(name);
+
+        for (index, (frame, clean)) in clip.frames.iter().zip(&clip.clean).enumerate() {
+            let parity = if (index + first_parity).is_multiple_of(2) {
+                Parity::Top
+            } else {
+                Parity::Bottom
+            };
+
+            let expected = rounded_bob(clean, clip.width, parity);
+            assert_eq!(*frame, expected, "{name} frame {index}");
+        }
     }
 }

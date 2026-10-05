@@ -1,7 +1,14 @@
 use super::reference::merge;
 use crate::degrain::DegrainSettings;
 use crate::deinterlace::qtgmc::{Parity, sharpness_strength};
-use crate::motion::{BlockGrid, ConfidenceScores, MotionSettings, PlaneScale, SceneChange};
+use crate::motion::{
+    BlockGrid,
+    ConfidenceScores,
+    MotionSettings,
+    PROGRESSIVE_SAD_MASK,
+    PlaneScale,
+    SceneChange,
+};
 use crate::testing::{
     ReferenceField,
     ReferenceNeighbour,
@@ -12,13 +19,16 @@ use crate::testing::{
     reference_degrain,
     reference_normalise,
     reference_pyramid,
+    reference_repair_blend,
     reference_resharpen,
+    reference_sad_mask,
     reference_scene_changed,
     reference_search,
     reference_search_clip,
     reference_shimmer,
     reference_temporal_limits,
     reference_tr0,
+    reference_vertical_blur,
 };
 
 /// The interpolator that builds `edi` from a frame's plane, its width, its height and the field's parity.
@@ -39,6 +49,19 @@ const TR1_SECOND_WEIGHT: f32 = 0.2;
 /// The weight of `edi` in TR1 at a radius of 2.
 const TR1_EDI_WEIGHT_2: f32 = 0.0625;
 
+/// QTGMC's InputType.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceInput {
+    /// Interlaced frames, each giving its top field and then its bottom field.
+    Interlaced,
+    /// Progressive frames, each its own entry.
+    Progressive,
+    /// Badly deinterlaced progressive frames, each rebuilt from one of its fields.
+    Repair,
+    /// The same as [Repair](ReferenceInput::Repair), keeping the other field of every frame.
+    RepairReversed,
+}
+
 /// The settings of QTGMC's chain that [reference_qtgmc](crate::testing::reference_qtgmc) runs with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QtgmcReferenceSettings {
@@ -48,6 +71,7 @@ pub struct QtgmcReferenceSettings {
     pub sharpness: f32,
     pub thsad1: f32,
     pub thsad2: f32,
+    pub input: ReferenceInput,
 }
 
 impl Default for QtgmcReferenceSettings {
@@ -59,6 +83,7 @@ impl Default for QtgmcReferenceSettings {
             sharpness: 1.0,
             thsad1: 640.0,
             thsad2: 256.0,
+            input: ReferenceInput::Interlaced,
         }
     }
 }
@@ -70,7 +95,13 @@ impl QtgmcReferenceSettings {
         thscd2: 98,
     };
 
-    /// How far apart the furthest motion neighbours are, `max(1, tr1, tr2)` fields.
+    /// MVTools' default scene-change rule, which QTGMC's repair mask runs with as it sets no other.
+    pub const MASK_SCENE_CHANGE: SceneChange = SceneChange {
+        thscd1: 400.0,
+        thscd2: 130,
+    };
+
+    /// How far apart the furthest motion neighbours are, `max(1, tr1, tr2)` entries.
     pub fn max_tr(&self) -> u32 {
         self.tr1.max(self.tr2).max(1)
     }
@@ -98,22 +129,22 @@ fn degrain_settings(temporal_radius: u32, thsad: f32) -> DegrainSettings {
     }
 }
 
-/// The offsets of a field's motion neighbours up to `radius` fields away, nearest first and the later
-/// field of each pair first, as MVTools' degrains order their backward and forward vectors.
+/// The offsets of an entry's motion neighbours up to `radius` entries away, nearest first and the later
+/// entry of each pair first, as MVTools' degrains order their backward and forward vectors.
 pub fn qtgmc_deltas(radius: u32) -> Vec<i32> {
     (1..=radius as i32)
         .flat_map(|distance| [distance, -distance])
         .collect()
 }
 
-/// One motion neighbour of a field, with the neighbour's planes the chain read through it.
+/// One motion neighbour of an entry, with the neighbour's planes the chain read through it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceMotion {
-    /// How many fields after the centre the neighbour is, negative for fields before it.
+    /// How many entries after the centre the neighbour is, negative for entries before it.
     pub delta: i32,
     /// The search from the centre to the neighbour, in half pixels.
     pub field: ReferenceField,
-    /// Whether the field is a scene change.
+    /// Whether the search is a scene change.
     pub flagged: bool,
     /// The neighbour's normalised search clip.
     pub neighbour_normalised: Vec<f32>,
@@ -122,7 +153,7 @@ pub struct ReferenceMotion {
     pub neighbour_limited: [Vec<f32>; 3],
 }
 
-/// Every intermediate of one output field, in the chain's order.
+/// Every intermediate of one output entry, in the chain's order.
 ///
 /// The luma-only steps hold one plane. The rest hold Y, U and V, with an empty plane where the input
 /// has none.
@@ -147,7 +178,7 @@ pub struct QtgmcFieldSteps {
     pub limited: [Vec<f32>; 3],
     /// The limited planes after TR2.
     pub stable: [Vec<f32>; 3],
-    /// The stable planes after Rep2, the field's output.
+    /// The stable planes after Rep2, the entry's output.
     pub output: [Vec<f32>; 3],
 }
 
@@ -160,7 +191,9 @@ struct Chain<'a> {
     interpolate: Interpolate<'a>,
 }
 
-/// The luma-only search path and the interpolation of one field.
+/// The luma-only search path and the interpolation of one entry.
+///
+/// In the repair modes `edi` holds the frame itself until the entry's motion exists.
 struct Prepared {
     bob: Vec<f32>,
     tr0: Vec<f32>,
@@ -171,7 +204,7 @@ struct Prepared {
     edi: [Vec<f32>; 3],
 }
 
-/// One search from a field to a neighbour that exists.
+/// One search from an entry to a neighbour that exists.
 struct FieldMotion {
     delta: i32,
     neighbour: usize,
@@ -179,7 +212,7 @@ struct FieldMotion {
     flagged: bool,
 }
 
-/// One field's planes from the temporal limits up to the limit.
+/// One entry's planes from the temporal limits up to the limit.
 #[derive(Default)]
 struct Limited {
     upper: [Vec<f32>; 3],
@@ -190,7 +223,7 @@ struct Limited {
     limited: [Vec<f32>; 3],
 }
 
-/// Every step of every field.
+/// Every step of every entry.
 struct ChainRun {
     prepared: Vec<Prepared>,
     motion: Vec<Vec<FieldMotion>>,
@@ -208,6 +241,49 @@ fn field_source(frames: &[[Vec<f32>; 3]], field: usize) -> (&[Vec<f32>; 3], Pari
     };
 
     (&frames[field / 2], parity)
+}
+
+/// The parity of the field that a repaired `frame` keeps, top field first.
+///
+/// [RepairReversed](ReferenceInput::RepairReversed) keeps the other field.
+pub(super) fn kept_parity(input: ReferenceInput, frame: usize) -> Parity {
+    let reversed = input == ReferenceInput::RepairReversed;
+    let top = frame.is_multiple_of(2) != reversed;
+
+    if top { Parity::Top } else { Parity::Bottom }
+}
+
+/// A repaired frame's `edi`, its luma blended towards `interpolate`'s rebuild of the field of `parity`
+/// through `mask` and its chroma the frame's own.
+pub(super) fn repaired_edi(
+    frame: &[Vec<f32>; 3],
+    (width, height): (usize, usize),
+    parity: Parity,
+    mask: &[f32],
+    interpolate: Interpolate<'_>,
+) -> [Vec<f32>; 3] {
+    let rebuilt = interpolate(&frame[0], width, height, parity);
+    let luma = reference_repair_blend(&frame[0], &rebuilt, mask);
+
+    [luma, frame[1].clone(), frame[2].clone()]
+}
+
+/// The mask that blends a repaired entry towards its rebuild, from the `sads` of its search to the next
+/// entry.
+///
+/// It is MVTools' `Mask(kind=1)` at QTGMC's `ProgSADMask`, as havsfunc r33's line 1326 calls it. That call
+/// sets no scene-change rule, so it is flagged by
+/// [MASK_SCENE_CHANGE](QtgmcReferenceSettings::MASK_SCENE_CHANGE). An entry without a next entry gets a mask
+/// of 0.
+pub(super) fn repair_mask(sads: Option<&[f32]>, grid: &BlockGrid, luma: (usize, usize)) -> Vec<f32> {
+    let Some(sads) = sads else {
+        return vec![0.0; luma.0 * luma.1];
+    };
+
+    let rule = QtgmcReferenceSettings::MASK_SCENE_CHANGE;
+    let flagged = reference_scene_changed(sads, grid, rule);
+
+    reference_sad_mask(sads, grid, flagged, PROGRESSIVE_SAD_MASK, luma)
 }
 
 /// The size of a chroma plane of a `width` by `height` frame holding `samples`, by trying each
@@ -251,16 +327,37 @@ fn plane_scale(size: (usize, usize), luma: (usize, usize)) -> PlaneScale {
 }
 
 impl Chain<'_> {
-    fn field_count(&self) -> usize {
-        2 * self.frames.len()
+    fn entry_count(&self) -> usize {
+        match self.settings.input {
+            ReferenceInput::Interlaced => 2 * self.frames.len(),
+            _ => self.frames.len(),
+        }
     }
 
     fn luma(&self) -> (usize, usize) {
         self.sizes[0]
     }
 
+    /// The bob and `edi` of `entry`, with `edi` the frame itself in the repair modes.
+    fn interpolated(&self, entry: usize) -> (Vec<f32>, [Vec<f32>; 3]) {
+        let (width, height) = self.luma();
+
+        match self.settings.input {
+            ReferenceInput::Interlaced => self.field_interpolated(entry),
+            ReferenceInput::Progressive => {
+                let frame = &self.frames[entry];
+                (frame[0].clone(), frame.clone())
+            },
+            ReferenceInput::Repair | ReferenceInput::RepairReversed => {
+                let frame = &self.frames[entry];
+                let bob = reference_vertical_blur(&frame[0], width, height);
+                (bob, frame.clone())
+            },
+        }
+    }
+
     /// The bob and `edi` of `field`.
-    fn interpolated(&self, field: usize) -> (Vec<f32>, [Vec<f32>; 3]) {
+    fn field_interpolated(&self, field: usize) -> (Vec<f32>, [Vec<f32>; 3]) {
         let (frame, parity) = field_source(self.frames, field);
         let bob = reference_bob(&frame[0], self.luma(), parity);
         let edi = std::array::from_fn(|plane| {
@@ -275,13 +372,13 @@ impl Chain<'_> {
         (bob, edi)
     }
 
-    /// The bob, TR0, Rep0, search clip, normalised clip and `edi` of every field.
+    /// The bob, TR0, Rep0, search clip, normalised clip and `edi` of every entry.
     fn prepare(&self) -> Vec<Prepared> {
         let (width, height) = self.luma();
         let levels = MotionSettings::default().pyramid_levels;
 
-        let interpolated: Vec<_> = (0..self.field_count())
-            .map(|field| self.interpolated(field))
+        let interpolated: Vec<_> = (0..self.entry_count())
+            .map(|entry| self.interpolated(entry))
             .collect();
         let bobs: Vec<Vec<f32>> = interpolated.iter().map(|(bob, _)| bob.clone()).collect();
 
@@ -341,6 +438,22 @@ impl Chain<'_> {
         }
 
         motion
+    }
+
+    /// Rebuilds the `edi` of every repaired entry, masked by its motion to the next entry.
+    fn repair(&self, prepared: &mut [Prepared], motion: &[Vec<FieldMotion>]) {
+        let luma = self.luma();
+        let grid = self.grid();
+
+        for (entry, found) in motion.iter().enumerate() {
+            let next = found.iter().find(|search| search.delta == 1);
+            let sads = next.map(|search| search.field.sads.as_slice());
+            let mask = repair_mask(sads, &grid, luma);
+
+            let parity = kept_parity(self.settings.input, entry);
+            let frame = &self.frames[entry];
+            prepared[entry].edi = repaired_edi(frame, luma, parity, &mask, self.interpolate);
+        }
     }
 
     fn grid(&self) -> BlockGrid {
@@ -515,10 +628,16 @@ impl Chain<'_> {
     }
 
     fn run(&self) -> ChainRun {
-        let prepared = self.prepare();
+        let mut prepared = self.prepare();
         let motion: Vec<Vec<FieldMotion>> = (0..prepared.len())
             .map(|centre| self.search(&prepared, centre))
             .collect();
+
+        let input = self.settings.input;
+        if input == ReferenceInput::Repair || input == ReferenceInput::RepairReversed {
+            self.repair(&mut prepared, &motion);
+        }
+
         let limited: Vec<Limited> = motion
             .iter()
             .enumerate()
@@ -563,11 +682,18 @@ fn chain<'a>(
     }
 }
 
-/// Runs the whole chain on the CPU over `frames`, returning every output field in order.
+/// Runs the whole chain on the CPU over `frames`, returning every output in order.
 ///
-/// `frames` are interlaced, top field first, as Y, U and V code values. Chroma may be subsampled, or
-/// empty for gray. Each frame yields its top field and then its bottom field. `interpolate` builds `edi`
-/// from a frame's plane and a field's parity.
+/// `frames` are Y, U and V code values. Chroma may be subsampled, or empty for gray. `settings.input`
+/// sets how each frame enters the chain:
+///
+/// - **Interlaced.** Each frame is top field first and yields its top field and then its bottom field.
+///   `interpolate` builds `edi` from a frame's plane and a field's parity.
+/// - **Progressive.** Each frame yields one output, and its bob and `edi` are the frame itself.
+/// - **Repair.** Each frame yields one output. Its bob is a vertical 1-2-1 blur of its luma. Frame `n` keeps
+///   the field of parity `n mod 2`, or `(n + 1) mod 2` when reversed, and `interpolate` rebuilds the other
+///   rows. `edi`'s luma blends the frame towards that rebuild through the SAD mask of its motion to frame
+///   `n + 1`, and its chroma is the frame's. The last frame keeps its own luma.
 ///
 /// The clip is one chunk. TR0 repeats the nearest bob past either end, a motion neighbour past either
 /// end is skipped, and a degrain without neighbours is its centre. Motion searches the normalised search
@@ -584,26 +710,26 @@ pub fn reference_qtgmc(
     run.output
 }
 
-/// One search from a field to a neighbour that exists.
+/// One search from an entry to a neighbour that exists.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceSearch {
-    /// How many fields after the centre the neighbour is, negative for fields before it.
+    /// How many entries after the centre the neighbour is, negative for entries before it.
     pub delta: i32,
     /// The search from the centre to the neighbour, in half pixels.
     pub field: ReferenceField,
-    /// Whether the field is a scene change.
+    /// Whether the search is a scene change.
     pub flagged: bool,
 }
 
-/// Every output field of the chain, with every field's searches.
+/// Every output of the chain, with every entry's searches.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QtgmcReferenceRun {
     pub output: Vec<[Vec<f32>; 3]>,
-    /// Each field's searches, in [qtgmc_deltas] order.
+    /// Each entry's searches, in [qtgmc_deltas] order.
     pub motion: Vec<Vec<ReferenceSearch>>,
 }
 
-/// The same as [reference_qtgmc](crate::testing::reference_qtgmc), also giving every field's searches.
+/// The same as [reference_qtgmc](crate::testing::reference_qtgmc), also giving every entry's searches.
 pub fn reference_qtgmc_run(
     frames: &[[Vec<f32>; 3]],
     luma: (usize, usize),
@@ -634,7 +760,7 @@ pub fn reference_qtgmc_run(
     }
 }
 
-/// Every intermediate of field `centre` of [reference_qtgmc](crate::testing::reference_qtgmc) over the
+/// Every intermediate of entry `centre` of [reference_qtgmc](crate::testing::reference_qtgmc) over the
 /// same arguments.
 pub fn reference_qtgmc_field(
     frames: &[[Vec<f32>; 3]],
@@ -647,7 +773,7 @@ pub fn reference_qtgmc_field(
     let mut run = chain(frames, luma, bits, settings, interpolate).run();
     assert!(
         centre < run.prepared.len(),
-        "field {centre} asked for, the clip has {}",
+        "entry {centre} asked for, the clip has {}",
         run.prepared.len()
     );
 

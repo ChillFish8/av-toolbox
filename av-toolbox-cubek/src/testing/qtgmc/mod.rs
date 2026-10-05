@@ -10,6 +10,7 @@ pub use self::chain::{
     QtgmcFieldSteps,
     QtgmcReferenceRun,
     QtgmcReferenceSettings,
+    ReferenceInput,
     ReferenceMotion,
     ReferenceSearch,
     qtgmc_deltas,
@@ -17,7 +18,7 @@ pub use self::chain::{
     reference_qtgmc_field,
     reference_qtgmc_run,
 };
-pub use self::fields::{FieldClip, field_clips};
+pub use self::fields::{FieldClip, ProgressiveClip, badly_clips, field_clips};
 pub use self::fixtures::{FixturePlane, QtgmcFixture, qtgmc_fixture, write_qtgmc_inputs};
 pub use self::reference::{
     reference_back_blend,

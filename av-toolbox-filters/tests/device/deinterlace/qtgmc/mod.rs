@@ -14,6 +14,7 @@ use av_toolbox_cubek::testing::{
     Eedi3Parameters,
     Interpolate,
     QtgmcReferenceSettings,
+    ReferenceInput,
     ReferenceSearch,
     field_clips,
     reference_bob,
@@ -275,6 +276,7 @@ fn reference_defaults() -> QtgmcReferenceSettings {
         sharpness: 1.0,
         thsad1: 640.0,
         thsad2: 256.0,
+        input: ReferenceInput::Interlaced,
     }
 }
 

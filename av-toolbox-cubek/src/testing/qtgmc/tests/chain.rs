@@ -1,20 +1,32 @@
 use crate::deinterlace::qtgmc::Parity;
 use crate::motion::{BlockGrid, MotionSettings, PlaneScale};
+use crate::testing::qtgmc::chain::{kept_parity, repair_mask, repaired_edi};
 use crate::testing::qtgmc::reference::merge;
 use crate::testing::qtgmc::{
     FieldClip,
+    ProgressiveClip,
     QtgmcFieldSteps,
     QtgmcReferenceSettings,
+    ReferenceInput,
     ReferenceMotion,
+    badly_clips,
     field_clips,
     qtgmc_deltas,
+    qtgmc_fixture,
     reference_bob,
     reference_qtgmc,
     reference_qtgmc_field,
     reference_shimmer,
     reference_temporal_limits,
 };
-use crate::testing::{ReferenceNeighbour, reference_compensate, reference_degrain};
+use crate::testing::{
+    ReferenceNeighbour,
+    assert_plane_within,
+    reference_compensate,
+    reference_degrain,
+    reference_scene_changed,
+    reference_vertical_blur,
+};
 
 fn bob_interpolate(plane: &[f32], width: usize, height: usize, parity: Parity) -> Vec<f32> {
     reference_bob(plane, (width, height), parity)
@@ -257,5 +269,186 @@ fn a_neighbour_across_a_cut_is_flagged_and_left_out() {
         let blended = merge(&near, &far, 0.2);
         let smoothed = merge(&blended, edi, 0.0625);
         assert_eq!(steps.smoothed[plane], smoothed, "plane {plane} tr1");
+    }
+}
+
+fn badly_clip(name: &str) -> ProgressiveClip {
+    badly_clips()
+        .into_iter()
+        .find(|clip| clip.name == name)
+        .expect("the badly deinterlaced clip exists")
+}
+
+fn float_planes(planes: &[Vec<i32>; 3]) -> [Vec<f32>; 3] {
+    planes
+        .each_ref()
+        .map(|plane| plane.iter().map(|sample| *sample as f32).collect())
+}
+
+/// The first `count` frames of `clip` as f32 code values.
+fn progressive_frames(clip: &ProgressiveClip, count: usize) -> Vec<[Vec<f32>; 3]> {
+    clip.frames.iter().take(count).map(float_planes).collect()
+}
+
+// Reversed repair keeps, top field first, the fields that repair keeps bottom field first.
+#[test]
+fn the_reference_repair_field_pattern_matches_havsfunc() {
+    let inputs = qtgmc_fixture("inputs", "frames");
+
+    for (name, input) in [
+        ("tff", ReferenceInput::Repair),
+        ("bff", ReferenceInput::RepairReversed),
+    ] {
+        let outputs = qtgmc_fixture("repair", name);
+
+        for (source, expected) in inputs.iter().zip(&outputs) {
+            // VapourSynth's Weave leaves the last frame of an odd count without a partner field.
+            let paired_frames = source.frames.len() / 2 * 2;
+
+            for index in 0..paired_frames {
+                let planes = &source.frames[index];
+                let frame: [Vec<f32>; 3] = std::array::from_fn(|plane| {
+                    planes[plane]
+                        .samples
+                        .iter()
+                        .map(|sample| *sample as f32)
+                        .collect()
+                });
+                let luma = (planes[0].width, planes[0].height);
+                let mask = vec![1.0; luma.0 * luma.1];
+                let parity = kept_parity(input, index);
+
+                let edi = repaired_edi(&frame, luma, parity, &mask, &bob_interpolate);
+
+                let wanted: Vec<f32> = expected.frames[index][0]
+                    .samples
+                    .iter()
+                    .map(|sample| *sample as f32)
+                    .collect();
+                let label = format!("repair/{name} {} frame {index}", source.clip);
+                assert_plane_within(&edi[0], &wanted, 1.0, luma.0 as u32, &label);
+                assert_eq!(edi[1], frame[1], "{label} keeps its chroma");
+                assert_eq!(edi[2], frame[2], "{label} keeps its chroma");
+            }
+        }
+    }
+}
+
+#[test]
+fn progressive_input_with_every_radius_zero_and_no_sharpening_is_rep2_of_the_frame() {
+    let source = badly_clip("badly_objects_8");
+    let frames = progressive_frames(&source, 3);
+    let settings = QtgmcReferenceSettings {
+        tr0: 0,
+        tr1: 0,
+        tr2: 0,
+        sharpness: 0.0,
+        input: ReferenceInput::Progressive,
+        ..QtgmcReferenceSettings::default()
+    };
+    let luma = (source.width, source.height);
+
+    let output = reference_qtgmc(&frames, luma, source.bits, &settings, &bob_interpolate);
+
+    assert_eq!(output.len(), frames.len());
+    for (index, planes) in output.iter().enumerate() {
+        for plane in 0..3 {
+            let width = if plane == 0 {
+                source.width
+            } else {
+                source.width / 2
+            };
+            let height = frames[index][plane].len() / width;
+            let frame = &frames[index][plane];
+            let expected = reference_shimmer(frame, frame, width, height, source.bits);
+
+            assert_eq!(planes[plane], expected, "frame {index} plane {plane}");
+        }
+    }
+}
+
+#[test]
+fn the_last_repaired_frame_keeps_its_original_luma() {
+    let source = badly_clip("badly_pan_8");
+    let frames = progressive_frames(&source, 3);
+    let settings = QtgmcReferenceSettings {
+        input: ReferenceInput::Repair,
+        ..QtgmcReferenceSettings::default()
+    };
+    let luma = (source.width, source.height);
+
+    let outputs = reference_qtgmc(&frames, luma, source.bits, &settings, &bob_interpolate);
+    assert_eq!(outputs.len(), frames.len());
+
+    let last = reference_qtgmc_field(&frames, luma, source.bits, &settings, &bob_interpolate, 2);
+    let deltas: Vec<i32> = last.motion.iter().map(|found| found.delta).collect();
+    assert_eq!(deltas, vec![-1, -2], "the last frame has no later neighbours");
+    assert_eq!(last.edi, frames[2]);
+
+    let first = reference_qtgmc_field(&frames, luma, source.bits, &settings, &bob_interpolate, 0);
+    assert_ne!(
+        first.edi[0], frames[0][0],
+        "an earlier frame rebuilds where it moves"
+    );
+    assert_eq!(
+        first.edi[1..],
+        frames[0][1..],
+        "an earlier frame keeps its chroma"
+    );
+}
+
+#[test]
+fn the_repair_mask_flags_by_mvtools_default_rule() {
+    let luma = (128, 64);
+    let grid = BlockGrid::new(&MotionSettings::default(), luma.0 as u32, luma.1 as u32);
+    let chain_rule = QtgmcReferenceSettings::SCENE_CHANGE;
+    let mask_rule = QtgmcReferenceSettings::MASK_SCENE_CHANGE;
+    let chain_threshold = chain_rule.threshold(grid.blksize);
+    let mask_threshold = mask_rule.threshold(grid.blksize);
+
+    let between = vec![(chain_threshold + mask_threshold) / 2.0; grid.blocks()];
+    assert!(reference_scene_changed(&between, &grid, chain_rule));
+    assert!(!reference_scene_changed(&between, &grid, mask_rule));
+    let mask = repair_mask(Some(&between), &grid, luma);
+    assert!(
+        mask.iter().all(|weight| *weight > 0.0),
+        "only QTGMC's rule flags it"
+    );
+
+    let above = vec![mask_threshold * 2.0; grid.blocks()];
+    assert!(reference_scene_changed(&above, &grid, mask_rule));
+    let mask = repair_mask(Some(&above), &grid, luma);
+    assert!(mask.iter().all(|weight| *weight == 0.0), "MVTools' rule flags it");
+
+    let missing = repair_mask(None, &grid, luma);
+    assert_eq!(missing, vec![0.0; luma.0 * luma.1]);
+}
+
+#[test]
+fn each_progressive_mode_bobs_its_frame_as_qtgmc_does() {
+    let source = badly_clip("badly_objects_8");
+    let frames = progressive_frames(&source, 3);
+    let luma = (source.width, source.height);
+
+    let modes = [
+        ReferenceInput::Progressive,
+        ReferenceInput::Repair,
+        ReferenceInput::RepairReversed,
+    ];
+    for input in modes {
+        let settings = QtgmcReferenceSettings {
+            input,
+            ..QtgmcReferenceSettings::default()
+        };
+
+        for (entry, frame) in frames.iter().enumerate() {
+            let steps = reference_qtgmc_field(&frames, luma, source.bits, &settings, &bob_interpolate, entry);
+
+            let expected = match input {
+                ReferenceInput::Progressive => frame[0].clone(),
+                _ => reference_vertical_blur(&frame[0], luma.0, luma.1),
+            };
+            assert_eq!(steps.bob, expected, "{input:?} entry {entry}");
+        }
     }
 }
