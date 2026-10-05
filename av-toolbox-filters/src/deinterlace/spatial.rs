@@ -15,7 +15,6 @@ use crate::aa::eedi3::{
     default_alpha,
     default_beta,
     default_gamma,
-    default_mdis,
     default_nrad,
     default_vcheck,
     default_vthresh,
@@ -26,6 +25,9 @@ use crate::aa::sangnom::{SangnomTuning, checked_sangnom_tuning};
 /// The stage whose name a [Spatial] is refused under while it is read.
 pub(crate) trait SpatialStage {
     const STAGE: &'static str;
+
+    /// The furthest direction an EEDI3 `spatial` searches when `mdis` is not given.
+    const DEFAULT_MDIS: u32;
 }
 
 /// Where the spatial prediction of each rebuilt row comes from.
@@ -33,7 +35,8 @@ pub(crate) trait SpatialStage {
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields, bound = "")]
 #[schemars(rename = "Spatial", bound = "")]
 pub(crate) enum Spatial<S: SpatialStage> {
-    /// bwdif's own cubic down each column.
+    /// The stage's plain interpolation. bwdif's own cubic down each column for `deinterlace/bwdif`, and a
+    /// bicubic resize of each field for `deinterlace/qtgmc`.
     Cubic {},
     /// EEDI2's edge directed interpolation, with `aa/eedi2`'s defaults.
     Eedi2(Eedi2Tuning),
@@ -72,7 +75,7 @@ pub(crate) struct Eedi3Spatial<S: SpatialStage> {
     #[serde(default = "default_nrad")]
     pub(crate) nrad: u32,
     /// The furthest direction searched, between 1 and 40.
-    #[serde(default = "default_mdis")]
+    #[serde(default = "stage_mdis::<S>")]
     pub(crate) mdis: u32,
     /// How strongly an unreliable direction falls back, between 0 and 3.
     #[serde(default = "default_vcheck")]
@@ -87,6 +90,10 @@ pub(crate) struct Eedi3Spatial<S: SpatialStage> {
     stage: PhantomData<S>,
 }
 
+fn stage_mdis<S: SpatialStage>() -> u32 {
+    S::DEFAULT_MDIS
+}
+
 fn three_thresholds<'de, S: SpatialStage, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<[f64; 3], D::Error> {
@@ -94,6 +101,20 @@ fn three_thresholds<'de, S: SpatialStage, D: Deserializer<'de>>(
 }
 
 impl<S: SpatialStage> Eedi3Spatial<S> {
+    /// EEDI3's defaults, with the stage's own `mdis`.
+    pub(crate) fn defaults() -> Self {
+        Self {
+            alpha: default_alpha(),
+            beta: default_beta(),
+            gamma: default_gamma(),
+            nrad: default_nrad(),
+            mdis: S::DEFAULT_MDIS,
+            vcheck: default_vcheck(),
+            vthresh: default_vthresh(),
+            stage: PhantomData,
+        }
+    }
+
     pub(crate) fn tuning(&self) -> Eedi3Tuning {
         Eedi3Tuning {
             alpha: self.alpha,

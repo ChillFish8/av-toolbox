@@ -55,6 +55,7 @@ pub(crate) struct BwdifSpatial;
 
 impl SpatialStage for BwdifSpatial {
     const STAGE: &'static str = STAGE;
+    const DEFAULT_MDIS: u32 = 20;
 }
 
 /// The field a stream shows first.
@@ -196,7 +197,7 @@ fn doubled(rate: FrameRate) -> Result<FrameRate, StageError> {
 }
 
 /// What comes out for `input` at `rate`.
-fn output_format(input: &FrameFormat, rate: Rate) -> Result<FrameFormat, StageError> {
+pub(crate) fn output_format(input: &FrameFormat, rate: Rate) -> Result<FrameFormat, StageError> {
     let frame_rate = match (rate, input.frame_rate) {
         (Rate::Double, Some(input_rate)) => Some(doubled(input_rate)?),
         (_, unchanged) => unchanged,
@@ -210,7 +211,7 @@ fn output_format(input: &FrameFormat, rate: Rate) -> Result<FrameFormat, StageEr
 }
 
 /// Half of one frame at `rate`, the time from a frame's first field to its second.
-fn half_frame(rate: Option<FrameRate>) -> Option<Duration> {
+pub(crate) fn half_frame(rate: Option<FrameRate>) -> Option<Duration> {
     let rate = rate?;
     let denominator = u128::from(rate.denominator());
     let numerator = u128::from(rate.numerator());
@@ -342,6 +343,30 @@ fn fields_of(order: Order, rate: Rate) -> Vec<BwdifField> {
     }
 }
 
+/// The metadata of each output of a frame carrying `meta`, one when `doubled` is false and otherwise one for
+/// each field.
+pub(crate) fn output_metas(meta: &FrameMeta, half_frame: Option<Duration>, doubled: bool) -> Vec<FrameMeta> {
+    if !doubled {
+        return vec![meta.clone()];
+    }
+
+    let first = FrameMeta {
+        index: meta.index * 2,
+        ..meta.clone()
+    };
+    let second_timestamp = match (meta.timestamp, half_frame) {
+        (Some(timestamp), Some(half_frame)) => Some(timestamp + half_frame),
+        _ => None,
+    };
+    let second = FrameMeta {
+        index: meta.index * 2 + 1,
+        timestamp: second_timestamp,
+        ..meta.clone()
+    };
+
+    vec![first, second]
+}
+
 /// Runs `deinterlace/bwdif` over a chunk, emitting each frame's outputs once the frame after it arrives.
 struct Deinterlacer<R: Runtime> {
     rebuilder: FieldRebuilder<R>,
@@ -357,29 +382,6 @@ struct Deinterlacer<R: Runtime> {
 }
 
 impl<R: Runtime> Deinterlacer<R> {
-    /// The metadata of each output of a frame carrying `meta`, in the order of `fields`.
-    fn output_metas(&self, meta: &FrameMeta) -> Vec<FrameMeta> {
-        if self.fields.len() == 1 {
-            return vec![meta.clone()];
-        }
-
-        let first = FrameMeta {
-            index: meta.index * 2,
-            ..meta.clone()
-        };
-        let second_timestamp = match (meta.timestamp, self.half_frame) {
-            (Some(timestamp), Some(half_frame)) => Some(timestamp + half_frame),
-            _ => None,
-        };
-        let second = FrameMeta {
-            index: meta.index * 2 + 1,
-            timestamp: second_timestamp,
-            ..meta.clone()
-        };
-
-        vec![first, second]
-    }
-
     /// Every output of the window's current frame.
     fn deinterlace(&self, context: &FrameContext, window: &Window<'_>) -> Result<Vec<Frame>, StageError> {
         let mut planes: Vec<Vec<Plane>> = vec![Vec::new(); self.fields.len()];
@@ -402,7 +404,7 @@ impl<R: Runtime> Deinterlacer<R> {
             }
         }
 
-        let metas = self.output_metas(window.current.meta());
+        let metas = output_metas(window.current.meta(), self.half_frame, self.fields.len() == 2);
         let mut frames = Vec::with_capacity(metas.len());
         for (output_planes, meta) in planes.into_iter().zip(metas) {
             let built = Frame::from_planes(self.output, output_planes, meta);

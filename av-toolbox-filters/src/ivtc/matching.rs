@@ -64,6 +64,7 @@ pub(crate) struct MatchSpatial;
 
 impl SpatialStage for MatchSpatial {
     const STAGE: &'static str = STAGE;
+    const DEFAULT_MDIS: u32 = 20;
 }
 
 /// The fewest rows a plane may have.

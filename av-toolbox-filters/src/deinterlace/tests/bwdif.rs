@@ -20,6 +20,7 @@ use serde_json::json;
 
 use crate::deinterlace::Bwdif;
 use crate::deinterlace::bwdif::{BwdifArgs, Order, Rate};
+use crate::deinterlace::spatial::Spatial;
 
 const STAGE: &str = "deinterlace/bwdif";
 
@@ -264,4 +265,14 @@ fn it_holds_two_frames_and_runs_by_chunk() {
 fn order_takes_top_or_bottom() {
     assert_eq!(args(json!({ "order": "top" })).order, Some(Order::Top));
     assert_eq!(args(json!({ "order": "bottom" })).order, Some(Order::Bottom));
+}
+
+#[test]
+fn an_explicit_eedi3_without_mdis_uses_aa_eedi3_s_mdis() {
+    let parsed = args(json!({ "spatial": { "kind": "eedi3", "alpha": 0.3 } }));
+    let Spatial::Eedi3(spatial) = parsed.spatial else {
+        panic!("spatial should be EEDI3");
+    };
+
+    assert_eq!(spatial.mdis, 20);
 }

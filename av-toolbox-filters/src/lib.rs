@@ -17,6 +17,8 @@
 //! - `dering/hq` smooths ringing inside a mask of the area around edges.
 //! - `deinterlace/bwdif` rebuilds progressive frames from interlaced fields, the way bwdif does, at the
 //!   input's rate or at one frame per field.
+//! - `deinterlace/qtgmc` rebuilds progressive frames from interlaced fields, the way QTGMC does, smoothing
+//!   and sharpening them along motion.
 //! - `ivtc/match` rebuilds telecined film frames by field matching, the way VIVTC's VFM does.
 //! - `ivtc/decimate` drops one frame in every cycle, the one most likely to be a duplicate, the way VIVTC's
 //!   VDecimate does.
@@ -77,6 +79,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<dehalo::Yahr>()?;
     registry.register_filter::<dering::Hq>()?;
     registry.register_filter::<deinterlace::Bwdif>()?;
+    registry.register_filter::<deinterlace::Qtgmc>()?;
     registry.register_filter::<ivtc::Match>()?;
     registry.register_filter::<ivtc::Decimate>()?;
     registry.register_filter::<lineart::Darken>()?;
@@ -129,6 +132,7 @@ mod tests {
         assert!(registered("dehalo/yahr"));
         assert!(registered("dering/hq"));
         assert!(registered("deinterlace/bwdif"));
+        assert!(registered("deinterlace/qtgmc"));
         assert!(registered("ivtc/match"));
         assert!(registered("ivtc/decimate"));
         assert!(registered("lineart/darken"));
