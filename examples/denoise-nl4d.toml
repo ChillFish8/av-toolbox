@@ -1,0 +1,41 @@
+# Reads a video, denoises it with av-denoise's NL4D, and writes it back.
+#
+# Similar patches are grouped and followed along their motion, then filtered together. Grain changes from frame to
+# frame while texture stays, so this keeps detail that the non-local means stages smooth away. The noise is
+# measured in every frame, and sigma_scale nudges how hard it is removed.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.preset]
+type = "string"
+description = "How much quality to trade for speed"
+default = "base"
+choices = ["veryfast", "fast", "base", "slow", "veryslow"]
+
+[variable.sigma_scale]
+type = "float"
+description = "A multiplier on the measured noise, above 1 to denoise harder"
+default = 1.0
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+args.preset = "{{ preset }}"
+args.sigma_scale = "{{ sigma_scale }}"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["denoise"]
+args.path = "{{ output }}"

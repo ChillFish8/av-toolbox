@@ -1,0 +1,42 @@
+# Reads a video, denoises it with av-denoise's fast non-local means, and writes it back.
+#
+# Each pixel is averaged with pixels whose surroundings look alike, in its own frame and its neighbours. The
+# strength is on FFmpeg's nlmeans scale, roughly the noise's standard deviation in 8-bit steps, and chroma is
+# denoised more gently than luma. av-denoise/nlmeans-hq measures the noise instead of taking a fixed strength.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.preset]
+type = "string"
+description = "How much quality to trade for speed"
+default = "base"
+choices = ["veryfast", "fast", "base", "slow", "veryslow"]
+
+[variable.strength]
+type = "float"
+description = "How strongly luma is denoised, about the noise's standard deviation in 8-bit steps"
+default = 6.0
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.denoise]
+type = "av-denoise/nlmeans"
+inputs = ["input"]
+args.preset = "{{ preset }}"
+args.luma_strength = "{{ strength }}"
+args.chroma_strength = 4.0
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["denoise"]
+args.path = "{{ output }}"

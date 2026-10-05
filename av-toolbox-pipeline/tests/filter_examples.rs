@@ -45,6 +45,13 @@ fn gradient_clip() -> Vec<u8> {
 
 /// A C420 y4m clip of `FRAMES` frames whose luma is `luma`, with flat chroma.
 fn clip_with_luma(luma: &[u8]) -> Vec<u8> {
+    let lumas = vec![luma.to_vec(); FRAMES as usize];
+
+    clip_with_lumas(&lumas)
+}
+
+/// A C420 y4m clip with one frame per entry of `lumas`, each with flat chroma.
+fn clip_with_lumas(lumas: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = Vec::new();
     let ratio = y4m::Ratio::new(24, 1);
     let mut encoder = y4m::encode(SIZE, SIZE, ratio)
@@ -54,7 +61,7 @@ fn clip_with_luma(luma: &[u8]) -> Vec<u8> {
     let chroma_samples = (SIZE / 2) * (SIZE / 2);
     let u_plane = vec![FLAT_U; chroma_samples];
     let v_plane = vec![FLAT_V; chroma_samples];
-    for _ in 0..FRAMES {
+    for luma in lumas {
         let frame = y4m::Frame::new([luma, &u_plane, &v_plane], None);
         encoder.write_frame(&frame).expect("writes a frame");
     }
@@ -600,4 +607,78 @@ fn the_anti_aliasing_example_softens_a_staircase() {
         assert!(frame.u_plane.iter().all(|sample| *sample == FLAT_U));
         assert!(frame.v_plane.iter().all(|sample| *sample == FLAT_V));
     }
+}
+
+/// How far noise moves a sample of `noisy_gradient_lumas` either way.
+const NOISE_SPREAD: i32 = 12;
+
+/// `gradient_luma` with deterministic noise of up to `NOISE_SPREAD` either way, drawn afresh for every frame.
+fn noisy_gradient_lumas() -> Vec<Vec<u8>> {
+    let clean = gradient_luma();
+    let span = 2 * NOISE_SPREAD as u32 + 1;
+
+    (0..FRAMES)
+        .map(|frame| {
+            clean
+                .iter()
+                .enumerate()
+                .map(|(index, sample)| {
+                    let seed = (index as u32).wrapping_mul(2_654_435_761) ^ (frame as u32).wrapping_mul(97);
+                    let noise = (seed % span) as i32 - NOISE_SPREAD;
+                    let noisy = i32::from(*sample) + noise;
+                    noisy.clamp(0, 255) as u8
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The mean absolute difference between two planes.
+fn mean_error(found: &[u8], wanted: &[u8]) -> f64 {
+    let total: u32 = found
+        .iter()
+        .zip(wanted)
+        .map(|(sample, expected)| u32::from(sample.abs_diff(*expected)))
+        .sum();
+
+    f64::from(total) / found.len() as f64
+}
+
+/// Runs the denoise example `name` on a noisy ramp and checks every frame's luma moved toward the clean ramp.
+fn assert_denoises(name: &str) {
+    let lumas = noisy_gradient_lumas();
+    let clip = clip_with_lumas(&lumas);
+    let decoded = run_example_on(name, &[], &clip);
+    let clean = gradient_luma();
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+
+    for (frame, noisy) in decoded.frames.iter().zip(&lumas) {
+        let before = mean_error(noisy, &clean);
+        let after = mean_error(&frame.luma, &clean);
+        println!("{name}: mean error {before:.3} to {after:.3}");
+        assert!(
+            after < before,
+            "{name} moved the mean error from {before:.3} to {after:.3}"
+        );
+
+        assert!(frame.u_plane.iter().all(|sample| sample.abs_diff(FLAT_U) <= 1));
+        assert!(frame.v_plane.iter().all(|sample| sample.abs_diff(FLAT_V) <= 1));
+    }
+}
+
+#[test]
+fn the_denoise_nlmeans_example_cleans_a_noisy_ramp() {
+    assert_denoises("denoise-nlmeans.toml");
+}
+
+#[test]
+fn the_denoise_nlmeans_hq_example_cleans_a_noisy_ramp() {
+    assert_denoises("denoise-nlmeans-hq.toml");
+}
+
+#[test]
+fn the_denoise_nl4d_example_cleans_a_noisy_ramp() {
+    assert_denoises("denoise-nl4d.toml");
 }
