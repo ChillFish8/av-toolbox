@@ -1,6 +1,20 @@
+mod chain;
+mod fields;
 mod fixtures;
 mod reference;
+#[cfg(test)]
+mod tests;
 
+pub use self::chain::{
+    Interpolate,
+    QtgmcFieldSteps,
+    QtgmcReferenceSettings,
+    ReferenceMotion,
+    qtgmc_deltas,
+    reference_qtgmc,
+    reference_qtgmc_field,
+};
+pub use self::fields::{FieldClip, field_clips};
 pub use self::fixtures::{FixturePlane, QtgmcFixture, qtgmc_fixture, write_qtgmc_inputs};
 pub use self::reference::{
     reference_back_blend,

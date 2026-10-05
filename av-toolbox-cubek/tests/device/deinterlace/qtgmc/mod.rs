@@ -1,5 +1,6 @@
 mod average;
 mod bob;
+mod chain;
 mod difference;
 mod limits;
 mod pointwise;

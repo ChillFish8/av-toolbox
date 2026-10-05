@@ -69,7 +69,7 @@ fn average_frames(bobs: &[Vec<f32>], centre: usize, radius: isize, length: usize
 }
 
 /// `first * (1 - weight) + second * weight`.
-fn merge(first: &[f32], second: &[f32], weight: f32) -> Vec<f32> {
+pub(super) fn merge(first: &[f32], second: &[f32], weight: f32) -> Vec<f32> {
     first
         .iter()
         .zip(second)

@@ -356,13 +356,12 @@ impl Texture {
     }
 }
 
-/// The topmost object covering `x`, `y` in frame `frame`, if any.
-fn covering_object(spec: &ClipSpec, frame: usize, x: f64, y: f64) -> Option<&'static MovingObject> {
+/// The topmost object covering `x`, `y` at `time`, in frames, if any.
+fn covering_object(spec: &ClipSpec, time: f64, x: f64, y: f64) -> Option<&'static MovingObject> {
     if !spec.objects {
         return None;
     }
 
-    let time = frame as f64;
     OBJECTS.iter().rev().find(|object| {
         let local_x = x - (object.origin.0 + object.velocity.0 * time);
         let local_y = y - (object.origin.1 + object.velocity.1 * time);
@@ -371,16 +370,15 @@ fn covering_object(spec: &ClipSpec, frame: usize, x: f64, y: f64) -> Option<&'st
     })
 }
 
-/// The clean luma, chroma U and chroma V of frame `frame` at luma position `x`, `y`.
-fn scene_at(spec: &ClipSpec, frame: usize, x: f64, y: f64) -> [f64; 3] {
-    let time = frame as f64;
-    if let Some(object) = covering_object(spec, frame, x, y) {
+/// The clean luma, chroma U and chroma V at `time`, in frames, at luma position `x`, `y`.
+fn scene_at(spec: &ClipSpec, time: f64, x: f64, y: f64) -> [f64; 3] {
+    if let Some(object) = covering_object(spec, time, x, y) {
         let local_x = x - (object.origin.0 + object.velocity.0 * time);
         let local_y = y - (object.origin.1 + object.velocity.1 * time);
         return object.texture.at(local_x, local_y);
     }
 
-    let background = if frame >= spec.cut {
+    let background = if time >= spec.cut as f64 {
         &SECOND_BACKGROUND
     } else {
         &FIRST_BACKGROUND
@@ -404,8 +402,16 @@ fn code_value(value: f64, noise: f64, bits: u32) -> i32 {
     rounded as i32
 }
 
-/// Plane `plane` of frame `frame`, with noise when `noisy` is true.
-fn render_plane(spec: &ClipSpec, clip_index: usize, frame: usize, plane: usize, noisy: bool) -> Vec<i32> {
+/// Plane `plane` of the render numbered `frame` at `time`, with noise when `noisy` is true.
+///
+/// The noise is drawn for the render's number, so renders with different numbers have independent noise.
+fn render_plane(
+    spec: &ClipSpec,
+    clip_index: usize,
+    (frame, time): (usize, f64),
+    plane: usize,
+    noisy: bool,
+) -> Vec<i32> {
     let (width, height) = if plane == 0 {
         (WIDTH, HEIGHT)
     } else {
@@ -422,7 +428,7 @@ fn render_plane(spec: &ClipSpec, clip_index: usize, frame: usize, plane: usize, 
             } else {
                 (2.0 * column as f64 + 0.5, 2.0 * row as f64 + 0.5)
             };
-            let values = scene_at(spec, frame, x, y);
+            let values = scene_at(spec, time, x, y);
 
             let noise = if noisy {
                 let words = [
@@ -448,7 +454,7 @@ fn displacement_of(spec: &ClipSpec, frame: usize) -> Vec<(f32, f32)> {
     let mut motion = Vec::with_capacity(WIDTH * HEIGHT);
     for row in 0..HEIGHT {
         for column in 0..WIDTH {
-            let object = covering_object(spec, frame, column as f64, row as f64);
+            let object = covering_object(spec, frame as f64, column as f64, row as f64);
             let velocity = object.map_or(PAN_VELOCITY, |object| object.velocity);
             motion.push((velocity.0 as f32, velocity.1 as f32));
         }
@@ -457,13 +463,32 @@ fn displacement_of(spec: &ClipSpec, frame: usize) -> Vec<(f32, f32)> {
     motion
 }
 
+/// Every plane of the render numbered `frame` at `time`, with noise when `noisy` is true.
+fn render_frame(spec: &ClipSpec, clip_index: usize, render: (usize, f64), noisy: bool) -> [Vec<i32>; 3] {
+    [0, 1, 2].map(|plane| render_plane(spec, clip_index, render, plane, noisy))
+}
+
+/// The Y, U and V planes of the motion clip `name`'s scene at `time`, in frames, as code values.
+///
+/// A noisy clip's noise is added only when `noisy` is true. It is drawn for `render`, so renders with
+/// different numbers have independent noise.
+pub(crate) fn render_at(name: &str, time: f64, render: usize, noisy: bool) -> [Vec<i32>; 3] {
+    let (clip_index, spec) = CLIPS
+        .iter()
+        .enumerate()
+        .find(|(_, spec)| spec.name == name)
+        .expect("the clip is one of the motion clips");
+
+    render_frame(spec, clip_index, (render, time), spec.noisy && noisy)
+}
+
 fn build_clip(clip_index: usize, spec: &ClipSpec) -> MotionClip {
     let clean: Vec<[Vec<i32>; 3]> = (0..FRAMES)
-        .map(|frame| [0, 1, 2].map(|plane| render_plane(spec, clip_index, frame, plane, false)))
+        .map(|frame| render_frame(spec, clip_index, (frame, frame as f64), false))
         .collect();
     let frames = if spec.noisy {
         (0..FRAMES)
-            .map(|frame| [0, 1, 2].map(|plane| render_plane(spec, clip_index, frame, plane, true)))
+            .map(|frame| render_frame(spec, clip_index, (frame, frame as f64), true))
             .collect()
     } else {
         clean.clone()
@@ -509,7 +534,7 @@ pub fn object_mask(clip: &MotionClip, frame: usize) -> Vec<bool> {
     let mut mask = Vec::with_capacity(clip.width * clip.height);
     for row in 0..clip.height {
         for column in 0..clip.width {
-            let object = covering_object(spec, frame, column as f64, row as f64);
+            let object = covering_object(spec, frame as f64, column as f64, row as f64);
             mask.push(object.is_some());
         }
     }
@@ -662,8 +687,8 @@ mod tests {
     #[test]
     fn a_whole_pixel_pan_moves_the_background_exactly() {
         let spec = &CLIPS[0];
-        let earlier = scene_at(spec, 0, 30.0, 20.0);
-        let later = scene_at(spec, 2, 33.0, 21.0);
+        let earlier = scene_at(spec, 0.0, 30.0, 20.0);
+        let later = scene_at(spec, 2.0, 33.0, 21.0);
 
         assert_eq!(earlier, later);
     }

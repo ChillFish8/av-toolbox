@@ -19,6 +19,7 @@ pub use self::reference::{
     reference_search,
 };
 pub(crate) use self::reference::{covering_windows, scaled_vector};
+pub(crate) use self::synthetic::render_at;
 pub use self::synthetic::{MotionClip, motion_clips, normalised, object_mask, write_motion_inputs};
 use crate::motion::{ConfidenceScores, MotionEstimation, MotionSettings};
 

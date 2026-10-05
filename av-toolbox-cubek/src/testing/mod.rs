@@ -185,13 +185,22 @@ pub use self::neighbourhood::{
 pub use self::normalise::reference_normalise;
 pub use self::padding::{reference_crop, reference_pad};
 pub use self::qtgmc::{
+    FieldClip,
     FixturePlane,
+    Interpolate,
+    QtgmcFieldSteps,
     QtgmcFixture,
+    QtgmcReferenceSettings,
+    ReferenceMotion,
+    field_clips,
+    qtgmc_deltas,
     qtgmc_fixture,
     reference_back_blend,
     reference_bob,
     reference_clamp,
     reference_clamped_difference,
+    reference_qtgmc,
+    reference_qtgmc_field,
     reference_resharpen,
     reference_search_clip,
     reference_search_inputs,
