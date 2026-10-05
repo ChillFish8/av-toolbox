@@ -16,8 +16,8 @@ use av_toolbox_gpu::{
 use serde_json::json;
 
 use crate::deinterlace::Qtgmc;
-use crate::deinterlace::bwdif::{Order, Rate};
-use crate::deinterlace::qtgmc::QtgmcArgs;
+use crate::deinterlace::bwdif::Order;
+use crate::deinterlace::qtgmc::{Input, QtgmcArgs};
 use crate::deinterlace::spatial::Spatial;
 
 fn args(value: serde_json::Value) -> QtgmcArgs {
@@ -91,7 +91,7 @@ fn the_defaults_are_slower() {
     let parsed = args(json!({}));
 
     assert_eq!(parsed.order, None);
-    assert_eq!(parsed.rate, Rate::Double);
+    assert_eq!(parsed.rate, None);
     assert!(matches!(parsed.spatial, Spatial::Eedi3(_)));
     assert_eq!(parsed.tr0, 2);
     assert_eq!(parsed.tr1, 2);
@@ -333,4 +333,117 @@ fn it_holds_frames_by_the_lag_and_runs_by_chunk() {
     assert_eq!(widest.lag(), 8);
     assert_eq!(Qtgmc::held_frames(&widest, &formats), 6);
     assert_eq!(Qtgmc::parallelism(&widest), Parallelism::Chunk);
+}
+
+#[test]
+fn the_default_input_is_interlaced() {
+    assert_eq!(args(json!({})).input, Input::Interlaced);
+}
+
+#[test]
+fn every_input_parses() {
+    let names = ["interlaced", "progressive", "repair", "repair_reversed"];
+    let expected = [
+        Input::Interlaced,
+        Input::Progressive,
+        Input::Repair,
+        Input::RepairReversed,
+    ];
+
+    for (name, input) in names.into_iter().zip(expected) {
+        assert_eq!(args(json!({ "input": name })).input, input);
+    }
+}
+
+#[test]
+fn rate_is_refused_with_progressive_input() {
+    for name in ["progressive", "repair", "repair_reversed"] {
+        let value = json!({ "input": name, "rate": "single", "order": "top" });
+        let message = refusal(value, interlaced());
+
+        assert!(message.contains("deinterlace/qtgmc"), "{message}");
+        assert!(message.contains("rate"), "{message}");
+    }
+}
+
+#[test]
+fn progressive_input_keeps_the_rate() {
+    for name in ["progressive", "repair", "repair_reversed"] {
+        let output = produced(json!({ "input": name, "order": "top" }), interlaced());
+
+        assert_eq!(output.frame_rate, FrameRate::new(25, 1));
+        assert_eq!(output.field_order, Some(FieldOrder::Progressive));
+    }
+}
+
+#[test]
+fn repair_needs_order_on_a_progressive_stream() {
+    let input = yuv420(64, 64, Some(FieldOrder::Progressive));
+
+    for name in ["repair", "repair_reversed"] {
+        let message = refusal(json!({ "input": name }), input);
+
+        assert!(message.contains("order"), "{message}");
+
+        let output = produced(json!({ "input": name, "order": "bottom" }), input);
+        assert_eq!(output.field_order, Some(FieldOrder::Progressive));
+    }
+}
+
+#[test]
+fn progressive_needs_no_order() {
+    let input = yuv420(64, 64, Some(FieldOrder::Progressive));
+    let output = produced(json!({ "input": "progressive" }), input);
+
+    assert_eq!(output.frame_rate, FrameRate::new(25, 1));
+    assert_eq!(output.field_order, Some(FieldOrder::Progressive));
+}
+
+#[test]
+fn held_frames_follow_each_mode_s_lag() {
+    let input = StreamFormat::Frames(interlaced());
+    let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
+    let cases = [
+        ("interlaced", json!({}), 5, 4),
+        ("progressive", json!({}), 5, 7),
+        ("repair", json!({}), 6, 8),
+        ("repair_reversed", json!({}), 6, 8),
+        ("interlaced", json!({ "tr0": 2, "tr1": 2, "tr2": 3 }), 8, 6),
+        ("progressive", json!({ "tr0": 2, "tr1": 2, "tr2": 3 }), 8, 10),
+        ("repair", json!({ "tr0": 2, "tr1": 2, "tr2": 3 }), 8, 10),
+    ];
+
+    for (name, mut value, lag, held) in cases {
+        value["input"] = json!(name);
+        let parsed = args(value);
+
+        assert_eq!(parsed.lag(), lag, "{name} lag");
+        assert_eq!(Qtgmc::held_frames(&parsed, &formats), held, "{name} held frames");
+    }
+}
+
+#[test]
+fn progressive_input_accepts_an_odd_height() {
+    let input = yuv420(64, 70, Some(FieldOrder::Progressive));
+
+    assert!(produces(json!({ "input": "progressive" }), input).is_ok());
+}
+
+#[test]
+fn progressive_input_checks_blocks_against_the_frame() {
+    let input = yuv420(64, 24, Some(FieldOrder::TopFirst));
+
+    assert!(produces(json!({ "input": "progressive" }), input).is_ok());
+
+    let message = refusal(json!({ "input": "repair" }), input);
+    assert!(message.contains("block"), "{message}");
+}
+
+#[test]
+fn repair_refuses_an_odd_plane_height() {
+    let input = yuv420(64, 70, Some(FieldOrder::TopFirst));
+    let message = refusal(json!({ "input": "repair" }), input);
+
+    assert!(message.contains("deinterlace/qtgmc"), "{message}");
+    assert!(message.contains("35"), "{message}");
 }

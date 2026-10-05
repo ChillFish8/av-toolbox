@@ -25,6 +25,33 @@ impl SpatialStage for QtgmcSpatial {
     const DEFAULT_MDIS: u32 = 8;
 }
 
+/// What the stage is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Input {
+    /// Interlaced frames, rebuilt from their fields.
+    #[default]
+    Interlaced,
+    /// Progressive frames, smoothed and sharpened without any field being rebuilt.
+    Progressive,
+    /// Progressive frames deinterlaced by another filter, with QTGMC's repair of that filter's artefacts.
+    Repair,
+    /// The same as `repair`, for frames whose field order was reversed before the other filter ran.
+    RepairReversed,
+}
+
+impl Input {
+    /// Whether the frames come in progressive and go out one for one.
+    pub(crate) fn is_progressive(self) -> bool {
+        self != Self::Interlaced
+    }
+
+    /// Whether the frames were deinterlaced elsewhere and are repaired here.
+    pub(crate) fn is_repair(self) -> bool {
+        matches!(self, Self::Repair | Self::RepairReversed)
+    }
+}
+
 /// Arguments for `deinterlace/qtgmc`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -32,9 +59,17 @@ pub(crate) struct QtgmcArgs {
     /// The field shown first, the stream's own field order when not given.
     #[serde(default)]
     pub(crate) order: Option<Order>,
-    /// One frame for each frame in, or one for each field. One for each field when not given.
+    /// What the stage is given, interlaced frames when not given.
+    ///
+    /// `progressive` smooths and sharpens frames. `repair` and `repair_reversed` repair frames another filter
+    /// has deinterlaced, and need `order` unless the stream has its own field order.
     #[serde(default)]
-    pub(crate) rate: Rate,
+    pub(crate) input: Input,
+    /// One frame for each frame in, or one for each field. One for each field when not given.
+    ///
+    /// Only interlaced input takes a `rate`, progressive input always gives one frame for each frame.
+    #[serde(default)]
+    pub(crate) rate: Option<Rate>,
     /// Where each rebuilt row's spatial prediction comes from, EEDI3 with a `mdis` of 8 when not given.
     ///
     /// `cubic` is a plain bicubic resize of each field, QTGMC's `bob`.
@@ -90,6 +125,13 @@ fn default_thsad1() -> f32 {
 
 fn default_thsad2() -> f32 {
     256.0
+}
+
+fn rate_with_progressive_input(input: Input) -> StageError {
+    let message =
+        format!("{STAGE} cannot take a `rate` with {input:?} input, it gives one frame for each frame");
+
+    StageError::msg(message)
 }
 
 fn bad_threshold(name: &str, value: f32) -> StageError {
@@ -159,18 +201,42 @@ impl QtgmcArgs {
     ///
     /// A field's output waits on the limits of the fields `tr2` after it, and they wait on their motion
     /// search, which reaches `max_tr` fields further, on search clips that average `tr0` fields further.
+    ///
+    /// Repair input also waits on the repair, which reaches one field past `tr1`.
     pub(crate) fn lag(&self) -> u32 {
-        self.tr0 + self.tr2 + self.max_tr()
+        let reach = match self.input.is_repair() {
+            true => self.max_tr().max(self.tr1.max(1) + 1),
+            false => self.max_tr(),
+        };
+
+        self.tr0 + self.tr2 + reach
     }
 
-    /// How many input frames the stage holds.
+    /// How many input frames the stage holds, where a field is one entry for interlaced input.
     pub(crate) fn held_frames(&self) -> usize {
-        self.lag() as usize / 2 + 2
+        let lag = self.lag() as usize;
+        if self.input.is_progressive() {
+            return lag + 2;
+        }
+
+        lag / 2 + 2
+    }
+
+    /// How many frames come out for each frame in.
+    pub(crate) fn resolved_rate(&self) -> Rate {
+        match self.input.is_progressive() {
+            true => Rate::Single,
+            false => self.rate.unwrap_or_default(),
+        }
     }
 
     /// Refuses the first argument outside its range, and the first motion or degrain setting built from
     /// them that fails its own checks.
     pub(crate) fn checked_values(&self) -> Result<(), StageError> {
+        if self.input.is_progressive() && self.rate.is_some() {
+            return Err(rate_with_progressive_input(self.input));
+        }
+
         between_u32(STAGE, "tr0", self.tr0, 0, 2)?;
         between_u32(STAGE, "tr1", self.tr1, 0, 2)?;
         between_u32(STAGE, "tr2", self.tr2, 0, 3)?;
@@ -194,12 +260,17 @@ impl QtgmcArgs {
     }
 }
 
-/// Refuses an `input` whose fields are smaller than a motion block, or than the pyramid can search.
-pub(crate) fn checked_field_size(input: &FrameFormat) -> Result<(), StageError> {
+/// Refuses an `input` whose entries are smaller than a motion block, or than the pyramid can search.
+///
+/// An entry is a field, or the whole frame for `progressive` input.
+pub(crate) fn checked_field_size(input: &FrameFormat, mode: Input) -> Result<(), StageError> {
     let settings = motion_settings();
     let blksize = settings.blksize;
     let width = input.width;
-    let height = input.height / 2;
+    let height = match mode {
+        Input::Progressive => input.height,
+        _ => input.height / 2,
+    };
     if width < blksize || height < blksize {
         return Err(field_too_small(blksize, width, height));
     }

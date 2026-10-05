@@ -40,7 +40,7 @@ use av_toolbox_gpu::{
     StreamTemplate,
 };
 
-pub(crate) use self::args::QtgmcArgs;
+pub(crate) use self::args::{Input, QtgmcArgs};
 use self::args::{checked_field_size, degrain_settings, motion_settings, scene_change};
 use self::cache::FieldCache;
 use self::chain::{Chain, ChainSettings, PlaneShape};
@@ -82,15 +82,33 @@ fn checked_format(input: &FrameFormat) -> Result<(), StageError> {
     Ok(())
 }
 
+fn not_built_yet(input: Input) -> StageError {
+    let message = format!("{STAGE} cannot process {input:?} input yet, its processing is not built");
+
+    StageError::msg(message)
+}
+
+/// The field order `input` is processed in, which progressive input does not need from the stream.
+fn stage_order(args: &QtgmcArgs, input: &FrameFormat) -> Result<Order, StageError> {
+    if args.input == Input::Progressive {
+        return Ok(args.order.unwrap_or(Order::Top));
+    }
+
+    resolved_order(STAGE, args.order, input)
+}
+
 /// Refuses `args` that `input` cannot run with.
 fn checked_stage(args: &QtgmcArgs, input: &FrameFormat) -> Result<Predictor, StageError> {
     args.checked_values()?;
-    resolved_order(STAGE, args.order, input)?;
+    stage_order(args, input)?;
     checked_format(input)?;
 
     let selected = vec![true; input.channels().len()];
-    checked_dimensions(STAGE, input, &selected, Direction::Vertical)?;
-    checked_field_size(input)?;
+    if args.input != Input::Progressive {
+        checked_dimensions(STAGE, input, &selected, Direction::Vertical)?;
+    }
+
+    checked_field_size(input, args.input)?;
 
     let predictor = checked_predictor(STAGE, &args.spatial)?;
     checked_predictor_planes(STAGE, predictor, input, &selected)?;
@@ -143,8 +161,8 @@ fn deinterlacer<R: Runtime>(
     input: FrameFormat,
 ) -> Result<Deinterlacer<R>, StageError> {
     let predictor = checked_stage(args, &input)?;
-    let order = resolved_order(STAGE, args.order, &input)?;
-    let output = output_format(&input, args.rate)?;
+    let order = stage_order(args, &input)?;
+    let output = output_format(&input, args.resolved_rate())?;
     let shapes = plane_shapes(&input)?;
 
     let client = context.client();
@@ -174,7 +192,8 @@ fn deinterlacer<R: Runtime>(
         chain,
         cache: FieldCache::new(),
         parities: [first, first.other()],
-        doubled: args.rate == Rate::Double,
+        input: args.input,
+        doubled: args.resolved_rate() == Rate::Double,
         half_frame: half_frame(input.frame_rate),
         #[cfg(feature = "test-support")]
         log: None,
@@ -203,7 +222,7 @@ impl StageDefinition for Qtgmc {
         Parallelism::Chunk
     }
 
-    // The fields the output trails the input by, and the frames they and the current frame come from.
+    // The entries the output trails the input by, and the frames they and the current frame come from.
     fn held_frames(args: &Self::Args, _formats: &ResolvedFormats) -> usize {
         args.held_frames()
     }
@@ -236,7 +255,7 @@ impl FilterDefinition for Qtgmc {
         let input = checked_input(STAGE, chosen)?;
         checked_stage(args, &input)?;
 
-        let output = output_format(&input, args.rate)?;
+        let output = output_format(&input, args.resolved_rate())?;
         let format = StreamFormat::Frames(output);
 
         Ok(OutputFormats {
@@ -263,6 +282,8 @@ impl FilterDefinition for Qtgmc {
 struct Deinterlacer<R: Runtime> {
     chain: Chain<R>,
     cache: FieldCache,
+    /// What the stage is given.
+    input: Input,
     /// The parity of each field of a frame, in the order they are shown.
     parities: [Parity; 2],
     /// Whether both fields of each frame are shown, rather than only the first.
@@ -332,6 +353,10 @@ impl<R: Runtime> Filter for Deinterlacer<R> {
         let Some(next) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));
         };
+
+        if self.input != Input::Interlaced {
+            return Err(not_built_yet(self.input));
+        }
 
         let metas = output_metas(next.meta(), self.half_frame, self.doubled);
         let mut shown = metas.into_iter();
