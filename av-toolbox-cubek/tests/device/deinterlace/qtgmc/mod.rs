@@ -1,5 +1,7 @@
 mod average;
 mod bob;
+mod difference;
+mod limits;
 mod pointwise;
 mod shimmer;
 

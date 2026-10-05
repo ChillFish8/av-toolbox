@@ -191,10 +191,12 @@ pub use self::qtgmc::{
     reference_back_blend,
     reference_bob,
     reference_clamp,
+    reference_clamped_difference,
     reference_resharpen,
     reference_search_clip,
     reference_search_inputs,
     reference_shimmer,
+    reference_temporal_limits,
     reference_tr0,
     write_qtgmc_inputs,
 };

@@ -54,8 +54,11 @@ fn bob_cases() -> Vec<BobCase> {
     for input in &inputs {
         for (index, planes) in input.frames.iter().enumerate() {
             for (plane_index, source) in planes.iter().enumerate() {
-                for parity in 0..2 {
-                    let label = format!("{} frame {index} plane {plane_index} parity {parity}", input.clip);
+                for parity in [Parity::Top, Parity::Bottom] {
+                    let label = format!(
+                        "{} frame {index} plane {plane_index} parity {parity:?}",
+                        input.clip
+                    );
 
                     cases.push(BobCase {
                         label,
@@ -84,11 +87,14 @@ fn the_bob_reference_matches_havsfunc() {
                 let frame = codes(&source.samples);
                 let size = (source.width, source.height);
 
-                for parity in 0..2 {
+                for parity in [Parity::Top, Parity::Bottom] {
                     let found = reference_bob(&frame, size, parity);
-                    let expected = &output.frames[2 * index + parity as usize][plane_index];
+                    let expected = &output.frames[2 * index + parity.row_offset() as usize][plane_index];
 
-                    let label = format!("{} frame {index} plane {plane_index} parity {parity}", input.clip);
+                    let label = format!(
+                        "{} frame {index} plane {plane_index} parity {parity:?}",
+                        input.clip
+                    );
                     assert_fixture_within(&found, &expected.samples, ceiling, |_| FIXTURE_TOLERANCE, &label);
                 }
             }
@@ -118,7 +124,7 @@ fn the_device_bob_matches_the_reference() {
 fn ramp_frame(parity: Parity) -> Vec<f32> {
     let mut frame = Vec::with_capacity(16 * 8);
     for row in 0..8usize {
-        let value = if row % 2 == parity as usize {
+        let value = if row % 2 == parity.row_offset() as usize {
             10.0 * (row / 2 + 1) as f32
         } else {
             1000.0
@@ -177,7 +183,7 @@ fn a_bottom_field_bob_clamps_at_both_ends() {
     // Row 6 is at 2.5, over rows 1 to 4, and row 4 clamps to row 3 so f3 weighs 8/16.
     // -0.0625 * 20 + 0.5625 * 30 + 0.5 * 40 = -1.25 + 16.875 + 20 = 35.625.
     // Row 7 is at 3.0, exactly on f3.
-    assert_ramp_bob(1, &[(0, 9.375), (6, 35.625), (7, 40.0)]);
+    assert_ramp_bob(Parity::Bottom, &[(0, 9.375), (6, 35.625), (7, 40.0)]);
 }
 
 #[test]
@@ -185,5 +191,13 @@ fn a_top_field_bob_clamps_at_the_last_row() {
     // Row 7 is at 3.5, over rows 2 to 5, and rows 4 and 5 clamp to row 3 so f3 weighs 17/16.
     // -0.0625 * 30 + 1.0625 * 40 = -1.875 + 42.5 = 40.625.
     // Row 0 is at 0.0, exactly on f0.
-    assert_ramp_bob(0, &[(0, 10.0), (7, 40.625)]);
+    assert_ramp_bob(Parity::Top, &[(0, 10.0), (7, 40.625)]);
+}
+
+#[test]
+fn parity_offsets_and_flips() {
+    assert_eq!(Parity::Top.row_offset(), 0);
+    assert_eq!(Parity::Bottom.row_offset(), 1);
+    assert_eq!(Parity::Top.other(), Parity::Bottom);
+    assert_eq!(Parity::Bottom.other(), Parity::Top);
 }

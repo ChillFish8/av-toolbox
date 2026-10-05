@@ -1,6 +1,7 @@
 use av_toolbox_cubek::motion::{
     BlockGrid,
     ConfidenceScores,
+    FieldBuffers,
     MotionSettings,
     build_pyramid,
     chain,
@@ -28,7 +29,7 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use super::{DeviceField, DevicePyramid, assert_same_field};
+use super::{DevicePyramid, assert_same_field, read_field};
 use crate::support::{Sizing, backend};
 
 /// A chained field and the seed it was refined from.
@@ -104,10 +105,10 @@ impl BuildTask for MotionRun {
             .collect();
 
         let direct_with = |centre: usize, neighbour: usize, scored: bool, settings: &MotionSettings| {
-            let field = DeviceField::new(client, &grid);
+            let field = FieldBuffers::new(client, &grid);
             let centre_pyramid = device_pyramids[centre].pyramid();
             let neighbour_pyramid = device_pyramids[neighbour].pyramid();
-            let device_field = field.field(scored, settings.pel);
+            let device_field = field.field(settings.pel, scored);
             let scores = scored.then_some(self.scores);
             search(
                 client,
@@ -133,16 +134,16 @@ impl BuildTask for MotionRun {
             let middle = (centre + neighbour) / 2;
             let first = direct_with(centre, middle, false, &whole_pixels);
             let second = direct_with(middle, neighbour, false, &whole_pixels);
-            let field = DeviceField::new(client, &grid);
-            let seed_field = field.field(scored, 1);
+            let field = FieldBuffers::new(client, &grid);
+            let seed_field = field.field(1, scored);
             chain(
                 client,
                 &sizing,
-                &first.field(false, 1),
-                &second.field(false, 1),
+                &first.field(1, false),
+                &second.field(1, false),
                 &seed_field,
             );
-            let seed = field.read(client, false).vectors;
+            let seed = read_field(client, &field, false).vectors;
 
             let centre_pyramid = device_pyramids[centre].pyramid();
             let neighbour_pyramid = device_pyramids[neighbour].pyramid();
@@ -160,15 +161,23 @@ impl BuildTask for MotionRun {
                 refine_half_pel(client, &sizing, &centre_pyramid, &neighbour_pyramid, &seed_field);
             }
 
-            let refined = field.read(client, scored);
+            let refined = read_field(client, &field, scored);
             Chained { seed, field: refined }
         };
 
         let direct_1 = (0..frames - 1)
-            .map(|centre| direct(centre, centre + 1, true).read(client, true))
+            .map(|centre| {
+                let field = direct(centre, centre + 1, true);
+
+                read_field(client, &field, true)
+            })
             .collect();
         let direct_2 = (0..frames - 2)
-            .map(|centre| direct(centre, centre + 2, false).read(client, false))
+            .map(|centre| {
+                let field = direct(centre, centre + 2, false);
+
+                read_field(client, &field, false)
+            })
             .collect();
         let chained_2 = (0..frames - 2)
             .map(|first| chained(first, first + 2, true))

@@ -241,6 +241,34 @@ fn degrain_kernel(
     output[ABSOLUTE_POS] = value_sum / weight_sum;
 }
 
+#[cube(launch_unchecked)]
+fn copy_kernel(input: &Array<f32>, output: &mut Array<f32>) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    output[ABSOLUTE_POS] = input[ABSOLUTE_POS];
+}
+
+/// Writes `centre` into `output`, which both hold at `centre`'s size.
+fn copy_centre<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    centre: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+) {
+    let cubes = dispatch.cube_count(output.samples());
+    let unit = dispatch.cube_dim();
+    let centre_array = centre.array::<R>();
+    let output_array = output.array::<R>();
+
+    // Safety: both planes were checked to hold the same number of f32 samples, and each unit reads and
+    // writes only its own sample.
+    unsafe {
+        copy_kernel::launch_unchecked::<R>(client, cubes, unit, centre_array, output_array);
+    }
+}
+
 /// Averages `centre` with its compensated `neighbours` into `output`.
 ///
 /// Each sample takes the blocks of the neighbours' shared grid covering it. A block weighs its window
@@ -250,8 +278,8 @@ fn degrain_kernel(
 ///
 /// `chroma` picks `thsad_chroma` over `thsad`. The vectors and SADs are the luma fields', with `scale`
 /// shrinking the blocks and vectors onto a smaller plane. All the planes read and written share one scale
-/// of values. There must be at least one neighbour, and every neighbour's field shares one grid and
-/// one `pel`.
+/// of values. Every neighbour's field shares one grid and one `pel`. With no neighbours, `output`
+/// is `centre`.
 #[expect(
     clippy::too_many_arguments,
     reason = "degrain takes each plane and setting as its own argument"
@@ -276,14 +304,17 @@ pub fn degrain<R: Runtime>(
         2 * radius
     );
 
-    let first = neighbours.first().expect("degrain needs at least one neighbour");
-    let grid = &first.field.grid;
-    let pel = first.field.pel;
-
     let width = centre.width();
     let height = centre.height();
     crate::assert_plane(&centre, width, height, "centre");
     crate::assert_plane(&output, width, height, "output");
+
+    let Some(first) = neighbours.first() else {
+        copy_centre::<R>(client, dispatch, centre, output);
+        return;
+    };
+    let grid = &first.field.grid;
+    let pel = first.field.pel;
     assert_blocks(grid, (width, height), scale);
 
     let mut planes = SequenceArg::<R, Array<f32>>::new();

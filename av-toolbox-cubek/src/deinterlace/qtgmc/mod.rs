@@ -2,6 +2,8 @@
 //!
 //! - [bob] resizes a field to a full-height plane.
 //! - [weighted_sum] averages bobs as QTGMC's TR0 does.
+//! - [clamped_difference] stores a difference as `std.MakeDiff` does.
+//! - [temporal_limits] bounds a plane by its compensated neighbours.
 //! - [shimmer] keeps only thin horizontal differences from a reference.
 //! - [search_clip] builds the clip motion is searched on.
 //! - [resharpen], [subtract], [clamp_between] and [merge] are QTGMC's other per-pixel steps.
@@ -12,11 +14,15 @@
 
 mod average;
 mod bob;
+mod difference;
+mod limits;
 mod pointwise;
 mod shimmer;
 
 pub use self::average::{MAX_AVERAGED, tr0_weights, weighted_sum};
 pub use self::bob::{BobPlanes, Parity, bob, bob_taps};
+pub use self::difference::clamped_difference;
+pub use self::limits::temporal_limits;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use self::pointwise::search_levels;
 pub use self::pointwise::{

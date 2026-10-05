@@ -14,6 +14,7 @@
 //!
 //! Each search also writes every block's best SAD and, when asked, its confidence.
 
+mod buffers;
 mod chain;
 mod compensate;
 mod confidence;
@@ -28,6 +29,7 @@ mod subpel;
 use cubecl::prelude::*;
 use thiserror::Error;
 
+pub use self::buffers::{FieldBuffers, SceneFlags};
 pub use self::chain::chain;
 pub use self::compensate::{CompensatePlanes, PlaneScale, compensate, window_weight};
 pub(crate) use self::compensate::{block_window, half_pel_component, upper_block};

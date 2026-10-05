@@ -13,7 +13,7 @@ pub struct ReferenceNeighbour<'a> {
 /// [degrain](crate::degrain::degrain).
 ///
 /// `centre` and the neighbours are planes scaled by `scale`. `flagged` says which neighbours are scene
-/// changes.
+/// changes. With no neighbours the result is `centre`.
 #[expect(
     clippy::too_many_arguments,
     reason = "the reference takes each input of the device call as its own argument"
@@ -29,6 +29,10 @@ pub fn reference_degrain(
     scale: PlaneScale,
     chroma: bool,
 ) -> Vec<f32> {
+    if neighbours.is_empty() {
+        return centre.to_vec();
+    }
+
     let threshold = settings.sad_threshold(grid.blksize, chroma);
 
     let mut output = Vec::with_capacity(width * height);

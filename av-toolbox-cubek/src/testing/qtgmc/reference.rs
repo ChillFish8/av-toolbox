@@ -35,7 +35,7 @@ pub fn reference_bob(frame: &[f32], (width, height): (usize, usize), parity: Par
             let mut total = 0.0f32;
             for (step, weight) in weights.iter().enumerate() {
                 let field_row = (start + step as i32).clamp(0, last) as usize;
-                let frame_row = field_row * 2 + parity as usize;
+                let frame_row = field_row * 2 + parity.row_offset() as usize;
                 total += frame[frame_row * width + column] * weight;
             }
 
@@ -111,15 +111,10 @@ pub fn reference_shimmer(
 ) -> Vec<f32> {
     assert_bits(bits);
 
-    let neutral = (1u32 << (bits - 1)) as f32;
     let peak = ((1u32 << bits) - 1) as f32;
     let (above, below) = restore_limits(bits);
 
-    let difference: Vec<f32> = reference
-        .iter()
-        .zip(input)
-        .map(|(wanted, found)| (wanted - found).clamp(-neutral, peak - neutral))
-        .collect();
+    let difference = reference_clamped_difference(reference, input, bits);
     let (columns, rows) = (width as u32, height as u32);
     let positive = reference_chain_with_edge(&difference, columns, rows, &POSITIVE_STEPS, Edge::Clamp);
     let negative = reference_chain_with_edge(&difference, columns, rows, &NEGATIVE_STEPS, Edge::Clamp);
@@ -264,13 +259,8 @@ pub fn reference_back_blend(
     assert_bits(bits);
 
     let peak = ((1u32 << bits) - 1) as f32;
-    let (lowest, highest) = ((peak + 1.0) / -2.0, (peak - 1.0) / 2.0);
 
-    let difference: Vec<f32> = sharpened
-        .iter()
-        .zip(unsharpened)
-        .map(|(sharp, plain)| (sharp - plain).clamp(lowest, highest))
-        .collect();
+    let difference = reference_clamped_difference(sharpened, unsharpened, bits);
     let blurred = reference_smooth_with_edge(
         &difference,
         width as u32,
@@ -296,4 +286,34 @@ pub fn reference_clamp(input: &[f32], upper: &[f32], lower: &[f32]) -> Vec<f32> 
         .zip(lower)
         .map(|((sample, high), low)| sample.min(*high).max(*low))
         .collect()
+}
+
+/// `first − second` clamped as `std.MakeDiff` stores it on the CPU, mirroring
+/// [clamped_difference](crate::deinterlace::qtgmc::clamped_difference).
+pub fn reference_clamped_difference(first: &[f32], second: &[f32], bits: u32) -> Vec<f32> {
+    assert_bits(bits);
+
+    let peak = ((1u32 << bits) - 1) as f32;
+    let (lowest, highest) = ((peak + 1.0) / -2.0, (peak - 1.0) / 2.0);
+
+    first
+        .iter()
+        .zip(second)
+        .map(|(minuend, subtrahend)| (minuend - subtrahend).clamp(lowest, highest))
+        .collect()
+}
+
+/// The per-sample maximum and minimum of `centre` and `neighbours` on the CPU, mirroring
+/// [temporal_limits](crate::deinterlace::qtgmc::temporal_limits).
+pub fn reference_temporal_limits(centre: &[f32], neighbours: &[&[f32]]) -> (Vec<f32>, Vec<f32>) {
+    let mut upper = centre.to_vec();
+    let mut lower = centre.to_vec();
+    for neighbour in neighbours {
+        for (position, sample) in neighbour.iter().enumerate() {
+            upper[position] = upper[position].max(*sample);
+            lower[position] = lower[position].min(*sample);
+        }
+    }
+
+    (upper, lower)
 }

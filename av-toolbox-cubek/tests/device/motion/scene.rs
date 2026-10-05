@@ -5,6 +5,7 @@ use av_toolbox_cubek::motion::{
     MotionField,
     MotionSettings,
     SceneChange,
+    SceneFlags,
     scene_change_flags,
 };
 use av_toolbox_cubek::testing::{motion_clips, reference_scene_changed};
@@ -14,7 +15,7 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::*;
 
 use crate::degrain::{DegrainRun, Frames};
-use crate::support::{backend, empty, plane, read_u32, upload_f32};
+use crate::support::{backend, plane, read_u32, upload_f32};
 
 fn settings_of(blksize: u32, overlap: u32) -> MotionSettings {
     MotionSettings {
@@ -143,11 +144,10 @@ impl BuildTask for FlagRun {
             })
             .collect();
 
-        let count = fields.len() as u32;
-        let flag_handle = empty(client, fields.len() * size_of::<u32>());
-        scene_change_flags(client, &fields, plane(&flag_handle, count, 1), self.rule);
+        let flags = SceneFlags::new(client, fields.len() as u32);
+        scene_change_flags(client, &fields, flags.plane(), self.rule);
 
-        read_u32(client, &flag_handle)
+        read_u32(client, flags.plane().handle())
             .iter()
             .map(|flag| *flag != 0)
             .collect()

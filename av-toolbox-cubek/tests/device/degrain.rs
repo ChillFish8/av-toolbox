@@ -1,9 +1,10 @@
 use av_toolbox_cubek::degrain::{DegrainNeighbour, DegrainSettings, degrain};
 use av_toolbox_cubek::motion::{
     BlockGrid,
+    FieldBuffers,
     MotionSettings,
     PlaneScale,
-    SceneFlag,
+    SceneFlags,
     build_pyramid,
     scene_change_flags,
     search,
@@ -24,7 +25,7 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 // by name.
 use cubecl::prelude::*;
 
-use crate::motion::{CHROMA, DeviceField, DevicePyramid};
+use crate::motion::{CHROMA, DevicePyramid, read_field};
 use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32};
 
 /// The centre frame of a clip and the frames around it, as degrain reads them.
@@ -109,8 +110,8 @@ impl BuildTask for DegrainRun {
         let mut fields = Vec::new();
         for neighbour in &frames.neighbours {
             let neighbour_pyramid = upload(*neighbour);
-            let field = DeviceField::new(client, &grid);
-            let device_field = field.field(false, self.motion.pel);
+            let field = FieldBuffers::new(client, &grid);
+            let device_field = field.field(self.motion.pel, false);
             search(
                 client,
                 &sizing,
@@ -123,13 +124,17 @@ impl BuildTask for DegrainRun {
             fields.push(field);
         }
 
-        let flag_handle = empty(client, fields.len() * size_of::<u32>());
-        let flag_plane = plane(&flag_handle, fields.len() as u32, 1);
+        let scene_flags = SceneFlags::new(client, fields.len() as u32);
         let device_fields: Vec<_> = fields
             .iter()
-            .map(|field| field.field(false, self.motion.pel))
+            .map(|field| field.field(self.motion.pel, false))
             .collect();
-        scene_change_flags(client, &device_fields, flag_plane, self.settings.scene_change());
+        scene_change_flags(
+            client,
+            &device_fields,
+            scene_flags.plane(),
+            self.settings.scene_change(),
+        );
 
         let mut outputs = Vec::new();
         for (index, scale) in [(0, PlaneScale::LUMA), (1, CHROMA)] {
@@ -148,11 +153,8 @@ impl BuildTask for DegrainRun {
                 .enumerate()
                 .map(|(index, (handle, field))| DegrainNeighbour {
                     plane: plane(handle, plane_width, plane_height),
-                    field: field.field(false, self.motion.pel),
-                    flag: SceneFlag {
-                        flags: flag_plane,
-                        index: index as u32,
-                    },
+                    field: field.field(self.motion.pel, false),
+                    flag: scene_flags.flag(index as u32),
                 })
                 .collect();
             degrain(
@@ -171,8 +173,11 @@ impl BuildTask for DegrainRun {
 
         let chroma = outputs.pop().expect("chroma should be degrained");
         let luma = outputs.pop().expect("luma should be degrained");
-        let fields = fields.iter().map(|field| field.read(client, false)).collect();
-        let flags = read_u32(client, &flag_handle)
+        let fields = fields
+            .iter()
+            .map(|field| read_field(client, field, false))
+            .collect();
+        let flags = read_u32(client, scene_flags.plane().handle())
             .iter()
             .map(|flag| *flag != 0)
             .collect();
@@ -316,4 +321,62 @@ fn a_cut_inside_the_window_weighs_zero() {
     );
     assert_eq!(skipping.luma, alone.luma, "the cut weighed in the luma");
     assert_eq!(skipping.chroma, alone.chroma, "the cut weighed in the chroma");
+}
+
+/// Degrains a plane with no neighbours on the device.
+struct LoneRun {
+    centre: Vec<f32>,
+    width: u32,
+}
+
+impl BuildTask for LoneRun {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let sizing = Sizing(build.frame_context());
+        let height = self.centre.len() as u32 / self.width;
+
+        let centre = upload_f32(client, &self.centre);
+        let output = empty(client, self.centre.len() * size_of::<f32>());
+        degrain(
+            client,
+            &sizing,
+            plane(&centre, self.width, height),
+            &[],
+            plane(&output, self.width, height),
+            &DegrainSettings::default(),
+            PlaneScale::LUMA,
+            false,
+        );
+
+        read_f32(client, &output)
+    }
+}
+
+#[test]
+fn degrain_without_neighbours_is_the_centre() {
+    let centre: Vec<f32> = (0..12 * 6).map(|sample| sample as f32 / 100.0).collect();
+    let grid = BlockGrid::new(&MotionSettings::default(), 12, 6);
+
+    let expected = reference_degrain(
+        &centre,
+        (12, 6),
+        &[],
+        &[],
+        &grid,
+        &DegrainSettings::default(),
+        2,
+        PlaneScale::LUMA,
+        false,
+    );
+    assert_eq!(expected, centre, "the CPU reference should give the centre");
+
+    let task = LoneRun {
+        centre: centre.clone(),
+        width: 12,
+    };
+    let found = backend().build(task);
+
+    assert_eq!(found, centre, "the device should give the centre");
 }

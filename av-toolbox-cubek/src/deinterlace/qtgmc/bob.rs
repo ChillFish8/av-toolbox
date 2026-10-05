@@ -5,8 +5,30 @@ use cubecl::prelude::*;
 use crate::resize::{Kernel, Taps, Weights, taps};
 use crate::{DevicePlane, Dispatch, assert_plane};
 
-/// Which rows of a frame a field holds, 0 for the top field and 1 for the bottom.
-pub type Parity = u32;
+/// The field of a frame, by the rows it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Parity {
+    Top,
+    Bottom,
+}
+
+impl Parity {
+    /// The first row of the frame the field holds, 0 for the top field and 1 for the bottom.
+    pub const fn row_offset(self) -> u32 {
+        match self {
+            Self::Top => 0,
+            Self::Bottom => 1,
+        }
+    }
+
+    /// The other field of the frame.
+    pub const fn other(self) -> Self {
+        match self {
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Top,
+        }
+    }
+}
 
 /// The vertical taps that bob a field of `field_height` rows of `parity` to `2 * field_height` rows.
 ///
@@ -17,7 +39,7 @@ pub fn bob_taps(field_height: u32, parity: Parity) -> Taps {
     // and `cp_d_v` to 0.5 for the frame it makes, for luma and for 4:2:0 `mpeg2` chroma alike.
     // `Scaler.cpp` then starts at `_src_step * center_pos_dst - 1 * center_pos_src`, which with a step
     // of 0.5 is 0 for the top field and -0.5 for the bottom.
-    let offset = -(parity as f32) / 2.0;
+    let offset = -(parity.row_offset() as f32) / 2.0;
     let kernel = Kernel::Bicubic { b: 0.0, c: 0.5 };
 
     taps(2 * field_height, 0.5, offset, &kernel)
@@ -80,7 +102,6 @@ pub fn bob<R: Runtime>(
         height.is_multiple_of(2) && height >= 2,
         "the frame is {height} rows, expected an even count of at least 2"
     );
-    assert!(parity < 2, "the parity is {parity}, expected 0 or 1");
     assert_plane(&planes.frame, width, height, "frame");
     assert_plane(&planes.output, width, height, "output");
     assert_eq!(
@@ -111,7 +132,7 @@ pub fn bob<R: Runtime>(
             width,
             height / 2,
             down.count(),
-            parity,
+            parity.row_offset(),
         );
     }
 }
