@@ -47,6 +47,16 @@ pub(crate) enum Input {
 }
 
 impl Input {
+    /// The name the argument is given by.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Interlaced => "interlaced",
+            Self::Progressive => "progressive",
+            Self::Repair => "repair",
+            Self::RepairReversed => "repair_reversed",
+        }
+    }
+
     /// Whether the frames come in progressive and go out one for one.
     pub(crate) fn is_progressive(self) -> bool {
         self != Self::Interlaced
@@ -78,7 +88,8 @@ pub(crate) struct QtgmcArgs {
     pub(crate) rate: Option<Rate>,
     /// Where each rebuilt row's spatial prediction comes from, EEDI3 with a `mdis` of 8 when not given.
     ///
-    /// `cubic` is a plain bicubic resize of each field, QTGMC's `bob`.
+    /// `cubic` is a plain bicubic resize of each field, QTGMC's `bob`. Repair input rebuilds the rows of the
+    /// field it does not keep with it.
     #[serde(default = "default_spatial")]
     pub(crate) spatial: Spatial<QtgmcSpatial>,
     /// The temporal radius of the smoothing that makes the motion search clip, between 0 and 2.
@@ -134,8 +145,10 @@ fn default_thsad2() -> f32 {
 }
 
 fn rate_with_progressive_input(input: Input) -> StageError {
-    let message =
-        format!("{STAGE} cannot take a `rate` with {input:?} input, it gives one frame for each frame");
+    let message = format!(
+        "{STAGE} cannot take a `rate` with {} input, it gives one frame for each frame",
+        input.name()
+    );
 
     StageError::msg(message)
 }

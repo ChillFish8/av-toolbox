@@ -207,7 +207,7 @@ fn field_clips_hash() -> u64 {
     hash
 }
 
-/// The hash of [field_clips] before the progressive clips were added.
+/// The hash of the frames, truth and clean frames of every clip [field_clips] makes.
 const FIELD_CLIPS_HASH: u64 = 0x4d43_dd75_67e3_8dc1;
 
 fn clip_named(name: &str) -> FieldClip {

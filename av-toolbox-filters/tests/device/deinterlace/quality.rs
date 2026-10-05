@@ -1,11 +1,20 @@
 use std::path::{Path, PathBuf};
 
 use av_toolbox_cubek::testing::{FieldClip, Interlace, badly_clips, field_clips, psnr, write_y4m};
-use av_toolbox_gpu::{FieldOrder, FrameFormat, Subsampling};
+use av_toolbox_gpu::{FieldOrder, Subsampling};
 use serde_json::json;
 
 use super::bwdif;
-use super::qtgmc::{Clip, deinterlaced, inputs, interlaced, run_chunks, run_clip};
+use super::qtgmc::{
+    Clip,
+    deinterlaced,
+    inputs,
+    interlaced,
+    mode_args,
+    progressive_format,
+    run_chunks,
+    run_clip,
+};
 use crate::stream::Output;
 use crate::support::{element_of, from_bytes};
 
@@ -86,21 +95,21 @@ const PROGRESSIVE_FLOORS: [ProgressiveFloors; 3] = [
     ProgressiveFloors {
         clip: "field_noisy_8",
         // Measured 38.481, over tr2 0 by 0.243. Without sharpening it leads the input by 0.790.
-        psnr: 38.4,
-        tr2_margin: Some(0.2),
-        unsharpened_margin: Some(0.7),
+        psnr: 38.43,
+        tr2_margin: Some(0.19),
+        unsharpened_margin: Some(0.74),
     },
     ProgressiveFloors {
         clip: "field_noisy_10",
         // Measured 38.538, over tr2 0 by 0.242. Without sharpening it leads the input by 0.720.
-        psnr: 38.5,
-        tr2_margin: Some(0.2),
-        unsharpened_margin: Some(0.6),
+        psnr: 38.48,
+        tr2_margin: Some(0.19),
+        unsharpened_margin: Some(0.67),
     },
     ProgressiveFloors {
         clip: "field_pan_8",
         // Measured 45.262.
-        psnr: 45.0,
+        psnr: 45.21,
         tr2_margin: None,
         unsharpened_margin: None,
     },
@@ -125,8 +134,8 @@ const REPAIR_FLOORS: [RepairFloors; 5] = [
     RepairFloors {
         clip: "badly_pan_8",
         // Measured 46.101 and 43.543, over the input by 0.958 and over repair_reversed by 2.558.
-        repair_psnr: 46.0,
-        reversed_psnr: 43.5,
+        repair_psnr: 46.05,
+        reversed_psnr: 43.49,
         input_margin: Some(0.9),
         order_margin: Some(2.5),
     },
@@ -134,34 +143,34 @@ const REPAIR_FLOORS: [RepairFloors; 5] = [
         clip: "badly_objects_8",
         // Measured 37.711 and 36.319, over the input by 0.205 and over repair_reversed by 1.392.
         // A repair that does nothing lands at 0 or below, so 0.15 still catches it.
-        repair_psnr: 37.5,
-        reversed_psnr: 36.3,
+        repair_psnr: 37.66,
+        reversed_psnr: 36.26,
         input_margin: Some(0.15),
-        order_margin: Some(1.3),
+        order_margin: Some(1.34),
     },
     RepairFloors {
         clip: "badly_static_8",
         // Measured 18.106 and 17.537, over the input by 2.072 and over repair_reversed by 0.569.
-        repair_psnr: 18.0,
-        reversed_psnr: 17.5,
-        input_margin: Some(2.0),
-        order_margin: Some(0.5),
+        repair_psnr: 18.05,
+        reversed_psnr: 17.48,
+        input_margin: Some(2.02),
+        order_margin: Some(0.51),
     },
     RepairFloors {
         clip: "badly_pan_8_reversed",
         // Measured 43.645 and 46.350, with repair_reversed over repair by 2.705.
-        repair_psnr: 43.5,
-        reversed_psnr: 46.0,
+        repair_psnr: 43.59,
+        reversed_psnr: 46.3,
         input_margin: None,
-        order_margin: Some(2.6),
+        order_margin: Some(2.65),
     },
     RepairFloors {
         clip: "badly_static_8_reversed",
         // Measured 17.470 and 18.106, with repair_reversed over repair by 0.636.
-        repair_psnr: 17.4,
-        reversed_psnr: 18.0,
+        repair_psnr: 17.42,
+        reversed_psnr: 18.05,
         input_margin: None,
-        order_margin: Some(0.6),
+        order_margin: Some(0.58),
     },
 ];
 
@@ -404,14 +413,6 @@ struct Restoration {
     clean: Frames,
 }
 
-/// The input arguments of `mode`, with the cubic interpolation and top field first for the repair modes.
-fn mode_args(mode: &str, tr2: u32) -> serde_json::Value {
-    match mode {
-        "progressive" => json!({ "input": mode, "tr2": tr2 }),
-        _ => json!({ "input": mode, "order": "top", "spatial": { "kind": "cubic" }, "tr2": tr2 }),
-    }
-}
-
 /// Runs `mode` on the progressive frames of `restoration`.
 fn run_progressive(restoration: &Restoration, args: serde_json::Value) -> Frames {
     let clip = Clip {
@@ -422,11 +423,7 @@ fn run_progressive(restoration: &Restoration, args: serde_json::Value) -> Frames
         subsampling: Subsampling::Yuv420,
         frames: restoration.frames.clone(),
     };
-    let base = interlaced(&clip, FieldOrder::TopFirst);
-    let input = FrameFormat {
-        field_order: Some(FieldOrder::Progressive),
-        ..base
-    };
+    let input = progressive_format(&clip);
     let output = deinterlaced(input, false);
     let chunk = inputs(&clip, &input, 0);
 

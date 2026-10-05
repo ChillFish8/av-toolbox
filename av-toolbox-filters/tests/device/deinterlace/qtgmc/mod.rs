@@ -38,6 +38,7 @@ use av_toolbox_gpu::{
 };
 use cubecl::prelude::Runtime;
 
+pub(super) use self::progressive::{mode_args, progressive_format};
 use crate::stream::{Input, Output, run_chunk};
 use crate::support::{backend, element_of, frame, from_bytes, ten_bit, to_bytes};
 

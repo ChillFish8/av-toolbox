@@ -46,7 +46,7 @@ fn paired(plane: &[i32], width: usize) -> Vec<i32> {
 }
 
 /// `clip` at 4:4:4, with chroma made from its luma.
-fn at_444(clip: &Clip) -> Clip {
+pub(super) fn at_444(clip: &Clip) -> Clip {
     let frames = clip
         .frames
         .iter()

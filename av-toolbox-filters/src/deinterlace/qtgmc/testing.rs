@@ -83,6 +83,7 @@ impl QtgmcMotionLog {
         let Some(flags) = cache.field(field).and_then(|state| state.mask_flag.as_ref()) else {
             return Ok(());
         };
+
         let client = chain.rebuilder.client();
         let read_flags = read::<R, u32>(client, flags.plane().handle())?;
 

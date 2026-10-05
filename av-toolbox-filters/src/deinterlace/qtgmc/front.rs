@@ -126,10 +126,13 @@ impl<R: Runtime> Chain<R> {
             return Ok(false);
         }
 
+        if !self.mode.is_repair() {
+            return Self::finish_repair(cache, field);
+        }
+
         let next = field + 1;
         let place = cache.place(next as i64);
         let ready = match place {
-            _ if !self.mode.is_repair() => true,
             Place::Coming => false,
             Place::Dropped => return Err(lost_slot("pyramid", next)),
             Place::Outside => true,
@@ -139,11 +142,15 @@ impl<R: Runtime> Chain<R> {
             return Ok(false);
         }
 
-        let blends = self.mode.is_repair() && place == Place::Held;
-        if blends {
+        if place == Place::Held {
             self.blend_towards_rebuild(context, cache, field, next)?;
         }
 
+        Self::finish_repair(cache, field)
+    }
+
+    /// Marks `field` repaired, dropping its rebuild.
+    fn finish_repair(cache: &mut FieldCache, field: usize) -> Result<bool, StageError> {
         let Some(state) = cache.field_mut(field) else {
             return Err(lost_slot("state", field));
         };

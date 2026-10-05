@@ -11,7 +11,7 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_gpu::{FieldOrder, FrameFormat, FrameMeta, Subsampling};
 use serde_json::json;
 
-use super::formats::{at_16_bit, at_422};
+use super::formats::{at_16_bit, at_422, at_444};
 use super::{
     ChunkRun,
     Clip,
@@ -56,7 +56,7 @@ impl Clip {
 }
 
 /// The 25 frames per second format of `clip`, flagged progressive.
-fn progressive_format(clip: &Clip) -> FrameFormat {
+pub(crate) fn progressive_format(clip: &Clip) -> FrameFormat {
     let base = interlaced(clip, FieldOrder::TopFirst);
 
     FrameFormat {
@@ -65,11 +65,12 @@ fn progressive_format(clip: &Clip) -> FrameFormat {
     }
 }
 
-/// The arguments of `mode` with the cubic interpolation, top field first for the repair modes.
-fn mode_args(mode: &str) -> serde_json::Value {
+/// The arguments of `mode` with a `tr2` of `tr2`, the cubic interpolation and top field first for the repair
+/// modes.
+pub(crate) fn mode_args(mode: &str, tr2: u32) -> serde_json::Value {
     match mode {
-        "progressive" => json!({ "input": mode }),
-        _ => json!({ "input": mode, "order": "top", "spatial": { "kind": "cubic" } }),
+        "progressive" => json!({ "input": mode, "tr2": tr2 }),
+        _ => json!({ "input": mode, "order": "top", "spatial": { "kind": "cubic" }, "tr2": tr2 }),
     }
 }
 
@@ -144,7 +145,7 @@ fn assert_mode_matches(
 
 /// Runs `clip` in `mode` and asserts it matches the reference.
 fn assert_clip_matches(clip: &Clip, mode: &str, input: ReferenceInput) -> Closeness {
-    let run = run_progressive(mode_args(mode), clip);
+    let run = run_progressive(mode_args(mode, 1), clip);
     let label = format!("{mode} {}", clip.name);
     let settings = mode_settings(input);
 
@@ -238,7 +239,7 @@ fn every_mode_matches_the_reference_at_every_radius_extreme() {
     for (mode, input) in MODES {
         let mut worst = 0.0f64;
         for (name, radius) in radii {
-            let mut args = mode_args(mode);
+            let mut args = mode_args(mode, 1);
             args[name] = json!(radius);
             let run = run_progressive(args, &clip);
 
@@ -262,13 +263,18 @@ fn every_mode_matches_the_reference_at_every_radius_extreme() {
 }
 
 #[test]
-fn repair_matches_the_reference_at_422_10_bit_and_16_bit() {
+fn every_mode_matches_the_reference_at_every_format() {
     let clip = Clip::named("field_noisy_10");
-    let subsampled = at_422(&clip);
-    let lifted = at_16_bit(&clip);
+    let formatted = [
+        at_422(&clip),
+        at_444(&Clip::named("field_noisy_8")),
+        at_16_bit(&clip),
+    ];
 
-    for formatted in [&subsampled, &lifted] {
-        assert_clip_matches(formatted, "repair", ReferenceInput::Repair);
+    for (mode, input) in MODES {
+        for subject in &formatted {
+            assert_clip_matches(subject, mode, input);
+        }
     }
 }
 
@@ -294,7 +300,7 @@ fn each_chunk_restarts_and_matches_its_own_reference() {
     let output = deinterlaced(input, false);
     let chunks = vec![inputs(&opening, &input, 0), inputs(&closing, &input, 3)];
 
-    let runs = run_chunks(mode_args("repair"), input, output, chunks);
+    let runs = run_chunks(mode_args("repair", 1), input, output, chunks);
     assert_eq!(runs.len(), 2);
 
     for (run, (part, first_frame)) in runs.iter().zip([(&opening, 0), (&closing, 3)]) {
@@ -314,7 +320,7 @@ fn each_chunk_restarts_and_matches_its_own_reference() {
 #[test]
 fn the_last_repaired_frame_of_a_chunk_is_the_original_luma() {
     let clip = Clip::named("field_pan_8").cut(0..3);
-    let mut args = mode_args("repair");
+    let mut args = mode_args("repair", 1);
     args["tr0"] = json!(0);
     args["tr1"] = json!(0);
     args["tr2"] = json!(0);
@@ -357,7 +363,7 @@ fn parity_follows_the_stream_index_across_chunks() {
     let output = deinterlaced(input, false);
     let chunks = vec![inputs(&clip, &input, 0), inputs(&closing, &input, 3)];
 
-    let mut args = mode_args("repair");
+    let mut args = mode_args("repair", 1);
     args["tr0"] = json!(0);
     args["tr1"] = json!(0);
     args["tr2"] = json!(0);
@@ -396,7 +402,7 @@ fn odd_chunk_lengths_keep_the_right_parity() {
     let borrowed: Vec<&Clip> = parts.iter().collect();
 
     for (mode, input) in &MODES[1..] {
-        let runs = run_parts(mode_args(mode), &borrowed, 5);
+        let runs = run_parts(mode_args(mode, 1), &borrowed, 5);
         let settings = QtgmcReferenceSettings {
             first_frame: 5,
             ..mode_settings(*input)
@@ -418,7 +424,7 @@ fn a_stream_shorter_than_the_lag_flushes_every_frame() {
     let borrowed: Vec<&Clip> = parts.iter().collect();
 
     for (mode, input) in MODES {
-        let runs = run_parts(mode_args(mode), &borrowed, 0);
+        let runs = run_parts(mode_args(mode, 1), &borrowed, 0);
         let settings = mode_settings(input);
 
         for (run, part) in runs.iter().zip(&parts) {
@@ -443,7 +449,7 @@ fn progressive_modes_keep_every_frame_s_index_and_timestamp() {
         }
         let input_metas: Vec<FrameMeta> = chunk.iter().map(|frame| frame.meta.clone()).collect();
 
-        let mut runs = run_chunks(mode_args(mode), input, output, vec![chunk]);
+        let mut runs = run_chunks(mode_args(mode, 1), input, output, vec![chunk]);
         let run = runs.pop().expect("one chunk was run");
         let found = metas(&run.outputs);
         assert_eq!(found, input_metas, "{mode}");

@@ -107,7 +107,14 @@ fn checked_stage(args: &QtgmcArgs, input: &FrameFormat) -> Result<Predictor, Sta
     checked_field_size(input, args.input)?;
 
     let predictor = checked_predictor(STAGE, &args.spatial)?;
-    checked_predictor_planes(STAGE, predictor, input, &selected)?;
+    match args.input {
+        Input::Progressive => {},
+        Input::Interlaced => checked_predictor_planes(STAGE, predictor, input, &selected)?,
+        Input::Repair | Input::RepairReversed => {
+            let luma_only: Vec<bool> = (0..selected.len()).map(|plane| plane == 0).collect();
+            checked_predictor_planes(STAGE, predictor, input, &luma_only)?;
+        },
+    }
 
     Ok(predictor)
 }

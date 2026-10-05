@@ -282,6 +282,14 @@ fn a_plane_too_wide_for_the_spatial_is_refused() {
 }
 
 #[test]
+fn progressive_input_is_not_refused_by_the_predictor() {
+    let input = yuv420(65536, 32, Some(FieldOrder::Progressive));
+    let value = json!({ "input": "progressive", "spatial": { "kind": "eedi2" } });
+
+    assert!(produces(value, input).is_ok());
+}
+
+#[test]
 fn a_bad_spatial_setting_is_refused_under_the_stage() {
     let value = json!({ "spatial": { "kind": "eedi3", "nrad": 9 } });
     let message = refusal(value, interlaced());
