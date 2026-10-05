@@ -3,11 +3,12 @@
 use cubecl::prelude::*;
 
 use super::subpel::half_pel_sample;
-use super::{MotionField, assert_blocks, assert_field};
+use super::{MotionField, SceneFlag, assert_blocks, assert_field, assert_flag};
 use crate::{DevicePlane, Dispatch};
 
 /// The planes `compensate` reads and writes, both the same size and holding f32.
 pub struct CompensatePlanes<'a> {
+    pub centre: DevicePlane<'a>,
     pub neighbour: DevicePlane<'a>,
     pub output: DevicePlane<'a>,
 }
@@ -163,15 +164,20 @@ pub(crate) fn block_window(
 }
 
 /// Builds each output sample from the blocks covering it, weighting their reads by their windows.
+///
+/// A flagged field writes the centre unchanged.
 #[expect(
     clippy::too_many_arguments,
     reason = "a kernel takes each plane and setting as its own argument"
 )]
 #[cube(launch_unchecked)]
 fn compensate_kernel(
+    centre: &Array<f32>,
     neighbour: &Array<f32>,
     vectors: &Array<i32>,
+    flags: &Array<u32>,
     output: &mut Array<f32>,
+    flag_index: u32,
     #[comptime] width: u32,
     #[comptime] height: u32,
     #[comptime] blksize: u32,
@@ -184,6 +190,11 @@ fn compensate_kernel(
 ) {
     let samples = comptime!(width * height);
     if ABSOLUTE_POS >= samples as usize {
+        terminate!();
+    }
+
+    if flags[flag_index as usize] != 0u32 {
+        output[ABSOLUTE_POS] = centre[ABSOLUTE_POS];
         terminate!();
     }
 
@@ -228,6 +239,8 @@ fn compensate_kernel(
 
 /// Lines `neighbour` up with the centre frame by the luma motion `field`.
 ///
+/// If `flag` marks the field as a scene change, the output is `centre` unchanged.
+///
 /// Each output sample is the sum, over every block of the field's grid covering it, of the block's
 /// window weight times the neighbour read at the sample plus the block's vector, divided by the sum of
 /// the weights.
@@ -241,34 +254,43 @@ pub fn compensate<R: Runtime>(
     dispatch: &impl Dispatch,
     planes: CompensatePlanes<'_>,
     field: &MotionField<'_>,
+    flag: SceneFlag<'_>,
     scale: PlaneScale,
 ) {
     assert_field(field);
+    assert_flag(&flag);
 
     let grid = &field.grid;
     let pel = field.pel;
     let width = planes.neighbour.width();
     let height = planes.neighbour.height();
+    crate::assert_plane(&planes.centre, width, height, "centre");
     crate::assert_plane(&planes.neighbour, width, height, "neighbour");
     crate::assert_plane(&planes.output, width, height, "output");
     assert_blocks(grid, (width, height), scale);
 
     let cubes = dispatch.cube_count(planes.output.samples());
     let unit = dispatch.cube_dim();
+    let centre = planes.centre.array::<R>();
     let neighbour = planes.neighbour.array::<R>();
     let vectors = field.planes.vectors.array::<R>();
+    let flags = flag.flags.array::<R>();
     let output = planes.output.array::<R>();
 
     // Safety: the planes hold `width` by `height` samples that every read clamps into, the vectors hold a
-    // pair for each block of `grid`, and each unit writes only its own sample of `output`.
+    // pair for each block of `grid`, the flag index is inside its plane, and each unit
+    // writes only its own sample of `output`.
     unsafe {
         compensate_kernel::launch_unchecked::<R>(
             client,
             cubes,
             unit,
+            centre,
             neighbour,
             vectors,
+            flags,
             output,
+            flag.index,
             width,
             height,
             grid.blksize,

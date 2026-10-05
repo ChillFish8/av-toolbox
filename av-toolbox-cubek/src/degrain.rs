@@ -4,14 +4,17 @@ use cubecl::prelude::*;
 use thiserror::Error;
 
 use crate::motion::{
-    BlockGrid,
     MotionField,
     PlaneScale,
+    SceneChange,
+    SceneFlag,
     assert_blocks,
     assert_field,
+    assert_flag,
     block_window,
     half_pel_component,
     half_pel_sample,
+    normalised_threshold,
     upper_block,
 };
 use crate::{DevicePlane, Dispatch};
@@ -100,32 +103,23 @@ impl DegrainSettings {
 
         normalised_threshold(value, blksize)
     }
+
+    /// The rule that marks a neighbour as across a scene change.
+    pub const fn scene_change(&self) -> SceneChange {
+        SceneChange {
+            thscd1: self.thscd1,
+            thscd2: self.thscd2,
+        }
+    }
 }
 
-/// An 8-bit, 8x8 block threshold as a normalised SAD of a block `blksize` across.
-fn normalised_threshold(value: f32, blksize: u32) -> f32 {
-    let samples = (blksize * blksize) as f32;
-
-    value * samples / 64.0 / 255.0
-}
-
-/// One neighbour frame and the field finding the centre's blocks in it.
+/// One neighbour frame, the field finding the centre's blocks in it and the field's scene-change flag.
 ///
 /// The field runs from the centre to the neighbour, for frames before and after the centre alike.
 pub struct DegrainNeighbour<'a> {
     pub plane: DevicePlane<'a>,
     pub field: MotionField<'a>,
-}
-
-/// Whether a neighbour is across a scene change from the centre, given its blocks' normalised `sads`.
-///
-/// It is when more than `thscd2` of every 255 blocks have a SAD above `thscd1`.
-pub fn scene_changed(sads: &[f32], grid: &BlockGrid, settings: &DegrainSettings) -> bool {
-    let threshold = normalised_threshold(settings.thscd1, grid.blksize);
-    let changed = sads.iter().filter(|sad| **sad > threshold).count() as u64;
-    let allowed = u64::from(settings.thscd2) * grid.blocks() as u64;
-
-    changed * 255 > allowed
+    pub flag: SceneFlag<'a>,
 }
 
 /// The weight of a block with `sad` against `threshold`, on a scale where the centre weighs 256.
@@ -158,7 +152,8 @@ fn device_degrain_weight(sad: f32, threshold: f32) -> f32 {
 
 /// Averages the centre sample with each neighbour's compensated sample, over the blocks covering it.
 ///
-/// Every term is weighted by its block's window, and a neighbour's also by its block's SAD.
+/// Every term is weighted by its block's window, and a neighbour's also by its block's SAD. A flagged
+/// neighbour weighs nothing.
 #[expect(
     clippy::too_many_arguments,
     reason = "a kernel takes each plane and setting as its own argument"
@@ -169,6 +164,8 @@ fn degrain_kernel(
     planes: &Sequence<Array<f32>>,
     vectors: &Sequence<Array<i32>>,
     sads: &Sequence<Array<f32>>,
+    flags: &Sequence<Array<u32>>,
+    flag_indices: &Sequence<u32>,
     output: &mut Array<f32>,
     threshold: f32,
     #[comptime] count: u32,
@@ -214,8 +211,12 @@ fn degrain_kernel(
                     #[unroll]
                     for neighbour in 0..count {
                         let index = neighbour as usize;
-                        let sad = sads.index(index)[block];
-                        let weight = window * device_degrain_weight(sad, threshold);
+                        let flagged = flags.index(index)[*flag_indices.index(index) as usize] != 0u32;
+                        let mut weight = 0.0f32;
+                        if !flagged {
+                            let sad = sads.index(index)[block];
+                            weight = window * device_degrain_weight(sad, threshold);
+                        }
 
                         let raw_x = vectors.index(index)[block * 2];
                         let raw_y = vectors.index(index)[block * 2 + 1];
@@ -244,8 +245,8 @@ fn degrain_kernel(
 ///
 /// Each sample takes the blocks of the neighbours' shared grid covering it. A block weighs its window
 /// times 256 for the centre, and its window times its neighbour's [degrain_weight] for each neighbour. The
-/// sample is the weighted mean of the centre and each neighbour read at the block's vector. `weights_on`
-/// says which neighbours count, and a neighbour that is off weighs nothing.
+/// sample is the weighted mean of the centre and each neighbour read at the block's vector. A neighbour
+/// whose flag is set weighs nothing.
 ///
 /// `chroma` picks `thsad_chroma` over `thsad`. The vectors and SADs are the luma fields', with `scale`
 /// shrinking the blocks and vectors onto a smaller plane. All the planes read and written share one scale
@@ -260,7 +261,6 @@ pub fn degrain<R: Runtime>(
     dispatch: &impl Dispatch,
     centre: DevicePlane<'_>,
     neighbours: &[DegrainNeighbour<'_>],
-    weights_on: &[bool],
     output: DevicePlane<'_>,
     settings: &DegrainSettings,
     scale: PlaneScale,
@@ -269,13 +269,6 @@ pub fn degrain<R: Runtime>(
     debug_assert_eq!(settings.validate(), Ok(()));
 
     let radius = settings.temporal_radius;
-    assert_eq!(
-        neighbours.len(),
-        weights_on.len(),
-        "{} neighbours with {} weights_on",
-        neighbours.len(),
-        weights_on.len()
-    );
     assert!(
         neighbours.len() <= 2 * radius as usize,
         "{} neighbours, expected at most {}",
@@ -296,19 +289,20 @@ pub fn degrain<R: Runtime>(
     let mut planes = SequenceArg::<R, Array<f32>>::new();
     let mut vectors = SequenceArg::<R, Array<i32>>::new();
     let mut sads = SequenceArg::<R, Array<f32>>::new();
-    let mut counted = 0u32;
-    for (neighbour, on) in neighbours.iter().zip(weights_on) {
+    let mut flags = SequenceArg::<R, Array<u32>>::new();
+    let mut flag_indices = SequenceArg::<R, u32>::new();
+    for neighbour in neighbours {
         crate::assert_plane(&neighbour.plane, width, height, "neighbour");
         assert_field(&neighbour.field);
+        assert_flag(&neighbour.flag);
         assert_eq!(neighbour.field.grid, *grid, "the neighbours' grids differ");
         assert_eq!(neighbour.field.pel, pel, "the neighbours' pels differ");
 
-        if *on {
-            planes.push(neighbour.plane.array::<R>());
-            vectors.push(neighbour.field.planes.vectors.array::<R>());
-            sads.push(neighbour.field.planes.sads.array::<R>());
-            counted += 1;
-        }
+        planes.push(neighbour.plane.array::<R>());
+        vectors.push(neighbour.field.planes.vectors.array::<R>());
+        sads.push(neighbour.field.planes.sads.array::<R>());
+        flags.push(neighbour.flag.flags.array::<R>());
+        flag_indices.push(neighbour.flag.index);
     }
 
     let threshold = settings.sad_threshold(grid.blksize, chroma);
@@ -318,7 +312,8 @@ pub fn degrain<R: Runtime>(
     let output_array = output.array::<R>();
 
     // Safety: every plane holds `width` by `height` samples that each read clamps into, the fields hold a
-    // vector pair and a SAD for each block of `grid`, and each unit writes only its own output sample.
+    // vector pair and a SAD for each block of `grid`, each flag index is inside its plane, and each
+    // unit writes only its own output sample.
     unsafe {
         degrain_kernel::launch_unchecked::<R>(
             client,
@@ -328,9 +323,11 @@ pub fn degrain<R: Runtime>(
             planes,
             vectors,
             sads,
+            flags,
+            flag_indices,
             output_array,
             threshold,
-            counted,
+            neighbours.len() as u32,
             width,
             height,
             grid.blksize,
@@ -347,15 +344,6 @@ pub fn degrain<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn grid_of_blocks(blocks: u32) -> BlockGrid {
-        BlockGrid {
-            blksize: 8,
-            step: 8,
-            across: blocks,
-            down: 1,
-        }
-    }
 
     fn refused(settings: DegrainSettings) -> String {
         let error = settings.validate().expect_err("the settings should be refused");
@@ -492,24 +480,5 @@ mod tests {
 
         assert_eq!(settings.sad_threshold(8, false), 400.0 / 255.0);
         assert_eq!(settings.sad_threshold(16, false), 4.0 * 400.0 / 255.0);
-    }
-
-    #[test]
-    fn a_scene_change_needs_more_than_thscd2_of_255_blocks() {
-        let settings = DegrainSettings {
-            thscd2: 255,
-            ..DegrainSettings::default()
-        };
-        let grid = grid_of_blocks(4);
-        let high = 100.0;
-
-        assert!(!scene_changed(&[high; 4], &grid, &settings));
-
-        let strict = DegrainSettings {
-            thscd2: 127,
-            ..DegrainSettings::default()
-        };
-        assert!(scene_changed(&[high, high, 0.0, 0.0], &grid, &strict));
-        assert!(!scene_changed(&[high, 0.0, 0.0, 0.0], &grid, &strict));
     }
 }

@@ -5,6 +5,7 @@ use av_toolbox_cubek::motion::{
     MotionField,
     MotionSettings,
     PlaneScale,
+    SceneFlag,
     compensate,
     window_weight,
 };
@@ -23,7 +24,7 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::*;
 
 use super::CHROMA;
-use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
+use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32, upload_u32};
 
 /// How far the device may sit from the CPU on a window weight.
 const WEIGHT_TOLERANCE: f32 = 1e-6;
@@ -33,6 +34,8 @@ const EDGE_TOLERANCE: f32 = 1e-6;
 
 /// One plane compensated on the device.
 pub(crate) struct Case {
+    centre: Vec<f32>,
+    flagged: bool,
     neighbour: Vec<f32>,
     width: u32,
     height: u32,
@@ -45,6 +48,8 @@ pub(crate) struct Case {
 impl Case {
     pub(crate) fn new(neighbour: Vec<f32>, size: (u32, u32), vectors: Vec<i32>, grid: BlockGrid) -> Self {
         Self {
+            centre: neighbour.clone(),
+            flagged: false,
             neighbour,
             width: size.0,
             height: size.1,
@@ -61,6 +66,15 @@ impl Case {
 
     fn scale(self, scale: PlaneScale) -> Self {
         Self { scale, ..self }
+    }
+
+    /// Flags the field as a scene change, so the output is `centre`.
+    fn flagged(self, centre: Vec<f32>) -> Self {
+        Self {
+            centre,
+            flagged: true,
+            ..self
+        }
     }
 
     fn reference(&self) -> Vec<f32> {
@@ -91,7 +105,9 @@ impl BuildTask for CompensateRun {
 
         let mut outputs = Vec::new();
         for case in &self.cases {
+            let centre = upload_f32(client, &case.centre);
             let neighbour = upload_f32(client, &case.neighbour);
+            let flags = upload_u32(client, &[u32::from(case.flagged)]);
             let vectors = client.create_from_slice(i32::as_bytes(&case.vectors));
             let samples = (case.width * case.height) as usize;
             let output = empty(client, samples * size_of::<f32>());
@@ -99,6 +115,7 @@ impl BuildTask for CompensateRun {
             let sads = empty(client, case.grid.blocks() * size_of::<f32>());
 
             let planes = CompensatePlanes {
+                centre: plane(&centre, case.width, case.height),
                 neighbour: plane(&neighbour, case.width, case.height),
                 output: plane(&output, case.width, case.height),
             };
@@ -113,7 +130,11 @@ impl BuildTask for CompensateRun {
                 grid: case.grid,
                 pel: case.pel,
             };
-            compensate(client, &sizing, planes, &field, case.scale);
+            let flag = SceneFlag {
+                flags: plane(&flags, 1, 1),
+                index: 0,
+            };
+            compensate(client, &sizing, planes, &field, flag, case.scale);
 
             outputs.push(read_f32(client, &output));
         }
@@ -354,4 +375,36 @@ fn the_device_window_matches_the_reference_weights() {
 
         println!("largest window weight difference, transposed {transposed}: {largest:e}");
     }
+}
+
+/// A plane of `width` by `height` samples that differs from every other `seed`.
+fn patterned_plane(width: u32, height: u32, seed: u32) -> Vec<f32> {
+    (0..width * height)
+        .map(|index| ((index * (seed + 3) + seed) % 251) as f32 / 251.0)
+        .collect()
+}
+
+#[test]
+fn a_flagged_neighbour_compensates_to_the_centre() {
+    let (width, height) = (48u32, 32u32);
+    let grid = grid_of(16, 8, width, height);
+    let vectors = varied_vectors(&grid);
+    let chroma = PlaneScale::from_factors((2, 1));
+
+    let mut cases = Vec::new();
+    for (scale, size) in [(PlaneScale::LUMA, (width, height)), (chroma, (width / 2, height))] {
+        let centre = patterned_plane(size.0, size.1, 1);
+        let neighbour = patterned_plane(size.0, size.1, 2);
+        let case = Case::new(neighbour, size, vectors.clone(), grid)
+            .pel(2)
+            .scale(scale)
+            .flagged(centre);
+
+        cases.push(case);
+    }
+
+    let expected: Vec<Vec<f32>> = cases.iter().map(|case| case.centre.clone()).collect();
+    let found = backend().build(CompensateRun { cases });
+
+    assert_eq!(found, expected, "a flagged field should compensate to the centre");
 }

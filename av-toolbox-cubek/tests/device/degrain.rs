@@ -1,5 +1,13 @@
-use av_toolbox_cubek::degrain::{DegrainNeighbour, DegrainSettings, degrain, scene_changed};
-use av_toolbox_cubek::motion::{BlockGrid, MotionSettings, PlaneScale, build_pyramid, search};
+use av_toolbox_cubek::degrain::{DegrainNeighbour, DegrainSettings, degrain};
+use av_toolbox_cubek::motion::{
+    BlockGrid,
+    MotionSettings,
+    PlaneScale,
+    SceneFlag,
+    build_pyramid,
+    scene_change_flags,
+    search,
+};
 use av_toolbox_cubek::testing::{
     MotionClip,
     OUTPUT_TOLERANCE,
@@ -9,6 +17,7 @@ use av_toolbox_cubek::testing::{
     motion_clips,
     normalised,
     reference_degrain,
+    reference_scene_changed,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
@@ -16,7 +25,7 @@ use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::*;
 
 use crate::motion::{CHROMA, DeviceField, DevicePyramid};
-use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
+use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32};
 
 /// The centre frame of a clip and the frames around it, as degrain reads them.
 #[derive(Clone)]
@@ -51,6 +60,8 @@ impl Frames {
 pub(crate) struct Outputs {
     /// Each neighbour's field, centre to neighbour.
     pub(crate) fields: Vec<ReferenceField>,
+    /// Each neighbour's scene-change flag, as the device set it.
+    pub(crate) flags: Vec<bool>,
     pub(crate) luma: Vec<f32>,
     chroma: Vec<f32>,
 }
@@ -60,25 +71,14 @@ pub(crate) struct DegrainRun {
     frames: Frames,
     motion: MotionSettings,
     settings: DegrainSettings,
-    weights_on: Vec<bool>,
 }
 
 impl DegrainRun {
     pub(crate) fn new(frames: Frames, motion: MotionSettings, settings: DegrainSettings) -> Self {
-        let weights_on = vec![true; frames.neighbours.len()];
-
         Self {
             frames,
             motion,
             settings,
-            weights_on,
-        }
-    }
-
-    fn weights_on(self, weights_on: &[bool]) -> Self {
-        Self {
-            weights_on: weights_on.to_vec(),
-            ..self
         }
     }
 }
@@ -123,6 +123,14 @@ impl BuildTask for DegrainRun {
             fields.push(field);
         }
 
+        let flag_handle = empty(client, fields.len() * size_of::<u32>());
+        let flag_plane = plane(&flag_handle, fields.len() as u32, 1);
+        let device_fields: Vec<_> = fields
+            .iter()
+            .map(|field| field.field(false, self.motion.pel))
+            .collect();
+        scene_change_flags(client, &device_fields, flag_plane, self.settings.scene_change());
+
         let mut outputs = Vec::new();
         for (index, scale) in [(0, PlaneScale::LUMA), (1, CHROMA)] {
             let (plane_width, plane_height) = (width >> scale.shift_x, height >> scale.shift_y);
@@ -137,9 +145,14 @@ impl BuildTask for DegrainRun {
             let neighbours: Vec<_> = uploaded
                 .iter()
                 .zip(&fields)
-                .map(|(handle, field)| DegrainNeighbour {
+                .enumerate()
+                .map(|(flag, (handle, field))| DegrainNeighbour {
                     plane: plane(handle, plane_width, plane_height),
                     field: field.field(false, self.motion.pel),
+                    flag: SceneFlag {
+                        flags: flag_plane,
+                        index: flag as u32,
+                    },
                 })
                 .collect();
             degrain(
@@ -147,7 +160,6 @@ impl BuildTask for DegrainRun {
                 &sizing,
                 plane(&centre, plane_width, plane_height),
                 &neighbours,
-                &self.weights_on,
                 plane(&output, plane_width, plane_height),
                 &self.settings,
                 scale,
@@ -160,9 +172,28 @@ impl BuildTask for DegrainRun {
         let chroma = outputs.pop().expect("chroma should be degrained");
         let luma = outputs.pop().expect("luma should be degrained");
         let fields = fields.iter().map(|field| field.read(client, false)).collect();
+        let flags = read_u32(client, &flag_handle)
+            .iter()
+            .map(|flag| *flag != 0)
+            .collect();
 
-        Outputs { fields, luma, chroma }
+        Outputs {
+            fields,
+            flags,
+            luma,
+            chroma,
+        }
     }
+}
+
+/// Whether each field is a scene change, by the CPU rule.
+fn flags_of(fields: &[ReferenceField], grid: &BlockGrid, settings: &DegrainSettings) -> Vec<bool> {
+    let rule = settings.scene_change();
+
+    fields
+        .iter()
+        .map(|field| reference_scene_changed(&field.sads, grid, rule))
+        .collect()
 }
 
 fn motion_of(pel: u32) -> MotionSettings {
@@ -188,10 +219,15 @@ fn the_device_matches_the_reference_on_the_noisy_clips() {
             };
             let motion = motion_of(pel);
             let grid = BlockGrid::new(&motion, frames.width, frames.height);
-            let weights_on = vec![true; around.len()];
 
             let run = DegrainRun::new(frames.clone(), motion, settings);
             let found = backend().build(run);
+            let flagged = flags_of(&found.fields, &grid, &settings);
+            assert_eq!(
+                found.flags, flagged,
+                "{} radius {radius} pel {pel} flags",
+                clip.name
+            );
 
             for (index, scale, found_plane) in
                 [(0, PlaneScale::LUMA, &found.luma), (1, CHROMA, &found.chroma)]
@@ -213,7 +249,7 @@ fn the_device_matches_the_reference_on_the_noisy_clips() {
                     &frames.planes[4][index],
                     size,
                     &neighbours,
-                    &weights_on,
+                    &flagged,
                     &grid,
                     &settings,
                     pel,
@@ -248,21 +284,28 @@ fn a_cut_inside_the_window_weighs_zero() {
         thsad_chroma: 1e6,
         ..DegrainSettings::default()
     };
+    let never_flagged = DegrainSettings {
+        thscd2: 255,
+        ..settings
+    };
     let around = Frames::new(&clip, 4, &[3, 5]);
     let near_side_only = Frames::new(&clip, 4, &[5]);
-    let grid = BlockGrid::new(&motion, around.width, around.height);
 
-    let every = DegrainRun::new(around.clone(), motion, settings);
+    let every = DegrainRun::new(around.clone(), motion, never_flagged);
     let every = backend().build(every);
+    assert_eq!(
+        every.flags,
+        [false, false],
+        "no field should be flagged at thscd2 255"
+    );
 
-    let across_cut = scene_changed(&every.fields[0].sads, &grid, &settings);
-    let near_side = scene_changed(&every.fields[1].sads, &grid, &settings);
-    assert!(across_cut, "neighbour 3 should be a scene change");
-    assert!(!near_side, "neighbour 5 should not be a scene change");
-
-    let derived = [!across_cut, !near_side];
-    let skipping = DegrainRun::new(around, motion, settings).weights_on(&derived);
+    let skipping = DegrainRun::new(around, motion, settings);
     let skipping = backend().build(skipping);
+    assert_eq!(
+        skipping.flags,
+        [true, false],
+        "only the field across the cut is a scene change"
+    );
 
     let alone = DegrainRun::new(near_side_only, motion, settings);
     let alone = backend().build(alone);

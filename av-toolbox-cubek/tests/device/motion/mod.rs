@@ -1,5 +1,7 @@
 mod compensate;
+mod normalise;
 mod quality;
+mod scene;
 mod search;
 
 use av_toolbox_cubek::motion::{BlockGrid, FieldPlanes, MotionField, PlaneScale, Pyramid, level_dims};

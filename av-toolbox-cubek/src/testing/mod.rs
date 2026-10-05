@@ -13,6 +13,7 @@ mod ivtc;
 mod lineart;
 mod motion;
 mod neighbourhood;
+mod normalise;
 mod padding;
 mod qtgmc;
 mod resize;
@@ -53,7 +54,7 @@ pub use self::based::{
 };
 pub use self::bilateral::{reference_bilateral, reference_range_weight};
 pub use self::bwdif::{BWDIF_FIXTURES, BwdifFixture, BwdifReferencePlanes, reference_bwdif};
-pub use self::degrain::{ReferenceNeighbour, reference_degrain};
+pub use self::degrain::{ReferenceNeighbour, reference_degrain, reference_scene_changed};
 pub use self::dehalo::{
     reference_dehalo_alpha,
     reference_edge_clean,
@@ -178,6 +179,7 @@ pub use self::neighbourhood::{
     reference_smooth,
     reference_spread,
 };
+pub use self::normalise::reference_normalise;
 pub use self::padding::{reference_crop, reference_pad};
 pub use self::qtgmc::{FixturePlane, QtgmcFixture, qtgmc_fixture, write_qtgmc_inputs};
 pub use self::resize::{reference_resize, reference_resize_float, reference_resize_wide};

@@ -8,14 +8,18 @@
 //! - [chain] joins two adjacent fields into a seed for a neighbour two frames away.
 //! - [refine_seed] searches a small window around a seed.
 //! - [refine_half_pel] refines whole pixel vectors to half pixels.
+//! - [scene_change_flags] marks the fields that are scene changes.
 //! - [compensate] lines a neighbour up with the centre frame, blending overlapping blocks.
+//! - [normalise] stretches luma code values to between 0 and 1 for searching.
 //!
 //! Each search also writes every block's best SAD and, when asked, its confidence.
 
 mod chain;
 mod compensate;
 mod confidence;
+mod normalise;
 mod pyramid;
+mod scene;
 mod search;
 mod subpel;
 
@@ -28,7 +32,10 @@ pub use self::chain::chain;
 pub use self::compensate::{CompensatePlanes, PlaneScale, compensate, window_weight};
 pub(crate) use self::compensate::{block_window, half_pel_component, upper_block};
 pub use self::confidence::ConfidenceScores;
+pub use self::normalise::normalise;
 pub use self::pyramid::{Pyramid, build_pyramid, level_dims};
+pub use self::scene::{SceneChange, SceneFlag, scene_change_flags};
+pub(crate) use self::scene::{assert_flag, normalised_threshold};
 pub use self::search::{refine_seed, search};
 pub(crate) use self::subpel::half_pel_sample;
 pub use self::subpel::refine_half_pel;
