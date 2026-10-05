@@ -3,16 +3,12 @@
 use cubecl::prelude::*;
 
 use super::subpel::half_pel_sample;
-use super::{BlockGrid, assert_blocks};
+use super::{MotionField, assert_blocks, assert_field};
 use crate::{DevicePlane, Dispatch};
 
-/// The planes `compensate` reads and writes.
-///
-/// `neighbour` and `output` hold the same plane size as f32. `vectors` holds the luma field's
-/// `(x, y)` pairs of `i32`, `2 * across` wide and `down` high.
+/// The planes `compensate` reads and writes, both the same size and holding f32.
 pub struct CompensatePlanes<'a> {
     pub neighbour: DevicePlane<'a>,
-    pub vectors: DevicePlane<'a>,
     pub output: DevicePlane<'a>,
 }
 
@@ -230,36 +226,37 @@ fn compensate_kernel(
     output[ABSOLUTE_POS] = value_sum / weight_sum;
 }
 
-/// Lines `neighbour` up with the centre frame by the luma motion field in `vectors`.
+/// Lines `neighbour` up with the centre frame by the luma motion `field`.
 ///
-/// Each output sample is the sum, over every block of `grid` covering it, of the block's window weight
-/// times the neighbour read at the sample plus the block's vector, divided by the sum of the weights.
+/// Each output sample is the sum, over every block of the field's grid covering it, of the block's
+/// window weight times the neighbour read at the sample plus the block's vector, divided by the sum of
+/// the weights.
 /// Reads between samples are bilinear, and reads past the frame take its nearest edge sample.
 ///
-/// The vectors are in units of `1 / pel` pixel. On a plane smaller than luma, `scale` shrinks the blocks
-/// and overlap by the same shifts, and each vector is shifted right by them, rounding towards negative
-/// infinity.
+/// The vectors are in units of `1 / field.pel` pixel. On a plane smaller than luma, `scale` shrinks the
+/// blocks and overlap by the same shifts, and each vector is shifted right by them, rounding towards
+/// negative infinity.
 pub fn compensate<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: CompensatePlanes<'_>,
-    grid: &BlockGrid,
-    pel: u32,
+    field: &MotionField<'_>,
     scale: PlaneScale,
 ) {
-    assert!((1..=2).contains(&pel), "pel is {pel}, expected 1 or 2");
+    assert_field(field);
 
+    let grid = &field.grid;
+    let pel = field.pel;
     let width = planes.neighbour.width();
     let height = planes.neighbour.height();
     crate::assert_plane(&planes.neighbour, width, height, "neighbour");
     crate::assert_plane(&planes.output, width, height, "output");
-    crate::assert_plane(&planes.vectors, 2 * grid.across, grid.down, "vectors");
     assert_blocks(grid, (width, height), scale);
 
     let cubes = dispatch.cube_count(planes.output.samples());
     let unit = dispatch.cube_dim();
     let neighbour = planes.neighbour.array::<R>();
-    let vectors = planes.vectors.array::<R>();
+    let vectors = field.planes.vectors.array::<R>();
     let output = planes.output.array::<R>();
 
     // Safety: the planes hold `width` by `height` samples that every read clamps into, the vectors hold a

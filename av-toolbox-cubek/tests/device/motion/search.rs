@@ -103,61 +103,61 @@ impl BuildTask for MotionRun {
             .map(|device_pyramid| device_pyramid.read(client))
             .collect();
 
-        let direct = |centre: usize, neighbour: usize, scored: bool| {
+        let direct_with = |centre: usize, neighbour: usize, scored: bool, settings: &MotionSettings| {
             let field = DeviceField::new(client, &grid);
             let centre_pyramid = device_pyramids[centre].pyramid();
             let neighbour_pyramid = device_pyramids[neighbour].pyramid();
-            let planes = field.planes(scored);
+            let device_field = field.field(scored, settings.pel);
+            let scores = scored.then_some(self.scores);
             search(
                 client,
                 &sizing,
                 &centre_pyramid,
                 &neighbour_pyramid,
-                &planes,
-                &grid,
-                &self.settings,
-                self.scores,
+                &device_field,
+                settings,
+                scores,
             );
             field
         };
+        let direct = |centre: usize, neighbour: usize, scored: bool| {
+            direct_with(centre, neighbour, scored, &self.settings)
+        };
 
+        // A chain joins whole pixel fields, so its two searches run at `pel` 1.
+        let whole_pixels = MotionSettings {
+            pel: 1,
+            ..self.settings
+        };
         let chained = |centre: usize, neighbour: usize, scored: bool| {
             let middle = (centre + neighbour) / 2;
-            let first = direct(centre, middle, false);
-            let second = direct(middle, neighbour, false);
+            let first = direct_with(centre, middle, false, &whole_pixels);
+            let second = direct_with(middle, neighbour, false, &whole_pixels);
             let field = DeviceField::new(client, &grid);
-            let planes = field.planes(scored);
+            let seed_field = field.field(scored, 1);
             chain(
                 client,
                 &sizing,
-                &first.planes(false),
-                &second.planes(false),
-                &planes,
-                &grid,
+                &first.field(false, 1),
+                &second.field(false, 1),
+                &seed_field,
             );
             let seed = field.read(client, false).vectors;
 
             let centre_pyramid = device_pyramids[centre].pyramid();
             let neighbour_pyramid = device_pyramids[neighbour].pyramid();
+            let scores = scored.then_some(self.scores);
             refine_seed(
                 client,
                 &sizing,
                 &centre_pyramid,
                 &neighbour_pyramid,
-                &planes,
-                &grid,
+                &seed_field,
                 self.refine_radius,
-                self.scores,
+                scores,
             );
             if self.settings.pel == 2 {
-                refine_half_pel(
-                    client,
-                    &sizing,
-                    &centre_pyramid,
-                    &neighbour_pyramid,
-                    &planes,
-                    &grid,
-                );
+                refine_half_pel(client, &sizing, &centre_pyramid, &neighbour_pyramid, &seed_field);
             }
 
             let refined = field.read(client, scored);
@@ -243,8 +243,9 @@ fn reference_chained(
     let grid = BlockGrid::new(settings, width, height);
     let middle = (centre + neighbour) / 2;
 
-    let first = reference_direct(clip, pyramids, settings, setting.scores, centre, middle);
-    let second = reference_direct(clip, pyramids, settings, setting.scores, middle, neighbour);
+    let whole_pixels = MotionSettings { pel: 1, ..*settings };
+    let first = reference_direct(clip, pyramids, &whole_pixels, setting.scores, centre, middle);
+    let second = reference_direct(clip, pyramids, &whole_pixels, setting.scores, middle, neighbour);
     let seed = reference_chain_seed(&first.vectors, &second.vectors, &grid, width, height);
     let mut field = reference_refine_seed(
         &pyramids[centre][0],

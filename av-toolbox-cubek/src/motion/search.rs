@@ -7,11 +7,13 @@ use super::subpel::refine_half_pel;
 use super::{
     BlockGrid,
     ConfidenceScores,
-    FieldPlanes,
     MAX_SEARCH_RADIUS,
+    MotionField,
     MotionSettings,
     Pyramid,
     assert_field,
+    assert_scores_match,
+    assert_whole_pel_field,
     clamp_i32,
 };
 use crate::{DevicePlane, Dispatch, assert_plane};
@@ -307,25 +309,31 @@ fn block_match_fine_kernel(
     }
 }
 
-/// One full resolution search over `grid`.
+/// One full resolution search over the grid of `field`.
 struct FineSearch<'a, 'b> {
     centre: DevicePlane<'a>,
     neighbour: DevicePlane<'a>,
-    field: &'b FieldPlanes<'a>,
-    grid: &'b BlockGrid,
+    field: &'b MotionField<'a>,
     search_radius: u32,
     use_seed: bool,
-    scores: ConfidenceScores,
+    scores: Option<ConfidenceScores>,
 }
 
+/// The scores a search passes when it writes no confidence, which the kernel never reads.
+const UNUSED_SCORES: ConfidenceScores = ConfidenceScores {
+    noise_floor: 0.0,
+    thsad: 1.0,
+};
+
 fn launch_fine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, search: FineSearch<'_, '_>) {
-    let grid = search.grid;
+    let grid = &search.field.grid;
     let cubes = CubeCount::Static(grid.across, grid.down, 1);
     let unit = dispatch.cube_dim();
     let use_seed = u32::from(search.use_seed);
 
-    let write_confidence = search.field.confidence.is_some();
-    let confidence = match &search.field.confidence {
+    let write_confidence = search.scores.is_some();
+    let scores = search.scores.unwrap_or(UNUSED_SCORES);
+    let confidence = match &search.field.planes.confidence {
         Some(plane) => plane.array::<R>(),
         None => {
             // Without confidence the kernel never reads its confidence argument, so a single value
@@ -339,8 +347,8 @@ fn launch_fine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, 
 
     let centre = search.centre.array::<R>();
     let neighbour = search.neighbour.array::<R>();
-    let vectors = search.field.vectors.array::<R>();
-    let sads = search.field.sads.array::<R>();
+    let vectors = search.field.planes.vectors.array::<R>();
+    let sads = search.field.planes.sads.array::<R>();
     let width = search.centre.width();
     let height = search.centre.height();
 
@@ -356,8 +364,8 @@ fn launch_fine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, 
             vectors,
             sads,
             confidence,
-            search.scores.noise_floor,
-            search.scores.thsad,
+            scores.noise_floor,
+            scores.thsad,
             use_seed,
             write_confidence,
             width,
@@ -376,10 +384,10 @@ fn launch_coarse<R: Runtime>(
     dispatch: &impl Dispatch,
     centre: &DevicePlane<'_>,
     neighbour: &DevicePlane<'_>,
-    field: &FieldPlanes<'_>,
-    grid: &BlockGrid,
+    field: &MotionField<'_>,
     settings: &MotionSettings,
 ) {
+    let grid = &field.grid;
     let coarse_level = settings.pyramid_levels - 1;
     let level_scale = 1u32 << coarse_level;
     let blksize = (settings.blksize / level_scale).max(2);
@@ -391,7 +399,7 @@ fn launch_coarse<R: Runtime>(
     let unit = dispatch.cube_dim();
     let centre_array = centre.array::<R>();
     let neighbour_array = neighbour.array::<R>();
-    let vectors = field.vectors.array::<R>();
+    let vectors = field.planes.vectors.array::<R>();
 
     // Safety: one cube per coarse block, each reading its block and window clamped to the level, and
     // writing the fine blocks inside its span, which no other coarse block reaches.
@@ -416,8 +424,12 @@ fn launch_coarse<R: Runtime>(
     }
 }
 
-/// Asserts that `scores` can score a block.
-fn assert_scores(scores: &ConfidenceScores) {
+/// Asserts that `scores`, when given, can score a block.
+fn assert_scores(scores: Option<ConfidenceScores>) {
+    let Some(scores) = scores else {
+        return;
+    };
+
     assert!(
         scores.thsad.is_finite() && scores.thsad > 0.0,
         "thsad is {}, expected a finite value above 0",
@@ -445,50 +457,43 @@ pub(super) fn assert_pyramids(centre: &Pyramid<'_>, neighbour: &Pyramid<'_>, lev
 /// With more than one level, a search of `search_radius` on the coarsest level seeds a search of the
 /// same radius at full resolution. With one level, the full resolution search starts from zero motion.
 ///
-/// With `pel` 2 the result is then refined to half pixels, as [refine_half_pel] does.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a search takes both pyramids, its field and each setting"
-)]
+/// `field.pel` must equal `settings.pel`. With `pel` 2 the result is then refined to half pixels, as
+/// [refine_half_pel] does. `scores` is given exactly when `field` has a confidence plane.
 pub fn search<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     centre: &Pyramid<'_>,
     neighbour: &Pyramid<'_>,
-    field: &FieldPlanes<'_>,
-    grid: &BlockGrid,
+    field: &MotionField<'_>,
     settings: &MotionSettings,
-    scores: ConfidenceScores,
+    scores: Option<ConfidenceScores>,
 ) {
     debug_assert_eq!(settings.validate(), Ok(()));
     assert_pyramids(centre, neighbour, settings.pyramid_levels);
-    assert_field(field, grid);
-    assert_scores(&scores);
+    assert_field(field);
+    assert_scores_match(field, scores);
+    assert_scores(scores);
+    assert_eq!(
+        field.pel, settings.pel,
+        "the field's pel does not match the settings' pel"
+    );
 
     let expected = BlockGrid::new(settings, centre.width(), centre.height());
-    assert_eq!(*grid, expected, "the grid does not match the settings");
+    assert_eq!(field.grid, expected, "the grid does not match the settings");
 
     let seeded = settings.pyramid_levels > 1;
     if seeded {
         let coarse_level = settings.pyramid_levels as usize - 1;
         let coarse_centre = &centre.levels[coarse_level];
         let coarse_neighbour = &neighbour.levels[coarse_level];
-        launch_coarse(
-            client,
-            dispatch,
-            coarse_centre,
-            coarse_neighbour,
-            field,
-            grid,
-            settings,
-        );
+        launch_coarse(client, dispatch, coarse_centre, coarse_neighbour, field, settings);
     }
 
+    let whole_pixels = MotionField { pel: 1, ..*field };
     let fine = FineSearch {
         centre: centre.levels[0],
         neighbour: neighbour.levels[0],
-        field,
-        grid,
+        field: &whole_pixels,
         search_radius: settings.search_radius,
         use_seed: seeded,
         scores,
@@ -496,31 +501,29 @@ pub fn search<R: Runtime>(
     launch_fine(client, dispatch, fine);
 
     if settings.pel == 2 {
-        refine_half_pel(client, dispatch, centre, neighbour, field, grid);
+        refine_half_pel(client, dispatch, centre, neighbour, &whole_pixels);
     }
 }
 
 /// Searches `refine_radius` pixels around the seed already in `field` at full resolution, writing the
 /// refined field over it.
 ///
-/// The vectors stay whole pixels. For half pixels, follow it with [refine_half_pel].
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a search takes both pyramids, its field and each setting"
-)]
+/// `field` must have `pel` 1 and keeps it. For half pixels, follow it with [refine_half_pel]. `scores` is
+/// given exactly when `field` has a confidence plane.
 pub fn refine_seed<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     centre: &Pyramid<'_>,
     neighbour: &Pyramid<'_>,
-    field: &FieldPlanes<'_>,
-    grid: &BlockGrid,
+    field: &MotionField<'_>,
     refine_radius: u32,
-    scores: ConfidenceScores,
+    scores: Option<ConfidenceScores>,
 ) {
     assert_pyramids(centre, neighbour, 1);
-    assert_field(field, grid);
-    assert_scores(&scores);
+    assert_field(field);
+    assert_whole_pel_field(field, "refine_seed");
+    assert_scores_match(field, scores);
+    assert_scores(scores);
     assert!(
         refine_radius <= MAX_SEARCH_RADIUS,
         "refine_radius is {refine_radius}, expected at most {MAX_SEARCH_RADIUS}"
@@ -530,7 +533,6 @@ pub fn refine_seed<R: Runtime>(
         centre: centre.levels[0],
         neighbour: neighbour.levels[0],
         field,
-        grid,
         search_radius: refine_radius,
         use_seed: true,
         scores,

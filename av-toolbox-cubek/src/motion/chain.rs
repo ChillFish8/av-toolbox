@@ -2,7 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
-use super::{BlockGrid, FieldPlanes, assert_field, clamp_i32};
+use super::{MotionField, assert_field, assert_whole_pel_field, clamp_i32};
 use crate::Dispatch;
 
 /// The block of a grid, `count` blocks long and `step` apart, that contains `position` clamped into the grid.
@@ -71,27 +71,38 @@ fn chain_kernel(
 }
 
 /// Joins `first`, the field from frame `a` to `b`, with `second`, from `b` to `c`, into a seed from `a`
-/// to `c` in `seed.vectors`.
+/// to `c` in `seed`'s vectors.
 ///
 /// Each block follows `first` from its centre, then adds the vector of the block of `second` it lands
-/// in. Both fields must hold whole pixel vectors, as a search with `pel` 1 gives.
+/// in. All three fields share one grid and hold whole pixel vectors, so each has `pel` 1.
 pub fn chain<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    first: &FieldPlanes<'_>,
-    second: &FieldPlanes<'_>,
-    seed: &FieldPlanes<'_>,
-    grid: &BlockGrid,
+    first: &MotionField<'_>,
+    second: &MotionField<'_>,
+    seed: &MotionField<'_>,
 ) {
-    assert_field(first, grid);
-    assert_field(second, grid);
-    assert_field(seed, grid);
+    assert_field(first);
+    assert_field(second);
+    assert_field(seed);
+    assert_whole_pel_field(first, "chain");
+    assert_whole_pel_field(second, "chain");
+    assert_whole_pel_field(seed, "chain");
+    assert_eq!(
+        first.grid, seed.grid,
+        "the first field's grid differs from the seed's"
+    );
+    assert_eq!(
+        second.grid, seed.grid,
+        "the second field's grid differs from the seed's"
+    );
 
+    let grid = &seed.grid;
     let cubes = dispatch.cube_count(grid.blocks());
     let unit = dispatch.cube_dim();
-    let first_array = first.vectors.array::<R>();
-    let second_array = second.vectors.array::<R>();
-    let seed_array = seed.vectors.array::<R>();
+    let first_array = first.planes.vectors.array::<R>();
+    let second_array = second.planes.vectors.array::<R>();
+    let seed_array = seed.planes.vectors.array::<R>();
 
     // Safety: every field holds two i32 per block of `grid`, each unit reads one block of each field,
     // clamped to the grid, and writes its own block of the seed.

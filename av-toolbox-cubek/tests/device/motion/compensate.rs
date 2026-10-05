@@ -1,6 +1,8 @@
 use av_toolbox_cubek::motion::{
     BlockGrid,
     CompensatePlanes,
+    FieldPlanes,
+    MotionField,
     MotionSettings,
     PlaneScale,
     compensate,
@@ -94,12 +96,24 @@ impl BuildTask for CompensateRun {
             let samples = (case.width * case.height) as usize;
             let output = empty(client, samples * size_of::<f32>());
 
+            let sads = empty(client, case.grid.blocks() * size_of::<f32>());
+
             let planes = CompensatePlanes {
                 neighbour: plane(&neighbour, case.width, case.height),
-                vectors: plane(&vectors, 2 * case.grid.across, case.grid.down),
                 output: plane(&output, case.width, case.height),
             };
-            compensate(client, &sizing, planes, &case.grid, case.pel, case.scale);
+            let (vector_width, vector_height) = case.grid.vector_dims();
+            let (sad_width, sad_height) = case.grid.sad_dims();
+            let field = MotionField {
+                planes: FieldPlanes {
+                    vectors: plane(&vectors, vector_width, vector_height),
+                    sads: plane(&sads, sad_width, sad_height),
+                    confidence: None,
+                },
+                grid: case.grid,
+                pel: case.pel,
+            };
+            compensate(client, &sizing, planes, &field, case.scale);
 
             outputs.push(read_f32(client, &output));
         }

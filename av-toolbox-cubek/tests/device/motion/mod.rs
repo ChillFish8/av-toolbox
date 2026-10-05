@@ -2,7 +2,7 @@ mod compensate;
 mod quality;
 mod search;
 
-use av_toolbox_cubek::motion::{BlockGrid, FieldPlanes, PlaneScale, Pyramid, level_dims};
+use av_toolbox_cubek::motion::{BlockGrid, FieldPlanes, MotionField, PlaneScale, Pyramid, level_dims};
 use av_toolbox_cubek::testing::{ReferenceField, assert_same_plane};
 use av_toolbox_gpu::Subsampling;
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
@@ -76,13 +76,22 @@ impl DeviceField {
         }
     }
 
-    pub(crate) fn planes(&self, scored: bool) -> FieldPlanes<'_> {
-        let confidence = scored.then(|| plane(&self.confidence, self.grid.across, self.grid.down));
+    /// The buffers as a field in units of `1 / pel` pixel, with its confidence plane only if `scored`.
+    pub(crate) fn field(&self, scored: bool, pel: u32) -> MotionField<'_> {
+        let (vector_width, vector_height) = self.grid.vector_dims();
+        let (sad_width, sad_height) = self.grid.sad_dims();
+        let confidence = scored.then(|| plane(&self.confidence, sad_width, sad_height));
 
-        FieldPlanes {
-            vectors: plane(&self.vectors, 2 * self.grid.across, self.grid.down),
-            sads: plane(&self.sads, self.grid.across, self.grid.down),
+        let planes = FieldPlanes {
+            vectors: plane(&self.vectors, vector_width, vector_height),
+            sads: plane(&self.sads, sad_width, sad_height),
             confidence,
+        };
+
+        MotionField {
+            planes,
+            grid: self.grid,
+            pel,
         }
     }
 

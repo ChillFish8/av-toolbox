@@ -1,12 +1,5 @@
 use av_toolbox_cubek::degrain::{DegrainNeighbour, DegrainSettings, degrain, scene_changed};
-use av_toolbox_cubek::motion::{
-    BlockGrid,
-    ConfidenceScores,
-    MotionSettings,
-    PlaneScale,
-    build_pyramid,
-    search,
-};
+use av_toolbox_cubek::motion::{BlockGrid, MotionSettings, PlaneScale, build_pyramid, search};
 use av_toolbox_cubek::testing::{
     MotionClip,
     OUTPUT_TOLERANCE,
@@ -99,10 +92,6 @@ impl BuildTask for DegrainRun {
         let frames = &self.frames;
         let (width, height) = (frames.width, frames.height);
         let grid = BlockGrid::new(&self.motion, width, height);
-        let scores = ConfidenceScores {
-            noise_floor: 0.0,
-            thsad: 1.0,
-        };
 
         let upload = |frame: usize| {
             let pyramid = DevicePyramid::upload(
@@ -121,16 +110,15 @@ impl BuildTask for DegrainRun {
         for neighbour in &frames.neighbours {
             let neighbour_pyramid = upload(*neighbour);
             let field = DeviceField::new(client, &grid);
-            let planes = field.planes(false);
+            let device_field = field.field(false, self.motion.pel);
             search(
                 client,
                 &sizing,
                 &centre_pyramid.pyramid(),
                 &neighbour_pyramid.pyramid(),
-                &planes,
-                &grid,
+                &device_field,
                 &self.motion,
-                scores,
+                None,
             );
             fields.push(field);
         }
@@ -149,14 +137,9 @@ impl BuildTask for DegrainRun {
             let neighbours: Vec<_> = uploaded
                 .iter()
                 .zip(&fields)
-                .map(|(handle, field)| {
-                    let planes = field.planes(false);
-
-                    DegrainNeighbour {
-                        plane: plane(handle, plane_width, plane_height),
-                        vectors: planes.vectors,
-                        sads: planes.sads,
-                    }
+                .map(|(handle, field)| DegrainNeighbour {
+                    plane: plane(handle, plane_width, plane_height),
+                    field: field.field(false, self.motion.pel),
                 })
                 .collect();
             degrain(
@@ -166,9 +149,7 @@ impl BuildTask for DegrainRun {
                 &neighbours,
                 &self.weights_on,
                 plane(&output, plane_width, plane_height),
-                &grid,
                 &self.settings,
-                self.motion.pel,
                 scale,
                 index == 1,
             );

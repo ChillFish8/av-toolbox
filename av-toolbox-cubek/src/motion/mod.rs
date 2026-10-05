@@ -162,18 +162,37 @@ impl BlockGrid {
     pub const fn blocks(&self) -> usize {
         self.across as usize * self.down as usize
     }
+
+    /// The width and height of a vector plane, two `i32` per block.
+    pub const fn vector_dims(&self) -> (u32, u32) {
+        (2 * self.across, self.down)
+    }
+
+    /// The width and height of a SAD or confidence plane, one `f32` per block.
+    pub const fn sad_dims(&self) -> (u32, u32) {
+        (self.across, self.down)
+    }
 }
 
 /// One field's planes on the device, telling where each block of the centre frame is found in the
 /// neighbour.
 ///
-/// `vectors` holds an `(x, y)` pair of `i32` per block, in whole pixels or, after half pixel
-/// refinement, half pixels. It is `2 * across` wide and `down` high. `sads` holds each block's best
-/// SAD as `f32`, and `confidence` its score, `across` by `down`.
+/// `vectors` holds an `(x, y)` pair of `i32` per block, `2 * across` wide and `down` high. `sads` holds
+/// each block's best SAD as `f32`, and `confidence` its score, `across` by `down`.
+#[derive(Debug, Clone, Copy)]
 pub struct FieldPlanes<'a> {
     pub vectors: DevicePlane<'a>,
     pub sads: DevicePlane<'a>,
     pub confidence: Option<DevicePlane<'a>>,
+}
+
+/// One centre-to-neighbour field on the device, with its block grid and its vector unit.
+#[derive(Debug, Clone, Copy)]
+pub struct MotionField<'a> {
+    pub planes: FieldPlanes<'a>,
+    pub grid: BlockGrid,
+    /// The vectors are in units of `1 / pel` pixel.
+    pub pel: u32,
 }
 
 /// Asserts that `grid` has a step between half its block size and its block size.
@@ -187,15 +206,55 @@ fn assert_grid(grid: &BlockGrid) {
     );
 }
 
-/// Asserts that `field` holds `grid`'s blocks.
-fn assert_field(field: &FieldPlanes<'_>, grid: &BlockGrid) {
-    assert_grid(grid);
-    crate::assert_plane(&field.vectors, 2 * grid.across, grid.down, "vectors");
-    crate::assert_plane(&field.sads, grid.across, grid.down, "sads");
+/// Asserts that `field` has a valid pel and its planes hold its grid's blocks.
+pub(crate) fn assert_field(field: &MotionField<'_>) {
+    let grid = &field.grid;
+    let (vector_width, vector_height) = grid.vector_dims();
+    let (sad_width, sad_height) = grid.sad_dims();
 
-    if let Some(confidence) = &field.confidence {
-        crate::assert_plane(confidence, grid.across, grid.down, "confidence");
+    assert!(
+        (1..=2).contains(&field.pel),
+        "pel is {}, expected 1 or 2",
+        field.pel
+    );
+    assert_grid(grid);
+    crate::assert_plane(&field.planes.vectors, vector_width, vector_height, "vectors");
+    crate::assert_plane(&field.planes.sads, sad_width, sad_height, "sads");
+
+    if let Some(confidence) = &field.planes.confidence {
+        crate::assert_plane(confidence, sad_width, sad_height, "confidence");
     }
+}
+
+/// Asserts that a field read by `operation` holds whole pixel vectors.
+fn assert_whole_pel(pel: u32, operation: &str) {
+    assert!(
+        pel == 1,
+        "{operation} needs a field with pel 1, but its pel is {pel}"
+    );
+}
+
+/// Asserts that `field` holds whole pixel vectors, which `operation` reads or seeds.
+pub(crate) fn assert_whole_pel_field(field: &MotionField<'_>, operation: &str) {
+    assert_whole_pel(field.pel, operation);
+}
+
+/// Asserts that `field` can be refined to half pixels.
+pub(crate) fn assert_refinable(field: &MotionField<'_>) {
+    assert_whole_pel(field.pel, "refine_half_pel");
+}
+
+/// Asserts that scores are given exactly when the field has a confidence plane to write them to.
+fn assert_scoring(has_confidence: bool, has_scores: bool) {
+    assert!(
+        has_confidence == has_scores,
+        "the field has a confidence plane: {has_confidence}, but scores were given: {has_scores}"
+    );
+}
+
+/// Asserts that `scores` are given exactly when `field` has a confidence plane.
+pub(crate) fn assert_scores_match(field: &MotionField<'_>, scores: Option<ConfidenceScores>) {
+    assert_scoring(field.planes.confidence.is_some(), scores.is_some());
 }
 
 /// Asserts that the blocks of `grid` cover a plane `width` by `height` scaled by `scale`.
@@ -383,6 +442,37 @@ mod tests {
         };
 
         settings.validate().expect("half a block should be valid");
+    }
+
+    #[test]
+    fn vector_and_sad_dims_follow_the_grid() {
+        let grid = BlockGrid {
+            blksize: 16,
+            step: 8,
+            across: 16,
+            down: 8,
+        };
+
+        assert_eq!(grid.vector_dims(), (32, 8));
+        assert_eq!(grid.sad_dims(), (16, 8));
+    }
+
+    #[test]
+    #[should_panic(expected = "refine_half_pel needs a field with pel 1, but its pel is 2")]
+    fn refining_a_half_pel_field_again_is_refused() {
+        assert_whole_pel(2, "refine_half_pel");
+    }
+
+    #[test]
+    #[should_panic(expected = "confidence plane: false, but scores were given: true")]
+    fn scores_without_a_confidence_plane_are_refused() {
+        assert_scoring(false, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "confidence plane: true, but scores were given: false")]
+    fn a_confidence_plane_without_scores_is_refused() {
+        assert_scoring(true, false);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use cubecl::prelude::*;
 
 use super::search::assert_pyramids;
-use super::{BlockGrid, FieldPlanes, Pyramid, assert_field, clamp_i32};
+use super::{MotionField, Pyramid, assert_field, assert_refinable, clamp_i32};
 use crate::Dispatch;
 
 /// The value of `plane` at the half pixel position `x2`, `y2`, clamped into the frame.
@@ -151,7 +151,8 @@ fn half_pel_kernel(
 ///
 /// Each vector is doubled, then moved by up to one half pixel in each direction to the position that
 /// matches best. `vectors` is replaced with the result in half pixels and `sads` with its SAD. The
-/// confidence is left as the whole pixel search wrote it.
+/// confidence is left as the whole pixel search wrote it. `field` must have `pel` 1, and its planes
+/// are then a field with `pel` 2.
 ///
 /// On a chained field, run it after [refine_seed](crate::motion::refine_seed).
 pub fn refine_half_pel<R: Runtime>(
@@ -159,19 +160,21 @@ pub fn refine_half_pel<R: Runtime>(
     dispatch: &impl Dispatch,
     centre: &Pyramid<'_>,
     neighbour: &Pyramid<'_>,
-    field: &FieldPlanes<'_>,
-    grid: &BlockGrid,
+    field: &MotionField<'_>,
 ) {
     assert_pyramids(centre, neighbour, 1);
-    assert_field(field, grid);
+    assert_field(field);
+    assert_refinable(field);
+
+    let grid = &field.grid;
 
     let cubes = dispatch.cube_count(grid.blocks());
     let unit = dispatch.cube_dim();
     let centre_plane = centre.levels[0];
     let centre_array = centre_plane.array::<R>();
     let neighbour_array = neighbour.levels[0].array::<R>();
-    let vectors = field.vectors.array::<R>();
-    let sads = field.sads.array::<R>();
+    let vectors = field.planes.vectors.array::<R>();
+    let sads = field.planes.sads.array::<R>();
 
     // Safety: both planes hold `width` by `height` samples that every read clamps into, and each unit
     // reads and writes only its own block's entries of `vectors` and `sads`.

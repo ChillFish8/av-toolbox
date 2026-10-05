@@ -5,8 +5,10 @@ use thiserror::Error;
 
 use crate::motion::{
     BlockGrid,
+    MotionField,
     PlaneScale,
     assert_blocks,
+    assert_field,
     block_window,
     half_pel_component,
     half_pel_sample,
@@ -109,12 +111,10 @@ fn normalised_threshold(value: f32, blksize: u32) -> f32 {
 
 /// One neighbour frame and the field finding the centre's blocks in it.
 ///
-/// `vectors` and `sads` are laid out as in [FieldPlanes](crate::motion::FieldPlanes). The field runs from
-/// the centre to the neighbour, for frames before and after the centre alike.
+/// The field runs from the centre to the neighbour, for frames before and after the centre alike.
 pub struct DegrainNeighbour<'a> {
     pub plane: DevicePlane<'a>,
-    pub vectors: DevicePlane<'a>,
-    pub sads: DevicePlane<'a>,
+    pub field: MotionField<'a>,
 }
 
 /// Whether a neighbour is across a scene change from the centre, given its blocks' normalised `sads`.
@@ -242,14 +242,15 @@ fn degrain_kernel(
 
 /// Averages `centre` with its compensated `neighbours` into `output`.
 ///
-/// Each sample takes the blocks of `grid` covering it. A block weighs its window times 256 for the
-/// centre, and its window times its neighbour's [degrain_weight] for each neighbour. The sample is the
-/// weighted mean of the centre and each neighbour read at the block's vector. `weights_on` says which
-/// neighbours count, and a neighbour that is off weighs nothing.
+/// Each sample takes the blocks of the neighbours' shared grid covering it. A block weighs its window
+/// times 256 for the centre, and its window times its neighbour's [degrain_weight] for each neighbour. The
+/// sample is the weighted mean of the centre and each neighbour read at the block's vector. `weights_on`
+/// says which neighbours count, and a neighbour that is off weighs nothing.
 ///
-/// `chroma` picks `thsad_chroma` over `thsad`. The vectors and SADs are the luma field's, with `scale`
+/// `chroma` picks `thsad_chroma` over `thsad`. The vectors and SADs are the luma fields', with `scale`
 /// shrinking the blocks and vectors onto a smaller plane. All the planes read and written share one scale
-/// of values.
+/// of values. There must be at least one neighbour, and every neighbour's field shares one grid and
+/// one `pel`.
 #[expect(
     clippy::too_many_arguments,
     reason = "degrain takes each plane and setting as its own argument"
@@ -261,14 +262,10 @@ pub fn degrain<R: Runtime>(
     neighbours: &[DegrainNeighbour<'_>],
     weights_on: &[bool],
     output: DevicePlane<'_>,
-    grid: &BlockGrid,
     settings: &DegrainSettings,
-    pel: u32,
     scale: PlaneScale,
     chroma: bool,
 ) {
-    assert!((1..=2).contains(&pel), "pel is {pel}, expected 1 or 2");
-
     debug_assert_eq!(settings.validate(), Ok(()));
 
     let radius = settings.temporal_radius;
@@ -286,6 +283,10 @@ pub fn degrain<R: Runtime>(
         2 * radius
     );
 
+    let first = neighbours.first().expect("degrain needs at least one neighbour");
+    let grid = &first.field.grid;
+    let pel = first.field.pel;
+
     let width = centre.width();
     let height = centre.height();
     crate::assert_plane(&centre, width, height, "centre");
@@ -298,13 +299,14 @@ pub fn degrain<R: Runtime>(
     let mut counted = 0u32;
     for (neighbour, on) in neighbours.iter().zip(weights_on) {
         crate::assert_plane(&neighbour.plane, width, height, "neighbour");
-        crate::assert_plane(&neighbour.vectors, 2 * grid.across, grid.down, "vectors");
-        crate::assert_plane(&neighbour.sads, grid.across, grid.down, "sads");
+        assert_field(&neighbour.field);
+        assert_eq!(neighbour.field.grid, *grid, "the neighbours' grids differ");
+        assert_eq!(neighbour.field.pel, pel, "the neighbours' pels differ");
 
         if *on {
             planes.push(neighbour.plane.array::<R>());
-            vectors.push(neighbour.vectors.array::<R>());
-            sads.push(neighbour.sads.array::<R>());
+            vectors.push(neighbour.field.planes.vectors.array::<R>());
+            sads.push(neighbour.field.planes.sads.array::<R>());
             counted += 1;
         }
     }
