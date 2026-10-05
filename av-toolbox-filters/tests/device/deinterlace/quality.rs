@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use av_toolbox_cubek::testing::{FieldClip, Interlace, field_clips, psnr, write_y4m};
-use av_toolbox_gpu::FieldOrder;
+use av_toolbox_cubek::testing::{FieldClip, Interlace, badly_clips, field_clips, psnr, write_y4m};
+use av_toolbox_gpu::{FieldOrder, FrameFormat, Subsampling};
 use serde_json::json;
 
 use super::bwdif;
-use super::qtgmc::{Clip, deinterlaced, inputs, interlaced, run_clip};
+use super::qtgmc::{Clip, deinterlaced, inputs, interlaced, run_chunks, run_clip};
 use crate::stream::Output;
 use crate::support::{element_of, from_bytes};
 
@@ -67,6 +67,108 @@ const FLOORS: [Floors; 5] = [
 ///
 /// Measured 0.0374, against 0.1631 for its bare bob.
 const STATIC_SHIMMER_CEILING: f64 = 0.04;
+
+/// The quality of `progressive` at its defaults on one clip, and the margins it must keep.
+///
+/// The defaults resharpen, which brings back noise along with detail, so they have no ordering against
+/// the input. The input only has to be beaten with the sharpening off.
+struct ProgressiveFloors {
+    clip: &'static str,
+    /// The least luma PSNR over every output frame, in dB.
+    psnr: f64,
+    /// How many dB `tr2 = 1` must lead `tr2 = 0` by, on the clips that ask for it.
+    tr2_margin: Option<f64>,
+    /// How many dB `sharpness = 0` must lead the input by, on the clips that ask for it.
+    unsharpened_margin: Option<f64>,
+}
+
+const PROGRESSIVE_FLOORS: [ProgressiveFloors; 3] = [
+    ProgressiveFloors {
+        clip: "field_noisy_8",
+        // Measured 38.481, over tr2 0 by 0.243. Without sharpening it leads the input by 0.790.
+        psnr: 38.4,
+        tr2_margin: Some(0.2),
+        unsharpened_margin: Some(0.7),
+    },
+    ProgressiveFloors {
+        clip: "field_noisy_10",
+        // Measured 38.538, over tr2 0 by 0.242. Without sharpening it leads the input by 0.720.
+        psnr: 38.5,
+        tr2_margin: Some(0.2),
+        unsharpened_margin: Some(0.6),
+    },
+    ProgressiveFloors {
+        clip: "field_pan_8",
+        // Measured 45.262.
+        psnr: 45.0,
+        tr2_margin: None,
+        unsharpened_margin: None,
+    },
+];
+
+/// The quality of `repair` and `repair_reversed` on one badly deinterlaced clip.
+///
+/// The margin between the two modes applies to every clip, whether or not it has a reversed counterpart.
+struct RepairFloors {
+    clip: &'static str,
+    /// The least luma PSNR of `repair`, in dB.
+    repair_psnr: f64,
+    /// The least luma PSNR of `repair_reversed`, in dB.
+    reversed_psnr: f64,
+    /// How many dB `repair` must lead its input by, on the clips that ask for it.
+    input_margin: Option<f64>,
+    /// How many dB the mode that matches the clip's field order must lead the other by.
+    order_margin: Option<f64>,
+}
+
+const REPAIR_FLOORS: [RepairFloors; 5] = [
+    RepairFloors {
+        clip: "badly_pan_8",
+        // Measured 46.101 and 43.543, over the input by 0.958 and over repair_reversed by 2.558.
+        repair_psnr: 46.0,
+        reversed_psnr: 43.5,
+        input_margin: Some(0.9),
+        order_margin: Some(2.5),
+    },
+    RepairFloors {
+        clip: "badly_objects_8",
+        // Measured 37.711 and 36.319, over the input by 0.205 and over repair_reversed by 1.392.
+        // A repair that does nothing lands at 0 or below, so 0.15 still catches it.
+        repair_psnr: 37.5,
+        reversed_psnr: 36.3,
+        input_margin: Some(0.15),
+        order_margin: Some(1.3),
+    },
+    RepairFloors {
+        clip: "badly_static_8",
+        // Measured 18.106 and 17.537, over the input by 2.072 and over repair_reversed by 0.569.
+        repair_psnr: 18.0,
+        reversed_psnr: 17.5,
+        input_margin: Some(2.0),
+        order_margin: Some(0.5),
+    },
+    RepairFloors {
+        clip: "badly_pan_8_reversed",
+        // Measured 43.645 and 46.350, with repair_reversed over repair by 2.705.
+        repair_psnr: 43.5,
+        reversed_psnr: 46.0,
+        input_margin: None,
+        order_margin: Some(2.6),
+    },
+    RepairFloors {
+        clip: "badly_static_8_reversed",
+        // Measured 17.470 and 18.106, with repair_reversed over repair by 0.636.
+        repair_psnr: 17.4,
+        reversed_psnr: 18.0,
+        input_margin: None,
+        order_margin: Some(0.6),
+    },
+];
+
+/// The most `repair`'s mean luma change between consecutive frames of `badly_static_8` may reach.
+///
+/// Measured 0.0575, against 0.1629 for its input.
+const REPAIR_SHIMMER_CEILING: f64 = 0.06;
 
 /// Where the report clips go, if `AVTB_QTGMC_REPORT_DIR` is set.
 fn report_directory() -> Option<PathBuf> {
@@ -290,4 +392,252 @@ fn quality_on_field_noisy_10() {
 #[test]
 fn quality_on_field_static_8() {
     assert_quality("field_static_8");
+}
+
+/// What `progressive` and the repair modes may be asked to restore.
+struct Restoration {
+    name: &'static str,
+    bits: u32,
+    width: usize,
+    height: usize,
+    frames: Frames,
+    clean: Frames,
+}
+
+/// The input arguments of `mode`, with the cubic interpolation and top field first for the repair modes.
+fn mode_args(mode: &str, tr2: u32) -> serde_json::Value {
+    match mode {
+        "progressive" => json!({ "input": mode, "tr2": tr2 }),
+        _ => json!({ "input": mode, "order": "top", "spatial": { "kind": "cubic" }, "tr2": tr2 }),
+    }
+}
+
+/// Runs `mode` on the progressive frames of `restoration`.
+fn run_progressive(restoration: &Restoration, args: serde_json::Value) -> Frames {
+    let clip = Clip {
+        name: restoration.name.to_string(),
+        bits: restoration.bits,
+        width: restoration.width,
+        height: restoration.height,
+        subsampling: Subsampling::Yuv420,
+        frames: restoration.frames.clone(),
+    };
+    let base = interlaced(&clip, FieldOrder::TopFirst);
+    let input = FrameFormat {
+        field_order: Some(FieldOrder::Progressive),
+        ..base
+    };
+    let output = deinterlaced(input, false);
+    let chunk = inputs(&clip, &input, 0);
+
+    let mut runs = run_chunks(args, input, output, vec![chunk]);
+    let run = runs.pop().expect("one chunk was run");
+
+    output_frames(&run.outputs, &clip)
+}
+
+/// The noisy field clips and the clean pan, rendered as progressive frames.
+fn noisy_restorations() -> Vec<Restoration> {
+    let names = ["field_noisy_8", "field_noisy_10", "field_pan_8"];
+
+    field_clips()
+        .into_iter()
+        .filter(|clip| names.contains(&clip.name))
+        .map(|clip| Restoration {
+            name: clip.name,
+            bits: clip.bits,
+            width: clip.width,
+            height: clip.height,
+            frames: clip.truth,
+            clean: clip.clean,
+        })
+        .collect()
+}
+
+/// Every badly deinterlaced clip.
+fn badly_restorations() -> Vec<Restoration> {
+    badly_clips()
+        .into_iter()
+        .map(|clip| Restoration {
+            name: clip.name,
+            bits: clip.bits,
+            width: clip.width,
+            height: clip.height,
+            frames: clip.frames,
+            clean: clip.clean,
+        })
+        .collect()
+}
+
+fn restoration_psnr(frames: &Frames, restoration: &Restoration) -> f64 {
+    let found = normalised_luma(frames, restoration.bits);
+    let clean = normalised_luma(&restoration.clean, restoration.bits);
+
+    field_psnr(&found, &clean)
+}
+
+/// Writes the clip's input, its clean truth and the repaired output.
+fn write_repair_report(directory: &Path, restoration: &Restoration, output: &Frames) {
+    let name = restoration.name;
+    let size = (restoration.width, restoration.height);
+    let files = [
+        ("input", &restoration.frames),
+        ("clean", &restoration.clean),
+        ("output", output),
+    ];
+
+    for (label, frames) in files {
+        let path = directory.join(format!("{name}_{label}.y4m"));
+        write_y4m(&path, frames, size, restoration.bits, 25, Interlace::Progressive)
+            .expect("the report file should be written");
+    }
+}
+
+fn find_restoration(restorations: Vec<Restoration>, name: &str) -> Restoration {
+    restorations
+        .into_iter()
+        .find(|restoration| restoration.name == name)
+        .expect("the clip exists")
+}
+
+fn assert_progressive_quality(name: &str) {
+    let restoration = find_restoration(noisy_restorations(), name);
+    let floors = PROGRESSIVE_FLOORS
+        .iter()
+        .find(|floors| floors.clip == name)
+        .expect("the clip has floors");
+
+    let defaults = run_progressive(&restoration, mode_args("progressive", 1));
+    let defaults_psnr = restoration_psnr(&defaults, &restoration);
+    assert!(
+        defaults_psnr >= floors.psnr,
+        "{name}: progressive {defaults_psnr:.3} dB is under its floor of {} dB",
+        floors.psnr
+    );
+
+    if let Some(margin) = floors.tr2_margin {
+        let off = run_progressive(&restoration, mode_args("progressive", 0));
+        let off_psnr = restoration_psnr(&off, &restoration);
+        let lead = defaults_psnr - off_psnr;
+        assert!(
+            lead >= margin,
+            "{name}: tr2 1 leads tr2 0 by {lead:.3} dB, under {margin} dB"
+        );
+    }
+
+    if let Some(margin) = floors.unsharpened_margin {
+        let args = json!({ "input": "progressive", "sharpness": 0 });
+        let unsharpened = run_progressive(&restoration, args);
+        let input_psnr = restoration_psnr(&restoration.frames, &restoration);
+        let unsharpened_psnr = restoration_psnr(&unsharpened, &restoration);
+        let lead = unsharpened_psnr - input_psnr;
+        assert!(
+            lead >= margin,
+            "{name}: unsharpened progressive leads its input by {lead:.3} dB, under {margin} dB"
+        );
+    }
+}
+
+fn assert_repair_quality(name: &str) {
+    let restoration = find_restoration(badly_restorations(), name);
+    let floors = REPAIR_FLOORS
+        .iter()
+        .find(|floors| floors.clip == name)
+        .expect("the clip has floors");
+    let reversed_clip = name.ends_with("_reversed");
+
+    let repaired = run_progressive(&restoration, mode_args("repair", 1));
+    let reversed = run_progressive(&restoration, mode_args("repair_reversed", 1));
+    let repair_psnr = restoration_psnr(&repaired, &restoration);
+    let reversed_psnr = restoration_psnr(&reversed, &restoration);
+    let input_psnr = restoration_psnr(&restoration.frames, &restoration);
+
+    if let Some(directory) = report_directory() {
+        let matching = if reversed_clip { &reversed } else { &repaired };
+        write_repair_report(&directory, &restoration, matching);
+    }
+
+    assert!(
+        repair_psnr >= floors.repair_psnr,
+        "{name}: repair {repair_psnr:.3} dB is under its floor of {} dB",
+        floors.repair_psnr
+    );
+    assert!(
+        reversed_psnr >= floors.reversed_psnr,
+        "{name}: repair_reversed {reversed_psnr:.3} dB is under its floor of {} dB",
+        floors.reversed_psnr
+    );
+
+    if let Some(margin) = floors.input_margin {
+        let lead = repair_psnr - input_psnr;
+        assert!(
+            lead >= margin,
+            "{name}: repair leads its input by {lead:.3} dB, under {margin} dB"
+        );
+    }
+
+    if let Some(margin) = floors.order_margin {
+        let lead = if reversed_clip {
+            reversed_psnr - repair_psnr
+        } else {
+            repair_psnr - reversed_psnr
+        };
+        assert!(
+            lead >= margin,
+            "{name}: the mode matching the field order leads by {lead:.3} dB, under {margin} dB"
+        );
+    }
+
+    if name == "badly_static_8" {
+        let input_shimmer = shimmer(&normalised_luma(&restoration.frames, restoration.bits));
+        let repair_shimmer = shimmer(&normalised_luma(&repaired, restoration.bits));
+        assert!(
+            repair_shimmer < input_shimmer,
+            "{name}: repair shimmers {repair_shimmer:.5}, its input {input_shimmer:.5}"
+        );
+        assert!(
+            repair_shimmer <= REPAIR_SHIMMER_CEILING,
+            "{name}: repair shimmers {repair_shimmer:.5}, over {REPAIR_SHIMMER_CEILING}"
+        );
+    }
+}
+
+#[test]
+fn progressive_quality_on_field_noisy_8() {
+    assert_progressive_quality("field_noisy_8");
+}
+
+#[test]
+fn progressive_quality_on_field_noisy_10() {
+    assert_progressive_quality("field_noisy_10");
+}
+
+#[test]
+fn progressive_quality_on_field_pan_8() {
+    assert_progressive_quality("field_pan_8");
+}
+
+#[test]
+fn repair_quality_on_badly_pan_8() {
+    assert_repair_quality("badly_pan_8");
+}
+
+#[test]
+fn repair_quality_on_badly_objects_8() {
+    assert_repair_quality("badly_objects_8");
+}
+
+#[test]
+fn repair_quality_on_badly_static_8() {
+    assert_repair_quality("badly_static_8");
+}
+
+#[test]
+fn repair_quality_on_badly_pan_8_reversed() {
+    assert_repair_quality("badly_pan_8_reversed");
+}
+
+#[test]
+fn repair_quality_on_badly_static_8_reversed() {
+    assert_repair_quality("badly_static_8_reversed");
 }

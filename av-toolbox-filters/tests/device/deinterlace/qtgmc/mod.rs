@@ -254,7 +254,7 @@ impl BuildTask for LoggedStream {
 }
 
 /// Runs `chunks` of `input` through the stage built with `args`, giving each chunk's run.
-fn run_chunks(
+pub(super) fn run_chunks(
     args: serde_json::Value,
     input: FrameFormat,
     output: FrameFormat,
