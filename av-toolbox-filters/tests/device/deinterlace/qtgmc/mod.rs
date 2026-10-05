@@ -1,5 +1,6 @@
 mod conventions;
 mod formats;
+mod progressive;
 mod reference;
 
 use std::cell::RefCell;
@@ -21,7 +22,7 @@ use av_toolbox_cubek::testing::{
     reference_eedi3_field,
     reference_qtgmc_run,
 };
-use av_toolbox_filters::testing::{QtgmcMotion, qtgmc_with_motion_log};
+use av_toolbox_filters::testing::{QtgmcMotion, QtgmcRepairFlag, qtgmc_with_motion_log};
 use av_toolbox_gpu::{
     BuildContext,
     BuildTask,
@@ -47,6 +48,13 @@ const TOLERANCE: u16 = 1;
 ///
 /// It allows for f32 threshold flips between the device and the CPU.
 const OUTLIER_SHARE: f64 = 0.001;
+
+/// [OUTLIER_SHARE] for the chroma of progressive, repair and repair reversed input.
+///
+/// These modes keep the frame's integer-valued chroma, so compensated values sit on whole or half codes
+/// within an ulp. Rep0 and Rep2 then meet their restore limits exactly, and the tie flips between the
+/// device and the CPU.
+const PROGRESSIVE_CHROMA_OUTLIER_SHARE: f64 = 0.005;
 
 /// How far apart, relative to the reference's SAD, two SADs of a near-tie may be.
 const NEAR_TIE_SAD: f32 = 1e-5;
@@ -205,10 +213,11 @@ pub(super) fn inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input
         .collect()
 }
 
-/// What the stage gave for one chunk, its outputs and every motion search it ran.
+/// What the stage gave for one chunk, its outputs, every motion search it ran and every repair mask flag.
 pub(super) struct ChunkRun {
     pub(super) outputs: Vec<Output>,
     motion: Vec<QtgmcMotion>,
+    repairs: Vec<QtgmcRepairFlag>,
 }
 
 /// Runs each chunk through one stage built with a motion log, starting and ending the stream around each.
@@ -232,7 +241,12 @@ impl BuildTask for LoggedStream {
             let formats = (&self.input, &self.output);
             let outputs = run_chunk(build, &mut context, filter.as_mut(), formats, chunk);
             let motion = log.take();
-            runs.push(ChunkRun { outputs, motion });
+            let repairs = log.take_repairs();
+            runs.push(ChunkRun {
+                outputs,
+                motion,
+                repairs,
+            });
         }
 
         runs
@@ -277,6 +291,7 @@ fn reference_defaults() -> QtgmcReferenceSettings {
         thsad1: 640.0,
         thsad2: 256.0,
         input: ReferenceInput::Interlaced,
+        first_frame: 0,
     }
 }
 
@@ -341,6 +356,7 @@ impl Eedi3Reference {
 struct Expected {
     fields: Vec<[Vec<f32>; 3]>,
     motion: Vec<Vec<ReferenceSearch>>,
+    input: ReferenceInput,
 }
 
 fn expected(clip: &Clip, settings: &QtgmcReferenceSettings, interpolate: Interpolate<'_>) -> Expected {
@@ -351,6 +367,7 @@ fn expected(clip: &Clip, settings: &QtgmcReferenceSettings, interpolate: Interpo
     Expected {
         fields: run.output,
         motion: run.motion,
+        input: settings.input,
     }
 }
 
@@ -519,23 +536,37 @@ fn closeness(found: &[u8], wanted: &[f32], sample: SampleFormat, field: usize, p
     }
 }
 
+/// The share of plane `plane` that may sit further than [TOLERANCE] from the reference for `input`.
+fn allowed_share(input: ReferenceInput, plane: usize) -> f64 {
+    let is_chroma = plane > 0;
+    let is_progressive = input != ReferenceInput::Interlaced;
+    if is_chroma && is_progressive {
+        return PROGRESSIVE_CHROMA_OUTLIER_SHARE;
+    }
+
+    OUTLIER_SHARE
+}
+
 /// Asserts each of `found` lies within the tolerance of the reference field it is paired with, giving the
 /// worst plane.
 ///
-/// Each pair is an output and the reference's planes for it.
+/// Each pair is an output and the reference's planes for it, from a run with `input`.
 fn assert_paired_outputs<'a>(
     pairs: impl Iterator<Item = (usize, &'a Output, &'a [Vec<f32>; 3])>,
     sample: SampleFormat,
+    input: ReferenceInput,
     label: &str,
 ) -> Closeness {
     let ceiling = largest_allowed(sample);
 
     let mut worst = Closeness::default();
+    let mut worst_planes: Vec<Closeness> = Vec::new();
     for (field, output, wanted) in pairs {
         for (plane, found) in output.planes.iter().enumerate() {
             let found_closeness = closeness(found, &wanted[plane], sample, field, plane);
+            let allowed = allowed_share(input, plane);
             assert!(
-                found_closeness.share <= OUTLIER_SHARE,
+                found_closeness.share <= allowed,
                 "{label}: {:.3} % of field {field} plane {plane} is over {TOLERANCE} code, the largest {}",
                 found_closeness.share * 100.0,
                 found_closeness.largest
@@ -549,16 +580,31 @@ fn assert_paired_outputs<'a>(
             if found_closeness.share > worst.share || found_closeness.largest > worst.largest {
                 worst = found_closeness;
             }
+
+            if worst_planes.len() <= plane {
+                worst_planes.push(Closeness::default());
+            }
+
+            let plane_worst = &mut worst_planes[plane];
+            if found_closeness.share > plane_worst.share || found_closeness.largest > plane_worst.largest {
+                *plane_worst = found_closeness;
+            }
         }
     }
 
     println!(
-        "{label}: worst share over {TOLERANCE} code is {:.3} % (field {}, plane {}), largest difference {}",
-        worst.share * 100.0,
-        worst.field,
-        worst.plane,
-        worst.largest
+        "{label}: the worst plane is plane {} of field {}",
+        worst.plane, worst.field
     );
+    for (plane, plane_worst) in worst_planes.iter().enumerate() {
+        println!(
+            "{label}: plane {plane} worst share over {TOLERANCE} code is {:.3} % (field {}), largest \
+             difference {}",
+            plane_worst.share * 100.0,
+            plane_worst.field,
+            plane_worst.largest
+        );
+    }
 
     worst
 }
@@ -577,7 +623,7 @@ fn assert_outputs(outputs: &[Output], expected: &Expected, sample: SampleFormat,
         .enumerate()
         .map(|(field, (output, wanted))| (field, output, wanted));
 
-    assert_paired_outputs(pairs, sample, label)
+    assert_paired_outputs(pairs, sample, expected.input, label)
 }
 
 /// Asserts `run` matches the reference, its motion first and then its outputs.

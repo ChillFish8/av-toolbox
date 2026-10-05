@@ -72,6 +72,8 @@ pub struct QtgmcReferenceSettings {
     pub thsad1: f32,
     pub thsad2: f32,
     pub input: ReferenceInput,
+    /// The stream index of the clip's first frame, which the kept parity of repair input counts from.
+    pub first_frame: usize,
 }
 
 impl Default for QtgmcReferenceSettings {
@@ -84,6 +86,7 @@ impl Default for QtgmcReferenceSettings {
             thsad1: 640.0,
             thsad2: 256.0,
             input: ReferenceInput::Interlaced,
+            first_frame: 0,
         }
     }
 }
@@ -243,7 +246,7 @@ fn field_source(frames: &[[Vec<f32>; 3]], field: usize) -> (&[Vec<f32>; 3], Pari
     (&frames[field / 2], parity)
 }
 
-/// The parity of the field that a repaired `frame` keeps, top field first.
+/// The parity of the field that a repaired `frame` keeps, top field first, by its stream index.
 ///
 /// [RepairReversed](ReferenceInput::RepairReversed) keeps the other field.
 pub(super) fn kept_parity(input: ReferenceInput, frame: usize) -> Parity {
@@ -450,7 +453,8 @@ impl Chain<'_> {
             let sads = next.map(|search| search.field.sads.as_slice());
             let mask = repair_mask(sads, &grid, luma);
 
-            let parity = kept_parity(self.settings.input, entry);
+            let index = self.settings.first_frame + entry;
+            let parity = kept_parity(self.settings.input, index);
             let frame = &self.frames[entry];
             prepared[entry].edi = repaired_edi(frame, luma, parity, &mask, self.interpolate);
         }
@@ -690,10 +694,11 @@ fn chain<'a>(
 /// - **Interlaced.** Each frame is top field first and yields its top field and then its bottom field.
 ///   `interpolate` builds `edi` from a frame's plane and a field's parity.
 /// - **Progressive.** Each frame yields one output, and its bob and `edi` are the frame itself.
-/// - **Repair.** Each frame yields one output. Its bob is a vertical 1-2-1 blur of its luma. Frame `n` keeps
-///   the field of parity `n mod 2`, or `(n + 1) mod 2` when reversed, and `interpolate` rebuilds the other
-///   rows. `edi`'s luma blends the frame towards that rebuild through the SAD mask of its motion to frame
-///   `n + 1`, and its chroma is the frame's. The last frame keeps its own luma.
+/// - **Repair.** Each frame yields one output. Its bob is a vertical 1-2-1 blur of its luma. The frame at
+///   stream index `n`, the clip starting at `settings.first_frame`, keeps the field of parity `n mod 2`, or
+///   `(n + 1) mod 2` when reversed, and `interpolate` rebuilds the other rows. `edi`'s luma blends the
+///   frame towards that rebuild through the SAD mask of its motion to the next frame, and its chroma is
+///   the frame's. The last frame keeps its own luma.
 ///
 /// The clip is one chunk. TR0 repeats the nearest bob past either end, a motion neighbour past either
 /// end is skipped, and a degrain without neighbours is its centre. Motion searches the normalised search

@@ -8,4 +8,4 @@ mod tests;
 pub(crate) use self::bwdif::Bwdif;
 pub(crate) use self::qtgmc::Qtgmc;
 #[cfg(feature = "test-support")]
-pub use self::qtgmc::{QtgmcMotion, QtgmcMotionLog, qtgmc_with_motion_log};
+pub use self::qtgmc::{QtgmcMotion, QtgmcMotionLog, QtgmcRepairFlag, qtgmc_with_motion_log};

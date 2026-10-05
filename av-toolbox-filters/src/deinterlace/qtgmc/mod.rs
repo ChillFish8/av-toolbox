@@ -1,6 +1,7 @@
 mod args;
 mod cache;
 mod chain;
+mod front;
 #[cfg(feature = "test-support")]
 mod testing;
 
@@ -21,7 +22,7 @@ use av_toolbox_core::{
     Tag,
 };
 use av_toolbox_cubek::deinterlace::qtgmc::{Parity, QtgmcTables, sharpness_strength};
-use av_toolbox_cubek::motion::{BlockGrid, PlaneScale};
+use av_toolbox_cubek::motion::{BlockGrid, PROGRESSIVE_SAD_MASK, PlaneScale, SadMaskTables};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -41,11 +42,12 @@ use av_toolbox_gpu::{
 };
 
 pub(crate) use self::args::{Input, QtgmcArgs};
-use self::args::{checked_field_size, degrain_settings, motion_settings, scene_change};
+use self::args::{checked_field_size, degrain_settings, mask_scene_change, motion_settings, scene_change};
 use self::cache::FieldCache;
 use self::chain::{Chain, ChainSettings, PlaneShape};
+use self::front::kept_parity;
 #[cfg(feature = "test-support")]
-pub use self::testing::{QtgmcMotion, QtgmcMotionLog, qtgmc_with_motion_log};
+pub use self::testing::{QtgmcMotion, QtgmcMotionLog, QtgmcRepairFlag, qtgmc_with_motion_log};
 use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
 use crate::bits::bits_of;
 use crate::checks::accepts_frames;
@@ -80,12 +82,6 @@ fn checked_format(input: &FrameFormat) -> Result<(), StageError> {
     }
 
     Ok(())
-}
-
-fn not_built_yet(input: Input) -> StageError {
-    let message = format!("{STAGE} cannot process {input:?} input yet, its processing is not built");
-
-    StageError::msg(message)
 }
 
 /// The field order `input` is processed in, which progressive input does not need from the stream.
@@ -149,6 +145,7 @@ fn chain_settings(args: &QtgmcArgs) -> ChainSettings {
         strength: (args.sharpness > 0.0).then_some(strength),
         motion: motion_settings(),
         scene_change: scene_change(),
+        mask_scene_change: mask_scene_change(),
         tr1_degrain: degrain_settings(1, args.thsad1),
         tr2_degrain: degrain_settings(args.tr2.max(1), args.thsad2),
     }
@@ -167,15 +164,25 @@ fn deinterlacer<R: Runtime>(
 
     let client = context.client();
     let sizes: Vec<(u32, u32)> = shapes.iter().map(|shape| (shape.width, shape.height)).collect();
-    let tables = QtgmcTables::new(client, &sizes);
+    let luma = (input.width, input.height);
+    let tables = match args.input {
+        Input::Progressive => QtgmcTables::without_bobs(client, luma),
+        _ => QtgmcTables::new(client, &sizes),
+    };
     let settings = chain_settings(args);
     let grid = BlockGrid::new(&settings.motion, input.width, input.height);
+    let mask_tables = args
+        .input
+        .is_repair()
+        .then(|| SadMaskTables::new(client, &grid, PROGRESSIVE_SAD_MASK, luma));
     let rebuilder = FieldRebuilder::new(STAGE, client.clone(), input, predictor);
 
     let chain = Chain {
         rebuilder,
         predictor,
         tables,
+        mask_tables,
+        mode: args.input,
         input,
         output,
         shapes,
@@ -192,7 +199,6 @@ fn deinterlacer<R: Runtime>(
         chain,
         cache: FieldCache::new(),
         parities: [first, first.other()],
-        input: args.input,
         doubled: args.resolved_rate() == Rate::Double,
         half_frame: half_frame(input.frame_rate),
         #[cfg(feature = "test-support")]
@@ -282,8 +288,6 @@ impl FilterDefinition for Qtgmc {
 struct Deinterlacer<R: Runtime> {
     chain: Chain<R>,
     cache: FieldCache,
-    /// What the stage is given.
-    input: Input,
     /// The parity of each field of a frame, in the order they are shown.
     parities: [Parity; 2],
     /// Whether both fields of each frame are shown, rather than only the first.
@@ -300,6 +304,13 @@ impl<R: Runtime> Deinterlacer<R> {
     fn advance(&mut self, context: &FrameContext) -> Result<Vec<Frame>, StageError> {
         for field in self.cache.held() {
             self.chain.search_clip(context, &mut self.cache, field)?;
+        }
+
+        for field in self.cache.held() {
+            let repaired = self.chain.repair(context, &mut self.cache, field)?;
+            if repaired {
+                self.record_repair(field)?;
+            }
         }
 
         for field in self.cache.held() {
@@ -338,6 +349,47 @@ impl<R: Runtime> Deinterlacer<R> {
     fn record_motion(&self, _field: usize) -> Result<(), StageError> {
         Ok(())
     }
+
+    /// Records the repair mask's flag of `field` in the test log, when there is one.
+    #[cfg(feature = "test-support")]
+    fn record_repair(&self, field: usize) -> Result<(), StageError> {
+        let Some(log) = &self.log else {
+            return Ok(());
+        };
+
+        log.record_repair(&self.chain, &self.cache, field)
+    }
+
+    #[cfg(not(feature = "test-support"))]
+    fn record_repair(&self, _field: usize) -> Result<(), StageError> {
+        Ok(())
+    }
+
+    /// Adds one progressive frame to the cache as its own entry.
+    fn push_frame(&mut self, context: &FrameContext, frame: &Frame) -> Result<(), StageError> {
+        let meta = frame.meta().clone();
+        let reversed = self.chain.mode == Input::RepairReversed;
+        let kept = kept_parity(self.parities[0], reversed, meta.index);
+
+        let state = self.chain.entry_of(context, frame, kept, meta)?;
+        self.cache.push(state);
+
+        Ok(())
+    }
+
+    /// Adds both fields of one interlaced frame to the cache.
+    fn push_fields(&mut self, context: &FrameContext, frame: &Frame) -> Result<(), StageError> {
+        let metas = output_metas(frame.meta(), self.half_frame, self.doubled);
+        let mut shown = metas.into_iter();
+        let field_metas = [shown.next(), shown.next()];
+
+        let fields = self.chain.fields_of(context, frame, self.parities, field_metas)?;
+        for state in fields {
+            self.cache.push(state);
+        }
+
+        Ok(())
+    }
 }
 
 impl<R: Runtime> StageInstance for Deinterlacer<R> {
@@ -354,17 +406,9 @@ impl<R: Runtime> Filter for Deinterlacer<R> {
             return Err(missing_input(STAGE));
         };
 
-        if self.input != Input::Interlaced {
-            return Err(not_built_yet(self.input));
-        }
-
-        let metas = output_metas(next.meta(), self.half_frame, self.doubled);
-        let mut shown = metas.into_iter();
-        let field_metas = [shown.next(), shown.next()];
-
-        let fields = self.chain.fields_of(context, &next, self.parities, field_metas)?;
-        for state in fields {
-            self.cache.push(state);
+        match self.chain.mode.is_progressive() {
+            true => self.push_frame(context, &next)?,
+            false => self.push_fields(context, &next)?,
         }
 
         self.advance(context)

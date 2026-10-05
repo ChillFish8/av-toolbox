@@ -257,6 +257,25 @@ impl<R: Runtime> FieldRebuilder<R> {
         self.predictions(context, plane_index, current, &[even_kept, odd_kept])
     }
 
+    /// Runs the predictor's field pass on `current`, keeping the rows whose parity is `kept`.
+    ///
+    /// The cubic predictor has no field pass and gives `None`.
+    pub(crate) fn one_field(
+        &self,
+        context: &FrameContext,
+        plane_index: usize,
+        current: DevicePlane<'_>,
+        kept: u32,
+    ) -> Option<Scratch> {
+        let field = BwdifField {
+            rebuilt: 1 - kept,
+            first: true,
+        };
+
+        let mut predicted = self.predictions(context, plane_index, current, &[field]);
+        predicted.pop()
+    }
+
     /// Rebuilds plane `plane_index` of the window's current frame once for each of `fields`.
     pub(crate) fn rebuild_plane(
         &self,

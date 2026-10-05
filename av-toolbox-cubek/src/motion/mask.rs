@@ -1,6 +1,7 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
+use cubecl::server::Handle;
 
 use super::{BlockGrid, MotionField, SceneFlag, assert_field, assert_flag};
 use crate::{DevicePlane, Dispatch, assert_plane};
@@ -200,48 +201,87 @@ fn sad_mask_kernel(
     output[ABSOLUTE_POS] = byte as f32 * inverse_peak;
 }
 
+/// The tables [sad_mask] reads for one grid, threshold and output size, uploaded once.
+///
+/// Each SAD byte's threshold comes from `ml` and the grid's block size. The resize tables map each column
+/// and row of the output to the blocks around it, as `SimpleResize` does.
+pub struct SadMaskTables {
+    thresholds: Handle,
+    across: Handle,
+    down: Handle,
+    grid: BlockGrid,
+    width: u32,
+    height: u32,
+}
+
+impl SadMaskTables {
+    /// The tables for masks of `width` by `height` from fields on `grid`, at `ml`.
+    pub fn new<R: Runtime>(
+        client: &ComputeClient<R>,
+        grid: &BlockGrid,
+        ml: f32,
+        (width, height): (u32, u32),
+    ) -> Self {
+        assert!(
+            ml > 0.0 && ml.is_finite(),
+            "ml is {ml}, expected a positive value"
+        );
+        assert!(grid.blocks() > 0, "the grid holds no blocks");
+
+        let (covered_width, covered_height) = covered_area(grid);
+        let thresholds = byte_thresholds(ml, grid.blksize);
+        let across_table = axis_table(covered_width, grid.across, width);
+        let down_table = axis_table(covered_height, grid.down, height);
+
+        Self {
+            thresholds: client.create_from_slice(f32::as_bytes(&thresholds)),
+            across: client.create_from_slice(u32::as_bytes(&across_table)),
+            down: client.create_from_slice(u32::as_bytes(&down_table)),
+            grid: *grid,
+            width,
+            height,
+        }
+    }
+
+    /// The thresholds and both resize tables as planes.
+    fn planes(&self) -> [DevicePlane<'_>; 3] {
+        // Safety: `new` uploads 255 thresholds, and a pair of 4 byte values for each column and each row.
+        unsafe {
+            [
+                DevicePlane::new(&self.thresholds, LEVELS as u32, 1),
+                DevicePlane::new(&self.across, 2 * self.width, 1),
+                DevicePlane::new(&self.down, 2 * self.height, 1),
+            ]
+        }
+    }
+}
+
 /// Writes MVTools' `Mask(kind=1)` of `field` as a plane between 0 and 1, zero where `flag` is set.
 ///
 /// This follows `Mask` at `time = 100`, `gamma = 1` and `ysc = 0`. Each block's SAD becomes a byte as
-/// `ByteNorm` makes it with `ml`, and the bytes are resized to the area the blocks cover as `SimpleResize`
-/// does, in fixed point. Columns and rows past the covered area repeat its last column and row, and a byte
-/// is stored as its value times `1 / 255`.
+/// `ByteNorm` makes it with the `ml` of `tables`, and the bytes are resized to the area the blocks cover as
+/// `SimpleResize` does, in fixed point. Columns and rows past the covered area repeat its last column and
+/// row, and a byte is stored as its value times `1 / 255`.
 pub fn sad_mask<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     field: &MotionField<'_>,
     flag: SceneFlag<'_>,
-    ml: f32,
+    tables: &SadMaskTables,
     output: DevicePlane<'_>,
 ) {
     assert_field(field);
     assert_flag(&flag);
-    assert!(
-        ml > 0.0 && ml.is_finite(),
-        "ml is {ml}, expected a positive value"
+    assert_eq!(
+        field.grid, tables.grid,
+        "the field and the tables are on other grids"
     );
 
     let grid = &field.grid;
-    let (width, height) = (output.width(), output.height());
+    let (width, height) = (tables.width, tables.height);
     assert_plane(&output, width, height, "output");
 
-    let (covered_width, covered_height) = covered_area(grid);
-    let thresholds = byte_thresholds(ml, grid.blksize);
-    let across_table = axis_table(covered_width, grid.across, width);
-    let down_table = axis_table(covered_height, grid.down, height);
-
-    let threshold_handle = client.create_from_slice(f32::as_bytes(&thresholds));
-    let across_handle = client.create_from_slice(u32::as_bytes(&across_table));
-    let down_handle = client.create_from_slice(u32::as_bytes(&down_table));
-
-    // Safety: each buffer is made from exactly as many 4 byte values as its plane is wide.
-    let (threshold_plane, across_plane, down_plane) = unsafe {
-        (
-            DevicePlane::new(&threshold_handle, LEVELS as u32, 1),
-            DevicePlane::new(&across_handle, 2 * width, 1),
-            DevicePlane::new(&down_handle, 2 * height, 1),
-        )
-    };
+    let [threshold_plane, across_plane, down_plane] = tables.planes();
     assert_plane(&threshold_plane, LEVELS as u32, 1, "thresholds");
     assert_plane(&across_plane, 2 * width, 1, "across table");
     assert_plane(&down_plane, 2 * height, 1, "down table");

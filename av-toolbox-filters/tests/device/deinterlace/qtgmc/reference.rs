@@ -177,7 +177,7 @@ fn bottom_field_first_matches_the_reference_reordered() {
     assert_motion_fields(&run.motion, motion_fields, &reordered.name);
 
     let pairs = (lag..fields - lag).map(|field| (field, &run.outputs[field], &wanted.fields[field + 1]));
-    assert_paired_outputs(pairs, clip.sample(), &reordered.name);
+    assert_paired_outputs(pairs, clip.sample(), wanted.input, &reordered.name);
 }
 
 #[test]

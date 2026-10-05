@@ -73,7 +73,7 @@ fn single_rate_emits_the_first_field_of_each_frame() {
         .iter()
         .enumerate()
         .map(|(frame, output)| (2 * frame, output, &wanted.fields[2 * frame]));
-    assert_paired_outputs(pairs, clip.sample(), "single rate");
+    assert_paired_outputs(pairs, clip.sample(), wanted.input, "single rate");
 }
 
 #[test]

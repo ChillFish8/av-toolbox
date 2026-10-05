@@ -26,6 +26,7 @@ use av_toolbox_cubek::motion::{
     MotionSettings,
     PlaneScale,
     Pyramid,
+    SadMaskTables,
     SceneChange,
     build_pyramid,
     compensate,
@@ -37,7 +38,7 @@ use av_toolbox_cubek::motion::{
 use av_toolbox_gpu::{Frame, FrameContext, FrameError, FrameFormat, FrameMeta, Plane, Runtime};
 
 use super::cache::{FieldCache, FieldState, Motion, Neighbour, Place, Progress, Reach};
-use crate::deinterlace::qtgmc::STAGE;
+use crate::deinterlace::qtgmc::{Input, STAGE};
 use crate::deinterlace::rebuild::{FieldRebuilder, channel_plane};
 use crate::deinterlace::spatial::Predictor;
 use crate::scratch::Scratch;
@@ -52,13 +53,13 @@ const TR1_SECOND_WEIGHT: f32 = 0.2;
 /// The weight of `edi` in TR1 at a radius of 2.
 const TR1_EDI_WEIGHT_2: f32 = 0.0625;
 
-fn lost_slot(slot: &str, field: usize) -> StageError {
+pub(super) fn lost_slot(slot: &str, field: usize) -> StageError {
     let message = format!("{STAGE} lost the {slot} of field {field} before every step had read it");
 
     StageError::msg(message)
 }
 
-fn no_prediction(plane: usize) -> StageError {
+pub(super) fn no_prediction(plane: usize) -> StageError {
     let message = format!("{STAGE} got no spatial prediction of plane {plane}");
 
     StageError::msg(message)
@@ -71,7 +72,7 @@ fn bad_frame(error: FrameError) -> StageError {
 }
 
 /// The slot `slot` of `field`, refusing one already freed.
-fn held<'a, T>(slot: &'a Option<T>, name: &str, field: usize) -> Result<&'a T, StageError> {
+pub(super) fn held<'a, T>(slot: &'a Option<T>, name: &str, field: usize) -> Result<&'a T, StageError> {
     match slot {
         Some(value) => Ok(value),
         None => Err(lost_slot(name, field)),
@@ -79,7 +80,7 @@ fn held<'a, T>(slot: &'a Option<T>, name: &str, field: usize) -> Result<&'a T, S
 }
 
 /// The state of `field`, refusing one no longer held.
-fn state_of(cache: &FieldCache, field: usize) -> Result<&FieldState, StageError> {
+pub(super) fn state_of(cache: &FieldCache, field: usize) -> Result<&FieldState, StageError> {
     match cache.field(field) {
         Some(state) => Ok(state),
         None => Err(lost_slot("state", field)),
@@ -113,6 +114,8 @@ pub(super) struct ChainSettings {
     pub(super) strength: Option<f32>,
     pub(super) motion: MotionSettings,
     pub(super) scene_change: SceneChange,
+    /// The scene-change rule of repair's SAD mask.
+    pub(super) mask_scene_change: SceneChange,
     pub(super) tr1_degrain: DegrainSettings,
     pub(super) tr2_degrain: DegrainSettings,
 }
@@ -141,6 +144,10 @@ pub(super) struct Chain<R: Runtime> {
     pub(super) rebuilder: FieldRebuilder<R>,
     pub(super) predictor: Predictor,
     pub(super) tables: QtgmcTables,
+    /// The SAD mask's tables, for repair input alone.
+    pub(super) mask_tables: Option<SadMaskTables>,
+    /// What the stage is given.
+    pub(super) mode: Input,
     pub(super) input: FrameFormat,
     pub(super) output: FrameFormat,
     /// Each plane's shape, in channel order.
@@ -151,7 +158,7 @@ pub(super) struct Chain<R: Runtime> {
 }
 
 impl<R: Runtime> Chain<R> {
-    fn scratch(&self, context: &FrameContext, plane: usize) -> Scratch {
+    pub(super) fn scratch(&self, context: &FrameContext, plane: usize) -> Scratch {
         let shape = self.shapes[plane];
 
         Scratch::new::<f32>(context, shape.width, shape.height)
@@ -162,7 +169,7 @@ impl<R: Runtime> Chain<R> {
     }
 
     /// Bobs the field of `parity` in `frame`, plane `plane` of a widened frame.
-    fn bobbed(
+    pub(super) fn bobbed(
         &self,
         context: &FrameContext,
         frame: DevicePlane<'_>,
@@ -385,6 +392,8 @@ impl<R: Runtime> Chain<R> {
 
     /// Searches `field` against each of its neighbours that exist once their pyramids are built, and flags
     /// the scene changes among them, answering whether it ran.
+    ///
+    /// The search to the next field is the repair's, when the repair ran one.
     pub(super) fn find_motion(
         &self,
         context: &FrameContext,
@@ -392,7 +401,7 @@ impl<R: Runtime> Chain<R> {
         field: usize,
     ) -> Result<bool, StageError> {
         let state = state_of(cache, field)?;
-        if state.progress != Progress::Searched {
+        if state.progress != Progress::Repaired {
             return Ok(false);
         }
 
@@ -400,10 +409,16 @@ impl<R: Runtime> Chain<R> {
             return Ok(false);
         };
 
+        let Some(state) = cache.field_mut(field) else {
+            return Err(lost_slot("state", field));
+        };
+        let mut reused = state.next_search.take();
+
         let client = self.rebuilder.client();
         let sizing = Sizing(context);
         let settings = &self.settings.motion;
-        let buffers = cache.take_buffers(client, &self.grid, found.len());
+        let fresh_count = found.len() - usize::from(reused.is_some());
+        let mut fresh = cache.take_buffers(client, &self.grid, fresh_count).into_iter();
         let flags = match found.len() {
             0 => None,
             count => Some(cache.take_flags(client, count)),
@@ -416,7 +431,23 @@ impl<R: Runtime> Chain<R> {
         };
 
         let mut neighbours = Vec::with_capacity(found.len());
-        for ((delta, neighbour), buffers) in found.into_iter().zip(buffers) {
+        for (delta, neighbour) in found {
+            let reusable = match delta {
+                1 => reused.take(),
+                _ => None,
+            };
+            if let Some(buffers) = reusable {
+                neighbours.push(Neighbour {
+                    delta,
+                    field: neighbour,
+                    buffers,
+                });
+                continue;
+            }
+
+            let Some(buffers) = fresh.next() else {
+                return Err(lost_slot("motion buffers", field));
+            };
             let neighbour_state = state_of(cache, neighbour)?;
             let neighbour_levels = held(&neighbour_state.pyramid, "pyramid", neighbour)?;
             let searched = Pyramid {
@@ -702,6 +733,11 @@ impl<R: Runtime> Chain<R> {
             return Ok(false);
         }
 
+        let motion = held(&state.motion, "motion", field)?;
+        if !self.edi_ready(cache, motion) {
+            return Ok(false);
+        }
+
         let mut limited = Vec::with_capacity(self.shapes.len());
         for plane in 0..self.shapes.len() {
             let plane_limited = self.limit_plane(context, cache, field, plane)?;
@@ -715,6 +751,20 @@ impl<R: Runtime> Chain<R> {
         state.progress = Progress::Limited;
 
         Ok(true)
+    }
+
+    /// Whether every neighbour the limits and TR1 read from `motion` has its final `edi`.
+    fn edi_ready(&self, cache: &FieldCache, motion: &Motion) -> bool {
+        let radius = self.settings.reach().smoothed as i32;
+
+        motion
+            .neighbours
+            .iter()
+            .filter(|neighbour| neighbour.delta.abs() <= radius)
+            .all(|neighbour| match cache.field(neighbour.field) {
+                Some(state) => state.progress >= Progress::Repaired,
+                None => true,
+            })
     }
 
     /// Whether every neighbour TR2 reads from `motion` has its limited planes.

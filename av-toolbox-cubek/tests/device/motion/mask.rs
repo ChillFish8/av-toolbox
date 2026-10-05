@@ -5,6 +5,7 @@ use av_toolbox_cubek::motion::{
     MotionField,
     MotionSettings,
     PROGRESSIVE_SAD_MASK,
+    SadMaskTables,
     SceneFlag,
     sad_mask,
 };
@@ -98,7 +99,8 @@ impl BuildTask for MaskRun {
                 index: 0,
             };
             let output_plane = plane(&output, case.width, case.height);
-            sad_mask(client, &sizing, &field, flag, case.ml, output_plane);
+            let tables = SadMaskTables::new(client, &case.grid, case.ml, (case.width, case.height));
+            sad_mask(client, &sizing, &field, flag, &tables, output_plane);
 
             outputs.push(read_f32(client, &output));
         }

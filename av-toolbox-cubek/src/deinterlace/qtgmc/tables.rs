@@ -93,8 +93,25 @@ impl QtgmcTables {
         }
     }
 
+    /// Builds the gaussian tables of a `luma` plane, as `(width, height)`, without any bob taps.
+    ///
+    /// This is for frames that are never split into fields, whose planes may have an odd height.
+    pub fn without_bobs<R: Runtime>(client: &ComputeClient<R>, luma: (u32, u32)) -> Self {
+        Self {
+            bobs: Vec::new(),
+            narrow: GaussTables::new(client, luma, 2.0),
+            wide: GaussTables::new(client, luma, 5.0),
+        }
+    }
+
+    /// The bob taps of plane `plane` and `parity`, for tables built with them.
     pub fn bob(&self, plane: usize, parity: Parity) -> &BobWeights {
-        let pair = &self.bobs[plane];
+        let Some(pair) = self.bobs.get(plane) else {
+            panic!(
+                "plane {plane} has no bob taps, the tables hold {}",
+                self.bobs.len()
+            );
+        };
 
         match parity {
             Parity::Top => &pair[0],

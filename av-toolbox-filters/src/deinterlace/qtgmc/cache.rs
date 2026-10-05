@@ -12,6 +12,8 @@ pub(super) enum Progress {
     Interpolated,
     /// The field has its search pyramid.
     Searched,
+    /// The field has its final `edi`, which repair input rebuilds where the frame moves.
+    Repaired,
     /// The field has its motion to every neighbour that exists.
     Moved,
     /// The field has its limited planes.
@@ -47,6 +49,12 @@ pub(super) struct FieldState {
     pub(super) pyramid: Option<Vec<Scratch>>,
     /// The field with its missing rows rebuilt, one plane per channel.
     pub(super) edi: Option<Vec<Scratch>>,
+    /// The luma rebuilt from the field a repaired frame keeps, until the repair blends it in.
+    pub(super) rebuilt: Option<Scratch>,
+    /// The repair's search to the next field, which the motion search takes over.
+    pub(super) next_search: Option<FieldBuffers>,
+    /// The repair mask's scene-change flag, until the step that made it has finished.
+    pub(super) mask_flag: Option<SceneFlags>,
     pub(super) motion: Option<Motion>,
     /// The field after the limit, one plane per channel.
     pub(super) limited: Option<Vec<Scratch>>,
@@ -61,9 +69,20 @@ impl FieldState {
             bob: Some(bob),
             pyramid: None,
             edi: Some(edi),
+            rebuilt: None,
+            next_search: None,
+            mask_flag: None,
             motion: None,
             limited: None,
             output: None,
+        }
+    }
+
+    /// The same field, holding `rebuilt` for its repair.
+    pub(super) fn with_rebuilt(self, rebuilt: Scratch) -> Self {
+        Self {
+            rebuilt: Some(rebuilt),
+            ..self
         }
     }
 
@@ -71,6 +90,9 @@ impl FieldState {
         self.bob.is_none()
             && self.pyramid.is_none()
             && self.edi.is_none()
+            && self.rebuilt.is_none()
+            && self.next_search.is_none()
+            && self.mask_flag.is_none()
             && self.motion.is_none()
             && self.limited.is_none()
             && self.output.is_none()
@@ -130,6 +152,8 @@ impl FieldCache {
     pub(super) fn restart(&mut self) {
         let fields: Vec<FieldState> = self.fields.drain(..).collect();
         for state in fields {
+            self.spare_buffers.extend(state.next_search);
+            self.spare_flags.extend(state.mask_flag);
             self.recycle_motion(state.motion);
         }
 
@@ -223,6 +247,7 @@ impl FieldCache {
             let keep_edi = self.awaited(field, reach.smoothed, Progress::Limited)
                 || self.progress(field) < Progress::Finished;
             let keep_motion = self.progress(field) < Progress::Finished;
+            let keep_mask_flag = self.progress(field) < Progress::Repaired;
             let keep_limited = self.awaited(field, reach.tr2, Progress::Finished);
 
             let Some(state) = self.field_mut(field) else {
@@ -245,10 +270,16 @@ impl FieldCache {
                 state.limited = None;
             }
 
-            if !keep_motion {
-                let motion = state.motion.take();
-                self.recycle_motion(motion);
-            }
+            let mask_flag = match keep_mask_flag {
+                true => None,
+                false => state.mask_flag.take(),
+            };
+            let motion = match keep_motion {
+                true => None,
+                false => state.motion.take(),
+            };
+            self.spare_flags.extend(mask_flag);
+            self.recycle_motion(motion);
         }
 
         while let Some(front) = self.fields.front() {

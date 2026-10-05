@@ -67,7 +67,7 @@ fn at_444(clip: &Clip) -> Clip {
 }
 
 /// `clip` at 4:2:2, with chroma made from its luma a horizontal pair at a time, on every row.
-fn at_422(clip: &Clip) -> Clip {
+pub(super) fn at_422(clip: &Clip) -> Clip {
     let full = at_444(clip);
     let frames = full
         .frames
@@ -89,7 +89,7 @@ fn at_422(clip: &Clip) -> Clip {
 }
 
 /// `clip`, a 10-bit clip, lifted to 16 bits.
-fn at_16_bit(clip: &Clip) -> Clip {
+pub(super) fn at_16_bit(clip: &Clip) -> Clip {
     assert_eq!(clip.bits, 10, "{} is not a 10-bit clip", clip.name);
 
     let frames = clip

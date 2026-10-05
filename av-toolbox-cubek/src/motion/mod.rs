@@ -36,7 +36,7 @@ pub use self::chain::chain;
 pub use self::compensate::{CompensatePlanes, PlaneScale, compensate, window_weight};
 pub(crate) use self::compensate::{block_window, half_pel_component, upper_block};
 pub use self::confidence::ConfidenceScores;
-pub use self::mask::{PROGRESSIVE_SAD_MASK, sad_mask};
+pub use self::mask::{PROGRESSIVE_SAD_MASK, SadMaskTables, sad_mask};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use self::mask::{
     WEIGHT_HALF,

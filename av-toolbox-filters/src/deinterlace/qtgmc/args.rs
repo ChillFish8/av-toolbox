@@ -16,6 +16,12 @@ const SCENE_CHANGE_SAD: f32 = 180.0;
 /// How many of every 255 blocks may change before a neighbour counts as a scene change.
 const SCENE_CHANGE_BLOCKS: u32 = 98;
 
+/// [SCENE_CHANGE_SAD] for repair's SAD mask, MVTools' default as QTGMC sets none.
+const MASK_SCENE_CHANGE_SAD: f32 = 400.0;
+
+/// [SCENE_CHANGE_BLOCKS] for repair's SAD mask, MVTools' default as QTGMC sets none.
+const MASK_SCENE_CHANGE_BLOCKS: u32 = 130;
+
 /// Names `deinterlace/qtgmc` in a refusal of its `spatial`.
 #[derive(Debug)]
 pub(crate) struct QtgmcSpatial;
@@ -172,6 +178,14 @@ pub(crate) const fn scene_change() -> SceneChange {
     SceneChange {
         thscd1: SCENE_CHANGE_SAD,
         thscd2: SCENE_CHANGE_BLOCKS,
+    }
+}
+
+/// The scene-change rule of repair's SAD mask.
+pub(crate) const fn mask_scene_change() -> SceneChange {
+    SceneChange {
+        thscd1: MASK_SCENE_CHANGE_SAD,
+        thscd2: MASK_SCENE_CHANGE_BLOCKS,
     }
 }
 

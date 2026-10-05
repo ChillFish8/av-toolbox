@@ -42,10 +42,20 @@ pub struct QtgmcMotion {
     pub flagged: bool,
 }
 
-/// Every motion search a stage built by [qtgmc_with_motion_log] ran, in the order it ran them.
+/// The scene-change flag of one repair mask the stage built, read back from the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QtgmcRepairFlag {
+    /// The repaired field's number within its chunk.
+    pub field: usize,
+    pub flagged: bool,
+}
+
+/// Every motion search and repair mask flag a stage built by [qtgmc_with_motion_log] ran, in the order it
+/// ran them.
 #[derive(Debug, Clone, Default)]
 pub struct QtgmcMotionLog {
     searches: Arc<Mutex<Vec<QtgmcMotion>>>,
+    repairs: Arc<Mutex<Vec<QtgmcRepairFlag>>>,
 }
 
 impl QtgmcMotionLog {
@@ -54,6 +64,33 @@ impl QtgmcMotionLog {
         let mut searches = self.searches.lock().unwrap_or_else(|error| error.into_inner());
 
         std::mem::take(&mut *searches)
+    }
+
+    /// Takes every repair mask flag recorded so far.
+    pub fn take_repairs(&self) -> Vec<QtgmcRepairFlag> {
+        let mut repairs = self.repairs.lock().unwrap_or_else(|error| error.into_inner());
+
+        std::mem::take(&mut *repairs)
+    }
+
+    /// Reads the repair mask flag of `field` back and records it, when its repair built a mask.
+    pub(super) fn record_repair<R: Runtime>(
+        &self,
+        chain: &Chain<R>,
+        cache: &FieldCache,
+        field: usize,
+    ) -> Result<(), StageError> {
+        let Some(flags) = cache.field(field).and_then(|state| state.mask_flag.as_ref()) else {
+            return Ok(());
+        };
+        let client = chain.rebuilder.client();
+        let read_flags = read::<R, u32>(client, flags.plane().handle())?;
+
+        let flagged = read_flags.first().is_some_and(|flag| *flag != 0);
+        let mut repairs = self.repairs.lock().unwrap_or_else(|error| error.into_inner());
+        repairs.push(QtgmcRepairFlag { field, flagged });
+
+        Ok(())
     }
 
     /// Reads the motion of `field` back and records each of its searches.
