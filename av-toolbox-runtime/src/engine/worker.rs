@@ -1,8 +1,9 @@
 use std::sync::mpsc::SyncSender;
 
-use av_toolbox_gpu::AnyItem;
+use av_toolbox_gpu::{AnyItem, LayerId};
 
 use super::region::WorkerSlot;
+use crate::chunks::chunk_in;
 use crate::{RunError, WorkItem, WorkResult};
 
 /// Runs one worker of an exchanged region, one unit at a time.
@@ -27,6 +28,8 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
         result_sender,
     } = worker;
 
+    let layer = runner.layer();
+
     runner.start(&mut context)?;
     let mut started = true;
     let mut chunk_in_hand = None;
@@ -39,7 +42,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                     started = true;
                 }
 
-                chunk_in_hand = bundle_chunk(&bundle);
+                chunk_in_hand = bundle_chunk(&bundle, layer);
 
                 let run = runner.run(&mut context, bundle);
                 let produced = run.map_err(|error| named_chunk(error, chunk_in_hand))?;
@@ -53,7 +56,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                     started = true;
                 }
 
-                chunk_in_hand = bundle_chunk(&bundle);
+                chunk_in_hand = bundle_chunk(&bundle, layer);
 
                 let run = runner.run(&mut context, bundle);
                 let produced = run.map_err(|error| named_chunk(error, chunk_in_hand))?;
@@ -96,11 +99,11 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
     Ok(())
 }
 
-/// The chunk a bundle belongs to, taken from the first slot carrying an item.
-fn bundle_chunk(bundle: &[Option<AnyItem>]) -> Option<u64> {
+/// The chunk a bundle belongs to in `layer`, taken from the first slot carrying an item.
+fn bundle_chunk(bundle: &[Option<AnyItem>], layer: Option<LayerId>) -> Option<u64> {
     let item = bundle.iter().flatten().next()?;
 
-    Some(item.meta().chunk)
+    Some(chunk_in(item.meta(), layer))
 }
 
 /// `error`, said to have come from `chunk` when there is one to name.

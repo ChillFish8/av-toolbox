@@ -8,6 +8,7 @@ use av_toolbox_gpu::AnyItem;
 use super::channel::{AggregateSignal, ExitMessage, send_routed};
 use super::freedom::{FirstIdle, WorkerFreedom};
 use super::region::DisperseSide;
+use crate::chunks::chunk_in;
 use crate::disperse::Dropped;
 use crate::{Cancel, Disperse, ExchangeError, RunError, RunWarning, WorkItem};
 
@@ -55,6 +56,7 @@ pub(super) fn drive_disperse(
         work_senders,
         assignment_sender,
         authority,
+        layer,
         width,
         head,
     } = side;
@@ -79,13 +81,8 @@ pub(super) fn drive_disperse(
                     .expect("this slot's queue was just confirmed non-empty");
 
                 if let Some(authority) = authority {
-                    note_chunk(
-                        slot,
-                        authority,
-                        item.meta().chunk,
-                        &mut authority_chunked,
-                        &mut other_chunked,
-                    );
+                    let chunk = chunk_in(item.meta(), layer);
+                    note_chunk(slot, authority, chunk, &mut authority_chunked, &mut other_chunked);
                 }
 
                 let offered = disperse.offer(slot, item);

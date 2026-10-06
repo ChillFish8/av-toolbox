@@ -342,7 +342,7 @@ impl Engine {
                 freedom: freedom.clone(),
             };
             let disperse = match authority {
-                Some(authority) => Disperse::new(&bound, authority, dispatch),
+                Some(authority) => Disperse::new(&bound, authority, dispatch).with_layer(region.layer()),
                 None => Disperse::by_frame(&bound, dispatch),
             };
             let upstream = inbound
@@ -396,6 +396,7 @@ impl Engine {
                     work_senders,
                     assignment_sender,
                     authority,
+                    layer: region.layer(),
                     width,
                     head: region.head(),
                 },

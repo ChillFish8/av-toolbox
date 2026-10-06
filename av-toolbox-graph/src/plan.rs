@@ -1,4 +1,5 @@
 use av_toolbox_core::{AnyDemand, Granularity, PipelineRegistry, PreparedStage, Residency};
+use av_toolbox_gpu::LayerId;
 
 use crate::diagnostic::stage_path;
 use crate::graph::{CompiledGraph, NodeId, NodeRole};
@@ -52,6 +53,7 @@ pub struct NodePlan {
     narrowed: Option<Narrowed>,
     routing: Routing,
     chunk_authority: Option<usize>,
+    layer: Option<LayerId>,
 }
 
 impl NodePlan {
@@ -65,6 +67,7 @@ impl NodePlan {
             narrowed: Some(Narrowed::NotAsked),
             routing: Routing::ByChunk,
             chunk_authority: None,
+            layer: None,
         }
     }
 
@@ -97,6 +100,11 @@ impl NodePlan {
     pub fn chunk_authority(&self) -> Option<usize> {
         self.chunk_authority
     }
+
+    /// The scene layer this node routes and restarts its chunks on.
+    pub fn layer(&self) -> Option<LayerId> {
+        self.layer
+    }
 }
 
 /// A set of nodes one worker runs a private copy of.
@@ -107,6 +115,7 @@ pub struct Region {
     head: NodeId,
     nodes: Vec<NodeId>,
     chunk_authority: Option<usize>,
+    layer: Option<LayerId>,
     routing: Routing,
     disperse: bool,
     aggregate: bool,
@@ -137,6 +146,11 @@ impl Region {
     /// authority is the one whose slot equals this index.
     pub fn chunk_authority(&self) -> Option<usize> {
         self.chunk_authority
+    }
+
+    /// The scene layer the region routes its chunks on, which is its head's.
+    pub fn layer(&self) -> Option<LayerId> {
+        self.layer
     }
 
     pub fn routing(&self) -> Routing {
@@ -186,8 +200,8 @@ impl ExecutionPlan {
 ///
 /// Once every width is settled, nodes are grouped into regions in the same topological order. A
 /// node joins its producer's region when every input comes from that one region and the width
-/// matches, and heads a region of its own otherwise. A crossing only joins when it is its
-/// producer's only consumer.
+/// matches, and heads a region of its own otherwise. A node with a scene layer also needs the
+/// region to route on that layer. A crossing only joins when it is its producer's only consumer.
 ///
 /// A region may have at most one exit. When one has more, a node at its branch is sealed, so
 /// nothing reading it may join its region, and the regions are placed again.
@@ -284,6 +298,7 @@ impl Planner<'_> {
             narrowed,
             routing: Routing::ByChunk,
             chunk_authority: stage.chunk_authority(),
+            layer: node.layer(),
         });
     }
 
@@ -344,7 +359,7 @@ impl Planner<'_> {
             return;
         }
 
-        match self.shared_producer_region(&sources, width) {
+        match self.shared_producer_region(&sources, width, node.layer()) {
             Some(region) => self.join_region(id, region),
             None => {
                 self.open_region(id, width);
@@ -360,8 +375,14 @@ impl Planner<'_> {
 
     /// The one region every input already shares, when its width matches this node's own.
     ///
-    /// A sealed input never counts, so a node reading one heads a region of its own.
-    fn shared_producer_region(&self, sources: &[NodeId], width: usize) -> Option<RegionId> {
+    /// A sealed input never counts, so a node reading one heads a region of its own. A node with a
+    /// layer only joins a region routed on that same layer.
+    fn shared_producer_region(
+        &self,
+        sources: &[NodeId],
+        width: usize,
+        layer: Option<LayerId>,
+    ) -> Option<RegionId> {
         let first_source = *sources.first()?;
 
         let any_sealed = sources.iter().any(|source| self.sealed[source.index()]);
@@ -377,7 +398,9 @@ impl Planner<'_> {
         }
 
         let region = &self.regions[candidate.index()];
-        (region.width == width).then_some(candidate)
+        let same_layer = layer.is_none() || layer == region.layer;
+
+        (region.width == width && same_layer).then_some(candidate)
     }
 
     fn region_of(&self, id: NodeId) -> RegionId {
@@ -411,6 +434,7 @@ impl Planner<'_> {
             head,
             nodes: vec![head],
             chunk_authority,
+            layer: self.graph.node(head).layer(),
             routing: Routing::ByChunk,
             disperse: head_inputs > 0 && (width > 1 || head_inputs > 1),
             aggregate: width > 1,

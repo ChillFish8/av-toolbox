@@ -1,4 +1,5 @@
 use av_toolbox_core::{Granularity, StageKind};
+use av_toolbox_gpu::LayerId;
 use serde_json::json;
 
 use crate::graph::{CompiledGraph, Node, NodeId};
@@ -214,6 +215,34 @@ fn a_chain_of_equal_width_nodes_is_one_region() {
         plan.region(first_region).nodes(),
         &[NodeId::new(1), NodeId::new(2)]
     );
+}
+
+#[test]
+fn a_node_on_another_layer_starts_its_own_region() {
+    let mut first = temporal("first", "input", 1);
+    first.workers = Some(4);
+    let second = temporal("second", "first", 1);
+
+    let specs = [source("input"), first, second, sink("out", "second")];
+    let registry = testing::registry();
+    let mut graph = build(&registry, &specs).expect("should build").into_graph();
+    let first_id = node_named(&graph, "first");
+    let second_id = node_named(&graph, "second");
+    graph.node_mut(first_id).set_layer(LayerId(0));
+    graph.node_mut(second_id).set_layer(LayerId(1));
+
+    let plan = plan(&graph, &registry).expect("should plan");
+
+    let first_region = plan.node(first_id).region();
+    let second_region = plan.node(second_id).region();
+    assert_eq!(plan.node(first_id).granularity(), Granularity::Chunk);
+    assert_eq!(plan.node(second_id).granularity(), Granularity::Chunk);
+    assert_eq!(plan.node(second_id).width(), 4);
+    assert_ne!(first_region, second_region);
+    assert_eq!(plan.node(first_id).layer(), Some(LayerId(0)));
+    assert_eq!(plan.node(second_id).layer(), Some(LayerId(1)));
+    assert_eq!(plan.region(first_region).layer(), Some(LayerId(0)));
+    assert_eq!(plan.region(second_region).layer(), Some(LayerId(1)));
 }
 
 #[test]

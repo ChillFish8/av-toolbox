@@ -18,6 +18,7 @@ use crate::{
     HostItem,
     HostPlanes,
     HostStreamItem,
+    Layers,
     LoadItem,
     MaskChroma,
     MaskFormat,
@@ -179,6 +180,7 @@ fn a_host_frame_keeps_its_bytes_and_place_through_an_upload_and_unload() {
     let meta = FrameMeta {
         index: 12,
         chunk: 3,
+        chunks: Layers::default(),
         timestamp: Some(Duration::from_millis(480)),
         scene_score: Some(SceneScore::new(2.5)),
         attachments: Attachments::new(),

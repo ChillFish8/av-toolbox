@@ -327,6 +327,7 @@ mod tests {
         FrameBudget,
         FrameLayout,
         HostStreamItem,
+        Layers,
         MetaValue,
         SampleFormat,
         SceneScore,
@@ -623,6 +624,7 @@ mod tests {
         let stamped = FrameMeta {
             index: 12,
             chunk: 0,
+            chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: Some(SceneScore::new(2.5)),
             attachments: Attachments::new(),
@@ -756,6 +758,7 @@ mod tests {
         let stamped = FrameMeta {
             index: 12,
             chunk: 3,
+            chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(40)),
             scene_score: Some(SceneScore::new(2.5)),
             attachments: Attachments::new(),
@@ -789,6 +792,7 @@ mod tests {
         let stamped = FrameMeta {
             index: 6,
             chunk: 1,
+            chunks: Layers::default(),
             timestamp: None,
             scene_score: None,
             attachments,

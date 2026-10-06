@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 
-use av_toolbox_gpu::{FrameBudget, FrameContext};
+use av_toolbox_gpu::{FrameBudget, FrameContext, LayerId};
 use av_toolbox_graph::NodeId;
 
 use super::channel::{AggregateSignal, DownstreamLink, Slotted};
@@ -86,6 +86,8 @@ pub(super) struct DisperseSide {
     /// The slot the disperse routes every bundle by, for a region routed by chunk. A frame
     /// routed region reads no chunk id at all, so it has none.
     pub(super) authority: Option<usize>,
+    /// The scene layer the region routes its chunks on.
+    pub(super) layer: Option<LayerId>,
     /// How many workers the region runs, for telling a genuine width-one join from one that
     /// simply has nothing else to spread work across.
     pub(super) width: usize,

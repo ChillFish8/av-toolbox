@@ -1,5 +1,6 @@
-use av_toolbox_gpu::AnyItem;
+use av_toolbox_gpu::{AnyItem, LayerId};
 
+use crate::chunks::chunk_in;
 use crate::{Assignment, ExchangeError, WorkItem};
 
 /// Chooses which worker takes the next unit.
@@ -105,6 +106,7 @@ pub struct Disperse<D> {
     slots: usize,
     bound: Vec<bool>,
     routing: RoutingState,
+    layer: Option<LayerId>,
     dispatch: D,
     pending: Vec<Option<AnyItem>>,
     held: Option<HeldBundle>,
@@ -148,12 +150,19 @@ impl<D: Dispatch> Disperse<D> {
             slots: bound.len(),
             bound: bound.to_vec(),
             routing,
+            layer: None,
             dispatch,
             pending: vec![None; bound.len()],
             held: None,
             assignments: Vec::new(),
             finished: false,
         }
+    }
+
+    /// The same disperse, reading each bundle's chunk from `layer`.
+    pub fn with_layer(mut self, layer: Option<LayerId>) -> Self {
+        self.layer = layer;
+        self
     }
 
     /// The unit given to each worker, in the order it was dispatched.
@@ -346,11 +355,10 @@ impl<D: Dispatch> Disperse<D> {
 
         match &mut self.routing {
             RoutingState::ByChunk { authority, current } => {
-                let chunk = self.pending[*authority]
+                let authoritative = self.pending[*authority]
                     .as_ref()
-                    .expect("the authority slot is bound and filled once a bundle is complete")
-                    .meta()
-                    .chunk;
+                    .expect("the authority slot is bound and filled once a bundle is complete");
+                let chunk = chunk_in(authoritative.meta(), self.layer);
 
                 let bundle = std::mem::replace(&mut self.pending, vec![None; self.slots]);
 
@@ -435,6 +443,7 @@ mod tests {
         FrameFormat,
         FrameLayout,
         FrameMeta,
+        LayerId,
         SampleFormat,
         StreamItem,
         Subsampling,
@@ -541,6 +550,40 @@ mod tests {
         let second = disperse.offer(0, item(1, 7)).expect("should accept");
 
         assert_eq!(first.routed.worker, second[0].worker);
+    }
+
+    fn layered_item(index: u64, layer_zero: u64, layer_one: u64) -> AnyItem {
+        let context = testing_context();
+        let meta = FrameMeta::at(index)
+            .in_layer(LayerId(0), layer_zero)
+            .in_layer(LayerId(1), layer_one);
+        StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
+    }
+
+    #[test]
+    fn a_disperse_routes_on_its_layer() {
+        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2)).with_layer(Some(LayerId(1)));
+        disperse.offer(0, layered_item(0, 0, 0)).expect("should accept");
+        disperse.place().expect("round robin always has a free worker");
+
+        let second = disperse.offer(0, layered_item(1, 0, 0)).expect("should accept");
+        assert!(matches!(
+            second[..],
+            [Routed {
+                item: WorkItem::Bundle(_),
+                ..
+            }]
+        ));
+
+        let third = disperse.offer(0, layered_item(2, 0, 1)).expect("should accept");
+        assert!(matches!(
+            third[..],
+            [Routed {
+                item: WorkItem::EndOfChunk(0),
+                ..
+            }]
+        ));
+        assert!(disperse.is_holding());
     }
 
     #[test]

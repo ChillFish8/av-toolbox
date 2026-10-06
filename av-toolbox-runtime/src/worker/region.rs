@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use av_toolbox_gpu::{AnyItem, FrameContext, StreamItem, StreamPolicy};
+use av_toolbox_gpu::{AnyItem, FrameContext, LayerId, StreamItem, StreamPolicy};
 use av_toolbox_graph::{NodeId, StageBox};
 
 use super::node::{end_node, run_node, start_node};
 use crate::RunError;
+use crate::chunks::chunk_in;
 use crate::profile::{Counted, Profiler};
 
 /// One node's output filling one of another node's input slots.
@@ -21,15 +22,17 @@ pub struct Feed {
 /// [RegionRunner]'s own node list. Each entry lists which producer fills which of that node's
 /// input slots. `exits` names the nodes whose output leaves the region. `paths` names each stage
 /// node, so what it emits is filed under that name. `chunked` names the nodes given one chunk at a
-/// time, which are restarted whenever their inputs move to a new one. `authorities` names, per node, the
-/// input slot its chunk is read from, falling back to its lowest filled slot. `frame_routed` marks a region
-/// whose output is returned per input frame, so a filter returning no frames is an error.
+/// time, which are restarted whenever their inputs move to a new one. `layers` names the scene layer
+/// each node reads its chunk from. `authorities` names, per node, the input slot its chunk is read
+/// from, falling back to its lowest filled slot. `frame_routed` marks a region whose output is
+/// returned per input frame, so a filter returning no frames is an error.
 #[derive(Debug)]
 pub struct RegionEdges {
     feeds: Vec<Vec<Feed>>,
     exits: Vec<NodeId>,
     paths: HashMap<NodeId, Arc<str>>,
     chunked: HashSet<NodeId>,
+    layers: HashMap<NodeId, LayerId>,
     authorities: HashMap<NodeId, usize>,
     frame_routed: bool,
 }
@@ -41,6 +44,7 @@ impl RegionEdges {
             exits,
             paths: HashMap::new(),
             chunked: HashSet::new(),
+            layers: HashMap::new(),
             authorities: HashMap::new(),
             frame_routed: false,
         }
@@ -55,6 +59,12 @@ impl RegionEdges {
     /// The same edges, restarting each of `chunked` whenever its inputs move to a new chunk.
     pub fn with_chunked(mut self, chunked: HashSet<NodeId>) -> Self {
         self.chunked = chunked;
+        self
+    }
+
+    /// The same edges, reading each node's chunk from the scene layer `layers` names for it.
+    pub fn with_layers(mut self, layers: HashMap<NodeId, LayerId>) -> Self {
+        self.layers = layers;
         self
     }
 
@@ -113,6 +123,12 @@ impl RegionRunner {
         }
     }
 
+    /// The scene layer the region routes its chunks on, which is its head's.
+    pub(crate) fn layer(&self) -> Option<LayerId> {
+        let head = self.nodes[0].0;
+        self.edges.layers.get(&head).copied()
+    }
+
     /// The same runner, timing every stage call through `profiler` when there is one.
     pub(crate) fn profiled(mut self, profiler: Option<Arc<Profiler>>) -> Self {
         self.profiler = profiler;
@@ -147,6 +163,7 @@ impl RegionRunner {
             chunked: self.edges.chunked.contains(&self.nodes[0].0),
             frame_routed: self.edges.frame_routed,
             authority: self.edges.authorities.get(&self.nodes[0].0).copied(),
+            layer: self.edges.layers.get(&self.nodes[0].0).copied(),
             last: &mut self.last_chunks[0],
             profiler: self.profiler.as_deref(),
         };
@@ -164,6 +181,7 @@ impl RegionRunner {
                 chunked: self.edges.chunked.contains(&node),
                 frame_routed: self.edges.frame_routed,
                 authority: self.edges.authorities.get(&node).copied(),
+                layer: self.edges.layers.get(&node).copied(),
                 last: &mut self.last_chunks[index],
                 profiler: self.profiler.as_deref(),
             };
@@ -206,6 +224,7 @@ impl RegionRunner {
                 chunked: self.edges.chunked.contains(&node),
                 frame_routed: self.edges.frame_routed,
                 authority: self.edges.authorities.get(&node).copied(),
+                layer: self.edges.layers.get(&node).copied(),
                 last: &mut self.last_chunks[index],
                 profiler: self.profiler.as_deref(),
             };
@@ -246,6 +265,7 @@ struct NodeWatch<'a> {
     chunked: bool,
     frame_routed: bool,
     authority: Option<usize>,
+    layer: Option<LayerId>,
     last: &'a mut Option<u64>,
     profiler: Option<&'a Profiler>,
 }
@@ -306,7 +326,7 @@ fn step_node(
     let mut produced = Vec::new();
 
     if watch.chunked {
-        let chunk = chunk_of(&slots, watch.authority);
+        let chunk = chunk_of(&slots, watch.authority, watch.layer);
         let mut flushed = restart_on_new_chunk(node, watch, chunk, context)?;
         produced.append(&mut flushed);
     }
@@ -328,15 +348,15 @@ fn is_filter(stage: &StageBox) -> bool {
     matches!(stage, StageBox::Filter(_) | StageBox::HostFilter(_))
 }
 
-/// The chunk a bundle belongs to, read from the slot `authority` names or else its lowest filled slot.
-fn chunk_of(slots: &[Option<AnyItem>], authority: Option<usize>) -> Option<u64> {
+/// The chunk a bundle belongs to in `layer`, read from the slot `authority` names or else its lowest filled slot.
+fn chunk_of(slots: &[Option<AnyItem>], authority: Option<usize>, layer: Option<LayerId>) -> Option<u64> {
     let authoritative = authority
         .and_then(|slot| slots.get(slot))
         .and_then(Option::as_ref);
     let first_filled = slots.iter().flatten().next();
     let item = authoritative.or(first_filled)?;
 
-    Some(item.meta().chunk)
+    Some(chunk_in(item.meta(), layer))
 }
 
 /// Ends and starts `node` again when `chunk` differs from the one it last ran on, returning what it flushed.

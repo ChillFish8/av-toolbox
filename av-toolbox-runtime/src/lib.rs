@@ -1,5 +1,6 @@
 mod aggregate;
 mod cancel;
+mod chunks;
 mod disperse;
 mod engine;
 mod error;

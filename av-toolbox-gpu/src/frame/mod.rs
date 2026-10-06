@@ -12,6 +12,7 @@ mod format;
 pub(crate) mod gpu;
 mod host;
 mod host_frame;
+mod layers;
 mod layout;
 mod rate;
 mod sample;
@@ -45,6 +46,7 @@ pub use self::gpu::{
 };
 pub use self::host::{HostItem, HostPlanes};
 pub use self::host_frame::{HostFrame, HostFrameMut, HostMask, HostMaskMut, HostPlane, HostStreamItem};
+pub use self::layers::{LayerId, Layers};
 pub use self::layout::{Channel, FrameLayout, Subsampling};
 pub use self::rate::FrameRate;
 pub use self::sample::{Depth, DepthError, SampleFormat};

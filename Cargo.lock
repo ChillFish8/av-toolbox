@@ -299,6 +299,8 @@ version = "0.1.0"
 dependencies = [
  "cubecl",
  "etcetera",
+ "schemars",
+ "serde",
  "strum",
  "strum_macros",
  "tempfile",

@@ -29,6 +29,7 @@ use av_toolbox_gpu::{
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    LayerId,
     MetaValue,
     SampleFormat,
     StreamItem,

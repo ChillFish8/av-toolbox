@@ -220,3 +220,66 @@ fn a_failing_restart_flush_names_the_chunk_it_was_flushing() {
 
     assert_eq!(error.chunk(), Some(0));
 }
+
+/// Passes its input through, counting each time it is started.
+struct StartCounting {
+    starts: Arc<AtomicUsize>,
+}
+
+impl StageInstance for StartCounting {
+    fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl Filter for StartCounting {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs.take_frame(0).ok_or_else(missing_item)?;
+        Ok(vec![frame])
+    }
+}
+
+#[test]
+fn a_node_restarts_on_its_own_layer() {
+    let context = testing_context();
+    let head = NodeId::new(0);
+    let next = NodeId::new(1);
+    let head_starts = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let counting = StartCounting {
+        starts: head_starts.clone(),
+    };
+    let recording = StartRecording { seen: seen.clone() };
+    let nodes = vec![
+        (head, StageBox::Filter(Box::new(counting))),
+        (next, StageBox::Sink(Box::new(recording))),
+    ];
+    let feeds = vec![vec![Feed {
+        producer: head,
+        slot: 0,
+    }]];
+    let layers = HashMap::from([(head, LayerId(0)), (next, LayerId(1))]);
+    let edges = RegionEdges::new(feeds, vec![])
+        .with_chunked(HashSet::from([head, next]))
+        .with_layers(layers);
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    runner.start(&mut context_of(&context)).expect("should start");
+
+    for (index, chunk) in [(0, 0), (1, 0), (2, 1), (3, 1)] {
+        let meta = FrameMeta::at(index)
+            .in_layer(LayerId(0), 0)
+            .in_layer(LayerId(1), chunk);
+        let frame = context.alloc_frame(&format(), meta);
+        let bundle = vec![Some(StreamItem::Frame(frame).into())];
+        runner.run(&mut context_of(&context), bundle).expect("should run");
+    }
+
+    runner.end(&mut context_of(&context)).expect("should end");
+
+    let started = u64::MAX;
+    let expected = vec![started, 0, 1, started, 2, 3];
+    assert_eq!(*seen.lock().expect("not poisoned"), expected);
+    assert_eq!(head_starts.load(Ordering::SeqCst), 1);
+}

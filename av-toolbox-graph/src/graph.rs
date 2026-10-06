@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use av_toolbox_core::{Crossing, OpenSlot, Residency, StageHandle, StageKind, StreamType};
+use av_toolbox_gpu::LayerId;
 use serde_json::Value;
 
 use crate::diagnostic::stage_path;
@@ -162,6 +163,8 @@ pub struct Node {
     /// What a source's stage learned by opening its input, shared across every pass that prepares
     /// this node.
     open: OpenSlot,
+    /// The scene layer this node routes and restarts its chunks on.
+    layer: Option<LayerId>,
 }
 
 impl Node {
@@ -182,6 +185,7 @@ impl Node {
             residency: None,
             stream: parts.kind.output(),
             open: OpenSlot::new(),
+            layer: None,
         }
     }
 
@@ -261,6 +265,19 @@ impl Node {
     /// The slot a source opens its input into, shared by every pass that prepares this node.
     pub fn open_slot(&self) -> &OpenSlot {
         &self.open
+    }
+
+    /// The scene layer this node routes and restarts its chunks on, if it has one.
+    pub fn layer(&self) -> Option<LayerId> {
+        self.layer
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only tests give a node a layer so far")
+    )]
+    pub(crate) fn set_layer(&mut self, layer: LayerId) {
+        self.layer = Some(layer);
     }
 }
 
@@ -384,6 +401,7 @@ impl CompiledGraph {
             residency: Some(crossing.to_side()),
             stream: source.output_stream(),
             open: OpenSlot::new(),
+            layer: None,
         };
 
         self.nodes.push(node);

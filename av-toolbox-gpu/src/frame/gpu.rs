@@ -7,6 +7,7 @@ use cubecl::server::Handle;
 
 use crate::frame::attachments::{Attachments, MetaValue};
 use crate::frame::format::{ColourInfo, FrameFormat, MaskChroma, MaskFormat, StreamFormat};
+use crate::frame::layers::{LayerId, Layers};
 use crate::frame::layout::{Channel, FrameLayout};
 use crate::memory::FrameBudget;
 
@@ -202,6 +203,8 @@ pub struct FrameMeta {
     ///
     /// A stream nothing has split is one chunk, so this stays zero until a stage sets it.
     pub chunk: u64,
+    /// The chunk this frame belongs to in each scene layer it carries.
+    pub chunks: Layers,
     pub timestamp: Option<Duration>,
     /// How strongly scene detection favoured a cut just before this frame, when it was scored.
     pub scene_score: Option<SceneScore>,
@@ -214,6 +217,7 @@ impl FrameMeta {
         Self {
             index,
             chunk: 0,
+            chunks: Layers::new(),
             timestamp: None,
             scene_score: None,
             attachments: Attachments::new(),
@@ -223,6 +227,12 @@ impl FrameMeta {
     /// The same metadata in `chunk`.
     pub fn in_chunk(mut self, chunk: u64) -> Self {
         self.chunk = chunk;
+        self
+    }
+
+    /// The same metadata in `chunk` of `layer`.
+    pub fn in_layer(mut self, layer: LayerId, chunk: u64) -> Self {
+        self.chunks.set(layer, chunk);
         self
     }
 
@@ -1082,6 +1092,7 @@ mod tests {
         let meta = FrameMeta {
             index: 7,
             chunk: 3,
+            chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
@@ -1106,6 +1117,7 @@ mod tests {
         let meta = FrameMeta {
             index: 7,
             chunk: 3,
+            chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
@@ -1126,6 +1138,7 @@ mod tests {
         let meta = FrameMeta {
             index: 7,
             chunk: 3,
+            chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
@@ -1151,6 +1164,7 @@ mod tests {
         let meta = FrameMeta {
             index: 7,
             chunk: 3,
+            chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
