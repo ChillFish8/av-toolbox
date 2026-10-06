@@ -19,11 +19,11 @@ use crate::{
     HostPlanes,
     HostStreamItem,
     LayerId,
-    Layers,
     LoadItem,
     MaskChroma,
     MaskFormat,
     PendingBatch,
+    Provided,
     SampleFormat,
     SceneScore,
     StreamFormat,
@@ -33,12 +33,12 @@ use crate::{
     test_device,
 };
 
-/// Chunks holding `chunk` in layer 0.
-fn layer_zero(chunk: u64) -> Layers {
-    let mut chunks = Layers::new();
-    chunks.set(LayerId(0), chunk);
+/// A provided store holding `chunk` for layer 0.
+fn layer_zero(chunk: u64) -> Provided {
+    let mut provided = Provided::new();
+    provided.set(LayerId(0), chunk);
 
-    chunks
+    provided
 }
 
 fn backend() -> Backend {
@@ -188,10 +188,9 @@ fn a_host_frame_keeps_its_bytes_and_place_through_an_upload_and_unload() {
     let format = frame_format();
     let meta = FrameMeta {
         index: 12,
-        chunks: layer_zero(3),
+        provided: layer_zero(3),
         timestamp: Some(Duration::from_millis(480)),
         scene_score: Some(SceneScore::new(2.5)),
-        provided: Default::default(),
         attachments: Attachments::new(),
     };
 

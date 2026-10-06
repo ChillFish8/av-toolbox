@@ -4,7 +4,7 @@ mod provider;
 use av_toolbox_core::{AnyDemand, Inputs, LayerDemand, Provider};
 use av_toolbox_gpu::{FrameContext, FrameFormat, HostFrame, HostSide, HostStreamItem, LayerId};
 
-use crate::provider::{SceneBreaks, SceneRequest, Scenes, ServeScenes};
+use crate::provider::{SceneBreaks, SceneChunk, SceneRequest, Scenes, ServeScenes};
 
 /// One layer per request, numbered in order from 0.
 fn demands(requests: &[SceneRequest]) -> Vec<LayerDemand> {
@@ -79,7 +79,13 @@ fn serve(
 fn chunks_in(frames: &[HostFrame], layer: u32) -> Vec<u64> {
     frames
         .iter()
-        .map(|frame| frame.meta().chunks.get(LayerId(layer)))
+        .map(|frame| {
+            frame
+                .meta()
+                .provided
+                .get::<SceneChunk>(LayerId(layer))
+                .map_or(0, |scene| scene.0)
+        })
         .collect()
 }
 

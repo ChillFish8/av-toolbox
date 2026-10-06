@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use av_toolbox_core::testing::FixtureChunk;
 use av_toolbox_core::{Filter, Inputs, Sink, StageError, StageInstance};
 use av_toolbox_gpu::{
     AnyItem,
@@ -31,6 +32,7 @@ use av_toolbox_gpu::{
 use av_toolbox_graph::{NodeId, StageBox};
 
 use crate::RunError;
+use crate::tests::routes::{meta_in, route};
 use crate::worker::{Feed, RegionEdges, RegionRunner};
 
 fn format() -> FrameFormat {
@@ -49,7 +51,7 @@ fn format() -> FrameFormat {
 
 /// A frame at `index`, in `chunk` of layer 0.
 fn frame(context: &FrameContext, index: u64, chunk: u64) -> Frame {
-    let meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
+    let meta = meta_in(index, 0, chunk);
     context.alloc_frame(&format(), meta)
 }
 
@@ -64,9 +66,9 @@ trait OnLayerZero {
 
 impl OnLayerZero for RegionEdges {
     fn chunked_on_layer_zero(self, chunked: HashSet<NodeId>) -> Self {
-        let layers = chunked.iter().map(|node| (*node, LayerId(0))).collect();
+        let routes = chunked.iter().map(|node| (*node, route(0))).collect();
 
-        self.with_chunked(chunked).with_layers(layers)
+        self.with_chunked(chunked).with_routes(routes)
     }
 }
 
@@ -171,7 +173,7 @@ impl Filter for Rechunking {
         let mut frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
         let index = frame.meta().index;
         let chunk = u64::from(index >= self.switch_at);
-        frame.meta_mut().chunks.set(LayerId(0), chunk);
+        frame.meta_mut().provided.set(LayerId(0), FixtureChunk(chunk));
 
         Ok(vec![frame])
     }

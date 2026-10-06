@@ -385,9 +385,9 @@ fn block_of(graph: &CompiledGraph, plan: &ExecutionPlan, region: &Region) -> Blo
     // A region one worker wide with no disperse never routes, so its layer goes unnamed.
     let routes = region.width() > 1 || region.has_disperse();
     let layer = region
-        .layer()
+        .route()
         .filter(|_| routes)
-        .and_then(|layer| layer_text(graph, layer));
+        .and_then(|route| layer_text(graph, route.layer));
 
     Block {
         id: region.id().index(),

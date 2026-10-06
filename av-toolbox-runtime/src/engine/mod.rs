@@ -286,7 +286,7 @@ impl Engine {
                     let nodes = wrap_head_source(nodes, exhausted.clone(), settings.frame_limit);
                     let edges = build_region_edges(graph, region);
                     let runner = RegionRunner::new(nodes, edges)
-                        .routed_on(region.layer())
+                        .routed_on(region.route())
                         .profiled(profiler.clone());
 
                     prepared.push(PreparedRegion::Source(SourceRegion {
@@ -306,7 +306,7 @@ impl Engine {
                     };
                     let edges = build_region_edges(graph, region);
                     let runner = RegionRunner::new(nodes, edges)
-                        .routed_on(region.layer())
+                        .routed_on(region.route())
                         .profiled(profiler.clone());
                     let upstream = inbound
                         .remove(&region.id())
@@ -357,7 +357,7 @@ impl Engine {
                 freedom: freedom.clone(),
             };
             let disperse = match authority {
-                Some(authority) => Disperse::new(&bound, authority, dispatch).with_layer(region.layer()),
+                Some(authority) => Disperse::new(&bound, authority, dispatch).with_route(region.route()),
                 None => Disperse::by_frame(&bound, dispatch),
             };
             let upstream = inbound
@@ -385,7 +385,7 @@ impl Engine {
                 let nodes = wrap_sinks(nodes, tally.clone());
                 let edges = build_region_edges(graph, region);
                 let runner = RegionRunner::new(nodes, edges)
-                    .routed_on(region.layer())
+                    .routed_on(region.route())
                     .profiled(profiler.clone());
                 let context = make_context();
                 let (result_sender, result_receiver) = mpsc::sync_channel(capacity);

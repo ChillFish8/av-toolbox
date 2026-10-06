@@ -26,7 +26,7 @@ fn two_layers_are_served_by_one_detection() {
 
     assert_eq!(emitted.len(), 90);
     for frame in &emitted {
-        let layers: Vec<LayerId> = frame.meta().chunks.iter().map(|(layer, _)| layer).collect();
+        let layers: Vec<LayerId> = frame.meta().provided.layers().collect();
         assert_eq!(layers, vec![LayerId(0), LayerId(1)]);
     }
 

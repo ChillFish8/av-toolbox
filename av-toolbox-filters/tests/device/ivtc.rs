@@ -28,6 +28,7 @@ use av_toolbox_gpu::{
     SampleFormat,
     Subsampling,
 };
+use av_toolbox_providers::SceneChunk;
 use serde_json::json;
 
 use crate::stream::{Input, Output, Stream};
@@ -450,7 +451,7 @@ fn each_chunk_is_matched_on_its_own() {
     let format = clip_format(&clip, false);
     let mut inputs = clip_inputs(&clip, &format);
     for input in &mut inputs[5..] {
-        input.meta.chunks.set(LayerId(0), 1);
+        input.meta.provided.set(LayerId(0), SceneChunk(1));
     }
 
     let second_chunk = inputs.split_off(5);

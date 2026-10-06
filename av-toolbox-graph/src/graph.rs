@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use av_toolbox_core::{Crossing, OpenSlot, Residency, StageHandle, StageKind, StreamType};
-use av_toolbox_gpu::LayerId;
+use av_toolbox_gpu::ChunkRoute;
 use serde_json::Value;
 
 use crate::demands::{NodeDemand, ProviderPlacement};
@@ -180,8 +180,8 @@ pub struct Node {
     /// What a source's stage learned by opening its input, shared across every pass that prepares
     /// this node.
     open: OpenSlot,
-    /// The scene layer this node routes and restarts its chunks on.
-    layer: Option<LayerId>,
+    /// The layer this node routes and restarts its chunks on, and how it reads a chunk from it.
+    route: Option<ChunkRoute>,
     /// What this node demanded, as the demand pass settled it.
     demands: Vec<NodeDemand>,
 }
@@ -204,7 +204,7 @@ impl Node {
             residency: None,
             stream: parts.kind.output(),
             open: OpenSlot::new(),
-            layer: None,
+            route: None,
             demands: Vec::new(),
         }
     }
@@ -287,13 +287,13 @@ impl Node {
         &self.open
     }
 
-    /// The scene layer this node routes and restarts its chunks on, if it has one.
-    pub fn layer(&self) -> Option<LayerId> {
-        self.layer
+    /// The layer this node routes and restarts its chunks on, if it has one.
+    pub fn route(&self) -> Option<ChunkRoute> {
+        self.route
     }
 
-    pub(crate) fn set_layer(&mut self, layer: LayerId) {
-        self.layer = Some(layer);
+    pub(crate) fn set_route(&mut self, route: ChunkRoute) {
+        self.route = Some(route);
     }
 
     /// What this node demanded, with the layer serving each demand.
@@ -427,7 +427,7 @@ impl CompiledGraph {
             residency: Some(crossing.to_side()),
             stream: source.output_stream(),
             open: OpenSlot::new(),
-            layer: None,
+            route: None,
             demands: Vec::new(),
         };
 
@@ -470,7 +470,7 @@ impl CompiledGraph {
             residency: None,
             stream: producer.output_stream(),
             open: OpenSlot::new(),
-            layer: None,
+            route: None,
             demands: Vec::new(),
         };
 

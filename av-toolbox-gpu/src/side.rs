@@ -282,11 +282,11 @@ mod tests {
         let mut device = AnyItem::from(device_item(0));
         let mut host = AnyItem::from(host_item(0));
 
-        device.meta_mut().chunks.set(LayerId(0), 3);
+        device.meta_mut().provided.set(LayerId(0), 3_u64);
         host.set_index(7);
 
         let device = device.into_device().expect("device");
-        assert_eq!(device.meta().chunks.get(LayerId(0)), 3);
+        assert_eq!(device.meta().provided.get::<u64>(LayerId(0)), Some(&3));
         assert_eq!(host.into_host().expect("host").meta().index, 7);
     }
 

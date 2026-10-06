@@ -1,5 +1,6 @@
-use av_toolbox_core::{Granularity, StageKind};
-use av_toolbox_gpu::LayerId;
+use av_toolbox_core::testing::FixtureCuts;
+use av_toolbox_core::{Granularity, Parallelism, StageKind};
+use av_toolbox_gpu::{ChunkRoute, LayerId};
 use serde_json::json;
 
 use crate::graph::{CompiledGraph, Node, NodeId};
@@ -218,6 +219,17 @@ fn a_chain_of_equal_width_nodes_is_one_region() {
     );
 }
 
+/// A route on `layer` reading [FixtureChunk](av_toolbox_core::testing::FixtureChunk) values.
+fn route(layer: u32) -> ChunkRoute {
+    let parallelism = Parallelism::chunk::<FixtureCuts>(());
+    let key = parallelism.chunk_key().expect("a chunk stage has a key");
+
+    ChunkRoute {
+        layer: LayerId(layer),
+        key,
+    }
+}
+
 #[test]
 fn a_node_on_another_layer_starts_its_own_region() {
     let mut first = temporal("first", "input", 1);
@@ -229,8 +241,8 @@ fn a_node_on_another_layer_starts_its_own_region() {
     let mut graph = build(&registry, &specs).expect("should build").into_graph();
     let first_id = node_named(&graph, "first");
     let second_id = node_named(&graph, "second");
-    graph.node_mut(first_id).set_layer(LayerId(0));
-    graph.node_mut(second_id).set_layer(LayerId(1));
+    graph.node_mut(first_id).set_route(route(0));
+    graph.node_mut(second_id).set_route(route(1));
 
     let plan = plan(&graph, &registry).expect("should plan");
 
@@ -240,10 +252,10 @@ fn a_node_on_another_layer_starts_its_own_region() {
     assert_eq!(plan.node(second_id).granularity(), Granularity::Chunk);
     assert_eq!(plan.node(second_id).width(), 4);
     assert_ne!(first_region, second_region);
-    assert_eq!(plan.node(first_id).layer(), Some(LayerId(0)));
-    assert_eq!(plan.node(second_id).layer(), Some(LayerId(1)));
-    assert_eq!(plan.region(first_region).layer(), Some(LayerId(0)));
-    assert_eq!(plan.region(second_region).layer(), Some(LayerId(1)));
+    assert_eq!(plan.node(first_id).route(), Some(route(0)));
+    assert_eq!(plan.node(second_id).route(), Some(route(1)));
+    assert_eq!(plan.region(first_region).route(), Some(route(0)));
+    assert_eq!(plan.region(second_region).route(), Some(route(1)));
 }
 
 #[test]
@@ -257,13 +269,13 @@ fn a_layered_node_joins_a_region_with_no_layer_and_routes_it() {
     let mut graph = build(&registry, &specs).expect("should build").into_graph();
     let input_id = node_named(&graph, "input");
     let denoise_id = node_named(&graph, "denoise");
-    graph.node_mut(denoise_id).set_layer(LayerId(0));
+    graph.node_mut(denoise_id).set_route(route(0));
 
     let plan = plan(&graph, &registry).expect("should plan");
 
     let region = plan.node(denoise_id).region();
     assert_eq!(plan.node(input_id).region(), region);
-    assert_eq!(plan.region(region).layer(), Some(LayerId(0)));
+    assert_eq!(plan.region(region).route(), Some(route(0)));
 }
 
 #[test]

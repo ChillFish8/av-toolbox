@@ -75,7 +75,6 @@ impl LayerHold {
                     .pop_front()
                     .expect("every layer placed the frame being released");
                 let meta = frame.meta_mut();
-                meta.chunks.set(held.layer, chunk);
                 meta.provided.set(held.layer, SceneChunk(chunk));
             }
 

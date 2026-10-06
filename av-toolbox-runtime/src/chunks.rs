@@ -1,11 +1,8 @@
-use av_toolbox_gpu::{FrameMeta, LayerId};
+use av_toolbox_gpu::{ChunkRoute, FrameMeta};
 
-/// The chunk a frame belongs to in `layer`.
+/// The chunk a frame belongs to on `route`.
 ///
-/// Without a layer nothing divides the stream, so every frame is in chunk 0.
-pub(crate) fn chunk_in(meta: &FrameMeta, layer: Option<LayerId>) -> u64 {
-    match layer {
-        Some(layer) => meta.chunks.get(layer),
-        None => 0,
-    }
+/// Without a route nothing divides the stream, so every frame is in chunk 0.
+pub(crate) fn chunk_in(meta: &FrameMeta, route: Option<ChunkRoute>) -> u64 {
+    route.map_or(0, |route| route.chunk_of(meta))
 }

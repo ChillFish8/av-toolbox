@@ -1,6 +1,6 @@
 use std::sync::mpsc::SyncSender;
 
-use av_toolbox_gpu::{AnyItem, LayerId};
+use av_toolbox_gpu::{AnyItem, ChunkRoute};
 
 use super::region::WorkerSlot;
 use crate::chunks::chunk_in;
@@ -28,7 +28,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
         result_sender,
     } = worker;
 
-    let layer = runner.layer();
+    let route = runner.route();
 
     runner.start(&mut context)?;
     let mut started = true;
@@ -42,7 +42,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                     started = true;
                 }
 
-                chunk_in_hand = bundle_chunk(&bundle, layer);
+                chunk_in_hand = bundle_chunk(&bundle, route);
 
                 let run = runner.run(&mut context, bundle);
                 let produced = run.map_err(|error| named_chunk(error, chunk_in_hand))?;
@@ -56,7 +56,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                     started = true;
                 }
 
-                chunk_in_hand = bundle_chunk(&bundle, layer);
+                chunk_in_hand = bundle_chunk(&bundle, route);
 
                 let run = runner.run(&mut context, bundle);
                 let produced = run.map_err(|error| named_chunk(error, chunk_in_hand))?;
@@ -99,11 +99,11 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
     Ok(())
 }
 
-/// The chunk a bundle belongs to in `layer`, taken from the first slot carrying an item.
-fn bundle_chunk(bundle: &[Option<AnyItem>], layer: Option<LayerId>) -> Option<u64> {
+/// The chunk a bundle belongs to on `route`, taken from the first slot carrying an item.
+fn bundle_chunk(bundle: &[Option<AnyItem>], route: Option<ChunkRoute>) -> Option<u64> {
     let item = bundle.iter().flatten().next()?;
 
-    Some(chunk_in(item.meta(), layer))
+    Some(chunk_in(item.meta(), route))
 }
 
 /// `error`, said to have come from `chunk` when there is one to name.

@@ -2,8 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::frame::gpu::FrameMeta;
-use crate::frame::layers::LayerId;
-use crate::frame::provided::{ChunkRoute, Provided, ProvidedValue};
+use crate::frame::provided::{ChunkRoute, LayerId, Provided, ProvidedValue};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 struct Flag(bool);

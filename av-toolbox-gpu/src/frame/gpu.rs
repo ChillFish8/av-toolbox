@@ -7,9 +7,8 @@ use cubecl::server::Handle;
 
 use crate::frame::attachments::{Attachments, MetaValue};
 use crate::frame::format::{ColourInfo, FrameFormat, MaskChroma, MaskFormat, StreamFormat};
-use crate::frame::layers::{LayerId, Layers};
 use crate::frame::layout::{Channel, FrameLayout};
-use crate::frame::provided::{Provided, ProvidedValue};
+use crate::frame::provided::{LayerId, Provided, ProvidedValue};
 use crate::memory::FrameBudget;
 
 /// Where a plane's memory goes when its last holder drops it.
@@ -216,8 +215,6 @@ impl Hash for SceneScore {
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct FrameMeta {
     pub index: u64,
-    /// The chunk this frame belongs to in each scene layer it carries.
-    pub chunks: Layers,
     pub timestamp: Option<Duration>,
     /// How strongly scene detection favoured a cut just before this frame, when it was scored.
     pub scene_score: Option<SceneScore>,
@@ -227,22 +224,15 @@ pub struct FrameMeta {
 }
 
 impl FrameMeta {
-    /// Metadata for the frame at `index`, in no scene layer, with no timestamp.
+    /// Metadata for the frame at `index`, carrying no provided values, with no timestamp.
     pub const fn at(index: u64) -> Self {
         Self {
             index,
-            chunks: Layers::new(),
             timestamp: None,
             scene_score: None,
             provided: Provided::new(),
             attachments: Attachments::new(),
         }
-    }
-
-    /// The same metadata in `chunk` of `layer`.
-    pub fn in_layer(mut self, layer: LayerId, chunk: u64) -> Self {
-        self.chunks.set(layer, chunk);
-        self
     }
 
     /// The same metadata carrying `value` for `layer`.
@@ -370,7 +360,7 @@ impl Frame {
 
     /// Moves this to `index` in the stream.
     ///
-    /// The chunks it belongs to and its timestamp are unchanged.
+    /// Its provided values and timestamp are unchanged.
     pub fn set_index(&mut self, index: u64) {
         self.meta.index = index;
     }
@@ -487,7 +477,7 @@ impl Mask {
 
     /// Moves this to `index` in the stream.
     ///
-    /// The chunks it belongs to are unchanged.
+    /// Its provided values are unchanged.
     pub fn set_index(&mut self, index: u64) {
         self.meta.index = index;
     }
@@ -647,12 +637,12 @@ mod tests {
     use crate::{Backend, test_device};
     use crate::{BufferPool, HostPlanes, RingSpec, StreamFormat, StreamPolicy};
 
-    /// Chunks holding `chunk` in layer 0.
-    fn layer_zero(chunk: u64) -> Layers {
-        let mut chunks = Layers::new();
-        chunks.set(LayerId(0), chunk);
+    /// A provided store holding `chunk` for layer 0.
+    fn layer_zero(chunk: u64) -> Provided {
+        let mut provided = Provided::new();
+        provided.set(LayerId(0), chunk);
 
-        chunks
+        provided
     }
 
     fn format() -> FrameFormat {
@@ -1093,20 +1083,20 @@ mod tests {
     }
 
     #[test]
-    fn metadata_starts_in_no_scene_layer() {
+    fn metadata_starts_with_no_provided_values() {
         let meta = FrameMeta::at(7);
 
         assert_eq!(meta.index, 7);
-        assert_eq!(meta.chunks.iter().count(), 0);
-        assert_eq!(meta.chunks.get(LayerId(0)), 0);
+        assert_eq!(meta.provided.layers().count(), 0);
+        assert_eq!(meta.provided.get::<u64>(LayerId(0)), None);
     }
 
     #[test]
-    fn metadata_can_be_moved_into_a_chunk_of_a_layer() {
-        let meta = FrameMeta::at(7).in_layer(LayerId(0), 3);
+    fn metadata_can_carry_a_provided_value() {
+        let meta = FrameMeta::at(7).with_provided(LayerId(0), 3_u64);
 
         assert_eq!(meta.index, 7);
-        assert_eq!(meta.chunks.get(LayerId(0)), 3);
+        assert_eq!(meta.provided.get::<u64>(LayerId(0)), Some(&3));
     }
 
     #[test]
@@ -1115,10 +1105,9 @@ mod tests {
         let planes = vec![plane(64, 64), plane(32, 32), plane(32, 32)];
         let meta = FrameMeta {
             index: 7,
-            chunks: layer_zero(3),
+            provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
-            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let mut frame = Frame::new(format, planes, meta);
@@ -1126,7 +1115,7 @@ mod tests {
         frame.set_index(11);
 
         assert_eq!(frame.meta().index, 11);
-        assert_eq!(frame.meta().chunks.get(LayerId(0)), 3);
+        assert_eq!(frame.meta().provided.get::<u64>(LayerId(0)), Some(&3));
         assert_eq!(frame.meta().timestamp, Some(Duration::from_millis(500)));
     }
 
@@ -1140,10 +1129,9 @@ mod tests {
         };
         let meta = FrameMeta {
             index: 7,
-            chunks: layer_zero(3),
+            provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
-            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let mut mask = Mask::new(format, plane(64, 64), meta, None);
@@ -1151,7 +1139,7 @@ mod tests {
         mask.set_index(11);
 
         assert_eq!(mask.meta().index, 11);
-        assert_eq!(mask.meta().chunks.get(LayerId(0)), 3);
+        assert_eq!(mask.meta().provided.get::<u64>(LayerId(0)), Some(&3));
         assert_eq!(mask.meta().timestamp, Some(Duration::from_millis(500)));
     }
 
@@ -1161,10 +1149,9 @@ mod tests {
         let planes = vec![plane(64, 64), plane(32, 32), plane(32, 32)];
         let meta = FrameMeta {
             index: 7,
-            chunks: layer_zero(3),
+            provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
-            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let frame = Frame::new(format, planes, meta);
@@ -1173,7 +1160,7 @@ mod tests {
         item.set_index(11);
 
         assert_eq!(item.meta().index, 11);
-        assert_eq!(item.meta().chunks.get(LayerId(0)), 3);
+        assert_eq!(item.meta().provided.get::<u64>(LayerId(0)), Some(&3));
         assert_eq!(item.meta().timestamp, Some(Duration::from_millis(500)));
     }
 
@@ -1187,10 +1174,9 @@ mod tests {
         };
         let meta = FrameMeta {
             index: 7,
-            chunks: layer_zero(3),
+            provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
-            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let mask = Mask::new(format, plane(64, 64), meta, None);
@@ -1199,7 +1185,7 @@ mod tests {
         item.set_index(11);
 
         assert_eq!(item.meta().index, 11);
-        assert_eq!(item.meta().chunks.get(LayerId(0)), 3);
+        assert_eq!(item.meta().provided.get::<u64>(LayerId(0)), Some(&3));
         assert_eq!(item.meta().timestamp, Some(Duration::from_millis(500)));
     }
 

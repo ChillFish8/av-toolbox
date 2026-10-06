@@ -60,11 +60,11 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
         .filter(|node_id| plan.node(*node_id).granularity() == Granularity::Chunk)
         .collect();
 
-    let layers = nodes
+    let routes = nodes
         .iter()
         .filter_map(|node_id| {
-            let layer = plan.node(*node_id).layer()?;
-            Some((*node_id, layer))
+            let route = plan.node(*node_id).route()?;
+            Some((*node_id, route))
         })
         .collect();
 
@@ -79,7 +79,7 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
     let edges = RegionEdges::new(feeds, region.exits().to_vec())
         .with_paths(paths)
         .with_chunked(chunked)
-        .with_layers(layers)
+        .with_routes(routes)
         .with_authorities(authorities);
 
     if region.routing() == Routing::ByFrame {

@@ -285,7 +285,6 @@ mod tests {
         HostFrame,
         HostSide,
         HostStreamItem,
-        LayerId,
         Mask as GpuMask,
         MaskFormat,
         SampleFormat,
@@ -296,6 +295,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::tests::routes::{chunk_on, meta_in};
 
     fn format() -> FrameFormat {
         FrameFormat {
@@ -312,7 +312,7 @@ mod tests {
     }
 
     fn item(context: &FrameContext, index: u64, chunk: u64) -> AnyItem {
-        let meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
+        let meta = meta_in(index, 0, chunk);
         StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
     }
 
@@ -808,7 +808,7 @@ mod tests {
 
         assert!(out[0].is_host());
         assert_eq!(out[0].meta().index, 9);
-        assert_eq!(out[0].meta().chunks.get(LayerId(0)), 2);
+        assert_eq!(chunk_on(out[0].meta(), 0), 2);
         assert_eq!(out[0].format(), StreamFormat::Frames(format()));
     }
 

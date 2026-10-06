@@ -8,7 +8,7 @@ use av_toolbox_core::{
     PreparedStage,
     StageKind,
 };
-use av_toolbox_gpu::LayerId;
+use av_toolbox_gpu::{ChunkRoute, LayerId};
 
 use crate::graph::{CompiledGraph, EdgeId, Node, NodeId, NodeRole, ProviderNode};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
@@ -97,7 +97,7 @@ pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -
         return Err(diagnostics);
     }
 
-    record_demands(graph, registry, &traced);
+    record_demands(graph, registry, &prepared, &traced);
 
     for group in &groups {
         place_provider(graph, registry, &prepared, &traced, &groups, group);
@@ -418,8 +418,29 @@ fn after_of(traced: &Traced) -> Option<&str> {
     request.get("after")?.as_str()
 }
 
-/// Gives every demanding node its demands, and the layer of its chunk request.
-fn record_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry, traced: &[Traced]) {
+/// The route a node takes for its chunk request, reading the layer with the node's own chunk key.
+fn route_of(prepared: &[Option<PreparedStage>], traced: &Traced) -> ChunkRoute {
+    let stage = prepared[traced.asked.node.index()]
+        .as_ref()
+        .expect("a stage that made a chunk request was prepared");
+    let key = stage
+        .parallelism()
+        .chunk_key()
+        .expect("a stage with a chunk request chunks by a demand");
+
+    ChunkRoute {
+        layer: traced.layer,
+        key,
+    }
+}
+
+/// Gives every demanding node its demands, and the route of its chunk request.
+fn record_demands(
+    graph: &mut CompiledGraph,
+    registry: &PipelineRegistry,
+    prepared: &[Option<PreparedStage>],
+    traced: &[Traced],
+) {
     let mut settled: Vec<(NodeId, Vec<NodeDemand>)> = Vec::new();
 
     for each in traced {
@@ -433,7 +454,8 @@ fn record_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry, traced
         };
 
         if each.asked.chunks {
-            graph.node_mut(each.asked.node).set_layer(each.layer);
+            let route = route_of(prepared, each);
+            graph.node_mut(each.asked.node).set_route(route);
         }
 
         match settled.iter_mut().find(|(node, _)| *node == each.asked.node) {

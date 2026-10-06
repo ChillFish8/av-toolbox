@@ -23,6 +23,7 @@ use av_toolbox_gpu::{
     SampleFormat,
     Subsampling,
 };
+use av_toolbox_providers::SceneChunk;
 use serde_json::json;
 
 use crate::stream::{Input, Output, Stream};
@@ -268,7 +269,7 @@ fn single_rate_keeps_every_frame_and_its_metadata() {
     let output = deinterlaced(input, false);
     let mut clip = moving_clip(&input, 10..14);
     for input in &mut clip {
-        input.meta.chunks.set(LayerId(0), 3);
+        input.meta.provided.set(LayerId(0), SceneChunk(3));
     }
 
     let outputs = run(json!({ "rate": "single" }), input, output, vec![clip.clone()]);

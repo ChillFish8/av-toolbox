@@ -313,7 +313,7 @@ inputs = ["deinterlace"]
         assert!(matches!(provider.role(), NodeRole::Provider(_)));
         assert_eq!(provider.identifier(), "provider/scenes");
         assert_eq!(deinterlace.inputs()[0].source(), provider.id());
-        assert!(deinterlace.layer().is_some());
+        assert!(deinterlace.route().is_some());
         assert!(pipeline.stage_of(provider.id()).is_none());
     }
 

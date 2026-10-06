@@ -5,17 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use av_toolbox_core::{Filter, Inputs, StageError, StageInstance};
-use av_toolbox_gpu::{
-    AnyItem,
-    Attachments,
-    Frame,
-    FrameContext,
-    FrameMeta,
-    LayerId,
-    Layers,
-    StreamItem,
-    testing_context,
-};
+use av_toolbox_gpu::{AnyItem, Attachments, Frame, FrameContext, FrameMeta, StreamItem, testing_context};
 use av_toolbox_graph::{NodeId, Routing, StageBox};
 
 use crate::engine::tests::fixtures::filters::{PASS_ENDS, PASS_STARTS, PassInstance};
@@ -41,6 +31,7 @@ use crate::engine::{
     run_aggregate,
     run_worker,
 };
+use crate::tests::routes::{meta_in, route};
 use crate::{
     Aggregate,
     Assignment,
@@ -57,7 +48,7 @@ use crate::{
 /// A one-slot bundle carrying a single frame in `chunk` of layer 0, for driving [run_worker]
 /// directly with a [WorkItem::Unit] rather than through a disperse.
 fn unit_bundle(context: &FrameContext, index: u64, chunk: u64) -> Vec<Option<AnyItem>> {
-    let meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
+    let meta = meta_in(index, 0, chunk);
     vec![Some(
         StreamItem::Frame(context.alloc_frame(&format(), meta)).into(),
     )]
@@ -72,10 +63,10 @@ fn one_node_worker(
 ) -> WorkerSlot {
     let head = NodeId::new(0);
     let nodes = vec![(head, stage)];
-    let layers = HashMap::from([(head, LayerId(0))]);
-    let edges = RegionEdges::new(vec![], vec![head]).with_layers(layers);
+    let routes = HashMap::from([(head, route(0))]);
+    let edges = RegionEdges::new(vec![], vec![head]).with_routes(routes);
 
-    let runner = RegionRunner::new(nodes, edges).routed_on(Some(LayerId(0)));
+    let runner = RegionRunner::new(nodes, edges).routed_on(Some(route(0)));
 
     WorkerSlot {
         runner,
@@ -154,14 +145,12 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
 
     let unit_ids: Vec<u64> = (100..108).collect();
     for &unit in &unit_ids {
-        let mut chunks = Layers::new();
-        chunks.set(LayerId(0), unit + 900);
+        let chunked = meta_in(unit, 0, unit + 900);
         let meta = FrameMeta {
             index: unit,
-            chunks,
             timestamp: Some(Duration::from_secs(unit)),
             scene_score: None,
-            provided: Default::default(),
+            provided: chunked.provided,
             attachments: Attachments::new(),
         };
         let item = AnyItem::from(StreamItem::Frame(build_context.alloc_frame(&format(), meta)));

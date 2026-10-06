@@ -1,3 +1,6 @@
+use av_toolbox_core::{ChunkKey, DemandDefinition, Parallelism};
+use av_toolbox_gpu::ChunkRoute;
+
 use super::*;
 
 #[test]
@@ -259,18 +262,16 @@ fn a_node_restarts_on_its_own_layer() {
         producer: head,
         slot: 0,
     }]];
-    let layers = HashMap::from([(head, LayerId(0)), (next, LayerId(1))]);
+    let routes = HashMap::from([(head, route(0)), (next, route(1))]);
     let edges = RegionEdges::new(feeds, vec![])
         .with_chunked(HashSet::from([head, next]))
-        .with_layers(layers);
+        .with_routes(routes);
     let mut runner = RegionRunner::new(nodes, edges);
 
     runner.start(&mut context_of(&context)).expect("should start");
 
     for (index, chunk) in [(0, 0), (1, 0), (2, 1), (3, 1)] {
-        let meta = FrameMeta::at(index)
-            .in_layer(LayerId(0), 0)
-            .in_layer(LayerId(1), chunk);
+        let meta = meta_in(index, 0, 0).with_provided(LayerId(1), FixtureChunk(chunk));
         let frame = context.alloc_frame(&format(), meta);
         let bundle = vec![Some(StreamItem::Frame(frame).into())];
         runner.run(&mut context_of(&context), bundle).expect("should run");
@@ -288,10 +289,69 @@ fn a_node_restarts_on_its_own_layer() {
 fn a_runner_routes_on_the_layer_its_region_was_planned_on() {
     let head = NodeId::new(0);
     let nodes = vec![(head, StageBox::Filter(Box::new(PassThrough)))];
-    let layers = HashMap::from([(head, LayerId(0))]);
-    let edges = RegionEdges::new(Vec::new(), vec![head]).with_layers(layers);
+    let routes = HashMap::from([(head, route(0))]);
+    let edges = RegionEdges::new(Vec::new(), vec![head]).with_routes(routes);
 
-    let runner = RegionRunner::new(nodes, edges).routed_on(Some(LayerId(1)));
+    let runner = RegionRunner::new(nodes, edges).routed_on(Some(route(1)));
 
-    assert_eq!(runner.layer(), Some(LayerId(1)));
+    assert_eq!(runner.route(), Some(route(1)));
+}
+
+/// A chunk key that is not a scene, naming its chunk by `id`.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct Shot {
+    id: u64,
+    label: &'static str,
+}
+
+impl ChunkKey for Shot {
+    fn chunk(&self) -> u64 {
+        self.id
+    }
+}
+
+struct ShotDemand;
+
+impl DemandDefinition for ShotDemand {
+    type Request = ();
+    type Output = Shot;
+
+    fn kind() -> &'static str {
+        "shot"
+    }
+}
+
+#[test]
+fn a_node_restarts_on_a_chunk_key_that_is_not_a_scene() {
+    let context = testing_context();
+    let head = NodeId::new(0);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = StartRecording { seen: seen.clone() };
+    let nodes = vec![(head, StageBox::Sink(Box::new(sink)))];
+    let parallelism = Parallelism::chunk::<ShotDemand>(());
+    let key = parallelism.chunk_key().expect("a chunk stage has a key");
+    let shot_route = ChunkRoute {
+        layer: LayerId(3),
+        key,
+    };
+    let edges = RegionEdges::new(Vec::new(), vec![])
+        .with_chunked(HashSet::from([head]))
+        .with_routes(HashMap::from([(head, shot_route)]));
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    runner.start(&mut context_of(&context)).expect("should start");
+
+    let shots = [(0, 4, "wide"), (1, 4, "close"), (2, 9, "wide"), (3, 9, "wide")];
+    for (index, id, label) in shots {
+        let meta = FrameMeta::at(index).with_provided(LayerId(3), Shot { id, label });
+        let frame = context.alloc_frame(&format(), meta);
+        let bundle = vec![Some(StreamItem::Frame(frame).into())];
+        runner.run(&mut context_of(&context), bundle).expect("should run");
+    }
+
+    runner.end(&mut context_of(&context)).expect("should end");
+
+    let started = u64::MAX;
+    let expected = vec![started, 0, 1, started, 2, 3];
+    assert_eq!(*seen.lock().expect("not poisoned"), expected);
 }

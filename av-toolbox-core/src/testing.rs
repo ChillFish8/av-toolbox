@@ -193,7 +193,6 @@ impl<S: Side> Provider<S> for StampingInstance {
         let meta = any.meta_mut();
         let chunk = fixture_chunk_of(meta);
         for layer in &self.layers {
-            meta.chunks.set(*layer, chunk);
             meta.provided.set(*layer, FixtureChunk(chunk));
         }
 

@@ -3,8 +3,14 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::frame::gpu::FrameMeta;
-use crate::frame::layers::LayerId;
+
+/// One distinct request on one provider instance, numbered by the graph.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, JsonSchema)]
+pub struct LayerId(pub u32);
 
 /// A value a provider wrote onto a frame, carried without its type.
 pub trait ProvidedValue: Any + Debug + Send + Sync {

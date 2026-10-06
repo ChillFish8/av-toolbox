@@ -194,7 +194,7 @@ fn a_chunk_stage_gets_a_provider_after_its_source() {
         layer: LayerId(0),
         chunks: true,
     }];
-    assert_eq!(denoise.layer(), Some(LayerId(0)));
+    assert_eq!(denoise.route().map(|route| route.layer), Some(LayerId(0)));
     assert_eq!(denoise.demands(), expected_demands.as_slice());
 }
 
@@ -268,8 +268,14 @@ fn distinct_demands_get_distinct_layers() {
             served(1, breaks(8, None), "every 8", &["second"]),
         ]
     );
-    assert_eq!(named(&graph, "first").layer(), Some(LayerId(0)));
-    assert_eq!(named(&graph, "second").layer(), Some(LayerId(1)));
+    assert_eq!(
+        named(&graph, "first").route().map(|route| route.layer),
+        Some(LayerId(0))
+    );
+    assert_eq!(
+        named(&graph, "second").route().map(|route| route.layer),
+        Some(LayerId(1))
+    );
     assert!(named(&graph, "second").demands()[0].chunks);
 }
 
@@ -290,7 +296,7 @@ fn only_the_source_a_demand_reaches_gets_a_provider() {
     assert_eq!(found[0].name(), "fixture-cuts(clip)");
     assert_eq!(reads(&graph, "fixture-cuts(clip)", 0), "clip");
     assert_eq!(consumer_names(&graph, "other"), vec!["other_out"]);
-    assert_eq!(named(&graph, "other_out").layer(), None);
+    assert_eq!(named(&graph, "other_out").route(), None);
 }
 
 #[test]
@@ -311,8 +317,14 @@ fn two_sources_each_get_a_provider() {
     assert_eq!(names, vec!["fixture-cuts(clip)", "fixture-cuts(other)"]);
     assert_eq!(reads(&graph, "first", 0), "fixture-cuts(clip)");
     assert_eq!(reads(&graph, "second", 0), "fixture-cuts(other)");
-    assert_eq!(named(&graph, "first").layer(), Some(LayerId(0)));
-    assert_eq!(named(&graph, "second").layer(), Some(LayerId(1)));
+    assert_eq!(
+        named(&graph, "first").route().map(|route| route.layer),
+        Some(LayerId(0))
+    );
+    assert_eq!(
+        named(&graph, "second").route().map(|route| route.layer),
+        Some(LayerId(1))
+    );
 }
 
 #[test]
@@ -336,7 +348,10 @@ fn a_demand_follows_the_chunk_authority_through_a_join() {
     assert_eq!(reads(&graph, "fixture-cuts(clip)", 0), "clip");
     assert_eq!(reads(&graph, "join", 0), "other");
     assert_eq!(reads(&graph, "join", 1), "fixture-cuts(clip)");
-    assert_eq!(named(&graph, "denoise").layer(), Some(LayerId(0)));
+    assert_eq!(
+        named(&graph, "denoise").route().map(|route| route.layer),
+        Some(LayerId(0))
+    );
 }
 
 #[test]
@@ -482,7 +497,7 @@ fn no_demands_leave_the_graph_alone() {
 
     assert_eq!(graph.len(), 3);
     assert!(providers(&graph).is_empty());
-    assert!(graph.nodes().iter().all(|node| node.layer().is_none()));
+    assert!(graph.nodes().iter().all(|node| node.route().is_none()));
     assert!(graph.nodes().iter().all(|node| node.demands().is_empty()));
 }
 

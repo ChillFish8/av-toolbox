@@ -1,5 +1,5 @@
 use av_toolbox_core::{AnyDemand, Granularity, PipelineRegistry, PreparedStage, Residency};
-use av_toolbox_gpu::LayerId;
+use av_toolbox_gpu::ChunkRoute;
 
 use crate::diagnostic::stage_path;
 use crate::graph::{CompiledGraph, NodeId, NodeRole};
@@ -53,7 +53,7 @@ pub struct NodePlan {
     narrowed: Option<Narrowed>,
     routing: Routing,
     chunk_authority: Option<usize>,
-    layer: Option<LayerId>,
+    route: Option<ChunkRoute>,
 }
 
 impl NodePlan {
@@ -67,7 +67,7 @@ impl NodePlan {
             narrowed: Some(Narrowed::NotAsked),
             routing: Routing::ByChunk,
             chunk_authority: None,
-            layer: None,
+            route: None,
         }
     }
 
@@ -101,9 +101,9 @@ impl NodePlan {
         self.chunk_authority
     }
 
-    /// The scene layer this node routes and restarts its chunks on.
-    pub fn layer(&self) -> Option<LayerId> {
-        self.layer
+    /// The layer this node routes and restarts its chunks on.
+    pub fn route(&self) -> Option<ChunkRoute> {
+        self.route
     }
 }
 
@@ -115,7 +115,7 @@ pub struct Region {
     head: NodeId,
     nodes: Vec<NodeId>,
     chunk_authority: Option<usize>,
-    layer: Option<LayerId>,
+    route: Option<ChunkRoute>,
     routing: Routing,
     disperse: bool,
     aggregate: bool,
@@ -148,9 +148,9 @@ impl Region {
         self.chunk_authority
     }
 
-    /// The scene layer the region routes its chunks on, taken from the first of its nodes that has one.
-    pub fn layer(&self) -> Option<LayerId> {
-        self.layer
+    /// The layer the region routes its chunks on, taken from the first of its nodes that has one.
+    pub fn route(&self) -> Option<ChunkRoute> {
+        self.route
     }
 
     pub fn routing(&self) -> Routing {
@@ -307,7 +307,7 @@ impl Planner<'_> {
             narrowed,
             routing: Routing::ByChunk,
             chunk_authority: stage.chunk_authority(),
-            layer: node.layer(),
+            route: node.route(),
         });
     }
 
@@ -373,7 +373,7 @@ impl Planner<'_> {
             return;
         }
 
-        match self.shared_producer_region(&sources, width, node.layer()) {
+        match self.shared_producer_region(&sources, width, node.route()) {
             Some(region) => self.join_region(id, region),
             None => {
                 self.open_region(id, width);
@@ -390,12 +390,12 @@ impl Planner<'_> {
     /// The one region every input already shares, when its width matches this node's own.
     ///
     /// A sealed input never counts, so a node reading one heads a region of its own. A node with a
-    /// layer only joins a region routed on that same layer, or on none yet.
+    /// route only joins a region routed on that same layer, or on none yet.
     fn shared_producer_region(
         &self,
         sources: &[NodeId],
         width: usize,
-        layer: Option<LayerId>,
+        route: Option<ChunkRoute>,
     ) -> Option<RegionId> {
         let first_source = *sources.first()?;
 
@@ -412,9 +412,9 @@ impl Planner<'_> {
         }
 
         let region = &self.regions[candidate.index()];
-        let same_layer = layer.is_none() || region.layer.is_none() || layer == region.layer;
+        let same_route = route.is_none() || region.route.is_none() || route == region.route;
 
-        (region.width == width && same_layer).then_some(candidate)
+        (region.width == width && same_route).then_some(candidate)
     }
 
     fn region_of(&self, id: NodeId) -> RegionId {
@@ -424,13 +424,13 @@ impl Planner<'_> {
             .expect("a producer is placed into a region before its consumer, since order is topological")
     }
 
-    /// Adds a node to an existing region, which routes on the node's layer when it had none.
+    /// Adds a node to an existing region, which routes on the node's route when it had none.
     fn join_region(&mut self, id: NodeId, region: RegionId) {
         let joined = &mut self.regions[region.index()];
         joined.nodes.push(id);
 
-        if joined.layer.is_none() {
-            joined.layer = self.graph.node(id).layer();
+        if joined.route.is_none() {
+            joined.route = self.graph.node(id).route();
         }
 
         self.set_region(id, region);
@@ -454,7 +454,7 @@ impl Planner<'_> {
             head,
             nodes: vec![head],
             chunk_authority,
-            layer: self.graph.node(head).layer(),
+            route: self.graph.node(head).route(),
             routing: Routing::ByChunk,
             disperse: head_inputs > 0 && (width > 1 || head_inputs > 1),
             aggregate: width > 1,
