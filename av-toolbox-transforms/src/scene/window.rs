@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -14,6 +15,9 @@ use super::args::DetectArgs;
 
 /// How many frames past the one being analysed the detector reads.
 pub(super) const LOOKAHEAD: usize = 5;
+
+/// The precision float luma is read at.
+const FLOAT_BITS: u8 = 16;
 
 /// Padding around each luma plane, wide enough for the detector's motion search to read past
 /// every edge without going out of bounds.
@@ -53,7 +57,8 @@ impl Settings {
         let bit_depth = match format.sample {
             SampleFormat::U8 => 8,
             SampleFormat::U16 { depth } => depth.bits(),
-            SampleFormat::F16 | SampleFormat::F32 => {
+            SampleFormat::F32 => FLOAT_BITS,
+            SampleFormat::F16 => {
                 let message = format!("scene/detect reads integer samples, not {:?}", format.sample);
                 return Err(StageError::msg(message));
             },
@@ -260,13 +265,34 @@ impl<T: Pixel> Window<T> {
         let mut luma =
             built.map_err(|error| StageError::msg(format!("could not hold a frame's luma: {error:?}")))?;
 
-        let copied = luma.y_plane.copy_from_u8_slice(plane.bytes());
+        let samples = luma_samples(frame, plane.bytes());
+        let copied = luma.y_plane.copy_from_u8_slice(&samples);
         copied.map_err(|error| {
             StageError::msg(format!("a frame's luma does not match its format: {error:?}"))
         })?;
 
         Ok(Arc::new(luma))
     }
+}
+
+/// The luma samples the detector reads, with float luma quantised to [FLOAT_BITS] bits.
+fn luma_samples<'a>(frame: &HostFrame, bytes: &'a [u8]) -> Cow<'a, [u8]> {
+    if frame.format().sample != SampleFormat::F32 {
+        return Cow::Borrowed(bytes);
+    }
+
+    let peak = f32::from(u16::MAX);
+    let (floats, _) = bytes.as_chunks::<4>();
+
+    let mut quantised = Vec::with_capacity(floats.len() * 2);
+    for float in floats {
+        let value = f32::from_le_bytes(*float);
+        let clamped = value.clamp(0.0, 1.0);
+        let code = (clamped * peak).round() as u16;
+        quantised.extend_from_slice(&code.to_le_bytes());
+    }
+
+    Cow::Owned(quantised)
 }
 
 /// The frame's cost as a cut relative to the cost the detector needs to call one.

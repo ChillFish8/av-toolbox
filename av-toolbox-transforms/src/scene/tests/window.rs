@@ -2,7 +2,16 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use av_scenechange::Rational32;
-use av_toolbox_gpu::{FrameFormat, FrameLayout, HostFrame, SampleFormat, Subsampling, testing_context};
+use av_toolbox_gpu::{
+    Channel,
+    FrameContext,
+    FrameFormat,
+    FrameLayout,
+    HostFrame,
+    SampleFormat,
+    Subsampling,
+    testing_context,
+};
 
 use super::clip::{THREE_SCENES, clip, flat_clip, grey8, grey8_of, yuv420_ten_bit};
 use crate::scene::args::{DetectArgs, Mode, Speed};
@@ -190,20 +199,58 @@ fn a_height_not_a_multiple_of_sixty_four_does_not_panic() {
     decide(&format, &args, THREE_SCENES);
 }
 
+fn to_float_luma(context: &FrameContext, format: &FrameFormat, frame: &HostFrame) -> HostFrame {
+    let codes = frame.plane(Channel::Y).expect("the clip carries luma");
+
+    let mut float_frame = context.alloc_host_frame(format, frame.meta().clone());
+    let luma = float_frame
+        .plane_mut(Channel::Y)
+        .expect("the float frame carries luma");
+    for (index, code) in codes.bytes().iter().enumerate() {
+        let value = f32::from(*code) / 255.0;
+        let at = index * 4;
+        luma[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    float_frame.freeze()
+}
+
 #[test]
-fn rgb_and_float_frames_are_refused() {
+fn float_luma_finds_the_same_cuts_as_integer_luma() {
+    let args = natural(Speed::Standard, 0, None);
+    let context = testing_context();
+    let integer_format = grey8();
+    let float_format = FrameFormat {
+        sample: SampleFormat::F32,
+        ..grey8()
+    };
+    let integer_frames = clip(&context, &integer_format, THREE_SCENES);
+    let float_frames: Vec<HostFrame> = integer_frames
+        .iter()
+        .map(|frame| to_float_luma(&context, &float_format, frame))
+        .collect();
+
+    let integer = decide_frames(&integer_format, &args, integer_frames);
+    let float = decide_frames(&float_format, &args, float_frames);
+
+    assert_eq!(scene_starts(&float), vec![0, 30, 60]);
+    assert_eq!(scene_starts(&float), scene_starts(&integer));
+}
+
+#[test]
+fn rgb_and_half_float_frames_are_refused() {
     let args = natural(Speed::Standard, 0, None);
     let rgb = FrameFormat {
         layout: FrameLayout::Rgb,
         ..grey8()
     };
-    let float = FrameFormat {
-        sample: SampleFormat::F32,
+    let half_float = FrameFormat {
+        sample: SampleFormat::F16,
         ..grey8()
     };
 
     assert!(Settings::for_stream(&rgb, &args).is_err());
-    assert!(Settings::for_stream(&float, &args).is_err());
+    assert!(Settings::for_stream(&half_float, &args).is_err());
 }
 
 #[test]
