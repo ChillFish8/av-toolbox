@@ -24,10 +24,10 @@ use av_toolbox_gpu::{
 };
 use serde_json::json;
 
-use super::clip::{THREE_SCENES, clip, grey8};
 use crate::scene::SceneDetect;
 use crate::scene::args::DetectArgs;
 use crate::scene::detect::Detect;
+use crate::tests::clip::{THREE_SCENES, clip, grey8};
 
 fn args(value: serde_json::Value) -> DetectArgs {
     serde_json::from_value(value).expect("the arguments parse")

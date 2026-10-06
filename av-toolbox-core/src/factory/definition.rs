@@ -12,6 +12,8 @@ use crate::{
     BindInputsError,
     BoundInputs,
     BuildStageError,
+    Granularity,
+    InputArgument,
     InputDemand,
     InputSignature,
     OpenSlot,
@@ -22,6 +24,7 @@ use crate::{
     StageError,
     StageKind,
     StreamType,
+    bind_inputs,
 };
 
 /// The adapter that erases a concrete [StageDefinition](crate::StageDefinition).
@@ -105,7 +108,7 @@ impl<D: StageDefinition> Definition<D> {
         }
     }
 
-    pub(super) fn invalid_inputs(&self, source: BindInputsError) -> BuildStageError {
+    fn invalid_inputs(&self, source: BindInputsError) -> BuildStageError {
         BuildStageError::InvalidInputs {
             identifier: self.full_identifier.clone(),
             source,
@@ -144,7 +147,7 @@ impl<D: StageDefinition> Definition<D> {
     }
 
     /// Rejects a demand naming an input the stage's signature does not have.
-    pub(super) fn check_demand_inputs(&self, args: &D::Args) -> Result<(), BuildStageError> {
+    fn check_demand_inputs(&self, args: &D::Args) -> Result<(), BuildStageError> {
         let params = D::inputs().params();
 
         for demanded in D::demands(args) {
@@ -161,6 +164,42 @@ impl<D: StageDefinition> Definition<D> {
         }
 
         Ok(())
+    }
+
+    /// Deserializes the arguments and binds the inputs, refusing demands the stage could not be given.
+    pub(super) fn prepared(
+        &self,
+        args: &Value,
+        inputs: &[InputArgument],
+        slot: &OpenSlot,
+    ) -> Result<Prepared<D>, BuildStageError> {
+        let args = self.deserialize_args(args)?;
+        self.check_demand_inputs(&args)?;
+
+        let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+        self.check_chunk_input(&args, &bound)?;
+
+        Ok(Prepared {
+            identifier: self.full_identifier.clone(),
+            args,
+            inputs: bound,
+            slot: slot.clone(),
+        })
+    }
+
+    /// Rejects a chunk stage whose chunk authority has no name to carry its chunk demand.
+    fn check_chunk_input(&self, args: &D::Args, inputs: &BoundInputs) -> Result<(), BuildStageError> {
+        let chunked = D::parallelism(args).granularity() == Granularity::Chunk;
+        if !chunked || inputs.chunk_authority().is_none() {
+            return Ok(());
+        }
+
+        if chunk_authority_name(D::inputs(), inputs).is_some() {
+            return Ok(());
+        }
+
+        let identifier = self.full_identifier.clone();
+        Err(self.invalid_args(ArgsError::UnnamedChunkInput { identifier }))
     }
 
     /// Rejects a segment that would produce a malformed `package/stage` identifier.
@@ -190,7 +229,7 @@ impl<D: StageDefinition> Prepared<D> {
     pub(super) fn stage_demands(&self) -> Vec<InputDemand> {
         let mut demands = D::demands(&self.args);
 
-        let Parallelism::Chunk(Some(demand)) = D::parallelism(&self.args) else {
+        let Parallelism::Chunk(demand) = D::parallelism(&self.args) else {
             return demands;
         };
 

@@ -8,6 +8,7 @@ mod testing;
 use std::time::Duration;
 
 use av_toolbox_core::{
+    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -40,6 +41,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
+use av_toolbox_transforms::{SceneRequest, Scenes};
 
 pub(crate) use self::args::{Input, QtgmcArgs};
 use self::args::{checked_field_size, degrain_settings, mask_scene_change, motion_settings, scene_change};
@@ -231,8 +233,11 @@ impl StageDefinition for Qtgmc {
         &[Tag::Deinterlace]
     }
 
+    // Its window spans a few frames, so any break costs little and chunks of 10 s spread across workers.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(None)
+        let demand = AnyDemand::new::<Scenes>(SceneRequest::limited_to_seconds(10.0));
+
+        Parallelism::Chunk(demand)
     }
 
     // The entries the output trails the input by, and the frames they and the current frame come from.

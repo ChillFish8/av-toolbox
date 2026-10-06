@@ -1,18 +1,19 @@
 //! Core interfaces for building video processing pipelines
 //!
-//! A pipeline is made of stages, and every stage falls into one of five kinds:
+//! A pipeline is made of stages, and every stage falls into one of six kinds:
 //!
 //! - [Source], which produces frames.
 //! - [Filter], which changes the frames.
 //! - [Mask], which selects pixels from two or more inputs.
 //! - [Transform], which changes the stream rather than the frames.
+//! - [Provider], which supplies what other stages demand. The graph places these itself.
 //! - [Sink], which consumes the finished stream.
 //!
 //! Every kind trait is typed over the side it runs on, defaulting to the device.
 //!
 //! A stage type is written as a [StageDefinition] plus the matching kind trait, one of
-//! [SourceDefinition], [FilterDefinition], [MaskDefinition], [TransformDefinition] or
-//! [SinkDefinition]. [StageDefinition] declares its arguments as a type, which supplies a JSON
+//! [SourceDefinition], [FilterDefinition], [MaskDefinition], [TransformDefinition],
+//! [ProviderDefinition] or [SinkDefinition]. [StageDefinition] declares its arguments as a type, which supplies a JSON
 //! schema, and its inputs as an [InputSignature]. The kind trait declares what formats it accepts
 //! and produces, and how to build it. Stages are registered with a [PipelineRegistry], which
 //! validates arguments against the schema and binds inputs to the signature before handing them
@@ -30,6 +31,7 @@ mod mask;
 mod meta;
 mod open;
 mod parallelism;
+mod provider;
 mod registry;
 mod residency;
 mod sink;
@@ -37,6 +39,8 @@ mod source;
 mod stage;
 mod stream;
 mod tag;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 mod transform;
 
 #[cfg(test)]
@@ -60,6 +64,7 @@ pub use self::factory::{
     PreparedMask,
     PreparedMetaSink,
     PreparedMetaTransform,
+    PreparedProvider,
     PreparedSink,
     PreparedSource,
     PreparedStage,
@@ -91,10 +96,12 @@ pub use self::meta::{
 };
 pub use self::open::OpenSlot;
 pub use self::parallelism::{Granularity, Parallelism};
+pub use self::provider::{LayerDemand, Placement, Provider, ProviderDefinition};
 pub use self::registry::PipelineRegistry;
 pub use self::residency::{
     BuiltFilter,
     BuiltMask,
+    BuiltProvider,
     BuiltSink,
     BuiltSource,
     BuiltTransform,

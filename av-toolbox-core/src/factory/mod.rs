@@ -2,6 +2,7 @@ mod builders;
 mod definition;
 mod meta;
 mod prepared;
+mod provider;
 
 use av_toolbox_gpu::{
     Capabilities,
@@ -20,6 +21,7 @@ pub use self::prepared::{
     PreparedMask,
     PreparedMetaSink,
     PreparedMetaTransform,
+    PreparedProvider,
     PreparedSink,
     PreparedSource,
     PreparedTransform,
@@ -105,6 +107,7 @@ pub enum PreparedStage {
     Mask(Box<dyn PreparedMask>),
     Transform(Box<dyn PreparedTransform>),
     MetaTransform(Box<dyn PreparedMetaTransform>),
+    Provider(Box<dyn PreparedProvider>),
     Sink(Box<dyn PreparedSink>),
     MetaSink(Box<dyn PreparedMetaSink>),
     /// A crossing that moves a stream between host and device.
@@ -118,6 +121,7 @@ impl PreparedStage {
             Self::Filter(_) => StageKind::Filter,
             Self::Mask(_) => StageKind::Mask,
             Self::Transform(_) | Self::MetaTransform(_) | Self::Crossing(_) => StageKind::Transform,
+            Self::Provider(_) => StageKind::Provider,
             Self::Sink(_) | Self::MetaSink(_) => StageKind::Sink,
         }
     }
@@ -129,6 +133,8 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.parallelism(),
             Self::Transform(prepared) => prepared.parallelism(),
             Self::MetaTransform(prepared) => prepared.parallelism(),
+            // A provider reads the whole stream in order to supply it.
+            Self::Provider(_) => Parallelism::Stream,
             Self::Sink(prepared) => prepared.parallelism(),
             Self::MetaSink(prepared) => prepared.parallelism(),
             // A crossing moves one item at a time and holds nothing between them.
@@ -143,6 +149,7 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.chunk_authority(),
             Self::Transform(prepared) => prepared.chunk_authority(),
             Self::MetaTransform(prepared) => prepared.chunk_authority(),
+            Self::Provider(prepared) => prepared.chunk_authority(),
             Self::Sink(prepared) => prepared.chunk_authority(),
             Self::MetaSink(prepared) => prepared.chunk_authority(),
             // A crossing's one input is the only thing it could line up by.
@@ -157,6 +164,7 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.demands(),
             Self::Transform(prepared) => prepared.demands(),
             Self::MetaTransform(prepared) => prepared.demands(),
+            Self::Provider(_) => Vec::new(),
             Self::Sink(prepared) => prepared.demands(),
             Self::MetaSink(prepared) => prepared.demands(),
             Self::Crossing(_) => Vec::new(),
@@ -171,6 +179,7 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.suggested_workers(),
             Self::Transform(prepared) => prepared.suggested_workers(),
             Self::MetaTransform(prepared) => prepared.suggested_workers(),
+            Self::Provider(_) => None,
             Self::Sink(prepared) => prepared.suggested_workers(),
             Self::MetaSink(prepared) => prepared.suggested_workers(),
             Self::Crossing(_) => None,
@@ -184,6 +193,7 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.held_frames(formats),
             Self::Transform(prepared) => prepared.held_frames(formats),
             Self::MetaTransform(prepared) => prepared.held_frames(formats),
+            Self::Provider(prepared) => prepared.held_frames(formats),
             Self::Sink(prepared) => prepared.held_frames(formats),
             Self::MetaSink(prepared) => prepared.held_frames(formats),
             Self::Crossing(_) => 0,
@@ -206,6 +216,7 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::Transform(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::MetaTransform(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
+            Self::Provider(prepared) => prepared.accepts_input(capabilities, offered),
             Self::Sink(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::MetaSink(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             // A crossing never changes a format, so it accepts back whatever it was offered.
@@ -225,6 +236,7 @@ impl PreparedStage {
             Self::Mask(prepared) => prepared.produces(capabilities, chosen),
             Self::Transform(prepared) => prepared.produces(capabilities, chosen),
             Self::MetaTransform(prepared) => prepared.produces(capabilities, chosen),
+            Self::Provider(prepared) => prepared.produces(chosen),
             Self::Sink(_) | Self::MetaSink(_) => Err(StageError::msg(
                 "produces was asked of a sink, which produces no stream, so reaching this is a solver bug",
             )),
@@ -251,6 +263,7 @@ impl PreparedStage {
             Self::Filter(prepared) => prepared.residency(),
             Self::Mask(prepared) => prepared.residency(),
             Self::Transform(prepared) => prepared.residency(),
+            Self::Provider(prepared) => prepared.residency(),
             Self::MetaTransform(_) | Self::MetaSink(_) => Residency::Either,
             Self::Sink(prepared) => prepared.residency(),
             Self::Crossing(crossing) => crossing.to_side(),

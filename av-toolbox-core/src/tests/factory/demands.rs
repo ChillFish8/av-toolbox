@@ -102,7 +102,7 @@ impl StageDefinition for DemandingExample {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(Some(cuts()))
+        Parallelism::Chunk(cuts())
     }
 
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
@@ -146,7 +146,7 @@ impl StageDefinition for VariadicExample {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(Some(cuts()))
+        Parallelism::Chunk(cuts())
     }
 
     fn inputs() -> &'static InputSignature {
@@ -204,6 +204,31 @@ fn a_chunk_stage_on_a_variadic_input_demands_on_it() {
         demand: cuts(),
     };
     assert_eq!(prepared.demands(), vec![expected]);
+}
+
+#[test]
+fn a_chunk_stage_on_an_unnamed_variadic_input_is_refused() {
+    let mut registry = PipelineRegistry::new();
+    registry
+        .register_filter::<VariadicExample>()
+        .expect("should register");
+
+    let inputs = [InputArgument::positional(StageHandle::new(1), StreamType::Frames)];
+    let args = serde_json::json!({});
+    let Err(error) = registry.prepare(StageKind::Filter, "av-denoise/variadic", &args, &inputs) else {
+        panic!("a chunk input with no name should be refused");
+    };
+
+    let BuildStageError::InvalidArgs { source, .. } = error else {
+        panic!("expected invalid arguments, got {error:?}");
+    };
+    let message = source.to_string();
+    assert!(
+        matches!(source, ArgsError::UnnamedChunkInput { .. }),
+        "{source:?}"
+    );
+    assert!(message.contains("av-denoise/variadic"), "{message}");
+    assert!(message.contains("no name"), "{message}");
 }
 
 #[test]

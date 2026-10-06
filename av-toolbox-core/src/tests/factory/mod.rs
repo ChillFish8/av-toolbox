@@ -140,7 +140,7 @@ fn reference_input() -> Vec<InputArgument> {
     vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)]
 }
 
-fn capabilities() -> Capabilities {
+pub(super) fn capabilities() -> Capabilities {
     let every = [
         av_toolbox_gpu::ElementType::F32,
         av_toolbox_gpu::ElementType::F16,
@@ -164,7 +164,7 @@ fn capabilities() -> Capabilities {
         .build()
 }
 
-fn frame_format() -> FrameFormat {
+pub(super) fn frame_format() -> FrameFormat {
     FrameFormat {
         width: 64,
         height: 64,

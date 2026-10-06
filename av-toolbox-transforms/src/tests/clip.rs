@@ -14,16 +14,16 @@ use av_toolbox_gpu::{
 };
 
 /// The width and height of every test clip.
-pub(super) const SIZE: u32 = 64;
+pub(crate) const SIZE: u32 = 64;
 
 /// Three scenes of 30 frames, with hard cuts at frames 30 and 60.
-pub(super) const THREE_SCENES: &[(u64, u64)] = &[(1, 30), (2, 30), (3, 30)];
+pub(crate) const THREE_SCENES: &[(u64, u64)] = &[(1, 30), (2, 30), (3, 30)];
 
-pub(super) fn grey8() -> FrameFormat {
+pub(crate) fn grey8() -> FrameFormat {
     grey8_of(SIZE, SIZE)
 }
 
-pub(super) fn grey8_of(width: u32, height: u32) -> FrameFormat {
+pub(crate) fn grey8_of(width: u32, height: u32) -> FrameFormat {
     FrameFormat {
         width,
         height,
@@ -35,7 +35,7 @@ pub(super) fn grey8_of(width: u32, height: u32) -> FrameFormat {
     }
 }
 
-pub(super) fn yuv420_ten_bit() -> FrameFormat {
+pub(crate) fn yuv420_ten_bit() -> FrameFormat {
     FrameFormat {
         width: SIZE,
         height: SIZE,
@@ -53,7 +53,7 @@ pub(super) fn yuv420_ten_bit() -> FrameFormat {
 ///
 /// Each scene's texture drifts one pixel a frame, so frames within a scene resemble each other
 /// and a new seed makes a hard cut.
-pub(super) fn clip(context: &FrameContext, format: &FrameFormat, scenes: &[(u64, u64)]) -> Vec<HostFrame> {
+pub(crate) fn clip(context: &FrameContext, format: &FrameFormat, scenes: &[(u64, u64)]) -> Vec<HostFrame> {
     let mut frames = Vec::new();
     let mut index = 0;
     for &(seed, length) in scenes {
@@ -68,7 +68,7 @@ pub(super) fn clip(context: &FrameContext, format: &FrameFormat, scenes: &[(u64,
 }
 
 /// A clip of `length` frames, every sample the same value throughout, 40 ms apart.
-pub(super) fn flat_clip(context: &FrameContext, format: &FrameFormat, length: u64) -> Vec<HostFrame> {
+pub(crate) fn flat_clip(context: &FrameContext, format: &FrameFormat, length: u64) -> Vec<HostFrame> {
     let mut frames = Vec::new();
     for index in 0..length {
         let frame = flat(context, format, index);

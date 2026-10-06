@@ -30,6 +30,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::chunked;
 use crate::engine::tests::support::StageLife;
 
 // A filter holding a window of frames and emitting each one unchanged once the window is full, so the
@@ -130,7 +131,7 @@ impl StageDefinition for Delay {
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_frame {
             true => Parallelism::Frame,
-            false => Parallelism::Chunk(None),
+            false => chunked(),
         }
     }
 

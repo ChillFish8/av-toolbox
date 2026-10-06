@@ -35,6 +35,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::chunked;
 use crate::engine::tests::support::{StageLife, format};
 
 // A filter that passes its one input through unchanged.
@@ -298,7 +299,7 @@ impl StageDefinition for Flushing {
 
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
-            true => Parallelism::Chunk(None),
+            true => chunked(),
             false => Parallelism::Frame,
         }
     }

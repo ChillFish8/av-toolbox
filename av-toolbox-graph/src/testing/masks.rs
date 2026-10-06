@@ -26,6 +26,7 @@ use av_toolbox_gpu::{
     StreamFormat,
 };
 
+use super::chunked;
 use super::shared::{NoArgs, TemporalArgs, first_bound, fixture_mask_format, frames_template, mask_template};
 
 fixture_stage!(
@@ -291,7 +292,7 @@ impl StageDefinition for TemporalMerge {
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.radius {
             0 => Parallelism::Frame,
-            _ => Parallelism::Chunk(None),
+            _ => chunked(),
         }
     }
 

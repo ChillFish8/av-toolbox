@@ -6,8 +6,11 @@ use av_denoise_core::{
     NlmeansAlgorithm,
     PrefilterMode,
 };
+use av_toolbox_core::{AnyDemand, Parallelism, StageDefinition};
+use av_toolbox_transforms::{SceneRequest, Scenes};
 use serde_json::json;
 
+use crate::denoise::avd::Denoise;
 use crate::denoise::avd::args::{AvdArgs, EngineOptions, Nl4dArgs, NlmeansArgs, NlmeansHqArgs};
 
 fn parsed<A: AvdArgs>(value: serde_json::Value) -> A {
@@ -205,4 +208,18 @@ fn an_unknown_preset_is_refused() {
     let parsed: Result<NlmeansArgs, _> = serde_json::from_value(json!({ "preset": "ultra" }));
 
     assert!(parsed.is_err());
+}
+
+#[test]
+fn every_engine_chunks_on_natural_scenes() {
+    let natural = AnyDemand::new::<Scenes>(SceneRequest::natural());
+    let chunked = Parallelism::Chunk(natural);
+
+    let nlmeans: NlmeansArgs = parsed(json!({}));
+    let nlmeans_hq: NlmeansHqArgs = parsed(json!({}));
+    let nl4d: Nl4dArgs = parsed(json!({}));
+
+    assert_eq!(Denoise::<NlmeansArgs>::parallelism(&nlmeans), chunked);
+    assert_eq!(Denoise::<NlmeansHqArgs>::parallelism(&nlmeans_hq), chunked);
+    assert_eq!(Denoise::<Nl4dArgs>::parallelism(&nl4d), chunked);
 }

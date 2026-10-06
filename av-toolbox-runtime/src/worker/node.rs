@@ -3,6 +3,7 @@ use av_toolbox_core::{
     Filter,
     Inputs,
     Mask,
+    Provider,
     Sink,
     Source,
     Transform,
@@ -18,8 +19,8 @@ use crate::RunError;
 
 /// Runs one stage against one bundle of inputs, producing what it emits.
 ///
-/// A source ignores `slots` and produces at most one item, a mask produces exactly one, a filter
-/// and a transform produce however many they return, and a sink produces nothing.
+/// A source ignores `slots` and produces at most one item, a mask produces exactly one, a filter,
+/// a transform and a provider produce however many they return, and a sink produces nothing.
 pub fn run_node(
     node: NodeId,
     stage: &mut StageBox,
@@ -42,6 +43,10 @@ pub fn run_node(
         },
         StageBox::MetaTransform(transform) => run_meta_transform(transform.as_mut(), context, slots)
             .map_err(|source| RunError::Stage { node, source }),
+        StageBox::Provider(provider) => {
+            let inputs = narrow(node, slots);
+            run_provider(node, provider.as_mut(), context, inputs)
+        },
         StageBox::Sink(sink) => {
             let inputs = narrow(node, slots);
             run_sink(node, sink.as_mut(), context, inputs)
@@ -64,6 +69,10 @@ pub fn run_node(
         StageBox::HostTransform(transform) => {
             let inputs = narrow(node, slots);
             run_transform(node, transform.as_mut(), context, inputs)
+        },
+        StageBox::HostProvider(provider) => {
+            let inputs = narrow(node, slots);
+            run_provider(node, provider.as_mut(), context, inputs)
         },
         StageBox::HostSink(sink) => {
             let inputs = narrow(node, slots);
@@ -102,12 +111,14 @@ pub fn start_node(node: NodeId, stage: &mut StageBox, context: &mut FrameContext
         StageBox::Mask(mask) => mask.start_of_stream(context),
         StageBox::Transform(transform) => transform.start_of_stream(context),
         StageBox::MetaTransform(transform) => transform.start_of_stream(context),
+        StageBox::Provider(provider) => provider.start_of_stream(context),
         StageBox::Sink(sink) => sink.start_of_stream(context),
         StageBox::MetaSink(sink) => sink.start_of_stream(context),
         StageBox::HostSource(source) => source.start_of_stream(context),
         StageBox::HostFilter(filter) => filter.start_of_stream(context),
         StageBox::HostMask(mask) => mask.start_of_stream(context),
         StageBox::HostTransform(transform) => transform.start_of_stream(context),
+        StageBox::HostProvider(provider) => provider.start_of_stream(context),
         StageBox::HostSink(sink) => sink.start_of_stream(context),
         StageBox::Crossing(_) => Ok(()),
     }
@@ -134,6 +145,7 @@ pub fn end_node(
         StageBox::MetaTransform(transform) => {
             end_meta_transform(transform.as_mut(), context).map_err(|source| RunError::Stage { node, source })
         },
+        StageBox::Provider(provider) => end_provider(node, provider.as_mut(), context),
         StageBox::Sink(sink) => end_sink(node, sink.as_mut(), context),
         StageBox::MetaSink(sink) => {
             end_meta_sink(sink.as_mut(), context).map_err(|source| RunError::Stage { node, source })?;
@@ -142,6 +154,7 @@ pub fn end_node(
         },
         StageBox::HostFilter(filter) => end_filter(node, filter.as_mut(), context),
         StageBox::HostTransform(transform) => end_transform(node, transform.as_mut(), context),
+        StageBox::HostProvider(provider) => end_provider(node, provider.as_mut(), context),
         StageBox::HostSink(sink) => end_sink(node, sink.as_mut(), context),
     }
 }
@@ -239,6 +252,19 @@ fn run_transform<S: Side>(
     Ok(emitted::<S>(items))
 }
 
+fn run_provider<S: Side>(
+    node: NodeId,
+    provider: &mut dyn Provider<S>,
+    context: &mut FrameContext,
+    inputs: Inputs<S>,
+) -> Result<Vec<AnyItem>, RunError> {
+    let items = provider
+        .process(context, inputs)
+        .map_err(|source| RunError::Stage { node, source })?;
+
+    Ok(emitted::<S>(items))
+}
+
 fn run_sink<S: Side>(
     node: NodeId,
     sink: &mut dyn Sink<S>,
@@ -269,6 +295,18 @@ fn end_transform<S: Side>(
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
     let flushed = transform
+        .end_of_stream(context)
+        .map_err(|source| RunError::Stage { node, source })?;
+
+    Ok(emitted::<S>(flushed))
+}
+
+fn end_provider<S: Side>(
+    node: NodeId,
+    provider: &mut dyn Provider<S>,
+    context: &mut FrameContext,
+) -> Result<Vec<AnyItem>, RunError> {
+    let flushed = provider
         .end_of_stream(context)
         .map_err(|source| RunError::Stage { node, source })?;
 
@@ -463,6 +501,33 @@ mod tests {
                 .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
 
             Ok((0..self.copies).map(|_| item.clone()).collect())
+        }
+    }
+
+    /// Holds each item back until the next one arrives, handing the last on at the end.
+    #[derive(Default)]
+    struct HoldOne {
+        held: Option<HostStreamItem>,
+    }
+
+    impl StageInstance for HoldOne {}
+
+    impl Provider<HostSide> for HoldOne {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            mut inputs: Inputs<HostSide>,
+        ) -> Result<Vec<HostStreamItem>, StageError> {
+            let item = inputs
+                .take(0)
+                .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+            let previous = self.held.replace(item);
+
+            Ok(previous.into_iter().collect())
+        }
+
+        fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<HostStreamItem>, StageError> {
+            Ok(self.held.take().into_iter().collect())
         }
     }
 
@@ -925,5 +990,25 @@ mod tests {
         start_node(NodeId::new(0), &mut stage, &mut context_of(&context)).expect("should start");
 
         assert!(started.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_host_provider_runs_on_host_items_and_flushes_at_the_end() {
+        let context = testing_context();
+        let mut stage = StageBox::HostProvider(Box::<HoldOne>::default());
+        let mut run_context = context_of(&context);
+
+        let first = vec![Some(host_item(&context, 1))];
+        let held = run_node(NodeId::new(0), &mut stage, &mut run_context, first).expect("runs");
+        let second = vec![Some(host_item(&context, 2))];
+        let passed = run_node(NodeId::new(0), &mut stage, &mut run_context, second).expect("runs");
+        let flushed = end_node(NodeId::new(0), &mut stage, &mut run_context).expect("ends");
+
+        assert!(held.is_empty());
+        assert_eq!(passed.len(), 1);
+        assert!(passed[0].is_host());
+        assert_eq!(passed[0].meta().index, 1);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].meta().index, 2);
     }
 }

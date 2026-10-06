@@ -66,11 +66,11 @@ fn a_demand_survives_json() {
 #[test]
 fn a_chunk_request_carries_its_demand() {
     let demand = AnyDemand::new::<Cuts>(Breaks { every: 4 });
-    let chunked = Parallelism::Chunk(Some(demand.clone()));
+    let chunked = Parallelism::Chunk(demand.clone());
 
     assert_eq!(chunked.granularity(), Granularity::Chunk);
     assert_eq!(chunked.demand(), Some(&demand));
-    assert_eq!(Parallelism::Chunk(None).demand(), None);
+    assert_eq!(Parallelism::Frame.demand(), None);
 }
 
 #[test]

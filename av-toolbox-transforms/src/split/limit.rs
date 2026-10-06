@@ -101,9 +101,7 @@ impl SplitLimit {
 
         let gaps = (length - 1) as f64;
         let frame_duration = span.as_secs_f64() / gaps;
-        let frames = max_seconds / frame_duration + FRAME_TOLERANCE;
-        let seconds_limit = frames.floor() as usize;
-        let seconds_limit = seconds_limit.max(1);
+        let seconds_limit = frames_in(max_seconds, frame_duration);
 
         let limit = match frame_limit {
             Some(frame_limit) => frame_limit.min(seconds_limit),
@@ -120,6 +118,14 @@ impl TryFrom<LimitArgs> for SplitLimit {
     fn try_from(args: LimitArgs) -> Result<Self, String> {
         Self::new(args.max_frames, args.max_seconds)
     }
+}
+
+/// The whole frames that fit in `seconds` when each lasts `frame_duration` seconds, at least one.
+pub(crate) fn frames_in(seconds: f64, frame_duration: f64) -> usize {
+    let frames = seconds / frame_duration + FRAME_TOLERANCE;
+    let whole = frames.floor() as usize;
+
+    whole.max(1)
 }
 
 /// Reads a field that was given, so a `null` stays apart from a field left out.

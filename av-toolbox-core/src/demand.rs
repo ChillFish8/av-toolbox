@@ -36,9 +36,10 @@ impl DemandKind {
 }
 
 /// A demand of any registered kind, carried without its type.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AnyDemand {
     #[serde(serialize_with = "serialize_kind", deserialize_with = "deserialize_kind")]
+    #[schemars(with = "String")]
     kind: DemandKind,
     request: Value,
 }

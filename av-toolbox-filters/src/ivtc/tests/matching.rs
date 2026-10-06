@@ -1,4 +1,4 @@
-use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition, StageError};
+use av_toolbox_core::{AnyDemand, FilterDefinition, Parallelism, StageDefinition, StageError};
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -14,6 +14,7 @@ use av_toolbox_gpu::{
     Subsampling,
     default_accelerators,
 };
+use av_toolbox_transforms::{SceneRequest, Scenes};
 use serde_json::json;
 
 use crate::deinterlace::spatial::Spatial;
@@ -330,5 +331,6 @@ fn it_holds_two_frames_and_runs_by_chunk() {
     let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
 
     assert_eq!(Match::held_frames(&parsed, &formats), 2);
-    assert_eq!(Match::parallelism(&parsed), Parallelism::Chunk(None));
+    let scenes = AnyDemand::new::<Scenes>(SceneRequest::limited_to_seconds(10.0));
+    assert_eq!(Match::parallelism(&parsed), Parallelism::Chunk(scenes));
 }

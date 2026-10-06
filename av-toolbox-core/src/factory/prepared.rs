@@ -12,6 +12,7 @@ use crate::{
     BuildStageError,
     BuiltFilter,
     BuiltMask,
+    BuiltProvider,
     BuiltSink,
     BuiltSource,
     BuiltTransform,
@@ -169,6 +170,32 @@ pub trait PreparedTransform: Send + Sync {
         backend: &Backend,
         formats: &ResolvedFormats,
     ) -> Result<BuiltTransform, BuildStageError>;
+}
+
+/// A provider whose demands are deserialized and whose input is bound.
+pub trait PreparedProvider: Send + Sync {
+    /// Which input's chunk ids line this stage's inputs up.
+    fn chunk_authority(&self) -> Option<usize>;
+
+    /// The most frames this stage may hold back at once, given its resolved formats.
+    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
+
+    fn accepts_input(
+        &self,
+        capabilities: &Capabilities,
+        offered: StreamFormat,
+    ) -> Result<FormatSet, StageError>;
+
+    /// The format the provider was given, once it has checked it can serve its demands on it.
+    fn produces(&self, chosen: &[Option<StreamFormat>]) -> Result<OutputFormats, StageError>;
+
+    fn residency(&self) -> Residency;
+
+    fn build(
+        self: Box<Self>,
+        backend: &Backend,
+        formats: &ResolvedFormats,
+    ) -> Result<BuiltProvider, BuildStageError>;
 }
 
 /// A metadata-only transform whose arguments are deserialized and whose inputs are bound.

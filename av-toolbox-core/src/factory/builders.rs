@@ -36,7 +36,6 @@ use crate::{
     StageError,
     StageSide,
     TransformDefinition,
-    bind_inputs,
 };
 
 /// Writes a stage kind's build task and factory, handing each built stage to `$finish`.
@@ -140,16 +139,9 @@ macro_rules! impl_stage_factory {
                 inputs: &[InputArgument],
                 slot: &OpenSlot,
             ) -> Result<Box<dyn $prepared_trait>, BuildStageError> {
-                let args = self.deserialize_args(args)?;
-                self.check_demand_inputs(&args)?;
-                let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+                let prepared = self.prepared(args, inputs, slot)?;
 
-                Ok(Box::new(Prepared::<D> {
-                    identifier: self.full_identifier().to_string(),
-                    args,
-                    inputs: bound,
-                    slot: slot.clone(),
-                }))
+                Ok(Box::new(prepared))
             }
         }
     };
@@ -245,16 +237,9 @@ macro_rules! impl_source_factory {
                 inputs: &[InputArgument],
                 slot: &OpenSlot,
             ) -> Result<Box<dyn PreparedSource>, BuildStageError> {
-                let args = self.deserialize_args(args)?;
-                self.check_demand_inputs(&args)?;
-                let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+                let prepared = self.prepared(args, inputs, slot)?;
 
-                Ok(Box::new(Prepared::<D> {
-                    identifier: self.full_identifier().to_string(),
-                    args,
-                    inputs: bound,
-                    slot: slot.clone(),
-                }))
+                Ok(Box::new(prepared))
             }
 
             fn reads_stream(&self, args: &Value) -> Result<bool, BuildStageError> {
@@ -347,16 +332,9 @@ macro_rules! impl_sink_factory {
                 inputs: &[InputArgument],
                 slot: &OpenSlot,
             ) -> Result<Box<dyn PreparedSink>, BuildStageError> {
-                let args = self.deserialize_args(args)?;
-                self.check_demand_inputs(&args)?;
-                let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+                let prepared = self.prepared(args, inputs, slot)?;
 
-                Ok(Box::new(Prepared::<D> {
-                    identifier: self.full_identifier().to_string(),
-                    args,
-                    inputs: bound,
-                    slot: slot.clone(),
-                }))
+                Ok(Box::new(prepared))
             }
         }
     };

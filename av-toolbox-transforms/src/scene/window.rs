@@ -14,7 +14,7 @@ use v_frame::pixel::Pixel;
 use super::args::DetectArgs;
 
 /// How many frames past the one being analysed the detector reads.
-pub(super) const LOOKAHEAD: usize = 5;
+pub(crate) const LOOKAHEAD: usize = 5;
 
 /// The precision float luma is read at.
 const FLOAT_BITS: u8 = 16;
@@ -25,9 +25,9 @@ const LUMA_PADDING: usize = 88;
 
 /// What the detector decided about one frame.
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub(super) struct Decision {
-    pub(super) starts_scene: bool,
-    pub(super) score: Option<SceneScore>,
+pub(crate) struct Decision {
+    pub(crate) starts_scene: bool,
+    pub(crate) score: Option<SceneScore>,
 }
 
 impl Decision {
@@ -40,7 +40,7 @@ impl Decision {
 
 /// The detector's settings for one stream.
 #[derive(Debug, Copy, Clone)]
-pub(super) struct Settings {
+pub(crate) struct Settings {
     width: usize,
     height: usize,
     bit_depth: u8,
@@ -51,7 +51,7 @@ pub(super) struct Settings {
 
 impl Settings {
     /// The settings for frames of `format`, or an error when the detector cannot read them.
-    pub(super) fn for_stream(format: &FrameFormat, args: &DetectArgs) -> Result<Self, StageError> {
+    pub(crate) fn for_stream(format: &FrameFormat, args: &DetectArgs) -> Result<Self, StageError> {
         check_layout(format)?;
 
         let bit_depth = match format.sample {
@@ -59,7 +59,10 @@ impl Settings {
             SampleFormat::U16 { depth } => depth.bits(),
             SampleFormat::F32 => FLOAT_BITS,
             SampleFormat::F16 => {
-                let message = format!("scene/detect reads integer samples, not {:?}", format.sample);
+                let message = format!(
+                    "scene detection reads integer or 32-bit float samples, not {:?}",
+                    format.sample
+                );
                 return Err(StageError::msg(message));
             },
         };
@@ -94,16 +97,16 @@ impl Settings {
 }
 
 /// Refuses a layout with no luma to read.
-pub(super) fn check_layout(format: &FrameFormat) -> Result<(), StageError> {
+pub(crate) fn check_layout(format: &FrameFormat) -> Result<(), StageError> {
     if matches!(format.layout, FrameLayout::Rgb) {
         return Err(StageError::msg(
-            "scene/detect reads luma, which an RGB frame does not carry",
+            "scene detection reads luma, which an RGB frame does not carry",
         ));
     }
 
     if matches!(format.layout, FrameLayout::Chroma { .. }) {
         return Err(StageError::msg(
-            "scene/detect reads YUV or Grey frames, not chroma planes",
+            "scene detection reads YUV or Grey frames, not chroma planes",
         ));
     }
 
@@ -131,13 +134,13 @@ pub(super) fn frame_rate(first: Option<Duration>, second: Option<Duration>) -> R
 }
 
 /// Scene detection over a sliding window of luma planes, for whichever sample type the stream has.
-pub(super) enum LumaWindow {
+pub(crate) enum LumaWindow {
     Eight(Window<u8>),
     Deep(Window<u16>),
 }
 
 impl LumaWindow {
-    pub(super) fn new(settings: Settings) -> Self {
+    pub(crate) fn new(settings: Settings) -> Self {
         if settings.bit_depth == 8 {
             return Self::Eight(Window::new(settings));
         }
@@ -146,7 +149,7 @@ impl LumaWindow {
     }
 
     /// Takes the next frame, returning a decision for every frame that can now be decided.
-    pub(super) fn push(&mut self, frame: &HostFrame) -> Result<Vec<Decision>, StageError> {
+    pub(crate) fn push(&mut self, frame: &HostFrame) -> Result<Vec<Decision>, StageError> {
         match self {
             Self::Eight(window) => window.push(frame),
             Self::Deep(window) => window.push(frame),
@@ -154,7 +157,7 @@ impl LumaWindow {
     }
 
     /// Decides every frame still waiting, once the stream has ended.
-    pub(super) fn finish(&mut self) -> Vec<Decision> {
+    pub(crate) fn finish(&mut self) -> Vec<Decision> {
         match self {
             Self::Eight(window) => window.finish(),
             Self::Deep(window) => window.finish(),
@@ -165,7 +168,7 @@ impl LumaWindow {
 /// Scene detection over a sliding window of luma planes.
 ///
 /// A frame is decided once the lookahead past it has arrived, or once the stream ends.
-pub(super) struct Window<T: Pixel> {
+pub(crate) struct Window<T: Pixel> {
     settings: Settings,
     detector: Option<SceneChangeDetector<T>>,
     first_timestamp: Option<Duration>,
@@ -249,7 +252,7 @@ impl<T: Pixel> Window<T> {
     fn luma_of(&self, frame: &HostFrame) -> Result<Arc<Frame<T>>, StageError> {
         let plane = frame
             .plane(Channel::Y)
-            .ok_or_else(|| StageError::msg("scene/detect needs a luma plane"))?;
+            .ok_or_else(|| StageError::msg("scene detection needs a luma plane"))?;
 
         let builder = FrameBuilder::new(
             self.settings.width,

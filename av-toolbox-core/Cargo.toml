@@ -24,3 +24,5 @@ metal = ["av-toolbox-cubek/metal", "av-toolbox-gpu/metal"]
 cuda = ["av-toolbox-cubek/cuda", "av-toolbox-gpu/cuda"]
 rocm = ["av-toolbox-cubek/rocm", "av-toolbox-gpu/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+# Exposes the demand kinds other crates' test fixtures use.
+test-support = []

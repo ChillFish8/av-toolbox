@@ -7,6 +7,7 @@ use std::thread;
 use std::thread::JoinHandle;
 
 use av_toolbox_core::{
+    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -42,6 +43,7 @@ use av_toolbox_gpu::{
 };
 use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build, place_transfers, plan, solve};
 use av_toolbox_runtime::{Engine, Settings};
+use av_toolbox_transforms::{SceneRequest, Scenes};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -108,7 +110,9 @@ impl StageDefinition for Chunked {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(None)
+        let demand = AnyDemand::new::<Scenes>(SceneRequest::natural());
+
+        Parallelism::Chunk(demand)
     }
 }
 

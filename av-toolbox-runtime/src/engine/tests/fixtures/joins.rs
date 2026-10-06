@@ -28,6 +28,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::chunked;
 use crate::engine::tests::support::StageLife;
 
 // A filter that reads two inputs and passes the first through, standing in for a mask-and-frame
@@ -80,7 +81,7 @@ impl StageDefinition for Join {
     // and `RunWarning::NothingChunked` are only ever noticed on that path, and this is the
     // fixture every test of them is written around.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(None)
+        chunked()
     }
 
     fn inputs() -> &'static InputSignature {
@@ -177,7 +178,7 @@ impl StageDefinition for Referring {
 
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
-            true => Parallelism::Chunk(None),
+            true => chunked(),
             false => Parallelism::Frame,
         }
     }

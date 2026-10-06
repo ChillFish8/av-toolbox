@@ -32,6 +32,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::chunked;
 use crate::engine::tests::support::{InstanceId, StageLife, WorkerGate, frame_second};
 
 // A filter that passes its input through, but whose first call blocks until a test releases it.
@@ -123,7 +124,7 @@ impl StageDefinition for Slow {
     // Per chunk, so a held worker is holding a whole chunk. Every test that gates one of these
     // is written about a chunk taking far longer than the rest.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(None)
+        chunked()
     }
 
     fn inputs() -> &'static InputSignature {
@@ -235,7 +236,7 @@ impl StageDefinition for HostSlow {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(None)
+        chunked()
     }
 
     fn inputs() -> &'static InputSignature {
@@ -347,7 +348,7 @@ impl StageDefinition for Tracked {
 
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
-            true => Parallelism::Chunk(None),
+            true => chunked(),
             false => Parallelism::Frame,
         }
     }

@@ -285,6 +285,7 @@ dependencies = [
  "av-toolbox-filters",
  "av-toolbox-gpu",
  "av-toolbox-models",
+ "av-toolbox-transforms",
  "cubecl",
  "schemars",
  "serde",

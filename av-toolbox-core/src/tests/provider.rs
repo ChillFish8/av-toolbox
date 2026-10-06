@@ -1,0 +1,238 @@
+use av_toolbox_gpu::{
+    BuildContext,
+    Capabilities,
+    FormatSet,
+    FrameContext,
+    FrameFormat,
+    FrameRate,
+    HostSide,
+    HostStreamItem,
+    ResolvedFormats,
+    Runtime,
+    StreamFormat,
+};
+use serde_json::json;
+
+use super::demand::{Breaks, Cuts};
+use super::factory::{capabilities, frame_format};
+use crate::{
+    DemandKind,
+    InputArgument,
+    InputParam,
+    InputSignature,
+    Inputs,
+    LayerDemand,
+    Parallelism,
+    PipelineRegistry,
+    Placement,
+    Provider,
+    ProviderDefinition,
+    RegistryError,
+    Residency,
+    StageDefinition,
+    StageError,
+    StageHandle,
+    StageInstance,
+    StageKind,
+    StreamType,
+};
+
+struct PassThrough;
+
+impl StageInstance for PassThrough {}
+
+impl Provider<HostSide> for PassThrough {
+    fn process(
+        &mut self,
+        _context: &mut FrameContext,
+        mut inputs: Inputs<HostSide>,
+    ) -> Result<Vec<HostStreamItem>, StageError> {
+        let item = inputs
+            .take(0)
+            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+
+        Ok(vec![item])
+    }
+}
+
+/// Writes a provider of cuts that passes every item through and needs a frame rate.
+macro_rules! cuts_provider {
+    ($definition:ident, $identifier:literal) => {
+        struct $definition;
+
+        impl StageDefinition for $definition {
+            type Args = Vec<LayerDemand>;
+
+            fn package() -> &'static str {
+                "provider"
+            }
+
+            fn identifier() -> &'static str {
+                $identifier
+            }
+
+            fn held_frames(args: &Self::Args, _formats: &ResolvedFormats) -> usize {
+                args.len()
+            }
+
+            fn inputs() -> &'static InputSignature {
+                const SIGNATURE: &InputSignature =
+                    &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+                SIGNATURE
+            }
+        }
+
+        impl ProviderDefinition for $definition {
+            type Side = HostSide;
+            type Demand = Cuts;
+
+            fn placement() -> Placement {
+                Placement::Shared
+            }
+
+            fn accepts_input(
+                _capabilities: &Capabilities,
+                _args: &Self::Args,
+                offered: StreamFormat,
+            ) -> Result<FormatSet, StageError> {
+                Ok(FormatSet::of([offered.sample()]))
+            }
+
+            fn check(_args: &Self::Args, input: &FrameFormat) -> Result<(), StageError> {
+                match input.frame_rate {
+                    Some(_) => Ok(()),
+                    None => Err(StageError::msg("the stream has no frame rate")),
+                }
+            }
+
+            fn build<R: Runtime>(
+                _context: &BuildContext<R>,
+                _args: Self::Args,
+                _formats: &ResolvedFormats,
+            ) -> Result<Box<dyn Provider<HostSide>>, StageError> {
+                Ok(Box::new(PassThrough))
+            }
+        }
+    };
+}
+
+cuts_provider!(CutsProvider, "cuts");
+cuts_provider!(OtherCutsProvider, "other-cuts");
+
+fn registry_with_cuts() -> PipelineRegistry {
+    let mut registry = PipelineRegistry::new();
+    registry
+        .register_provider::<CutsProvider>()
+        .expect("should register");
+
+    registry
+}
+
+fn provider_args() -> serde_json::Value {
+    json!([
+        {
+            "layer": 0,
+            "demand": { "kind": "cuts", "request": { "every": 4 } },
+        },
+    ])
+}
+
+fn input() -> Vec<InputArgument> {
+    vec![InputArgument::named(
+        "input",
+        StageHandle::new(1),
+        StreamType::Frames,
+    )]
+}
+
+#[test]
+fn a_provider_registers_under_its_demand_kind() {
+    let registry = registry_with_cuts();
+
+    let found = registry.provider_for(DemandKind::of::<Cuts>());
+
+    assert_eq!(found, Some(("provider/cuts", Placement::Shared)));
+
+    let args = provider_args();
+    let prepared = registry
+        .prepare(StageKind::Provider, "provider/cuts", &args, &input())
+        .expect("should prepare");
+
+    assert_eq!(prepared.kind(), StageKind::Provider);
+    assert_eq!(prepared.parallelism(), Parallelism::Stream);
+    assert_eq!(prepared.chunk_authority(), Some(0));
+    assert_eq!(prepared.residency(), Residency::Host);
+    assert!(prepared.demands().is_empty());
+}
+
+#[test]
+fn registering_a_provider_registers_its_demand_kind() {
+    let registry = registry_with_cuts();
+
+    assert_eq!(registry.demand_kind("cuts"), Some(DemandKind::of::<Cuts>()));
+
+    let demand = crate::AnyDemand::new::<Cuts>(Breaks { every: 4 });
+    assert_eq!(registry.describe(&demand), "cuts");
+}
+
+#[test]
+fn a_provider_registers_beside_its_kind_registered_first() {
+    let mut registry = PipelineRegistry::new();
+    registry.register_demand::<Cuts>().expect("should register");
+
+    let registered = registry.register_provider::<CutsProvider>();
+
+    assert!(registered.is_ok(), "{registered:?}");
+}
+
+#[test]
+fn a_provider_cannot_be_named_twice_for_one_kind() {
+    let mut registry = registry_with_cuts();
+
+    let Err(error) = registry.register_provider::<OtherCutsProvider>() else {
+        panic!("a second provider of cuts should be refused");
+    };
+
+    assert!(
+        matches!(error, RegistryError::DuplicateProvider { kind: "cuts" }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_provider_produces_what_it_is_given_once_checked() {
+    let registry = registry_with_cuts();
+    let args = provider_args();
+    let prepared = registry
+        .prepare(StageKind::Provider, "provider/cuts", &args, &input())
+        .expect("should prepare");
+
+    let without_rate = StreamFormat::Frames(frame_format());
+    let refused = prepared.produces(&capabilities(), &[Some(without_rate)]);
+    assert!(refused.is_err());
+
+    let rate = FrameRate::new(25, 1);
+    let format = FrameFormat {
+        frame_rate: rate,
+        ..frame_format()
+    };
+    let with_rate = StreamFormat::Frames(format);
+    let produced = prepared
+        .produces(&capabilities(), &[Some(with_rate)])
+        .expect("should produce");
+
+    assert_eq!(produced.samples, FormatSet::of([format.sample]));
+}
+
+#[test]
+fn a_provider_holds_what_its_definition_says() {
+    let registry = registry_with_cuts();
+    let args = provider_args();
+    let prepared = registry
+        .prepare(StageKind::Provider, "provider/cuts", &args, &input())
+        .expect("should prepare");
+
+    let formats = ResolvedFormats::new(vec![], None);
+
+    assert_eq!(prepared.held_frames(&formats), 1);
+}

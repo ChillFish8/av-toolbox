@@ -39,6 +39,8 @@ pub enum StageKind {
     Filter,
     Mask,
     Transform,
+    /// Supplies what other stages demand, placed by the graph rather than the pipeline.
+    Provider,
     Sink,
 }
 
@@ -46,7 +48,7 @@ impl StageKind {
     /// What a stage of this kind produces, or `None` for a sink.
     pub const fn output(&self) -> Option<StreamType> {
         match self {
-            Self::Source | Self::Filter | Self::Transform => Some(StreamType::Frames),
+            Self::Source | Self::Filter | Self::Transform | Self::Provider => Some(StreamType::Frames),
             Self::Mask => Some(StreamType::Mask),
             Self::Sink => None,
         }
@@ -60,6 +62,7 @@ impl fmt::Display for StageKind {
             Self::Filter => "filter",
             Self::Mask => "mask",
             Self::Transform => "transform",
+            Self::Provider => "provider",
             Self::Sink => "sink",
         };
 
@@ -641,6 +644,7 @@ mod tests {
         assert_eq!(StageKind::Source.output(), Some(StreamType::Frames));
         assert_eq!(StageKind::Filter.output(), Some(StreamType::Frames));
         assert_eq!(StageKind::Transform.output(), Some(StreamType::Frames));
+        assert_eq!(StageKind::Provider.output(), Some(StreamType::Frames));
         assert_eq!(StageKind::Mask.output(), Some(StreamType::Mask));
         assert_eq!(StageKind::Sink.output(), None);
     }

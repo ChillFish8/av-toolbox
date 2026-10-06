@@ -2,7 +2,7 @@ use std::fmt;
 
 use av_toolbox_gpu::{DeviceSide, HostSide, Side};
 
-use crate::{Filter, Mask, Sink, Source, Transform};
+use crate::{Filter, Mask, Provider, Sink, Source, Transform};
 
 /// Where a stage runs.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -57,6 +57,7 @@ pub type BuiltSource = Sided<dyn Source<DeviceSide>, dyn Source<HostSide>>;
 pub type BuiltFilter = Sided<dyn Filter<DeviceSide>, dyn Filter<HostSide>>;
 pub type BuiltMask = Sided<dyn Mask<DeviceSide>, dyn Mask<HostSide>>;
 pub type BuiltTransform = Sided<dyn Transform<DeviceSide>, dyn Transform<HostSide>>;
+pub type BuiltProvider = Sided<dyn Provider<DeviceSide>, dyn Provider<HostSide>>;
 pub type BuiltSink = Sided<dyn Sink<DeviceSide>, dyn Sink<HostSide>>;
 
 /// A side a stage can be built for, which knows how to file what was built for it.
@@ -70,6 +71,8 @@ pub trait StageSide: Side {
     fn mask(stage: Box<dyn Mask<Self>>) -> BuiltMask;
 
     fn transform(stage: Box<dyn Transform<Self>>) -> BuiltTransform;
+
+    fn provider(stage: Box<dyn Provider<Self>>) -> BuiltProvider;
 
     fn sink(stage: Box<dyn Sink<Self>>) -> BuiltSink;
 }
@@ -90,6 +93,10 @@ impl StageSide for DeviceSide {
     }
 
     fn transform(stage: Box<dyn Transform<Self>>) -> BuiltTransform {
+        Sided::Device(stage)
+    }
+
+    fn provider(stage: Box<dyn Provider<Self>>) -> BuiltProvider {
         Sided::Device(stage)
     }
 
@@ -114,6 +121,10 @@ impl StageSide for HostSide {
     }
 
     fn transform(stage: Box<dyn Transform<Self>>) -> BuiltTransform {
+        Sided::Host(stage)
+    }
+
+    fn provider(stage: Box<dyn Provider<Self>>) -> BuiltProvider {
         Sided::Host(stage)
     }
 

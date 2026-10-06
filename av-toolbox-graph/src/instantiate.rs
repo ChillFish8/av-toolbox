@@ -11,6 +11,7 @@ use av_toolbox_core::{
     MetaTransform,
     PipelineRegistry,
     PreparedStage,
+    Provider,
     Sided,
     Sink,
     Source,
@@ -29,12 +30,14 @@ pub enum StageBox {
     Mask(Box<dyn Mask>),
     Transform(Box<dyn Transform>),
     MetaTransform(Box<dyn MetaTransform>),
+    Provider(Box<dyn Provider>),
     Sink(Box<dyn Sink>),
     MetaSink(Box<dyn MetaSink>),
     HostSource(Box<dyn Source<HostSide>>),
     HostFilter(Box<dyn Filter<HostSide>>),
     HostMask(Box<dyn Mask<HostSide>>),
     HostTransform(Box<dyn Transform<HostSide>>),
+    HostProvider(Box<dyn Provider<HostSide>>),
     HostSink(Box<dyn Sink<HostSide>>),
     /// A crossing that moves one item between host and device.
     Crossing(Crossing),
@@ -48,12 +51,14 @@ impl fmt::Debug for StageBox {
             Self::Mask(_) => "Mask",
             Self::Transform(_) => "Transform",
             Self::MetaTransform(_) => "MetaTransform",
+            Self::Provider(_) => "Provider",
             Self::Sink(_) => "Sink",
             Self::MetaSink(_) => "MetaSink",
             Self::HostSource(_) => "HostSource",
             Self::HostFilter(_) => "HostFilter",
             Self::HostMask(_) => "HostMask",
             Self::HostTransform(_) => "HostTransform",
+            Self::HostProvider(_) => "HostProvider",
             Self::HostSink(_) => "HostSink",
             Self::Crossing(_) => "Crossing",
         };
@@ -281,6 +286,10 @@ fn build_stage(
             let stage = prepared.build(backend, formats)?;
 
             StageBox::MetaTransform(stage)
+        },
+        PreparedStage::Provider(prepared) => match prepared.build(backend, formats)? {
+            Sided::Device(stage) => StageBox::Provider(stage),
+            Sided::Host(stage) => StageBox::HostProvider(stage),
         },
         PreparedStage::Sink(prepared) => match prepared.build(backend, formats)? {
             Sided::Device(stage) => StageBox::Sink(stage),

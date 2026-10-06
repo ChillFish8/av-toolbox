@@ -55,6 +55,8 @@ pub enum RegistryError {
     InvalidDemand { identifier: String, input: &'static str },
     #[error("a demand kind named {kind} is already registered")]
     DuplicateDemand { kind: &'static str },
+    #[error("a provider of {kind} demands is already registered")]
+    DuplicateProvider { kind: &'static str },
 }
 
 /// A failure raised while binding a pipeline's inputs to a stage's signature.
@@ -122,6 +124,10 @@ pub enum ArgsError {
     Deserialize(#[source] serde_json::Error),
     #[error(transparent)]
     InvalidDemand(RegistryError),
+    #[error(
+        "stage {identifier} is chunked on a variadic input given without a name, so its chunk input has no name"
+    )]
+    UnnamedChunkInput { identifier: String },
 }
 
 fn render_violations(violations: &[SchemaViolation]) -> String {

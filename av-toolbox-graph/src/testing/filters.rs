@@ -34,6 +34,7 @@ use av_toolbox_gpu::{
     StreamTemplate,
 };
 
+use super::chunked;
 use super::shared::{BlurArgs, NoArgs, SplitArgs, TemporalArgs, first_bound, frames_template};
 
 fixture_stage!(
@@ -431,7 +432,7 @@ impl StageDefinition for Temporal {
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.radius {
             0 => Parallelism::Frame,
-            _ => Parallelism::Chunk(None),
+            _ => chunked(),
         }
     }
 

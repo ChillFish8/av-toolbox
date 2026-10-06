@@ -1,4 +1,5 @@
 use av_toolbox_core::{
+    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -35,6 +36,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
+use av_toolbox_transforms::{SceneRequest, Scenes};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -370,8 +372,11 @@ impl StageDefinition for Match {
         &[Tag::Deinterlace]
     }
 
+    // Its window spans a few frames, so any break costs little and chunks of 10 s spread across workers.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(None)
+        let demand = AnyDemand::new::<Scenes>(SceneRequest::limited_to_seconds(10.0));
+
+        Parallelism::Chunk(demand)
     }
 
     // The current frame, whose output waits on the next, and the previous frame it reads.

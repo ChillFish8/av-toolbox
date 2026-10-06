@@ -12,6 +12,7 @@ av-toolbox-graph = { path = "../av-toolbox-graph" }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+av-toolbox-core = { path = "../av-toolbox-core", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 schemars = { workspace = true }
 serde = { workspace = true }

@@ -1,8 +1,8 @@
-mod args;
+pub(crate) mod args;
 mod detect;
 #[cfg(test)]
 mod tests;
-mod window;
+pub(crate) mod window;
 
 use av_toolbox_core::{
     BoundInputs,

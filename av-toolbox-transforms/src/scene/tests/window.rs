@@ -13,9 +13,9 @@ use av_toolbox_gpu::{
     testing_context,
 };
 
-use super::clip::{THREE_SCENES, clip, flat_clip, grey8, grey8_of, yuv420_ten_bit};
 use crate::scene::args::{DetectArgs, Mode, Speed};
 use crate::scene::window::{Decision, LumaWindow, Settings, frame_rate};
+use crate::tests::clip::{THREE_SCENES, clip, flat_clip, grey8, grey8_of, yuv420_ten_bit};
 
 fn natural(speed: Speed, min_scene_frames: usize, max_scene_frames: Option<usize>) -> DetectArgs {
     let max_scene_frames = max_scene_frames.and_then(NonZeroUsize::new);

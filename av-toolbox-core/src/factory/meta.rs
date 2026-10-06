@@ -27,7 +27,6 @@ use crate::{
     OpenSlot,
     Parallelism,
     StageError,
-    bind_inputs,
 };
 
 struct BuildMetaTransform<'a, D: MetaTransformDefinition> {
@@ -112,16 +111,9 @@ impl<D: MetaTransformDefinition> StageFactory<dyn PreparedMetaTransform> for Def
         inputs: &[InputArgument],
         slot: &OpenSlot,
     ) -> Result<Box<dyn PreparedMetaTransform>, BuildStageError> {
-        let args = self.deserialize_args(args)?;
-        self.check_demand_inputs(&args)?;
-        let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+        let prepared = self.prepared(args, inputs, slot)?;
 
-        Ok(Box::new(Prepared::<D> {
-            identifier: self.full_identifier().to_string(),
-            args,
-            inputs: bound,
-            slot: slot.clone(),
-        }))
+        Ok(Box::new(prepared))
     }
 }
 
@@ -199,15 +191,8 @@ impl<D: MetaSinkDefinition> StageFactory<dyn PreparedMetaSink> for Definition<D>
         inputs: &[InputArgument],
         slot: &OpenSlot,
     ) -> Result<Box<dyn PreparedMetaSink>, BuildStageError> {
-        let args = self.deserialize_args(args)?;
-        self.check_demand_inputs(&args)?;
-        let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
+        let prepared = self.prepared(args, inputs, slot)?;
 
-        Ok(Box::new(Prepared::<D> {
-            identifier: self.full_identifier().to_string(),
-            args,
-            inputs: bound,
-            slot: slot.clone(),
-        }))
+        Ok(Box::new(prepared))
     }
 }

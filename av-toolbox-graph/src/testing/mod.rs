@@ -10,7 +10,8 @@ mod rated;
 mod shared;
 mod specs;
 
-use av_toolbox_core::PipelineRegistry;
+use av_toolbox_core::testing::FixtureCuts;
+use av_toolbox_core::{AnyDemand, Parallelism, PipelineRegistry};
 
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
@@ -41,6 +42,13 @@ use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
 use self::planes::{Blend, Combine, HostMasker, LayoutFile, PlainBlend};
 use self::rated::{Rated, Retime};
 pub(crate) use self::specs::{named, positional, spec};
+
+/// One chunk at a time, chunked by the fixture demand kind.
+pub(crate) fn chunked() -> Parallelism {
+    let demand = AnyDemand::new::<FixtureCuts>(());
+
+    Parallelism::Chunk(demand)
+}
 
 pub(crate) fn registry() -> PipelineRegistry {
     let mut registry = PipelineRegistry::new();

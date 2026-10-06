@@ -30,9 +30,7 @@ impl fmt::Display for Granularity {
 pub enum Parallelism {
     Frame,
     /// One chunk at a time, chunked by the layer its demand asks for.
-    ///
-    /// `None` chunks the stage without asking for any layer.
-    Chunk(Option<AnyDemand>),
+    Chunk(AnyDemand),
     Stream,
 }
 
@@ -45,10 +43,10 @@ impl Parallelism {
         }
     }
 
-    /// The demand a chunk stage is chunked by, if it names one.
+    /// The demand a chunk stage is chunked by.
     pub fn demand(&self) -> Option<&AnyDemand> {
         match self {
-            Self::Chunk(demand) => demand.as_ref(),
+            Self::Chunk(demand) => Some(demand),
             Self::Frame | Self::Stream => None,
         }
     }
@@ -63,10 +61,12 @@ impl fmt::Display for Parallelism {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::FixtureCuts;
 
     #[test]
     fn a_granularity_renders_as_a_word() {
-        let chunked = Parallelism::Chunk(None);
+        let demand = AnyDemand::new::<FixtureCuts>(());
+        let chunked = Parallelism::Chunk(demand);
 
         assert_eq!(Parallelism::Frame.to_string(), "frame");
         assert_eq!(chunked.to_string(), "chunk");

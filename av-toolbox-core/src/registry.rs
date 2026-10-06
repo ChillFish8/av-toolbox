@@ -16,14 +16,17 @@ use crate::{
     MetaSinkDefinition,
     MetaTransformDefinition,
     OpenSlot,
+    Placement,
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,
     PreparedMetaTransform,
+    PreparedProvider,
     PreparedSink,
     PreparedSource,
     PreparedStage,
     PreparedTransform,
+    ProviderDefinition,
     RegistryError,
     SinkDefinition,
     SourceDefinition,
@@ -43,6 +46,12 @@ struct RegisteredDemand {
     describe: fn(&AnyDemand) -> String,
 }
 
+/// The provider registered for one demand kind.
+struct RegisteredProvider {
+    full_identifier: String,
+    placement: Placement,
+}
+
 /// The registry tracks all stages available for use within the pipeline.
 ///
 /// Stages are keyed by their fully qualified `package/stage` identifier. `builtin/upload` and
@@ -54,9 +63,11 @@ pub struct PipelineRegistry {
     masks: Factories<dyn PreparedMask>,
     transforms: Factories<dyn PreparedTransform>,
     meta_transforms: Factories<dyn PreparedMetaTransform>,
+    providers: Factories<dyn PreparedProvider>,
     sinks: Factories<dyn PreparedSink>,
     meta_sinks: Factories<dyn PreparedMetaSink>,
     demands: HashMap<&'static str, RegisteredDemand>,
+    served: HashMap<DemandKind, RegisteredProvider>,
 }
 
 impl PipelineRegistry {
@@ -113,6 +124,39 @@ impl PipelineRegistry {
         }
 
         insert(&mut self.meta_transforms, definition)
+    }
+
+    /// Registers the provider of `P::Demand`, registering that demand kind too if it is new.
+    ///
+    /// Each demand kind has at most one provider.
+    pub fn register_provider<P: ProviderDefinition>(&mut self) -> Result<(), RegistryError> {
+        let kind = DemandKind::of::<P::Demand>();
+        if self.served.contains_key(&kind) {
+            return Err(RegistryError::DuplicateProvider { kind: kind.name() });
+        }
+
+        let definition = Definition::<P>::new(StageKind::Provider)?;
+        let full_identifier = definition.full_identifier().to_string();
+        insert(&mut self.providers, definition)?;
+
+        if !self.demands.contains_key(kind.name()) {
+            self.register_demand::<P::Demand>()?;
+        }
+
+        let registered = RegisteredProvider {
+            full_identifier,
+            placement: P::placement(),
+        };
+        self.served.insert(kind, registered);
+
+        Ok(())
+    }
+
+    /// The full identifier and placement of the provider serving `kind`.
+    pub fn provider_for(&self, kind: DemandKind) -> Option<(&str, Placement)> {
+        let registered = self.served.get(&kind)?;
+
+        Some((&registered.full_identifier, registered.placement))
     }
 
     pub fn register_sink<D: SinkDefinition>(&mut self) -> Result<(), RegistryError> {
@@ -181,6 +225,9 @@ impl PipelineRegistry {
             StageKind::Transform => {
                 prepare(&self.transforms, kind, identifier, args, inputs, slot).map(PreparedStage::Transform)
             },
+            StageKind::Provider => {
+                prepare(&self.providers, kind, identifier, args, inputs, slot).map(PreparedStage::Provider)
+            },
             StageKind::Sink if self.meta_sinks.contains_key(identifier) => {
                 prepare(&self.meta_sinks, kind, identifier, args, inputs, slot).map(PreparedStage::MetaSink)
             },
@@ -241,6 +288,7 @@ impl PipelineRegistry {
         let masks = self.masks.values().map(|factory| factory.info());
         let transforms = self.transforms.values().map(|factory| factory.info());
         let meta_transforms = self.meta_transforms.values().map(|factory| factory.info());
+        let providers = self.providers.values().map(|factory| factory.info());
         let sinks = self.sinks.values().map(|factory| factory.info());
         let meta_sinks = self.meta_sinks.values().map(|factory| factory.info());
 
@@ -249,6 +297,7 @@ impl PipelineRegistry {
             .chain(masks)
             .chain(transforms)
             .chain(meta_transforms)
+            .chain(providers)
             .chain(sinks)
             .chain(meta_sinks)
     }

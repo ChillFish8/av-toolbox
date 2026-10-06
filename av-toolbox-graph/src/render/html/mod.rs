@@ -137,6 +137,7 @@ fn kind_name(kind: StageKind) -> &'static str {
         StageKind::Filter => "filter",
         StageKind::Mask => "mask",
         StageKind::Transform => "transform",
+        StageKind::Provider => "provider",
         StageKind::Sink => "sink",
     }
 }
@@ -327,6 +328,7 @@ mod tests {
         assert_eq!(kind_name(StageKind::Filter), "filter");
         assert_eq!(kind_name(StageKind::Mask), "mask");
         assert_eq!(kind_name(StageKind::Transform), "transform");
+        assert_eq!(kind_name(StageKind::Provider), "provider");
         assert_eq!(kind_name(StageKind::Sink), "sink");
     }
 }
