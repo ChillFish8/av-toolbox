@@ -1,0 +1,54 @@
+# Reads a video, denoises it with av-denoise's NL4D while keeping the line art, then debands it while keeping the
+# texture, and throws the result away.
+#
+# The line mask is found on the input, so the lines come back untouched from the source. The detail mask is found on
+# the denoised clip, so the deband skips the texture that survived the denoise.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.mkv"
+
+[variable.preset]
+type = "string"
+description = "How much quality to trade for speed"
+default = "base"
+choices = ["veryfast", "fast", "base", "slow", "veryslow"]
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+args.preset = "{{ preset }}"
+
+[mask.lines]
+type = "lines/adaptive"
+inputs = ["input"]
+
+[filter.keep_lines]
+type = "blend/masked"
+inputs = ["denoise", "input", "lines"]
+
+[filter.deband]
+type = "deband/placebo"
+inputs = ["keep_lines"]
+args.iterations = 2
+args.threshold = [4.0, 3.0, 3.0]
+args.grain = [6.0, 0.0, 0.0]
+
+[mask.detail]
+type = "detail/mask"
+inputs = ["keep_lines"]
+# Blurring first keeps shallow banding steps out of the mask.
+args.sigma = 1.0
+
+[filter.keep_detail]
+type = "blend/masked"
+inputs = ["deband", "keep_lines", "detail"]
+
+[sink.output]
+type = "null/discard"
+inputs = ["keep_detail"]
