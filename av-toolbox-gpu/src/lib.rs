@@ -98,7 +98,6 @@ pub use self::frame::{
     Provided,
     ProvidedValue,
     SampleFormat,
-    SceneScore,
     StreamFormat,
     StreamItem,
     Subsampling,

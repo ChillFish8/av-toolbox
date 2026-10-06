@@ -187,6 +187,29 @@ fn run_pipeline(template: &str, clip: &[u8]) -> RunOutput {
     RunOutput { frames, log }
 }
 
+/// `denoise_pipeline` plus a sink logging the denoised frames with no scenes asked for.
+fn unscened_denoise_pipeline(filter: &str) -> String {
+    let pipeline = denoise_pipeline(filter);
+    let log = r#"
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["denoise"]
+args.path = "{log}"
+"#;
+
+    pipeline + log
+}
+
+/// The `scene_score` of every line of an ndjson log, in order.
+fn logged_scores(log: &str) -> Vec<serde_json::Value> {
+    log.lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).expect("a json line");
+            value["scene_score"].take()
+        })
+        .collect()
+}
+
 /// The `chunk` of every line of an ndjson log, in order.
 fn logged_chunks(log: &str) -> Vec<u64> {
     log.lines()
@@ -303,4 +326,32 @@ fn a_clip_without_cuts_is_one_chunk() {
     assert_eq!(chunk_lengths(&chunks), [12], "{chunks:?}");
     assert_eq!(parallel.frames.len(), 12);
     assert!(parallel.frames == serial.frames, "two workers differ from one");
+}
+
+#[test]
+fn the_metadata_sink_writes_scores_only_when_it_demands_scenes() {
+    let filter = r#"type = "av-denoise/nlmeans""#;
+    let (opening, closing) = two_scene_lumas();
+    let lumas = [opening, closing].concat();
+    let clip = clip_with_lumas(&lumas);
+
+    let demanding = logged_denoise_pipeline(filter, r#"{ mode = "natural" }"#);
+    let demanded = run_pipeline(&demanding, &clip);
+    let demanded_log = demanded.log.expect("the log is written");
+    let demanded_scores = logged_scores(&demanded_log);
+
+    let unscened = unscened_denoise_pipeline(filter);
+    let undemanded = run_pipeline(&unscened, &clip);
+    let undemanded_log = undemanded.log.expect("the log is written");
+    let undemanded_scores = logged_scores(&undemanded_log);
+
+    assert!(
+        demanded_scores.iter().any(serde_json::Value::is_number),
+        "{demanded_scores:?}"
+    );
+    assert_eq!(undemanded_scores.len(), 2 * SCENE_FRAMES);
+    assert!(
+        undemanded_scores.iter().all(serde_json::Value::is_null),
+        "{undemanded_scores:?}"
+    );
 }

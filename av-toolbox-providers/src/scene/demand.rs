@@ -1,9 +1,12 @@
+use std::hash::{Hash, Hasher};
+
 use av_scenechange::SceneDetectionSpeed;
-use av_toolbox_core::{ChunkKey, DemandDefinition, StageError};
+use av_toolbox_core::{ChunkKey, DemandDefinition, LayerDemand, RequestError, StageError};
+use av_toolbox_gpu::LayerId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Scene breaks, supplied by the scene provider.
+/// Scene breaks, supplied by the `scene-split` provider.
 pub struct Scenes;
 
 impl DemandDefinition for Scenes {
@@ -143,4 +146,125 @@ impl SceneSpeed {
             Self::Fast => SceneDetectionSpeed::Fast,
         }
     }
+
+    /// The slowest of `speeds`, which is [SceneSpeed::Fast] when there are none.
+    pub(crate) fn slowest(speeds: impl IntoIterator<Item = Self>) -> Self {
+        let mut speeds = speeds.into_iter();
+        let any_standard = speeds.any(|speed| speed == Self::Standard);
+
+        if any_standard { Self::Standard } else { Self::Fast }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Fast => "fast",
+        }
+    }
+}
+
+/// Each frame's scene cut score, supplied by the `scene-score` provider.
+pub struct SceneScores;
+
+impl DemandDefinition for SceneScores {
+    type Request = ScoreRequest;
+    type Output = SceneCut;
+
+    fn kind() -> &'static str {
+        "scene-score"
+    }
+
+    /// The speed the detector runs at, such as `standard`.
+    fn describe(request: &ScoreRequest) -> String {
+        request.speed.name().to_string()
+    }
+}
+
+/// Which scene detection a stage asks to score frames with.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScoreRequest {
+    #[serde(default)]
+    pub speed: SceneSpeed,
+    /// The stage to score frames after, in place of where the provider would go.
+    #[serde(default)]
+    pub after: Option<String>,
+}
+
+/// What scene detection decided about one frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SceneCut {
+    /// How strongly the detector favoured a cut just before the frame, when it could score one.
+    pub score: Option<SceneScore>,
+    pub starts_scene: bool,
+}
+
+/// How strongly scene detection favoured a cut just before a frame.
+///
+/// Higher is a better place to cut. Two scores are equal when their bits are, so metadata carrying
+/// one can still be compared and hashed.
+#[derive(Debug, Copy, Clone)]
+pub struct SceneScore(f32);
+
+impl SceneScore {
+    pub const fn new(value: f32) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl PartialEq for SceneScore {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for SceneScore {}
+
+impl Hash for SceneScore {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+/// Every layer's request of kind `D`, in order of layer.
+///
+/// `provider` names the provider reading them in the error for a request it cannot read.
+pub(crate) fn layer_requests<D: DemandDefinition>(
+    args: &[LayerDemand],
+    provider: &str,
+) -> Result<Vec<(LayerId, D::Request)>, StageError> {
+    let mut requests = Vec::with_capacity(args.len());
+    for served in args {
+        let request = served.demand.try_request::<D>();
+        let request = request.map_err(|error| unreadable_request(provider, served, error))?;
+        requests.push((served.layer, request));
+    }
+
+    requests.sort_by_key(|(layer, _)| *layer);
+
+    Ok(requests)
+}
+
+fn unreadable_request(provider: &str, served: &LayerDemand, error: RequestError) -> StageError {
+    let message = match error {
+        RequestError::OtherKind { expected, found } => format!(
+            "the {provider} provider serves {} demands, but layer {} asks for a {} demand",
+            expected.name(),
+            served.layer.0,
+            found.name(),
+        ),
+        RequestError::Malformed { kind, source } => {
+            format!(
+                "layer {}'s {} request is malformed: {source}",
+                served.layer.0,
+                kind.name()
+            )
+        },
+    };
+
+    StageError::msg(message)
 }

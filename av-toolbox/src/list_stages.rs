@@ -260,7 +260,7 @@ mod tests {
 
         let in_stages = stage_rows(&drawn)
             .iter()
-            .any(|line| line.starts_with("provider/scenes"));
+            .any(|line| line.starts_with("provider/scene"));
         assert!(!in_stages, "{drawn}");
 
         let heading = drawn
@@ -268,7 +268,8 @@ mod tests {
             .position(|line| line == PROVIDERS_HEADING)
             .expect("a providers heading");
         let rows: Vec<&str> = drawn.lines().skip(heading + 1).collect();
-        assert!(rows[0].starts_with("provider/scenes"), "{drawn}");
+        assert!(rows[0].starts_with("provider/scene-score"), "{drawn}");
+        assert!(rows[1].starts_with("provider/scene-split"), "{drawn}");
     }
 
     #[test]

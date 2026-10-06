@@ -28,7 +28,7 @@ use av_toolbox_gpu::{
     Runtime,
     StreamFormat,
 };
-use av_toolbox_providers::{SceneRequest, Scenes};
+use av_toolbox_providers::{SceneRequest, SceneScores, Scenes, ScoreRequest};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -49,7 +49,7 @@ pub(crate) struct NdjsonArgs {
     pub(crate) include: Option<Vec<Pattern>>,
     /// Keys to drop, which wins over `include`.
     pub(crate) exclude: Option<Vec<Pattern>>,
-    /// Scene breaks to write each frame's chunk in, as its `chunk`.
+    /// Scene breaks to write each frame's chunk in, as its `chunk`, along with its `scene_score`.
     #[serde(default)]
     pub(crate) scenes: Option<SceneRequest>,
 }
@@ -67,17 +67,29 @@ impl StageDefinition for Ndjson {
         "ndjson"
     }
 
+    /// Scene breaks and scene cut scores, both on the input, when `scenes` is set.
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
         let Some(request) = args.scenes.clone() else {
             return Vec::new();
         };
 
-        let demand = AnyDemand::new::<Scenes>(request);
+        let score_request = ScoreRequest {
+            speed: request.speed,
+            after: request.after.clone(),
+        };
+        let scenes = AnyDemand::new::<Scenes>(request);
+        let scores = AnyDemand::new::<SceneScores>(score_request);
 
-        vec![InputDemand {
-            input: "input",
-            demand,
-        }]
+        vec![
+            InputDemand {
+                input: "input",
+                demand: scenes,
+            },
+            InputDemand {
+                input: "input",
+                demand: scores,
+            },
+        ]
     }
 
     fn inputs() -> &'static InputSignature {
@@ -112,7 +124,7 @@ impl MetaSinkDefinition for Ndjson {
         let path = args.path.as_deref();
         let file = open_target(STAGE, args.fd, path)?;
         let filter = KeyFilter::new(args.include, args.exclude);
-        let scenes = inputs.provision::<Scenes>("input").ok();
+        let scenes = SceneProvisions::of(&inputs);
         let sink = NdjsonSink::new(file, filter, scenes);
 
         Ok(Box::new(sink))
@@ -128,17 +140,34 @@ fn accepts(offered: StreamFormat) -> Result<FormatSet, StageError> {
     Ok(FormatSet::of([offered.sample()]))
 }
 
+/// The handles a sink given `scenes` reads each frame's chunk and scene cut score through.
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct SceneProvisions {
+    pub(crate) chunks: Provision<Scenes>,
+    pub(crate) scores: Provision<SceneScores>,
+}
+
+impl SceneProvisions {
+    /// The handles for what was provided on `input`, when the sink demanded both.
+    fn of(inputs: &BoundInputs) -> Option<Self> {
+        let chunks = inputs.provision::<Scenes>("input").ok()?;
+        let scores = inputs.provision::<SceneScores>("input").ok()?;
+
+        Some(Self { chunks, scores })
+    }
+}
+
 /// A sink writing each frame's metadata as one line of JSON.
 ///
-/// With a scene layer, each line carries the frame's chunk in that layer.
+/// With scene layers, each line carries the frame's chunk and scene cut score from them.
 pub(crate) struct NdjsonSink<W: Write> {
     output: BufWriter<W>,
     filter: KeyFilter,
-    scenes: Option<Provision<Scenes>>,
+    scenes: Option<SceneProvisions>,
 }
 
 impl<W: Write> NdjsonSink<W> {
-    pub(crate) fn new(output: W, filter: KeyFilter, scenes: Option<Provision<Scenes>>) -> Self {
+    pub(crate) fn new(output: W, filter: KeyFilter, scenes: Option<SceneProvisions>) -> Self {
         Self {
             output: BufWriter::new(output),
             filter,
@@ -158,9 +187,13 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
         let meta = item.meta();
         let chunk = self
             .scenes
-            .and_then(|scenes| scenes.get(meta))
+            .and_then(|scenes| scenes.chunks.get(meta))
             .map(|scene| scene.0);
-        let written = write_line(&mut self.output, meta, chunk, &self.filter);
+        let score = self
+            .scenes
+            .and_then(|scenes| scenes.scores.get(meta))
+            .and_then(|cut| cut.score);
+        let written = write_line(&mut self.output, meta, chunk, score, &self.filter);
 
         written.map_err(|error| {
             let position = format!("frame {}", meta.index);
@@ -222,7 +255,7 @@ mod tests {
         default_accelerators,
         testing_context,
     };
-    use av_toolbox_providers::{SceneChunk, SceneRequest, Scenes};
+    use av_toolbox_providers::{SceneChunk, SceneCut, SceneRequest, SceneScore, SceneSpeed};
 
     use super::*;
     use crate::shared::testing::{SharedBuffer, filled_frame, yuv420};
@@ -355,13 +388,30 @@ mod tests {
         AnyItem::Host(HostStreamItem::from(frame))
     }
 
-    fn scenes_provision() -> Provision<Scenes> {
-        let kind = DemandKind::of::<Scenes>();
-        let argument =
-            InputArgument::positional(StageHandle::new(0), StreamType::Frames).with_demand(kind, LayerId(0));
+    /// Handles reading chunks from layer 0 and scores from layer 1.
+    fn scenes_provision() -> SceneProvisions {
+        let chunks_kind = DemandKind::of::<Scenes>();
+        let scores_kind = DemandKind::of::<SceneScores>();
+        let argument = InputArgument::positional(StageHandle::new(0), StreamType::Frames)
+            .with_demand(chunks_kind, LayerId(0))
+            .with_demand(scores_kind, LayerId(1));
         let bound = bind_inputs(Ndjson::inputs(), &[argument]).expect("binds");
 
-        bound.provision::<Scenes>("input").expect("demanded")
+        SceneProvisions::of(&bound).expect("demanded")
+    }
+
+    fn scored_item(index: u64, chunk: u64, score: f32) -> AnyItem {
+        let format = yuv420(4, 2, SampleFormat::U8, None);
+        let mut frame = filled_frame(&format, index, 0);
+        let cut = SceneCut {
+            score: Some(SceneScore::new(score)),
+            starts_scene: false,
+        };
+        let provided = &mut frame.meta_mut().provided;
+        provided.set(LayerId(0), SceneChunk(chunk));
+        provided.set(LayerId(1), cut);
+
+        AnyItem::Host(HostStreamItem::from(frame))
     }
 
     fn written_lines(buffer: &SharedBuffer) -> Vec<serde_json::Value> {
@@ -386,6 +436,30 @@ mod tests {
     }
 
     #[test]
+    fn the_ndjson_sink_writes_the_score_it_asks_for() {
+        let buffer = SharedBuffer::default();
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), Some(scenes_provision()));
+        let items = vec![scored_item(0, 0, 2.5), chunked_item(1, 0)];
+
+        run(&mut sink, items).expect("runs");
+
+        let lines = written_lines(&buffer);
+        let scores: Vec<&serde_json::Value> = lines.iter().map(|line| &line["scene_score"]).collect();
+        assert_eq!(scores, [&serde_json::json!(2.5), &serde_json::Value::Null]);
+    }
+
+    #[test]
+    fn the_ndjson_sink_writes_no_score_without_scenes() {
+        let buffer = SharedBuffer::default();
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
+
+        run(&mut sink, vec![scored_item(0, 0, 2.5)]).expect("runs");
+
+        let lines = written_lines(&buffer);
+        assert!(lines[0]["scene_score"].is_null(), "{lines:?}");
+    }
+
+    #[test]
     fn the_ndjson_sink_writes_no_chunk_without_scenes() {
         let buffer = SharedBuffer::default();
         let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
@@ -398,19 +472,32 @@ mod tests {
     }
 
     #[test]
-    fn scenes_demand_scene_breaks_on_the_input() {
+    fn scenes_demand_scene_breaks_and_scores_on_the_input() {
         let value = serde_json::json!({
             "path": "out.ndjson",
-            "scenes": { "breaks": { "mode": "natural" } },
+            "scenes": { "breaks": { "mode": "natural" }, "speed": "fast", "after": "denoise" },
         });
         let args: NdjsonArgs = serde_json::from_value(value).expect("parses");
 
         let demands = Ndjson::demands(&args);
 
-        assert_eq!(demands.len(), 1);
-        assert_eq!(demands[0].input, "input");
-        let request = demands[0].demand.request::<Scenes>();
-        assert_eq!(request, Some(SceneRequest::natural()));
+        assert_eq!(demands.len(), 2);
+        assert!(demands.iter().all(|demand| demand.input == "input"));
+
+        let scenes = demands[0].demand.request::<Scenes>();
+        let expected_scenes = SceneRequest {
+            speed: SceneSpeed::Fast,
+            after: Some("denoise".to_string()),
+            ..SceneRequest::natural()
+        };
+        assert_eq!(scenes, Some(expected_scenes));
+
+        let scores = demands[1].demand.request::<SceneScores>();
+        let expected_scores = ScoreRequest {
+            speed: SceneSpeed::Fast,
+            after: Some("denoise".to_string()),
+        };
+        assert_eq!(scores, Some(expected_scores));
     }
 
     #[test]

@@ -3,17 +3,29 @@ use av_toolbox_core::{
     DemandDefinition,
     DemandKind,
     InputArgument,
+    LayerDemand,
     PipelineRegistry,
+    StageDefinition,
     StageHandle,
     StageKind,
     StreamType,
+    run_meta_provider,
 };
-use av_toolbox_gpu::{Channel, LayerId, testing_context};
+use av_toolbox_gpu::{AnyItem, Channel, FrameMeta, HostStreamItem, LayerId, testing_context};
 use serde_json::json;
 
-use super::{chunks_in, demands, limited, serve};
-use crate::provider::{SceneBreaks, SceneRequest, SceneSpeed, Scenes};
+use super::{SCORE_LAYER, chunks_in, demands, limited, scores_provision, serve};
+use crate::scene::{SceneRequest, SceneScores, SceneSpeed, Scenes, ScoreRequest};
+use crate::split::provider::{SceneSplitProvider, ServeSplits};
 use crate::tests::clip::{THREE_SCENES, clip, grey8};
+
+fn after(name: &str, speed: SceneSpeed) -> SceneRequest {
+    SceneRequest {
+        speed,
+        after: Some(name.to_string()),
+        ..SceneRequest::natural()
+    }
+}
 
 #[test]
 fn two_layers_are_served_by_one_detection() {
@@ -26,7 +38,7 @@ fn two_layers_are_served_by_one_detection() {
     assert_eq!(emitted.len(), 90);
     for frame in &emitted {
         let layers: Vec<LayerId> = frame.meta().provided.layers().collect();
-        assert_eq!(layers, vec![LayerId(0), LayerId(1)]);
+        assert_eq!(layers, vec![LayerId(0), LayerId(1), SCORE_LAYER]);
     }
 
     let natural: Vec<u64> = (0..90).map(|index| index / 30).collect();
@@ -56,48 +68,61 @@ fn frames_pass_through_unchanged() {
 }
 
 #[test]
-fn scene_requests_describe_themselves() {
-    let seconds = SceneRequest::limited_to_seconds(10.0);
-    let frames = SceneRequest {
-        breaks: SceneBreaks::Limited {
-            min_frames: 24,
-            max_frames: Some(12),
-            max_seconds: None,
-        },
-        ..SceneRequest::natural()
-    };
-
-    assert_eq!(Scenes::describe(&SceneRequest::natural()), "natural");
-    assert_eq!(Scenes::describe(&seconds), "limited ≤10 s");
-    assert_eq!(Scenes::describe(&frames), "limited ≥24 frames ≤12 frames");
-}
-
-#[test]
-fn a_scene_request_reads_from_toml_shaped_json() {
-    let value = json!({ "breaks": { "mode": "limited", "max_seconds": 10.0 } });
-
-    let request: SceneRequest = serde_json::from_value(value).expect("parses");
-
-    assert_eq!(request, SceneRequest::limited_to_seconds(10.0));
-    assert_eq!(request.speed, SceneSpeed::Standard);
-    assert_eq!(request.after, None);
-}
-
-#[test]
-fn the_scene_provider_is_registered_for_scenes() {
+fn the_split_provider_is_registered_for_scenes() {
     let mut registry = PipelineRegistry::new();
     crate::register(&mut registry).expect("registers");
 
     let found = registry.provider_for(DemandKind::of::<Scenes>());
     let identifier = found.map(|(identifier, _)| identifier);
-    assert_eq!(identifier, Some("provider/scenes"));
+    assert_eq!(identifier, Some("provider/scene-split"));
 
     let args = demands(&[SceneRequest::natural()]);
     let args = serde_json::to_value(args).expect("serialises");
-    let input = InputArgument::named("input", StageHandle::new(0), StreamType::Frames);
-    let prepared = registry.prepare(StageKind::Provider, "provider/scenes", &args, &[input]);
+    let input = InputArgument::named("input", StageHandle::new(0), StreamType::Frames)
+        .with_demand(DemandKind::of::<SceneScores>(), SCORE_LAYER);
+    let prepared = registry.prepare(StageKind::Provider, "provider/scene-split", &args, &[input]);
 
     assert!(prepared.is_ok());
+}
+
+#[test]
+fn the_split_demands_one_score_at_the_slowest_speed_after_the_first_layer() {
+    let requests = [
+        after("denoise", SceneSpeed::Fast),
+        after("other", SceneSpeed::Standard),
+    ];
+    let args = demands(&requests);
+
+    let demanded = SceneSplitProvider::demands(&args);
+
+    assert_eq!(demanded.len(), 1);
+    assert_eq!(demanded[0].input, "input");
+
+    let request = demanded[0].demand.request::<SceneScores>();
+    let expected = ScoreRequest {
+        speed: SceneSpeed::Standard,
+        after: Some("denoise".to_string()),
+    };
+    assert_eq!(request, Some(expected));
+}
+
+#[test]
+fn split_refuses_an_unscored_frame() {
+    let context = testing_context();
+    let args = demands(&[SceneRequest::natural()]);
+    let mut split = ServeSplits::new(&args, None, scores_provision()).expect("builds");
+    let frame = context.alloc_host_frame(&grey8(), FrameMeta::at(0)).freeze();
+    let item = AnyItem::Host(HostStreamItem::from(frame));
+    let mut stage_context = testing_context();
+
+    let Err(error) = run_meta_provider(&mut split, &mut stage_context, item) else {
+        panic!("an unscored frame should be refused");
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "scene-split was given a frame scene-score never scored"
+    );
 }
 
 #[test]
@@ -113,12 +138,12 @@ fn a_demand_of_another_kind_is_refused() {
         }
     }
 
-    let args = vec![av_toolbox_core::LayerDemand {
+    let args = vec![LayerDemand {
         layer: LayerId(0),
         demand: AnyDemand::new::<Other>(()),
     }];
 
-    let built = crate::provider::ServeScenes::new(&args, &grey8());
+    let built = ServeSplits::new(&args, None, scores_provision());
 
     assert!(built.is_err());
 }
@@ -127,12 +152,12 @@ fn a_demand_of_another_kind_is_refused() {
 fn a_malformed_scene_request_is_refused_as_malformed() {
     let value = json!({ "kind": "scenes", "request": { "breaks": { "mode": "sideways" } } });
     let demand: AnyDemand = serde_json::from_value(value).expect("deserialises");
-    let args = vec![av_toolbox_core::LayerDemand {
+    let args = vec![LayerDemand {
         layer: LayerId(0),
         demand,
     }];
 
-    let Err(error) = crate::provider::ServeScenes::new(&args, &grey8()) else {
+    let Err(error) = ServeSplits::new(&args, None, scores_provision()) else {
         panic!("a malformed scenes request should be refused");
     };
 
@@ -140,18 +165,4 @@ fn a_malformed_scene_request_is_refused_as_malformed() {
     assert!(message.contains("malformed"), "{message}");
     assert!(message.contains("sideways"), "{message}");
     assert!(!message.contains("asks for a"), "{message}");
-}
-
-#[test]
-fn a_seconds_limit_that_is_not_finite_is_refused() {
-    for seconds in [f64::INFINITY, f64::NAN] {
-        let request = SceneRequest::limited_to_seconds(seconds);
-
-        let error = request.validate().expect_err("refused").to_string();
-
-        assert!(error.contains("finite"), "{error}");
-    }
-
-    assert!(SceneRequest::limited_to_seconds(10.0).validate().is_ok());
-    assert!(SceneRequest::natural().validate().is_ok());
 }

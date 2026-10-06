@@ -1,4 +1,4 @@
-use av_toolbox_gpu::SceneScore;
+use crate::scene::SceneScore;
 
 /// Cuts one scene into pieces no longer than `limit` frames, returning each piece's length in order.
 ///

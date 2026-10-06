@@ -311,7 +311,7 @@ inputs = ["deinterlace"]
             .expect("the deinterlacer is kept");
 
         assert!(matches!(provider.role(), NodeRole::Provider(_)));
-        assert_eq!(provider.identifier(), "provider/scenes");
+        assert_eq!(provider.identifier(), "provider/scene-split");
         assert_eq!(deinterlace.inputs()[0].source(), provider.id());
         assert!(deinterlace.route().is_some());
         assert!(pipeline.stage_of(provider.id()).is_none());
@@ -356,16 +356,20 @@ args.scenes = { breaks = { mode = "natural" }, after = "denoise" }
             .iter()
             .filter(|node| matches!(node.role(), NodeRole::Provider(_)))
             .collect();
-        assert_eq!(providers.len(), 2);
+        assert_eq!(providers.len(), 4);
 
         let denoise = node_named("denoise");
         let log = node_named("log");
         let output = node_named("output");
-        let before = graph.node(denoise.inputs()[0].source());
-        let after = graph.node(log.inputs()[0].source());
+        let before = reads(graph, denoise);
+        let after = reads(graph, log);
+        let before_score = reads(graph, before);
+        let after_score = reads(graph, after);
 
-        assert_eq!(name_of(before.inputs()[0].source()), "input");
-        assert_eq!(name_of(after.inputs()[0].source()), "denoise");
+        assert_eq!(before_score.identifier(), "provider/scene-score");
+        assert_eq!(after_score.identifier(), "provider/scene-score");
+        assert_eq!(reads(graph, before_score).name(), "input");
+        assert_eq!(reads(graph, after_score).name(), "denoise");
         assert_eq!(name_of(output.inputs()[0].source()), "denoise");
 
         let NodeRole::Provider(before_placement) = before.role() else {
@@ -386,6 +390,105 @@ args.scenes = { breaks = { mode = "natural" }, after = "denoise" }
             .collect();
         assert_eq!(before_demanders, [["denoise".to_string()]]);
         assert_eq!(after_demanders, [["log".to_string()]]);
+    }
+
+    fn nodes_of<'a>(graph: &'a CompiledGraph, identifier: &str) -> Vec<&'a Node> {
+        graph
+            .nodes()
+            .iter()
+            .filter(|node| node.identifier() == identifier)
+            .collect()
+    }
+
+    fn reads<'a>(graph: &'a CompiledGraph, node: &Node) -> &'a Node {
+        let source = node.inputs()[0].source();
+
+        graph.node(source)
+    }
+
+    fn layer_count(node: &Node) -> usize {
+        let NodeRole::Provider(placement) = node.role() else {
+            panic!("{} is not a provider", node.name());
+        };
+
+        placement.layers.len()
+    }
+
+    #[test]
+    fn natural_and_limited_on_one_source_detect_once() {
+        let registry = crate::registry().expect("the built-in stages register");
+        let text = r#"
+[source.input]
+type = "y4m/stdin"
+
+[sink.whole]
+type = "metadata/ndjson"
+inputs = ["input"]
+args.path = "whole.ndjson"
+args.scenes = { breaks = { mode = "natural" } }
+
+[sink.pieces]
+type = "metadata/ndjson"
+inputs = ["input"]
+args.path = "pieces.ndjson"
+args.scenes = { breaks = { mode = "limited", max_frames = 12 } }
+"#;
+        let specs = specs(text);
+
+        let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+        let graph = pipeline.graph();
+        let scores = nodes_of(graph, "provider/scene-score");
+        let splits = nodes_of(graph, "provider/scene-split");
+
+        assert_eq!(scores.len(), 1);
+        assert_eq!(splits.len(), 1);
+        assert_eq!(layer_count(splits[0]), 2);
+        assert_eq!(reads(graph, splits[0]).id(), scores[0].id());
+        assert_eq!(reads(graph, scores[0]).name(), "input");
+    }
+
+    #[test]
+    fn a_split_after_a_stage_gets_its_own_score() {
+        let registry = crate::registry().expect("the built-in stages register");
+        let text = r#"
+[source.input]
+type = "y4m/stdin"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["denoise"]
+
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["denoise"]
+args.path = "scenes.ndjson"
+args.scenes = { breaks = { mode = "natural" }, after = "denoise" }
+"#;
+        let specs = specs(text);
+
+        let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+        let graph = pipeline.graph();
+        let scores = nodes_of(graph, "provider/scene-score");
+        let splits = nodes_of(graph, "provider/scene-split");
+
+        assert_eq!(scores.len(), 2);
+        assert_eq!(splits.len(), 2);
+
+        let mut follows = Vec::new();
+        for split in splits {
+            let score = reads(graph, split);
+            assert_eq!(score.identifier(), "provider/scene-score", "{}", split.name());
+
+            let producer = reads(graph, score);
+            follows.push(producer.name().to_string());
+        }
+
+        follows.sort();
+        assert_eq!(follows, ["denoise", "input"]);
     }
 
     #[test]

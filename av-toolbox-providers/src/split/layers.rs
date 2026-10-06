@@ -1,8 +1,9 @@
 use av_toolbox_core::StageError;
-use av_toolbox_gpu::{FrameRate, SceneScore};
+use av_toolbox_gpu::FrameRate;
 
-use super::demand::SceneBreaks;
-use crate::split::{frames_in, split_lengths};
+use super::limit::frames_in;
+use super::rule::split_lengths;
+use crate::scene::{SceneBreaks, SceneScore};
 
 /// How many times its limit a limited layer lets a scene run before closing it.
 pub(crate) const LONGEST_SCENE: usize = 4;

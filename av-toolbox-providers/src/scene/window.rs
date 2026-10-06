@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use av_scenechange::{Rational32, SceneChangeDetector, SceneDetectionSpeed, ScenecutResult};
 use av_toolbox_core::StageError;
-use av_toolbox_gpu::{Channel, FrameFormat, FrameLayout, HostFrame, SampleFormat, SceneScore};
+use av_toolbox_gpu::{Channel, FrameFormat, FrameLayout, HostFrame, SampleFormat};
 use v_frame::chroma::ChromaSubsampling;
 use v_frame::frame::{Frame, FrameBuilder};
 use v_frame::pixel::Pixel;
 
-use crate::provider::SceneSpeed;
+use super::demand::{SceneScore, SceneSpeed};
 
 /// How many frames past the one being analysed the detector reads.
 pub(crate) const LOOKAHEAD: usize = 5;

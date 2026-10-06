@@ -2,6 +2,7 @@ use std::io;
 use std::io::Write;
 
 use av_toolbox_gpu::{FrameMeta, MetaValue};
+use av_toolbox_providers::SceneScore;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
 
@@ -10,13 +11,20 @@ use super::filter::KeyFilter;
 /// Writes one frame's metadata as a JSON object followed by a newline.
 ///
 /// `chunk` is the frame's chunk in the sink's scene layer, and is left out when there is none.
+/// `score` is the frame's scene cut score, written as `null` when there is none.
 pub(crate) fn write_line<W: Write>(
     output: &mut W,
     meta: &FrameMeta,
     chunk: Option<u64>,
+    score: Option<SceneScore>,
     filter: &KeyFilter,
 ) -> io::Result<()> {
-    let line = Line { meta, chunk, filter };
+    let line = Line {
+        meta,
+        chunk,
+        score,
+        filter,
+    };
     serde_json::to_writer(&mut *output, &line)?;
 
     output.write_all(b"\n")
@@ -26,13 +34,14 @@ pub(crate) fn write_line<W: Write>(
 struct Line<'a> {
     meta: &'a FrameMeta,
     chunk: Option<u64>,
+    score: Option<SceneScore>,
     filter: &'a KeyFilter,
 }
 
 impl Serialize for Line<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let timestamp = self.meta.timestamp.map(|timestamp| timestamp.as_secs_f64());
-        let scene_score = self.meta.scene_score.map(|score| score.get());
+        let scene_score = self.score.map(SceneScore::get);
 
         let mut map = serializer.serialize_map(None)?;
         self.entry(&mut map, "index", &self.meta.index)?;
@@ -101,15 +110,20 @@ impl Serialize for Value<'_> {
 mod tests {
     use std::time::Duration;
 
-    use av_toolbox_gpu::{FrameMeta, MetaValue, SceneScore};
+    use av_toolbox_gpu::{FrameMeta, MetaValue};
     use serde_json::json;
 
     use super::*;
     use crate::metadata::filter::{KeyFilter, Pattern};
 
-    fn line_of(meta: &FrameMeta, chunk: Option<u64>, filter: &KeyFilter) -> String {
+    fn line_of(
+        meta: &FrameMeta,
+        chunk: Option<u64>,
+        score: Option<SceneScore>,
+        filter: &KeyFilter,
+    ) -> String {
         let mut output = Vec::new();
-        write_line(&mut output, meta, chunk, filter).expect("writes");
+        write_line(&mut output, meta, chunk, score, filter).expect("writes");
 
         String::from_utf8(output).expect("utf-8")
     }
@@ -127,7 +141,6 @@ mod tests {
     fn stamped_meta() -> FrameMeta {
         let mut meta = FrameMeta::at(12);
         meta.timestamp = Some(Duration::from_millis(500));
-        meta.scene_score = Some(SceneScore::new(2.5));
         meta.attach("attr1", MetaValue::Int(123));
         meta.attach("clipped", MetaValue::Bool(false));
         meta.attachments.stamp("filter.convert_colour");
@@ -141,7 +154,8 @@ mod tests {
     fn built_in_keys_come_first_then_stages_in_order() {
         let meta = stamped_meta();
         let filter = KeyFilter::default();
-        let line = line_of(&meta, Some(4), &filter);
+        let score = Some(SceneScore::new(2.5));
+        let line = line_of(&meta, Some(4), score, &filter);
 
         let expected = concat!(
             r#"{"index":12,"chunk":4,"timestamp":0.5,"scene_score":2.5,"#,
@@ -156,7 +170,7 @@ mod tests {
     fn unknown_built_ins_are_null() {
         let meta = FrameMeta::at(0);
         let filter = KeyFilter::default();
-        let line = line_of(&meta, Some(0), &filter);
+        let line = line_of(&meta, Some(0), None, &filter);
 
         assert_eq!(
             line,
@@ -168,7 +182,7 @@ mod tests {
     fn no_chunk_is_written_without_one() {
         let meta = FrameMeta::at(0);
         let filter = KeyFilter::default();
-        let line = line_of(&meta, None, &filter);
+        let line = line_of(&meta, None, None, &filter);
 
         assert_eq!(line, "{\"index\":0,\"timestamp\":null,\"scene_score\":null}\n");
     }
@@ -181,7 +195,7 @@ mod tests {
         meta.attachments.stamp("filter.measure");
 
         let filter = KeyFilter::default();
-        let line = line_of(&meta, None, &filter);
+        let line = line_of(&meta, None, None, &filter);
 
         assert!(
             line.contains(r#""filter.measure":{"nan":null,"infinite":null}"#),
@@ -197,7 +211,7 @@ mod tests {
         meta.attachments.stamp("filter.note");
 
         let filter = KeyFilter::default();
-        let line = line_of(&meta, None, &filter);
+        let line = line_of(&meta, None, None, &filter);
 
         assert_eq!(line.matches('\n').count(), 1);
         assert!(line.ends_with('\n'));
@@ -211,7 +225,7 @@ mod tests {
         let pattern_list = patterns(&["index", "*.scenes.*"]);
         let filter = KeyFilter::new(Some(pattern_list), None);
         let meta = stamped_meta();
-        let line = line_of(&meta, None, &filter);
+        let line = line_of(&meta, None, None, &filter);
 
         assert_eq!(line, "{\"index\":12,\"filter.scenes.detect\":{\"cut\":true}}\n");
     }

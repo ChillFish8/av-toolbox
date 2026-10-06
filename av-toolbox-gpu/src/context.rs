@@ -343,7 +343,6 @@ mod tests {
         MetaValue,
         Provided,
         SampleFormat,
-        SceneScore,
         Subsampling,
         default_accelerators,
     };
@@ -645,7 +644,6 @@ mod tests {
         let stamped = FrameMeta {
             index: 12,
             timestamp: Some(Duration::from_millis(500)),
-            scene_score: Some(SceneScore::new(2.5)),
             provided: Default::default(),
             attachments: Attachments::new(),
         };
@@ -779,7 +777,6 @@ mod tests {
             index: 12,
             provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(40)),
-            scene_score: Some(SceneScore::new(2.5)),
             attachments: Attachments::new(),
         };
 
@@ -812,7 +809,6 @@ mod tests {
             index: 6,
             provided: layer_zero(1),
             timestamp: None,
-            scene_score: None,
             attachments,
         };
 

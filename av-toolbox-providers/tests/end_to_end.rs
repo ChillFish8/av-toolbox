@@ -80,7 +80,7 @@ static PIECES: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 
 /// Records `meta`'s index and its scene.
 fn record(seen: &Mutex<Vec<(u64, u64)>>, meta: &FrameMeta, scenes: Provision<Scenes>) {
-    let scene = scenes.get(meta).expect("the provider stamped the frame");
+    let scene = scenes.get(meta).expect("scene-split stamped the frame");
     seen.lock().expect("not poisoned").push((meta.index, scene.0));
 }
 
@@ -477,7 +477,7 @@ fn assert_split_chunks(pieces: &[(u64, u64)], limit: usize) {
 }
 
 #[test]
-fn the_scene_provider_runs_through_the_engine_on_a_real_device() {
+fn the_scene_providers_run_through_the_engine_on_a_real_device() {
     let stream = y4m_stream();
     let (fd, feeder) = piped(stream);
     let registry = registry();

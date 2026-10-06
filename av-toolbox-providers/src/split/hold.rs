@@ -1,27 +1,28 @@
 use std::collections::VecDeque;
 
-use av_toolbox_gpu::{HostFrame, LayerId};
+use av_toolbox_core::MetaItem;
+use av_toolbox_gpu::LayerId;
 
-use super::demand::SceneChunk;
 use super::layers::LayerBreaks;
+use crate::scene::{SceneChunk, SceneCut};
 
-/// One layer with the chunks it has placed that no frame has been stamped with yet.
+/// One layer with the chunks it has placed that no item has been stamped with yet.
 struct HeldLayer {
     layer: LayerId,
     breaks: LayerBreaks,
     placed: VecDeque<u64>,
 }
 
-/// Holds decided frames until every layer has placed them, then stamps and hands them on in order.
+/// Holds scored items until every layer has placed them, then stamps and hands them on in order.
 ///
-/// Frames are held once however many layers there are, so they wait only on the slowest layer.
+/// Items are held once however many layers there are, so they wait only on the slowest layer.
 pub(crate) struct LayerHold {
-    frames: VecDeque<HostFrame>,
+    items: VecDeque<MetaItem>,
     layers: Vec<HeldLayer>,
 }
 
 impl LayerHold {
-    /// Holds frames for `layers`, which are placed in the order given.
+    /// Holds items for `layers`, which are placed in the order given.
     pub(crate) fn new(layers: Vec<(LayerId, LayerBreaks)>) -> Self {
         let layers = layers
             .into_iter()
@@ -33,26 +34,25 @@ impl LayerHold {
             .collect();
 
         Self {
-            frames: VecDeque::new(),
+            items: VecDeque::new(),
             layers,
         }
     }
 
-    /// Takes the next decided frame, returning every frame now placed by every layer.
-    pub(crate) fn place(&mut self, frame: HostFrame, starts_scene: bool) -> Vec<HostFrame> {
-        let score = frame.meta().scene_score;
-        self.frames.push_back(frame);
+    /// Takes the next item with its cut, returning every item now placed by every layer.
+    pub(crate) fn place(&mut self, item: MetaItem, cut: SceneCut) -> Vec<MetaItem> {
+        self.items.push_back(item);
 
         for held in &mut self.layers {
-            let placed = held.breaks.place(score, starts_scene);
+            let placed = held.breaks.place(cut.score, cut.starts_scene);
             held.placed.extend(placed);
         }
 
         self.release()
     }
 
-    /// Hands on every frame still held, as the stream has ended.
-    pub(crate) fn finish(&mut self) -> Vec<HostFrame> {
+    /// Hands on every item still held, as the stream has ended.
+    pub(crate) fn finish(&mut self) -> Vec<MetaItem> {
         for held in &mut self.layers {
             let placed = held.breaks.finish();
             held.placed.extend(placed);
@@ -61,31 +61,31 @@ impl LayerHold {
         self.release()
     }
 
-    fn release(&mut self) -> Vec<HostFrame> {
+    fn release(&mut self) -> Vec<MetaItem> {
         let mut released = Vec::new();
         while self.every_layer_placed_the_next() {
-            let mut frame = self
-                .frames
+            let mut item = self
+                .items
                 .pop_front()
-                .expect("a frame is held while every layer has placed it");
+                .expect("an item is held while every layer has placed it");
 
             for held in &mut self.layers {
                 let chunk = held
                     .placed
                     .pop_front()
-                    .expect("every layer placed the frame being released");
-                let meta = frame.meta_mut();
+                    .expect("every layer placed the item being released");
+                let meta = item.meta_mut();
                 meta.provided.set(held.layer, SceneChunk(chunk));
             }
 
-            released.push(frame);
+            released.push(item);
         }
 
         released
     }
 
     fn every_layer_placed_the_next(&self) -> bool {
-        if self.frames.is_empty() {
+        if self.items.is_empty() {
             return false;
         }
 

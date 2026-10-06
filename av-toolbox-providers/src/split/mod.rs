@@ -1,5 +1,9 @@
+mod hold;
+mod layers;
 mod limit;
+mod provider;
 mod rule;
+#[cfg(test)]
+mod tests;
 
-pub(crate) use self::limit::frames_in;
-pub(crate) use self::rule::split_lengths;
+pub(crate) use self::provider::SceneSplitProvider;

@@ -13,7 +13,7 @@ use av_toolbox_gpu::{
     testing_context,
 };
 
-use crate::provider::SceneSpeed;
+use crate::scene::SceneSpeed;
 use crate::scene::window::{Decision, DetectOptions, LumaWindow, Settings, frame_rate};
 use crate::tests::clip::{THREE_SCENES, clip, flat_clip, grey8, grey8_of, yuv420_ten_bit};
 

@@ -1,18 +1,23 @@
 use av_toolbox_core::{ProviderDefinition, StageDefinition};
-use av_toolbox_gpu::{
-    FrameContext,
-    FrameFormat,
-    HostFrame,
-    ResolvedFormats,
-    SceneScore,
-    StreamFormat,
-    testing_context,
-};
+use av_toolbox_gpu::{FrameContext, FrameFormat, HostFrame, ResolvedFormats, StreamFormat, testing_context};
 
-use super::{breaks_of, chunks_in, demands, finish, limited, process, serve};
-use crate::provider::{SceneProvider, SceneRequest, SceneSpeed, ServeScenes};
+use super::{
+    Chain,
+    SCORE_LAYER,
+    breaks_of,
+    chunks_in,
+    demands,
+    finish,
+    limited,
+    process,
+    score_demands,
+    serve,
+};
+use crate::scene::score::SceneScoreProvider;
 use crate::scene::window::{DetectOptions, LumaWindow, Settings};
-use crate::split::split_lengths;
+use crate::scene::{SceneCut, SceneRequest, SceneScore, SceneSpeed};
+use crate::split::provider::SceneSplitProvider;
+use crate::split::rule::split_lengths;
 use crate::tests::clip::{THREE_SCENES, clip, grey8};
 
 /// A long scene with a short one before it, so the cut at frame 10 comes soon after the first.
@@ -30,10 +35,7 @@ fn split_ids(frames: &[HostFrame], scenes: &[std::ops::Range<usize>], limit: usi
     let mut ids = Vec::new();
     let mut next = 0;
     for scene in scenes {
-        let scores: Vec<Option<SceneScore>> = frames[scene.clone()]
-            .iter()
-            .map(|frame| frame.meta().scene_score)
-            .collect();
+        let scores: Vec<Option<SceneScore>> = frames[scene.clone()].iter().map(score_of).collect();
 
         for length in split_lengths(&scores, limit) {
             ids.extend(std::iter::repeat_n(next, length));
@@ -42,6 +44,16 @@ fn split_ids(frames: &[HostFrame], scenes: &[std::ops::Range<usize>], limit: usi
     }
 
     ids
+}
+
+/// The score the split read for `frame`.
+fn score_of(frame: &HostFrame) -> Option<SceneScore> {
+    let provided = &frame.meta().provided;
+    let cut = provided
+        .get::<SceneCut>(SCORE_LAYER)
+        .expect("every frame is scored");
+
+    cut.score
 }
 
 /// The scene starts a detector with its own minimum scene length finds on `scenes`.
@@ -81,30 +93,34 @@ fn peak_held(
     scenes: &[(u64, u64)],
 ) -> usize {
     let frames = clip(context, format, scenes);
-    let args = demands(requests);
-    let mut provider = ServeScenes::new(&args, format).expect("builds");
+    let mut chain = Chain::new(requests, format);
 
     let mut received = 0;
     let mut emitted = 0;
     let mut peak = 0;
     for frame in frames {
         received += 1;
-        emitted += process(&mut provider, context, frame).len();
+        emitted += process(&mut chain, context, frame).len();
         peak = peak.max(received - emitted);
     }
 
-    emitted += finish(&mut provider, context).len();
+    emitted += finish(&mut chain, context).len();
     assert_eq!(emitted, received, "every frame is emitted by the end");
 
     peak
 }
 
+/// The frames the score and split providers together say they may hold.
 fn held_frames(requests: &[SceneRequest]) -> usize {
     let args = demands(requests);
+    let score_args = score_demands(&args);
     let input = StreamFormat::Frames(grey8());
     let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
 
-    SceneProvider::held_frames(&args, &formats)
+    let scored = SceneScoreProvider::held_frames(&score_args, &formats);
+    let split = SceneSplitProvider::held_frames(&args, &formats);
+
+    scored + split
 }
 
 #[test]
@@ -187,7 +203,7 @@ fn layers_together_hold_no_more_than_the_longest_alone() {
 fn a_seconds_limit_without_a_frame_rate_is_refused() {
     let args = demands(&[SceneRequest::limited_to_seconds(10.0)]);
 
-    let checked = SceneProvider::check(&args, &grey8());
+    let checked = SceneSplitProvider::check(&args, &grey8());
 
     let error = checked.expect_err("refused").to_string();
     assert!(error.contains("no frame rate"), "{error}");

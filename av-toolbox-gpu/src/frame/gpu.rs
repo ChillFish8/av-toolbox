@@ -1,4 +1,3 @@
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -180,44 +179,11 @@ impl Plane {
     }
 }
 
-/// How strongly scene detection favoured a cut just before a frame.
-///
-/// Higher is a better place to cut. Two scores are equal when their bits are, so metadata carrying
-/// one can still be compared and hashed.
-#[derive(Debug, Copy, Clone)]
-pub struct SceneScore(f32);
-
-impl SceneScore {
-    pub const fn new(value: f32) -> Self {
-        Self(value)
-    }
-
-    pub const fn get(self) -> f32 {
-        self.0
-    }
-}
-
-impl PartialEq for SceneScore {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
-    }
-}
-
-impl Eq for SceneScore {}
-
-impl Hash for SceneScore {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
-    }
-}
-
 /// Where a frame sits in its stream, and what stages attached to it.
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct FrameMeta {
     pub index: u64,
     pub timestamp: Option<Duration>,
-    /// How strongly scene detection favoured a cut just before this frame, when it was scored.
-    pub scene_score: Option<SceneScore>,
     /// The values providers wrote onto this frame, by layer.
     pub provided: Provided,
     pub attachments: Attachments,
@@ -229,7 +195,6 @@ impl FrameMeta {
         Self {
             index,
             timestamp: None,
-            scene_score: None,
             provided: Provided::new(),
             attachments: Attachments::new(),
         }
@@ -614,8 +579,6 @@ impl From<Mask> for StreamItem {
 mod tests {
     // Whichever backend this build enables, picked in the same order `Backend` tries them, so the
     // array tests below need no device and run under every feature set.
-    use std::hash::DefaultHasher;
-
     #[cfg(all(feature = "cuda", not(any(feature = "vulkan", feature = "metal"))))]
     use cubecl::cuda::CudaRuntime as TestRuntime;
     #[cfg(all(
@@ -1107,7 +1070,6 @@ mod tests {
             index: 7,
             provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
-            scene_score: None,
             attachments: Attachments::new(),
         };
         let mut frame = Frame::new(format, planes, meta);
@@ -1131,7 +1093,6 @@ mod tests {
             index: 7,
             provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
-            scene_score: None,
             attachments: Attachments::new(),
         };
         let mut mask = Mask::new(format, plane(64, 64), meta, None);
@@ -1151,7 +1112,6 @@ mod tests {
             index: 7,
             provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
-            scene_score: None,
             attachments: Attachments::new(),
         };
         let frame = Frame::new(format, planes, meta);
@@ -1176,7 +1136,6 @@ mod tests {
             index: 7,
             provided: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
-            scene_score: None,
             attachments: Attachments::new(),
         };
         let mask = Mask::new(format, plane(64, 64), meta, None);
@@ -1187,44 +1146,6 @@ mod tests {
         assert_eq!(item.meta().index, 11);
         assert_eq!(item.meta().provided.get::<u64>(LayerId(0)), Some(&3));
         assert_eq!(item.meta().timestamp, Some(Duration::from_millis(500)));
-    }
-
-    fn hash_of(score: SceneScore) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        score.hash(&mut hasher);
-
-        hasher.finish()
-    }
-
-    #[test]
-    fn scene_scores_with_the_same_bits_are_equal_and_hash_equal() {
-        let first = SceneScore::new(2.5);
-        let second = SceneScore::new(2.5);
-
-        assert_eq!(first, second);
-        assert_eq!(hash_of(first), hash_of(second));
-    }
-
-    #[test]
-    fn scene_scores_compare_by_their_bits() {
-        let positive_zero = SceneScore::new(0.0);
-        let negative_zero = SceneScore::new(-0.0);
-
-        assert_ne!(positive_zero, negative_zero);
-    }
-
-    #[test]
-    fn a_nan_scene_score_equals_itself() {
-        let score = SceneScore::new(f32::NAN);
-
-        assert_eq!(score, score);
-    }
-
-    #[test]
-    fn new_metadata_carries_no_scene_score() {
-        let meta = FrameMeta::at(3);
-
-        assert_eq!(meta.scene_score, None);
     }
 
     #[test]

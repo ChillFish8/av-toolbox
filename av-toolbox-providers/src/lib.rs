@@ -1,9 +1,10 @@
 //! Providers that supply what stages demand
 //!
-//! - The scene provider, which finds scene cuts and breaks the stream into scenes for every
-//!   stage demanding [Scenes].
+//! - `scene-score`, which scores every frame as a scene cut for every stage demanding
+//!   [SceneScores].
+//! - `scene-split`, which breaks the stream into scenes from those scores for every stage
+//!   demanding [Scenes].
 
-mod provider;
 mod scene;
 mod split;
 #[cfg(test)]
@@ -11,11 +12,22 @@ mod tests;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
-pub use self::provider::{SceneBreaks, SceneChunk, SceneRequest, SceneSpeed, Scenes};
+pub use self::scene::{
+    SceneBreaks,
+    SceneChunk,
+    SceneCut,
+    SceneRequest,
+    SceneScore,
+    SceneScores,
+    SceneSpeed,
+    Scenes,
+    ScoreRequest,
+};
 
 /// Registers every provider this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
-    registry.register_provider::<provider::SceneProvider>()?;
+    registry.register_provider::<scene::SceneScoreProvider>()?;
+    registry.register_provider::<split::SceneSplitProvider>()?;
 
     Ok(())
 }

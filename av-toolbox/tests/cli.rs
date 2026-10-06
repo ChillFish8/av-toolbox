@@ -707,6 +707,7 @@ frames = 4
 
         for (position, line) in lines.iter().enumerate() {
             assert_eq!(line["index"], position as u64, "{lines:?}");
+            assert!(line["scene_score"].is_null(), "{lines:?}");
         }
     }
 

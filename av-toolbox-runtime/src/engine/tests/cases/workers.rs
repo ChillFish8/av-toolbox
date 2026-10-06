@@ -149,7 +149,6 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
         let meta = FrameMeta {
             index: unit,
             timestamp: Some(Duration::from_secs(unit)),
-            scene_score: None,
             provided: chunked.provided,
             attachments: Attachments::new(),
         };

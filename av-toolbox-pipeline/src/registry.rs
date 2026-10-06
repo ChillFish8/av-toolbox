@@ -34,7 +34,8 @@ mod tests {
         assert!(registered(StageKind::Source, "y4m/pipe"));
         assert!(registered(StageKind::Sink, "y4m/stdout"));
         assert!(registered(StageKind::Sink, "y4m/pipe"));
-        assert!(registered(StageKind::Provider, "provider/scenes"));
+        assert!(registered(StageKind::Provider, "provider/scene-score"));
+        assert!(registered(StageKind::Provider, "provider/scene-split"));
         assert!(registered(StageKind::Filter, "blend/masked"));
         assert!(registered(StageKind::Mask, "lines/adaptive"));
         assert!(registered(StageKind::Mask, "lines/canny"));
