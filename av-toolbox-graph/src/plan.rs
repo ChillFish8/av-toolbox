@@ -148,7 +148,7 @@ impl Region {
         self.chunk_authority
     }
 
-    /// The scene layer the region routes its chunks on, which is its head's.
+    /// The scene layer the region routes its chunks on, taken from the first of its nodes that has one.
     pub fn layer(&self) -> Option<LayerId> {
         self.layer
     }
@@ -201,7 +201,7 @@ impl ExecutionPlan {
 /// Once every width is settled, nodes are grouped into regions in the same topological order. A
 /// node joins its producer's region when every input comes from that one region and the width
 /// matches, and heads a region of its own otherwise. A node with a scene layer also needs the
-/// region to route on that layer. A crossing only joins when it is its producer's only consumer.
+/// region to route on that layer, or on none yet. A crossing only joins when it is its producer's only consumer.
 ///
 /// A region may have at most one exit. When one has more, a node at its branch is sealed, so
 /// nothing reading it may join its region, and the regions are placed again.
@@ -376,7 +376,7 @@ impl Planner<'_> {
     /// The one region every input already shares, when its width matches this node's own.
     ///
     /// A sealed input never counts, so a node reading one heads a region of its own. A node with a
-    /// layer only joins a region routed on that same layer.
+    /// layer only joins a region routed on that same layer, or on none yet.
     fn shared_producer_region(
         &self,
         sources: &[NodeId],
@@ -398,7 +398,7 @@ impl Planner<'_> {
         }
 
         let region = &self.regions[candidate.index()];
-        let same_layer = layer.is_none() || layer == region.layer;
+        let same_layer = layer.is_none() || region.layer.is_none() || layer == region.layer;
 
         (region.width == width && same_layer).then_some(candidate)
     }
@@ -410,9 +410,15 @@ impl Planner<'_> {
             .expect("a producer is placed into a region before its consumer, since order is topological")
     }
 
-    /// Adds a node to an existing region.
+    /// Adds a node to an existing region, which routes on the node's layer when it had none.
     fn join_region(&mut self, id: NodeId, region: RegionId) {
-        self.regions[region.index()].nodes.push(id);
+        let joined = &mut self.regions[region.index()];
+        joined.nodes.push(id);
+
+        if joined.layer.is_none() {
+            joined.layer = self.graph.node(id).layer();
+        }
+
         self.set_region(id, region);
     }
 

@@ -28,6 +28,7 @@
 
 mod build;
 mod chroma;
+mod demands;
 mod diagnostic;
 mod graph;
 mod instantiate;
@@ -45,6 +46,7 @@ mod tests;
 
 pub use self::build::{Built, build};
 pub use self::chroma::settle_mask_planes;
+pub use self::demands::{NodeDemand, ProviderPlacement, ServedLayer, satisfy_demands};
 pub use self::diagnostic::{Diagnostic, DiagnosticCode, Diagnostics, Note, Severity};
 pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, NodeRole, Sharing};
 pub use self::instantiate::StageBox;

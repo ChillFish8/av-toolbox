@@ -41,7 +41,7 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
     let paths = nodes
         .iter()
         .map(|node_id| graph.node(*node_id))
-        .filter(|node| node.role() == NodeRole::Stage)
+        .filter(|node| !matches!(node.role(), NodeRole::Crossing(_)))
         .map(|node| {
             let path = node.path();
             (node.id(), Arc::from(path))

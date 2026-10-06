@@ -561,7 +561,7 @@ mod tests {
         let unload = graph
             .nodes()
             .iter()
-            .find(|node| node.role() == NodeRole::Crossing(Crossing::Unload))
+            .find(|node| *node.role() == NodeRole::Crossing(Crossing::Unload))
             .expect("the mask is unloaded for its host sink");
         let carried = formats.output(unload.id());
         assert!(chroma_of(carried).is_some());

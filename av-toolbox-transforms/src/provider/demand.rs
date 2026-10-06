@@ -61,6 +61,22 @@ impl SceneRequest {
         }
     }
 
+    /// Scenes split to whichever of `max_frames` and `max_seconds` is shorter, with no shortest scene.
+    ///
+    /// A stream with no frame rate is still split, to `max_frames`.
+    pub fn limited_to(max_frames: u32, max_seconds: f64) -> Self {
+        let breaks = SceneBreaks::Limited {
+            min_frames: 0,
+            max_frames: Some(max_frames),
+            max_seconds: Some(max_seconds),
+        };
+
+        Self {
+            breaks,
+            ..Self::natural()
+        }
+    }
+
     /// Scenes split to `max_seconds`, with no shortest scene.
     pub fn limited_to_seconds(max_seconds: f64) -> Self {
         let breaks = SceneBreaks::Limited {

@@ -372,9 +372,10 @@ impl StageDefinition for Match {
         &[Tag::Deinterlace]
     }
 
-    // Its window spans a few frames, so any break costs little and chunks of 10 s spread across workers.
+    // Its window spans a few frames, so any break costs little and chunks of 10 s or 240 frames, whichever is
+    // shorter, spread across workers.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        let demand = AnyDemand::new::<Scenes>(SceneRequest::limited_to_seconds(10.0));
+        let demand = AnyDemand::new::<Scenes>(SceneRequest::limited_to(240, 10.0));
 
         Parallelism::Chunk(demand)
     }

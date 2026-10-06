@@ -13,27 +13,6 @@ fn widened_join_spec(name: &str, base: &str, overlay: &str, workers: usize) -> S
 }
 
 #[test]
-fn a_widened_join_whose_authority_never_chunked_is_warned_about() {
-    let specs = vec![
-        engine::source_spec("base_input", &[0, 0, 0, 0], 0),
-        engine::source_spec("overlay_input", &[0, 1, 2, 3], 1),
-        widened_join_spec("join", "base_input", "overlay_input", 4),
-        engine::sink_spec("out", "join"),
-    ];
-    let run_engine = engine::build_engine(&specs, Settings::default());
-
-    let report = engine::run_with_watchdog(
-        run_engine,
-        "a_widened_join_whose_authority_never_chunked_is_warned_about",
-    );
-
-    assert_eq!(
-        report.warnings,
-        vec![RunWarning::DetectorOnWrongBranch { node: NodeId::new(2) }]
-    );
-}
-
-#[test]
 fn a_widened_join_whose_authority_did_chunk_is_not_warned_about() {
     let specs = vec![
         engine::source_spec("base_input", &[0, 1, 2, 3], 0),

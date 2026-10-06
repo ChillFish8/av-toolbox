@@ -333,8 +333,8 @@ fn planned_box(plan: &ExecutionPlan, node: &Node) -> DiagramBox {
 
 fn box_of(node: &Node, block: usize, width: usize, reason: Option<&'static str>) -> DiagramBox {
     let crossing = match node.role() {
-        NodeRole::Crossing(crossing) => Some(crossing),
-        NodeRole::Stage => None,
+        NodeRole::Crossing(crossing) => Some(*crossing),
+        NodeRole::Stage | NodeRole::Provider(_) => None,
     };
 
     DiagramBox {

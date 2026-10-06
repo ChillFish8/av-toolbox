@@ -45,11 +45,11 @@ fn settle_sides(graph: &CompiledGraph, prepared: &[Option<PreparedStage>]) -> Ve
         let node = graph.node(id);
         let side = match (node.role(), prepared[id.index()].as_ref()) {
             (NodeRole::Crossing(crossing), _) => crossing.to_side(),
-            (NodeRole::Stage, Some(stage)) => match stage.residency() {
+            (_, Some(stage)) => match stage.residency() {
                 Residency::Either => follow_inputs(node, stage.chunk_authority(), &sides),
                 fixed => fixed,
             },
-            (NodeRole::Stage, None) => Residency::Device,
+            (_, None) => Residency::Device,
         };
 
         sides[id.index()] = side;
@@ -115,7 +115,7 @@ pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnost
     let off_the_device = streams_off_the_device(graph);
 
     for node in graph.nodes() {
-        if node.role() != NodeRole::Crossing(Crossing::Upload) {
+        if *node.role() != NodeRole::Crossing(Crossing::Upload) {
             continue;
         }
 
@@ -129,7 +129,7 @@ pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnost
             }
 
             let producer = graph.node(id);
-            if producer.role() == NodeRole::Stage {
+            if !matches!(producer.role(), NodeRole::Crossing(_)) {
                 host_stages.push(id);
                 pending.extend(producer.inputs().iter().map(|edge| edge.source()));
             }
@@ -164,7 +164,7 @@ fn streams_off_the_device(graph: &CompiledGraph) -> Vec<bool> {
         off_the_device[id.index()] = match node.role() {
             NodeRole::Crossing(Crossing::Unload) => true,
             NodeRole::Crossing(Crossing::Upload) => false,
-            NodeRole::Stage => node
+            NodeRole::Stage | NodeRole::Provider(_) => node
                 .inputs()
                 .iter()
                 .any(|edge| off_the_device[edge.source().index()]),
@@ -232,7 +232,7 @@ pub(crate) mod tests {
         graph
             .nodes()
             .iter()
-            .filter(|node| node.role() == NodeRole::Crossing(crossing))
+            .filter(|node| *node.role() == NodeRole::Crossing(crossing))
             .collect()
     }
 

@@ -84,7 +84,7 @@ impl CompiledGraph {
             let node = self.node(*id);
 
             if let NodeRole::Crossing(crossing) = node.role() {
-                prepared[id.index()] = Some(PreparedStage::Crossing(crossing));
+                prepared[id.index()] = Some(PreparedStage::Crossing(*crossing));
                 continue;
             }
 
@@ -199,7 +199,7 @@ impl CompiledGraph {
             let node = self.node(*id);
 
             if let NodeRole::Crossing(crossing) = node.role() {
-                prepared[slot] = Some(PreparedStage::Crossing(crossing));
+                prepared[slot] = Some(PreparedStage::Crossing(*crossing));
                 continue;
             }
 

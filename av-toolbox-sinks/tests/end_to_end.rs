@@ -351,7 +351,7 @@ fn a_device_filters_attachments_are_logged_without_a_download() {
     let unloads = graph
         .nodes()
         .iter()
-        .filter(|node| node.role() == NodeRole::Crossing(Crossing::Unload))
+        .filter(|node| *node.role() == NodeRole::Crossing(Crossing::Unload))
         .count();
     let made = plan(&graph, &registry).expect("should plan");
     graph.set_execution_plan(made);

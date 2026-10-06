@@ -53,6 +53,9 @@ pub enum DiagnosticCode {
     ConflictingMaskPlanes,
     HostMaskPlanes,
     HeldInFrameRegion,
+    UnsatisfiedDemand,
+    ConflictingPlacement,
+    UnknownAfter,
 }
 
 impl DiagnosticCode {
@@ -87,6 +90,9 @@ impl DiagnosticCode {
             Self::ConflictingMaskPlanes => "conflicting-mask-planes",
             Self::HostMaskPlanes => "host-mask-planes",
             Self::HeldInFrameRegion => "held-in-frame-region",
+            Self::UnsatisfiedDemand => "unsatisfied-demand",
+            Self::ConflictingPlacement => "conflicting-placement",
+            Self::UnknownAfter => "unknown-after",
         }
     }
 }

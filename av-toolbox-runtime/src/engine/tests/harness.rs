@@ -4,7 +4,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use av_toolbox_core::PipelineRegistry;
+use av_toolbox_core::testing::{HostStamping, Stamping, StampingInstance};
+use av_toolbox_core::{LayerDemand, PipelineRegistry};
 use av_toolbox_gpu::testing_context;
 use av_toolbox_graph::{
     CompiledGraph,
@@ -19,6 +20,7 @@ use av_toolbox_graph::{
     build,
     place_transfers,
     plan,
+    satisfy_demands,
     solve,
 };
 
@@ -122,6 +124,10 @@ fn registry() -> PipelineRegistry {
     registry
         .register_meta_sink::<MetaRecording>()
         .expect("should register");
+    registry.register_provider::<Stamping>().expect("should register");
+    registry
+        .register_provider::<HostStamping>()
+        .expect("should register");
     registry
 }
 
@@ -138,7 +144,7 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
     let node = graph.node(id);
 
     if let NodeRole::Crossing(crossing) = node.role() {
-        return (id, StageBox::Crossing(crossing));
+        return (id, StageBox::Crossing(*crossing));
     }
 
     let stage = match node.identifier() {
@@ -182,6 +188,18 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
         "test/gated" => StageBox::Sink(Box::new(GatedInstance::new())),
         "test/restamp" => StageBox::MetaTransform(Box::new(RestampInstance)),
         "test/meta-recording" => StageBox::MetaSink(Box::new(MetaRecordingInstance::new())),
+        "test/stamping" => {
+            let args: Vec<LayerDemand> =
+                serde_json::from_value(node.args().clone()).expect("valid stamping args");
+            let instance = StampingInstance::new(&args);
+            StageBox::Provider(Box::new(instance))
+        },
+        "test/host-stamping" => {
+            let args: Vec<LayerDemand> =
+                serde_json::from_value(node.args().clone()).expect("valid stamping args");
+            let instance = StampingInstance::new(&args);
+            StageBox::HostProvider(Box::new(instance))
+        },
         other => panic!("no test fixture knows how to build {other}"),
     };
 
@@ -200,10 +218,11 @@ pub(crate) fn instantiate(
         .collect())
 }
 
-/// Builds, solves, places crossings and plans `specs`, without ever touching a backend.
+/// Builds, places providers, solves, places crossings and plans `specs`, without ever touching a backend.
 pub(crate) fn planned_graph(specs: &[StageSpec]) -> (CompiledGraph, SolvedFormats) {
     let registry = registry();
     let mut graph = build(&registry, specs).expect("should build").into_graph();
+    satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
 
     let capabilities = testing_capabilities();
     let mut solved = solve(&graph, &registry, &capabilities).expect("should solve");
@@ -251,7 +270,8 @@ pub(crate) fn declared_held(graph: &CompiledGraph, solved: &SolvedFormats) -> Ve
 /// Solves `specs` the way [planned_graph] does, handing back whatever diagnostics it refused with.
 pub(crate) fn solve_result(specs: &[StageSpec]) -> Result<SolvedFormats, Diagnostics> {
     let registry = registry();
-    let graph = build(&registry, specs).expect("should build").into_graph();
+    let mut graph = build(&registry, specs).expect("should build").into_graph();
+    satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
 
     solve(&graph, &registry, &testing_capabilities())
 }

@@ -246,6 +246,26 @@ fn a_node_on_another_layer_starts_its_own_region() {
 }
 
 #[test]
+fn a_layered_node_joins_a_region_with_no_layer_and_routes_it() {
+    let specs = [
+        source("input"),
+        temporal("denoise", "input", 1),
+        sink("out", "denoise"),
+    ];
+    let registry = testing::registry();
+    let mut graph = build(&registry, &specs).expect("should build").into_graph();
+    let input_id = node_named(&graph, "input");
+    let denoise_id = node_named(&graph, "denoise");
+    graph.node_mut(denoise_id).set_layer(LayerId(0));
+
+    let plan = plan(&graph, &registry).expect("should plan");
+
+    let region = plan.node(denoise_id).region();
+    assert_eq!(plan.node(input_id).region(), region);
+    assert_eq!(plan.region(region).layer(), Some(LayerId(0)));
+}
+
+#[test]
 fn a_change_of_width_starts_a_new_region() {
     let mut wide = temporal("wide", "input", 0);
     wide.workers = Some(4);

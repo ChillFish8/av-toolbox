@@ -10,7 +10,7 @@ fn crossings_of(graph: &av_toolbox_graph::CompiledGraph, crossing: Crossing) -> 
     graph
         .nodes()
         .iter()
-        .filter(|node| node.role() == NodeRole::Crossing(crossing))
+        .filter(|node| *node.role() == NodeRole::Crossing(crossing))
         .count()
 }
 

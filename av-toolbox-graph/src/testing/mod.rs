@@ -6,11 +6,12 @@ mod filters;
 mod host;
 mod masks;
 mod planes;
+mod providers;
 mod rated;
 mod shared;
 mod specs;
 
-use av_toolbox_core::testing::FixtureCuts;
+use av_toolbox_core::testing::{FixtureCuts, Stamping};
 use av_toolbox_core::{AnyDemand, Parallelism, PipelineRegistry};
 
 pub(crate) use self::counted::COUNTED_OPENS;
@@ -40,6 +41,8 @@ pub(crate) use self::filters::{
 use self::host::{HostBlur, HostFile, HostStdout, Log, Restamp};
 use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
 use self::planes::{Blend, Combine, HostMasker, LayoutFile, PlainBlend};
+use self::providers::{Breaking, Demanding};
+pub(crate) use self::providers::{BreaksRequest, FixtureBreaks};
 use self::rated::{Rated, Retime};
 pub(crate) use self::specs::{named, positional, spec};
 
@@ -96,6 +99,9 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_mask::<HostMasker>().expect("should register");
     registry.register_filter::<Blend>().expect("should register");
     registry.register_filter::<PlainBlend>().expect("should register");
+    registry.register_filter::<Demanding>().expect("should register");
+    registry.register_provider::<Stamping>().expect("should register");
+    registry.register_provider::<Breaking>().expect("should register");
 
     registry
 }
@@ -112,7 +118,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 37);
+        assert_eq!(identifiers.len(), 40);
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
         assert!(identifiers.contains(&"test/blur"));
@@ -127,6 +133,9 @@ mod tests {
         assert!(identifiers.contains(&"test/host-stdout"));
         assert!(identifiers.contains(&"test/restamp"));
         assert!(identifiers.contains(&"test/log"));
+        assert!(identifiers.contains(&"test/demanding"));
+        assert!(identifiers.contains(&"test/stamping"));
+        assert!(identifiers.contains(&"test/breaking"));
     }
 
     #[test]

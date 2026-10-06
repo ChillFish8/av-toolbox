@@ -16,6 +16,7 @@ use av_toolbox_gpu::{
     StreamTemplate,
 };
 
+use crate::demands::note_demanders;
 use crate::diagnostic::{input_path, stage_path};
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
@@ -567,12 +568,15 @@ impl Solver<'_> {
         }
 
         let node = self.graph.node(id);
-        self.diagnostics.push(Diagnostic::error(
+        let diagnostic = Diagnostic::error(
             DiagnosticCode::StageBuildFailed,
             stage_path(node.kind(), node.name()),
             node.span(),
             error.to_string(),
-        ));
+        );
+        let noted = note_demanders(self.graph, node, diagnostic);
+
+        self.diagnostics.push(noted);
     }
 
     /// Names an edge that has no format to carry, together with every reader that refused.

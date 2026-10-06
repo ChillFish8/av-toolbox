@@ -172,7 +172,7 @@ fn node_infos(graph: &CompiledGraph) -> Vec<NodeInfo> {
         let node = graph.node(*id);
         let planned = plan.node(*id).width();
         let info = match node.role() {
-            NodeRole::Stage => {
+            NodeRole::Stage | NodeRole::Provider(_) => {
                 let granularity = plan.node(*id).granularity();
                 let sized_kind = matches!(
                     node.kind(),
@@ -191,7 +191,7 @@ fn node_infos(graph: &CompiledGraph) -> Vec<NodeInfo> {
             NodeRole::Crossing(crossing) => NodeInfo {
                 id: *id,
                 key: String::new(),
-                label: transfer_label(graph, *id, crossing),
+                label: transfer_label(graph, *id, *crossing),
                 granularity: None,
                 planned,
                 widenable: false,

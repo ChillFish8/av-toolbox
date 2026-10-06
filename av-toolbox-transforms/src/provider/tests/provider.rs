@@ -74,6 +74,21 @@ fn scene_requests_describe_themselves() {
 }
 
 #[test]
+fn a_request_limited_to_frames_and_seconds_keeps_both_and_no_minimum() {
+    let request = SceneRequest::limited_to(240, 10.0);
+
+    let expected = SceneBreaks::Limited {
+        min_frames: 0,
+        max_frames: Some(240),
+        max_seconds: Some(10.0),
+    };
+    assert_eq!(request.breaks, expected);
+    assert_eq!(request.speed, SceneSpeed::Standard);
+    assert_eq!(request.after, None);
+    assert_eq!(Scenes::describe(&request), "limited ≤240 frames ≤10 s");
+}
+
+#[test]
 fn a_scene_request_reads_from_toml_shaped_json() {
     let value = json!({ "breaks": { "mode": "limited", "max_seconds": 10.0 } });
 

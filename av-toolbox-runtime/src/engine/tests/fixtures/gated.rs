@@ -32,7 +32,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::chunked;
+use super::{chunked, host_chunked};
 use crate::engine::tests::support::{InstanceId, StageLife, WorkerGate, frame_second};
 
 // A filter that passes its input through, but whose first call blocks until a test releases it.
@@ -236,7 +236,7 @@ impl StageDefinition for HostSlow {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        chunked()
+        host_chunked()
     }
 
     fn inputs() -> &'static InputSignature {

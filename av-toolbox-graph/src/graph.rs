@@ -5,6 +5,7 @@ use av_toolbox_core::{Crossing, OpenSlot, Residency, StageHandle, StageKind, Str
 use av_toolbox_gpu::LayerId;
 use serde_json::Value;
 
+use crate::demands::{NodeDemand, ProviderPlacement};
 use crate::diagnostic::stage_path;
 use crate::plan::ExecutionPlan;
 use crate::{ArgSpans, Span};
@@ -119,12 +120,26 @@ impl Edge {
     }
 }
 
-/// A node is either a stage the pipeline declared, or a crossing the graph inserted between two
-/// stages on different sides.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+/// A node is a stage the pipeline declared, a crossing the graph inserted between two stages on
+/// different sides, or a provider the graph inserted to serve what stages demand.
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeRole {
     Stage,
     Crossing(Crossing),
+    /// A provider the graph placed, serving the layers listed, each with the stages that demanded it.
+    Provider(ProviderPlacement),
+}
+
+/// A provider to append to the graph, with everything its node is built from.
+pub(crate) struct ProviderNode {
+    /// The full identifier the provider was registered under.
+    pub(crate) identifier: String,
+    /// The name of the provider's one input.
+    pub(crate) input: &'static str,
+    /// The name of the source the provider serves.
+    pub(crate) source: String,
+    pub(crate) args: Value,
+    pub(crate) placement: ProviderPlacement,
 }
 
 /// The pieces a node is built from.
@@ -165,6 +180,8 @@ pub struct Node {
     open: OpenSlot,
     /// The scene layer this node routes and restarts its chunks on.
     layer: Option<LayerId>,
+    /// What this node demanded, as the demand pass settled it.
+    demands: Vec<NodeDemand>,
 }
 
 impl Node {
@@ -186,6 +203,7 @@ impl Node {
             stream: parts.kind.output(),
             open: OpenSlot::new(),
             layer: None,
+            demands: Vec::new(),
         }
     }
 
@@ -250,8 +268,8 @@ impl Node {
         &mut self.inputs
     }
 
-    pub fn role(&self) -> NodeRole {
-        self.role
+    pub fn role(&self) -> &NodeRole {
+        &self.role
     }
 
     pub fn residency(&self) -> Option<Residency> {
@@ -272,12 +290,17 @@ impl Node {
         self.layer
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "only tests give a node a layer so far")
-    )]
     pub(crate) fn set_layer(&mut self, layer: LayerId) {
         self.layer = Some(layer);
+    }
+
+    /// What this node demanded, with the layer serving each demand.
+    pub fn demands(&self) -> &[NodeDemand] {
+        &self.demands
+    }
+
+    pub(crate) fn set_demands(&mut self, demands: Vec<NodeDemand>) {
+        self.demands = demands;
     }
 }
 
@@ -402,10 +425,71 @@ impl CompiledGraph {
             stream: source.output_stream(),
             open: OpenSlot::new(),
             layer: None,
+            demands: Vec::new(),
         };
 
         self.nodes.push(node);
         id
+    }
+
+    /// Appends a provider reading `after`'s output, moves each edge in `moved` onto it, and
+    /// returns it.
+    ///
+    /// The provider is named after its demand kind and the source it serves, such as
+    /// `scenes(input)`. The order is not recomputed until
+    /// [CompiledGraph::finish_edit](crate::CompiledGraph::finish_edit) is called.
+    pub(crate) fn push_provider(
+        &mut self,
+        after: NodeId,
+        provider: ProviderNode,
+        moved: &[EdgeId],
+    ) -> NodeId {
+        let id = NodeId::new(self.nodes.len());
+        let producer = &self.nodes[after.index()];
+        let name = format!("{}({})", provider.placement.kind.name(), provider.source);
+
+        let mut input = Edge::new(None, Some(provider.input), 0, after, producer.span());
+        let reads = self.reads_of(after);
+        if reads == moved.len() {
+            input.set_sharing(Sharing::Move);
+        }
+
+        let node = Node {
+            id,
+            name,
+            kind: StageKind::Provider,
+            identifier: provider.identifier,
+            args: provider.args,
+            args_span: producer.span(),
+            arg_spans: ArgSpans::default(),
+            inputs: vec![input],
+            consumers: Vec::new(),
+            workers: None,
+            span: producer.span(),
+            role: NodeRole::Provider(provider.placement),
+            residency: None,
+            stream: producer.output_stream(),
+            open: OpenSlot::new(),
+            layer: None,
+            demands: Vec::new(),
+        };
+
+        self.nodes.push(node);
+
+        for edge in moved {
+            self.redirect(edge.node(), edge.index(), id);
+        }
+
+        id
+    }
+
+    /// How many edges read `producer`, counted from the edges themselves.
+    fn reads_of(&self, producer: NodeId) -> usize {
+        self.nodes
+            .iter()
+            .flat_map(|node| node.inputs())
+            .filter(|edge| edge.source() == producer)
+            .count()
     }
 
     pub(crate) fn redirect(&mut self, consumer: NodeId, edge: usize, source: NodeId) {
@@ -630,7 +714,7 @@ pub(crate) mod tests {
         let graph = file_blur_stdout();
         let blur = graph.node(node_named(&graph, "blur"));
 
-        assert_eq!(blur.role(), NodeRole::Stage);
+        assert_eq!(*blur.role(), NodeRole::Stage);
         assert_eq!(blur.residency(), None);
         assert_eq!(blur.output_stream(), Some(StreamType::Frames));
     }
@@ -646,7 +730,7 @@ pub(crate) mod tests {
         let node = graph.node(crossing);
         assert_eq!(node.name(), "unload(blur)");
         assert_eq!(node.identifier(), "builtin/unload");
-        assert_eq!(node.role(), NodeRole::Crossing(Crossing::Unload));
+        assert_eq!(*node.role(), NodeRole::Crossing(Crossing::Unload));
         assert_eq!(node.inputs()[0].source(), blur);
         assert!(graph.node(blur).consumers().contains(&crossing));
     }

@@ -15,6 +15,7 @@ use av_toolbox_graph::{
     plan,
     render_ascii,
     render_html,
+    satisfy_demands,
     settle_mask_planes,
     solve,
 };
@@ -52,6 +53,7 @@ impl<'r> Pipeline<'r> {
 
         let passes = default_passes();
         optimise(&mut graph, &passes);
+        satisfy_demands(&mut graph, registry)?;
 
         Ok(Self {
             registry,
@@ -163,7 +165,7 @@ impl CompiledPipeline<'_, '_> {
 /// The written stage behind a node, or `None` for a node the compiler inserted.
 fn stage_of(graph: &CompiledGraph, id: NodeId) -> Option<StageRef<'_>> {
     let node = graph.nodes().get(id.index())?;
-    if node.role() != NodeRole::Stage {
+    if *node.role() != NodeRole::Stage {
         return None;
     }
 
@@ -179,7 +181,7 @@ fn live_sources<'a>(graph: &'a CompiledGraph, registry: &PipelineRegistry) -> Ve
     let mut found = Vec::new();
 
     for node in graph.nodes() {
-        let is_written_source = node.role() == NodeRole::Stage && node.kind() == StageKind::Source;
+        let is_written_source = *node.role() == NodeRole::Stage && node.kind() == StageKind::Source;
         if !is_written_source {
             continue;
         }
@@ -276,6 +278,43 @@ inputs = ["input"]
         let codes: Vec<DiagnosticCode> = pipeline.warnings().iter().map(|warning| warning.code()).collect();
 
         assert_eq!(codes, [DiagnosticCode::UnusedStage]);
+    }
+
+    #[test]
+    fn building_places_a_scene_provider_for_a_chunk_stage() {
+        let registry = crate::registry().expect("the built-in stages register");
+        let text = r#"
+[source.input]
+type = "y4m/stdin"
+
+[filter.deinterlace]
+type = "deinterlace/bwdif"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["deinterlace"]
+"#;
+        let specs = specs(text);
+
+        let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+        let graph = pipeline.graph();
+        let provider = graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == "scenes(input)")
+            .expect("a scene provider follows the source");
+        let deinterlace = graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == "deinterlace")
+            .expect("the deinterlacer is kept");
+
+        assert!(matches!(provider.role(), NodeRole::Provider(_)));
+        assert_eq!(provider.identifier(), "provider/scenes");
+        assert_eq!(deinterlace.inputs()[0].source(), provider.id());
+        assert!(deinterlace.layer().is_some());
+        assert!(pipeline.stage_of(provider.id()).is_none());
     }
 
     #[test]
