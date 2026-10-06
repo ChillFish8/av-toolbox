@@ -70,9 +70,21 @@ impl FrameContext {
     }
 
     /// This context, charging every frame shaped allocation on either side to `budget`.
+    ///
+    /// An allocation waits until `budget` has room for it.
     pub fn with_budget(mut self, budget: Arc<FrameBudget>) -> Self {
         self.host = self.host.with_budget(budget.clone());
         self.pool = self.pool.with_budget(budget);
+        self
+    }
+
+    /// This context, charging every frame shaped allocation on either side to `budget` without
+    /// ever waiting for room.
+    ///
+    /// Another context waiting on the same `budget` is held back by what this one has charged.
+    pub fn with_charged_budget(mut self, budget: Arc<FrameBudget>) -> Self {
+        self.host = self.host.with_charged_budget(budget.clone());
+        self.pool = self.pool.with_charged_budget(budget);
         self
     }
 

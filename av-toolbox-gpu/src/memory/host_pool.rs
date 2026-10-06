@@ -21,6 +21,8 @@ use crate::memory::budget::{FrameBudget, Room};
 pub struct HostPool {
     free: Arc<HostFree>,
     budget: Option<Arc<FrameBudget>>,
+    /// Whether an allocation waits for room on `budget` before it is charged.
+    waits: bool,
 }
 
 #[derive(Debug, Default)]
@@ -62,9 +64,17 @@ impl HostPool {
         Self::default()
     }
 
-    /// This pool, charging every frame shaped allocation to `budget`.
+    /// This pool, charging every frame shaped allocation to `budget` once it has room.
     pub(crate) fn with_budget(mut self, budget: Arc<FrameBudget>) -> Self {
         self.budget = Some(budget);
+        self.waits = true;
+        self
+    }
+
+    /// This pool, charging every frame shaped allocation to `budget` without waiting for room.
+    pub(crate) fn with_charged_budget(mut self, budget: Arc<FrameBudget>) -> Self {
+        self.budget = Some(budget);
+        self.waits = false;
         self
     }
 
@@ -77,11 +87,15 @@ impl HostPool {
     /// Waits until `bytes` fits under this pool's budget, or returns immediately when it has none.
     ///
     /// A released or stalled budget belongs to a run that is over or failing, so charging it would
-    /// leave a total nothing ever credits back.
+    /// leave a total nothing ever credits back. A pool that does not wait always charges.
     pub(crate) fn wait_for_room(&self, bytes: usize) -> bool {
         let Some(budget) = &self.budget else {
             return false;
         };
+
+        if !self.waits {
+            return true;
+        }
 
         matches!(budget.wait_for_room(bytes), Room::Available)
     }

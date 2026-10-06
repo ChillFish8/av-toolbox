@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,9 +9,11 @@ use av_toolbox_graph::{
     Diagnostic,
     DiagnosticCode,
     Diagnostics,
+    ExecutionPlan,
     NodeId,
     NodeRole,
     Region,
+    RegionId,
     Routing,
     SolvedFormats,
 };
@@ -335,4 +338,57 @@ pub(super) fn source_budget(share: usize, deadline: Option<Duration>) -> Arc<Fra
         Some(deadline) => FrameBudget::with_stall_deadline(share, deadline),
         None => FrameBudget::new(share),
     }
+}
+
+/// Maps every region that allocates against a source's budget to that source's region.
+///
+/// A region without a disperse inherits when every input reaches it from one source region,
+/// directly or through other inheriting regions. A region with a disperse, or one fed by more than
+/// one source, allocates freely. `regions` must be in topological order, as a plan lists them.
+pub(super) fn inherited_budgets(graph: &CompiledGraph, regions: &[Region]) -> HashMap<RegionId, RegionId> {
+    let plan = graph
+        .execution_plan()
+        .expect("a graph must be planned before its budgets are shared out");
+    let mut owners = HashMap::new();
+
+    for region in regions {
+        if is_source_region(graph, region) {
+            owners.insert(region.id(), region.id());
+            continue;
+        }
+
+        if region.has_disperse() {
+            continue;
+        }
+
+        if let Some(owner) = single_budget_owner(graph, plan, region, &owners) {
+            owners.insert(region.id(), owner);
+        }
+    }
+
+    owners.retain(|region, owner| region != owner);
+    owners
+}
+
+/// The one source region every input of `region` draws its budget from, if there is exactly one.
+fn single_budget_owner(
+    graph: &CompiledGraph,
+    plan: &ExecutionPlan,
+    region: &Region,
+    owners: &HashMap<RegionId, RegionId>,
+) -> Option<RegionId> {
+    let mut owner = None;
+
+    for edge in graph.node(region.head()).inputs() {
+        let producer = plan.node(edge.source()).region();
+        let producer_owner = owners.get(&producer).copied()?;
+
+        if owner.is_some_and(|known| known != producer_owner) {
+            return None;
+        }
+
+        owner = Some(producer_owner);
+    }
+
+    owner
 }

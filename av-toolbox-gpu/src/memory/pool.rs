@@ -37,6 +37,8 @@ pub struct BufferPool {
     /// Charged by every frame shaped allocation: `alloc_frame`, `alloc_like`, `alloc_mask`,
     /// `add_chroma`, `load_frame` and `load_mask`. Rings and scratch never touch it.
     budget: Option<Arc<FrameBudget>>,
+    /// Whether an allocation waits for room on `budget` before it is charged.
+    waits: bool,
 }
 
 /// Anything host side a plane can be uploaded from.
@@ -84,12 +86,21 @@ impl BufferPool {
                 free: Mutex::new(HashMap::new()),
             }),
             budget: None,
+            waits: false,
         }
     }
 
-    /// This pool, charging every frame shaped allocation to `budget`.
+    /// This pool, charging every frame shaped allocation to `budget` once it has room.
     pub(crate) fn with_budget(mut self, budget: Arc<FrameBudget>) -> Self {
         self.budget = Some(budget);
+        self.waits = true;
+        self
+    }
+
+    /// This pool, charging every frame shaped allocation to `budget` without waiting for room.
+    pub(crate) fn with_charged_budget(mut self, budget: Arc<FrameBudget>) -> Self {
+        self.budget = Some(budget);
+        self.waits = false;
         self
     }
 
@@ -155,11 +166,15 @@ impl BufferPool {
     /// Answers whether what follows should be charged. A released budget is one whose run is
     /// over, and one that gave up waiting is a run about to fail, so either way the allocation it
     /// just stopped waiting for goes through uncounted rather than charging a total nothing will
-    /// ever credit back.
+    /// ever credit back. A pool that does not wait always charges.
     fn wait_for_room(&self, bytes: usize) -> bool {
         let Some(budget) = &self.budget else {
             return false;
         };
+
+        if !self.waits {
+            return true;
+        }
 
         matches!(budget.wait_for_room(bytes), Room::Available)
     }

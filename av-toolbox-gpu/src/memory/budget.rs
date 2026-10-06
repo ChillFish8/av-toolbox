@@ -27,8 +27,14 @@ pub trait BudgetWaits: Send + Sync {
 
 /// How much frame memory a source may have outstanding at once.
 ///
-/// A source waits here before emitting a frame that would take it past its limit, and is woken
-/// when a frame it emitted earlier returns to the pool. Nothing else waits.
+/// A context made with [FrameContext::with_budget](crate::FrameContext::with_budget) waits here
+/// before allocating a frame that would take it past its limit, and is woken when a frame charged
+/// to it returns to the pool. A context made with
+/// [FrameContext::with_charged_budget](crate::FrameContext::with_charged_budget) charges it
+/// without waiting.
+///
+/// Only one thread may wait on a budget. Room is checked before a frame's planes are charged, so
+/// two waiting threads could both take the last of it.
 pub struct FrameBudget {
     limit: usize,
     stall_deadline: Duration,
@@ -51,6 +57,7 @@ impl fmt::Debug for FrameBudget {
 #[derive(Debug)]
 struct BudgetState {
     outstanding: usize,
+    peak: usize,
     released: bool,
     stalled: Option<usize>,
 }
@@ -68,6 +75,7 @@ impl FrameBudget {
             stall_deadline: deadline,
             state: Mutex::new(BudgetState {
                 outstanding: 0,
+                peak: 0,
                 released: false,
                 stalled: None,
             }),
@@ -83,6 +91,11 @@ impl FrameBudget {
 
     pub fn outstanding(&self) -> usize {
         self.lock().outstanding
+    }
+
+    /// The most this budget has ever had outstanding at once.
+    pub fn peak(&self) -> usize {
+        self.lock().peak
     }
 
     pub const fn limit(&self) -> usize {
@@ -154,7 +167,9 @@ impl FrameBudget {
 
     /// Adds `bytes` to what is outstanding.
     pub(crate) fn charge(&self, bytes: usize) {
-        self.lock().outstanding += bytes;
+        let mut state = self.lock();
+        state.outstanding += bytes;
+        state.peak = state.peak.max(state.outstanding);
     }
 
     /// Returns `bytes` to the budget and wakes anyone waiting for room.
@@ -284,6 +299,27 @@ mod tests {
         assert_eq!(budget.outstanding(), 0);
     }
 
+    /// The budget only has room for one frame, so a context that waited would block on the second.
+    #[test]
+    fn a_charged_budget_charges_past_its_limit_without_waiting() {
+        let one_frame = frame_format().total_bytes();
+        let budget = FrameBudget::with_stall_deadline(one_frame, Duration::from_secs(10));
+        let context = testing_context().with_charged_budget(budget.clone());
+
+        let first = context.alloc_frame(&frame_format(), FrameMeta::at(0));
+        let planes = HostPlanes::zeroed(&StreamFormat::Frames(frame_format()));
+        let item = LoadItem::new(&planes, FrameMeta::at(1));
+        let second = context.load_one(&item).expect("should load");
+        let third = context.alloc_host_frame(&frame_format(), FrameMeta::at(2));
+
+        assert_eq!(budget.outstanding(), 3 * one_frame);
+        assert_eq!(budget.stalled(), None);
+
+        drop((first, second, third));
+
+        assert_eq!(budget.outstanding(), 0);
+    }
+
     #[test]
     fn a_ring_does_not_charge_the_budget() {
         let budget = FrameBudget::new(1 << 20);
@@ -317,6 +353,19 @@ mod tests {
 
         assert!(context.budget().is_none());
         drop(frame);
+    }
+
+    #[test]
+    fn the_peak_keeps_the_most_ever_outstanding() {
+        let budget = FrameBudget::new(1024);
+
+        budget.charge(300);
+        budget.charge(200);
+        budget.credit(400);
+        budget.charge(100);
+
+        assert_eq!(budget.outstanding(), 200);
+        assert_eq!(budget.peak(), 500);
     }
 
     #[test]

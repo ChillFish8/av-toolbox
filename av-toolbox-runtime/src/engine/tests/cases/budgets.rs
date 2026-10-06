@@ -1,10 +1,16 @@
+use std::collections::HashMap;
+use std::sync::mpsc;
 use std::time::Duration;
 
-use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, Routing};
+use av_toolbox_graph::{CompiledGraph, Diagnostic, DiagnosticCode, Diagnostics, RegionId, Routing};
 
-use crate::engine::plan::{default_source_share, holds_nothing_in_frame_region};
-use crate::engine::tests::fixtures::sources::SOURCE_BUDGETS;
+use crate::engine::plan::{default_source_share, holds_nothing_in_frame_region, inherited_budgets};
+use crate::engine::tests::fixtures::gated::{SLOW_GATES, SLOW_PARKED};
+use crate::engine::tests::fixtures::sources::{SOURCE_BUDGET, SOURCE_BUDGETS, SOURCE_DONE};
 use crate::engine::tests::harness::{
+    NOTHING_MORE_COMING,
+    WATCHDOG,
+    assert_every_thread_exited,
     build_engine,
     clear_recorded,
     node_id,
@@ -12,15 +18,19 @@ use crate::engine::tests::harness::{
     planned_width,
     recorded,
     routing_of,
+    run_driven_with_watchdog,
     run_result_with_watchdog,
     run_with_watchdog,
+    share_a_region,
 };
 use crate::engine::tests::specs::{
     allocating_spec,
     delay_spec,
     filter_spec,
+    join_spec,
     masking_spec,
     sink_spec,
+    slow_spec,
     source_spec,
 };
 use crate::engine::tests::support::{format, mask_format};
@@ -242,4 +252,139 @@ fn a_frame_routed_node_holding_nothing_is_accepted() {
 
     assert!(accepted);
     assert!(diagnostics.is_empty());
+}
+
+/// The region `name` runs in.
+fn region_of(graph: &CompiledGraph, name: &str) -> RegionId {
+    let plan = graph.execution_plan().expect("a planned graph");
+    let node = node_id(graph, name);
+
+    plan.node(node).region()
+}
+
+/// `fresh` allocates a new frame for every input in a region of its own after the provider, and
+/// worker zero of `slow` is held on the first chunk so nothing reaches the sink. The frames `fresh`
+/// allocates pile up behind that chunk, and the source can only finish while they do if they are
+/// not charged to its share.
+///
+/// `fresh` charges the share without waiting for room, so the peak may pass the share by the one
+/// frame it allocates between the source's waits.
+#[test]
+fn frames_allocated_after_a_provider_are_charged_to_the_source_share() {
+    let property = "frames_allocated_after_a_provider_are_charged_to_the_source_share";
+    clear_recorded();
+
+    let (parked_sender, parked_receiver) = mpsc::channel();
+    let (gate_sender, gate_receiver) = mpsc::channel();
+    let (done_sender, done_receiver) = mpsc::channel();
+
+    *SLOW_PARKED[0].lock().expect("not poisoned") = Some(parked_sender);
+    *SLOW_GATES[0].lock().expect("not poisoned") = Some(gate_receiver);
+    *SOURCE_DONE.lock().expect("not poisoned") = Some(done_sender);
+
+    let chunks: Vec<u64> = (0..48).collect();
+    let specs = vec![
+        source_spec("input", &chunks, 0),
+        allocating_spec("fresh", "input"),
+        slow_spec("slow", "fresh", 2),
+        sink_spec("out", "slow"),
+    ];
+    let (graph, _solved) = planned_graph(&specs);
+
+    assert!(!share_a_region(&graph, "input", "fresh"));
+    assert!(!share_a_region(&graph, "fresh", "slow"));
+
+    let engine = build_engine(&specs, Settings::default());
+
+    let report = run_driven_with_watchdog(engine, property, |_cancel| {
+        parked_receiver
+            .recv_timeout(WATCHDOG)
+            .expect("the held worker should take its chunk and park inside it");
+
+        let finished = done_receiver.recv_timeout(NOTHING_MORE_COMING);
+        assert!(
+            finished.is_err(),
+            "{property}: the source emitted every frame while the frames after it were held",
+        );
+
+        gate_sender.send(()).ok();
+    })
+    .expect("the run should finish once the held worker is released");
+
+    let budget = SOURCE_BUDGET
+        .lock()
+        .expect("not poisoned")
+        .clone()
+        .expect("the source should have started with a budget");
+
+    let allocating_stages_after_the_source = 1;
+    let allowance = allocating_stages_after_the_source * format().total_bytes();
+    let ceiling = budget.limit() + allowance;
+    assert!(
+        budget.peak() <= ceiling,
+        "{property}: {} bytes were outstanding against a {} byte share plus {allowance} for `fresh`",
+        budget.peak(),
+        budget.limit(),
+    );
+    assert_eq!(report.frames, 48, "{property}: not every chunk reached the sink");
+    assert_every_thread_exited(property);
+}
+
+#[test]
+fn a_chain_of_single_worker_regions_after_a_source_inherits_its_budget() {
+    let specs = vec![
+        source_spec("input", &[0, 1], 0),
+        allocating_spec("fresh", "input"),
+        slow_spec("slow", "fresh", 2),
+        sink_spec("out", "slow"),
+    ];
+    let (graph, _solved) = planned_graph(&specs);
+    let plan = graph.execution_plan().expect("a planned graph");
+
+    let inherited = inherited_budgets(&graph, plan.regions());
+
+    let source = region_of(&graph, "input");
+    let provider = region_of(&graph, "fixture-cuts(input)");
+    let fresh = region_of(&graph, "fresh");
+    let expected = HashMap::from([(provider, source), (fresh, source)]);
+    assert_eq!(inherited, expected);
+}
+
+#[test]
+fn a_region_after_a_disperse_does_not_inherit_a_budget() {
+    let specs = vec![
+        source_spec("input", &[0, 1], 0),
+        slow_spec("slow", "input", 2),
+        filter_spec("narrow", "slow", Some(1)),
+        sink_spec("out", "narrow"),
+    ];
+    let (graph, _solved) = planned_graph(&specs);
+    let plan = graph.execution_plan().expect("a planned graph");
+
+    let inherited = inherited_budgets(&graph, plan.regions());
+
+    let source = region_of(&graph, "input");
+    let provider = region_of(&graph, "fixture-cuts(input)");
+    let expected = HashMap::from([(provider, source)]);
+    assert!(!share_a_region(&graph, "slow", "narrow"));
+    assert_eq!(inherited, expected);
+}
+
+#[test]
+fn a_region_fed_by_two_sources_does_not_inherit_a_budget() {
+    let specs = vec![
+        source_spec("base", &[0, 1], 0),
+        source_spec("overlay", &[0, 1], 1),
+        join_spec("join", "base", "overlay"),
+        sink_spec("out", "join"),
+    ];
+    let (graph, _solved) = planned_graph(&specs);
+    let plan = graph.execution_plan().expect("a planned graph");
+
+    let inherited = inherited_budgets(&graph, plan.regions());
+
+    let base = region_of(&graph, "base");
+    let provider = region_of(&graph, "fixture-cuts(base)");
+    let expected = HashMap::from([(provider, base)]);
+    assert_eq!(inherited, expected);
 }

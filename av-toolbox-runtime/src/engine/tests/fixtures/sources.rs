@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use av_toolbox_core::testing::fixture_chunk;
@@ -61,6 +61,9 @@ pub(crate) struct ListedArgs {
 /// worker thread.
 pub(crate) static SOURCE_BUDGETS: Mutex<Vec<(u32, Option<usize>)>> = Mutex::new(Vec::new());
 
+/// The budget the last `Listed` source to start was given, so a test can read its peak.
+pub(crate) static SOURCE_BUDGET: Mutex<Option<Arc<FrameBudget>>> = Mutex::new(None);
+
 /// Signalled once, from inside `next`, the moment a `Listed` source discovers it has nothing
 /// left. By then every real frame has already been forwarded to every downstream consumer, from
 /// the loop iteration before this one, so a test reading this signal knows production is
@@ -116,6 +119,9 @@ impl StageInstance for ListedInstance {
             .lock()
             .expect("not poisoned")
             .push((self.id, limit));
+
+        *SOURCE_BUDGET.lock().expect("not poisoned") = context.budget().cloned();
+
         Ok(())
     }
 }

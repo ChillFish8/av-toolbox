@@ -20,7 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use av_toolbox_core::PipelineRegistry;
-use av_toolbox_gpu::{Backend, FrameContext};
+use av_toolbox_gpu::{Backend, FrameBudget, FrameContext};
 use av_toolbox_graph::{
     CompiledGraph,
     Diagnostics,
@@ -46,6 +46,7 @@ use self::plan::{
     build_region_edges,
     default_source_share,
     holds_nothing_in_frame_region,
+    inherited_budgets,
     is_source_region,
     region_is_supported,
     source_budget,
@@ -243,6 +244,12 @@ impl Engine {
             inbound.insert(region.id(), receiver);
         }
 
+        // Regions are listed in topological order, so a source's budget is always made before any
+        // region inheriting it is wired. An inheriting region charges that budget without waiting
+        // on it, so only the source is held back and nothing after it can deadlock on its room.
+        let inherited = inherited_budgets(graph, regions);
+        let mut source_budgets: HashMap<RegionId, Arc<FrameBudget>> = HashMap::new();
+
         let mut prepared = Vec::with_capacity(regions.len());
         for (region, workers) in regions.iter().zip(built_regions) {
             let downstream: Vec<DownstreamLink> = region
@@ -272,6 +279,8 @@ impl Engine {
                         budget.set_waits(profiler.clone());
                     }
 
+                    source_budgets.insert(region.id(), budget.clone());
+
                     let context = make_context().with_budget(budget.clone());
                     let exhausted = Arc::new(AtomicBool::new(false));
                     let nodes = wrap_head_source(nodes, exhausted.clone(), settings.frame_limit);
@@ -288,7 +297,13 @@ impl Engine {
                         downstream,
                     }));
                 } else {
-                    let context = make_context();
+                    let inherited_budget = inherited
+                        .get(&region.id())
+                        .and_then(|source| source_budgets.get(source));
+                    let context = match inherited_budget {
+                        Some(budget) => make_context().with_charged_budget(budget.clone()),
+                        None => make_context(),
+                    };
                     let edges = build_region_edges(graph, region);
                     let runner = RegionRunner::new(nodes, edges)
                         .routed_on(region.layer())
