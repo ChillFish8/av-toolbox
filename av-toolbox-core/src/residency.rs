@@ -24,6 +24,19 @@ impl fmt::Display for Residency {
     }
 }
 
+impl Residency {
+    /// The name a provider registered for this side is shown under.
+    ///
+    /// A provider that runs on metadata alone is shown as `meta`.
+    pub fn provider_tag(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Device => "device",
+            Self::Either => "meta",
+        }
+    }
+}
+
 /// A built stage of one kind, on whichever side its definition named.
 pub enum Sided<D: ?Sized, H: ?Sized> {
     Device(Box<D>),

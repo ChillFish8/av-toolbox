@@ -140,6 +140,30 @@ fn list_stages_names_the_built_in_stages() {
 }
 
 #[test]
+fn list_stages_shows_each_providers_kind_and_side() {
+    let output = toolbox(&["list-stages"]);
+    let stdout = text(&output.stdout);
+
+    let columns_of = |identifier: &str| -> Vec<&str> {
+        let row = stdout
+            .lines()
+            .find(|line| line.starts_with(identifier))
+            .expect("the provider is listed");
+
+        row.split_whitespace().collect()
+    };
+
+    assert_eq!(
+        columns_of("provider/scene-split"),
+        ["provider/scene-split", "scenes", "meta"]
+    );
+    assert_eq!(
+        columns_of("provider/scene-score"),
+        ["provider/scene-score", "scene-score", "host"]
+    );
+}
+
+#[test]
 fn list_stages_describes_one_type() {
     let output = toolbox(&["list-stages", "y4m/stdout"]);
 

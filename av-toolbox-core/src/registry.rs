@@ -30,8 +30,10 @@ use crate::{
     PreparedSource,
     PreparedStage,
     ProviderDefinition,
+    ProviderSide,
     RegistryError,
     RequestError,
+    Residency,
     SinkDefinition,
     SourceDefinition,
     StageDefinition,
@@ -55,6 +57,7 @@ struct RegisteredProvider {
     full_identifier: String,
     place: PlaceFn,
     demands: DemandsFn,
+    residency: Residency,
 }
 
 /// The registry tracks all stages available for use within the pipeline.
@@ -123,6 +126,7 @@ impl PipelineRegistry {
             full_identifier,
             place: place_erased::<P>,
             demands: demands_erased::<P>,
+            residency: <P::Side as ProviderSide>::RESIDENCY,
         };
         self.served.insert(kind, registered);
 
@@ -141,6 +145,20 @@ impl PipelineRegistry {
         let registered = self.served.get(&kind)?;
 
         Some(registered.demands)
+    }
+
+    /// The side the provider serving `kind` was registered for.
+    pub fn provider_side(&self, kind: DemandKind) -> Option<Residency> {
+        self.served.get(&kind).map(|registered| registered.residency)
+    }
+
+    /// Every registered provider as its full identifier, the demand kind it serves and its side.
+    pub fn providers(&self) -> impl Iterator<Item = (&str, DemandKind, Residency)> {
+        self.served.iter().map(|(kind, registered)| {
+            let identifier = registered.full_identifier.as_str();
+
+            (identifier, *kind, registered.residency)
+        })
     }
 
     pub fn register_sink<D: SinkDefinition>(&mut self) -> Result<(), RegistryError> {

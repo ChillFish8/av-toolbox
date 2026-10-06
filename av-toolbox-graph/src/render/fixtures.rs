@@ -279,6 +279,45 @@ pub(crate) fn planned_round_trip() -> CompiledGraph {
     graph
 }
 
+/// A host source read by a stage demanding tags, which demand host cuts of their own.
+pub(crate) fn provider_stack() -> Vec<StageSpec> {
+    let input = testing::spec(StageKind::Source, "input", "test/host-file");
+
+    let mut wants = testing::spec(StageKind::Filter, "wants", "test/demanding");
+    wants.inputs = vec![testing::positional("input")];
+    wants.args = Spanned::unknown(json!({ "tags": true, "host_cuts": true }));
+
+    let out = stdout("out", "wants");
+
+    vec![input, wants, out]
+}
+
+/// A source read by a stage demanding tags, which a metadata provider serves.
+pub(crate) fn tags_pipeline() -> Vec<StageSpec> {
+    let input = source("input", "a.mkv");
+
+    let mut wants = testing::spec(StageKind::Filter, "wants", "test/demanding");
+    wants.inputs = vec![testing::positional("input")];
+    wants.args = Spanned::unknown(json!({ "tags": true }));
+
+    let out = stdout("out", "wants");
+
+    vec![input, wants, out]
+}
+
+/// Satisfies every demand in `specs`, settles sides, places crossings and plans the regions.
+pub(crate) fn placed_planned(specs: &[StageSpec]) -> CompiledGraph {
+    let registry = testing::registry();
+    let mut graph = satisfied(specs);
+    let capabilities = crate::residency::tests::capabilities();
+    let mut formats = crate::solve(&graph, &registry, &capabilities).expect("should solve");
+    crate::place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+
+    let made = crate::plan::plan(&graph, &registry).expect("should plan");
+    graph.set_execution_plan(made);
+    graph
+}
+
 /// The demand kind the hand built example's provider serves.
 struct ExampleScenes;
 
@@ -360,6 +399,7 @@ fn example_provider(name: &'static str, block: usize, layers: &[(&str, &str)]) -
     let placement = ProviderPlacement {
         kind: DemandKind::of::<ExampleScenes>(),
         node: NodeId::new(0),
+        side: Residency::Either,
         layers,
     };
 
@@ -367,7 +407,7 @@ fn example_provider(name: &'static str, block: usize, layers: &[(&str, &str)]) -
         provider: Some(placement),
         ..example_stage(
             name,
-            "provider/scenes",
+            "provider/scene-split",
             StageKind::Provider,
             Residency::Host,
             block,

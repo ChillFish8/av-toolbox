@@ -11,7 +11,9 @@ pub trait ChunkKey {
     fn chunk(&self) -> u64;
 }
 
-/// Reads one demand's value from frames. Built from a stage's bound inputs.
+/// Reads one demand's value from frames.
+///
+/// It is built from a stage's bound inputs.
 pub struct Provision<D: DemandDefinition> {
     layer: LayerId,
     marker: PhantomData<fn() -> D>,

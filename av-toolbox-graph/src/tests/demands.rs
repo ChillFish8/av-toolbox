@@ -223,6 +223,7 @@ fn a_chunk_stage_gets_a_provider_after_its_source() {
     let expected = ProviderPlacement {
         kind: DemandKind::of::<FixtureCuts>(),
         node: named(&graph, "input").id(),
+        side: Residency::Device,
         layers: vec![served(0, cuts(), "fixture-cuts", &["denoise"])],
     };
     assert_eq!(*placement(provider), expected);

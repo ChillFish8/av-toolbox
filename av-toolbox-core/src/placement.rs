@@ -20,7 +20,9 @@ pub struct PathNode<'g> {
     pub args: &'g Value,
 }
 
-/// The edge leaving one node of a [PathView]. Only a path can make one.
+/// The edge leaving one node of a [PathView].
+///
+/// Only a path can make one.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct PathEdge(usize);
 

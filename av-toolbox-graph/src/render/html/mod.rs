@@ -124,6 +124,7 @@ fn provider_json(placement: &ProviderPlacement) -> Value {
 
     json!({
         "kind": placement.kind.name(),
+        "side": placement.side.provider_tag(),
         "layers": layers,
     })
 }
@@ -311,6 +312,31 @@ mod tests {
         assert_eq!(denoise["kind"], "filter");
         assert_eq!(denoise["width"], 4);
         assert!(denoise["block"].as_str().expect("a block id").starts_with('r'));
+    }
+
+    #[test]
+    fn provider_entries_carry_their_side_and_demands() {
+        let graph = fixtures::placed_planned(&fixtures::provider_stack());
+        let rendered = render_html(&graph, &RenderOptions::default());
+        let data = embedded(&rendered);
+
+        let boxes = data["boxes"].as_array().expect("boxes");
+        let side_of = |name: &str| {
+            let entry = boxes.iter().find(|entry| entry["name"] == name);
+
+            entry.expect("the provider is drawn")["provider"]["side"].clone()
+        };
+
+        assert_eq!(side_of("tags(input)"), "meta");
+        assert_eq!(side_of("host-fixture-cuts(input)"), "host");
+
+        let tags = boxes
+            .iter()
+            .find(|entry| entry["name"] == "tags(input)")
+            .expect("the provider is drawn");
+        let demands = tags["demands"].as_array().expect("demands");
+        assert_eq!(demands.len(), 1);
+        assert_eq!(demands[0]["description"], "host-fixture-cuts: host-fixture-cuts");
     }
 
     #[test]

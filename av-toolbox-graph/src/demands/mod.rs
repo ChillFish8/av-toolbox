@@ -9,6 +9,7 @@ use av_toolbox_core::{
     LayerDemand,
     PipelineRegistry,
     PreparedStage,
+    Residency,
     StageKind,
 };
 use av_toolbox_gpu::{ChunkRoute, LayerId};
@@ -25,6 +26,8 @@ pub struct ProviderPlacement {
     pub kind: DemandKind,
     /// The real node the provider sits behind.
     pub node: NodeId,
+    /// The side the provider was registered for.
+    pub side: Residency,
     pub layers: Vec<ServedLayer>,
 }
 

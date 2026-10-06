@@ -73,7 +73,9 @@ pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
     /// Refuses demands the provider cannot bound, such as a seconds limit with no frame rate.
     fn check(args: &Self::Args, input: &FrameFormat) -> Result<(), StageError>;
 
-    /// Builds the provider. `inputs` hands out what was provided for its own demands.
+    /// Builds the provider.
+    ///
+    /// `inputs` hands out what was provided for its own demands.
     fn build<R: Runtime>(
         context: &BuildContext<R>,
         args: Self::Args,

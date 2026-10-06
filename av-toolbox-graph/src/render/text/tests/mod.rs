@@ -220,6 +220,56 @@ fn a_provider_is_drawn_dashed_and_implied() {
 }
 
 #[test]
+fn a_provider_stack_renders_its_chain() {
+    let graph = fixtures::placed_planned(&fixtures::provider_stack());
+    let diagram = Diagram::of(&graph);
+    let options = bare();
+
+    let lines_of = |name: &str| {
+        let found = diagram.boxes.iter().find(|entry| entry.name == name);
+
+        found.expect("the box is drawn").lines(&options)
+    };
+
+    assert_eq!(
+        lines_of("tags(input)"),
+        [
+            "tags · implied",
+            "tags(input)",
+            "meta",
+            "tags ← wants",
+            "demands host-fixture-cuts: host-fixture-cuts",
+        ]
+    );
+    assert_eq!(
+        lines_of("host-fixture-cuts(input)"),
+        [
+            "host-fixture-cuts · implied",
+            "host-fixture-cuts(input)",
+            "host",
+            "host-fixture-cuts ← tags(input)",
+        ]
+    );
+}
+
+#[test]
+fn a_meta_provider_renders_inside_its_producers_region() {
+    let graph = fixtures::placed_planned(&fixtures::tags_pipeline());
+    let diagram = Diagram::of(&graph);
+
+    let region_of = |name: &str| {
+        diagram
+            .boxes
+            .iter()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.block)
+            .expect("the box is drawn")
+    };
+
+    assert_eq!(region_of("tags(input)"), region_of("input"));
+}
+
+#[test]
 fn a_region_names_the_layer_it_routes_on() {
     let specs = fixtures::wide_pipeline(4);
     let graph = fixtures::satisfied_planned(&specs);
@@ -679,20 +729,24 @@ fn a_provider_serving_two_branches_draws_exactly() {
         concat!(
             "┌ region … ─┐   ┌ region 1 · stream ───────────┐    ┌ region 2 · frame ─────────────────────────────────────────┐\n",
             "│           │   │                              │    │                                                           │\n",
-            "│           │   │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │    │ ┌──────────────────────────────────────┐                  │\n",
-            "│ ┌───────┐ │   │ ┆ fixture-breaks · implied ┆ │    │ │                first                 │  ┌─────────────┐ │\n",
-            "│ │ input ├─┼─┬─┼─▶     every 4 ← first      ├─┼──┬─┼─▶   demands fixture-breaks: every 4    ├──▶  first_out  │ │\n",
-            "│ └───────┘ │ │ │ ┆     every 8 ← second     ┆ │  │ │ └──────────────────────────────────────┘  └─────────────┘ │\n",
+            "│           │   │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │    │                                                           │\n",
+            "│           │   │ ┆ fixture-breaks · implied ┆ │    │ ┌──────────────────────────────────────┐                  │\n",
+            "│ ┌───────┐ │   │ ┆  fixture-breaks(input)   ┆ │    │ │                first                 │  ┌─────────────┐ │\n",
+            "│ │ input ├─┼─┬─┼─▶          device          ├─┼──┬─┼─▶   demands fixture-breaks: every 4    ├──▶  first_out  │ │\n",
+            "│ └───────┘ │ │ │ ┆     every 4 ← first      ┆ │  │ │ └──────────────────────────────────────┘  └─────────────┘ │\n",
+            "│           │ │ │ ┆     every 8 ← second     ┆ │  │ │                                                           │\n",
             "│           │ │ │ └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │  │ │                                                           │\n",
             "│           │ │ │                              │  │ │                                                           │\n",
             "└───────────┘ │ └──────────────────────────────┘  │ └───────────────────────────────────────────────────────────┘\n",
             "              │                                   │\n",
             "              │ ┌ region 4 · stream ───────────┐  │ ┌ region 3 · frame ─────────────────────────────────────────┐\n",
             "              │ │                              │  │ │                                                           │\n",
-            "              │ │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │  │ │ ┌──────────────────────────────────────┐                  │\n",
-            "              │ │ ┆  fixture-cuts · implied  ┆ │  │ │ │                second                │  ┌─────────────┐ │\n",
-            "              └─┼─▶  fixture-cuts ← denoise  ├─┼─┐└─┼─▶   demands fixture-breaks: every 8    ├──▶ second_out  │ │\n",
-            "                │ └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │ │  │ └──────────────────────────────────────┘  └─────────────┘ │\n",
+            "              │ │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │  │ │                                                           │\n",
+            "              │ │ ┆  fixture-cuts · implied  ┆ │  │ │ ┌──────────────────────────────────────┐                  │\n",
+            "              │ │ ┆   fixture-cuts(input)    ┆ │  │ │ │                second                │  ┌─────────────┐ │\n",
+            "              └─┼─▶          device          ├─┼─┐└─┼─▶   demands fixture-breaks: every 8    ├──▶ second_out  │ │\n",
+            "                │ ┆  fixture-cuts ← denoise  ┆ │ │  │ └──────────────────────────────────────┘  └─────────────┘ │\n",
+            "                │ └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │ │  │                                                           │\n",
             "                │                              │ │  │                                                           │\n",
             "                └──────────────────────────────┘ │  └───────────────────────────────────────────────────────────┘\n",
             "                                                 │\n",
@@ -721,19 +775,23 @@ fn two_sources_each_draw_their_provider_exactly() {
         concat!(
             "┌ region 0… ─┐  ┌ region 2 · stream ───────────┐  ┌ region 3 · frame ───────────────────────────────────┐\n",
             "│            │  │                              │  │                                                     │\n",
-            "│            │  │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │  │ ┌─────────────────────────────────┐                 │\n",
-            "│ ┌────────┐ │  │ ┆ fixture-breaks · implied ┆ │  │ │          first_breaks           │  ┌────────────┐ │\n",
-            "│ │ first  ├─┼──┼─▶  every 4 ← first_breaks  ├─┼──┼─▶ demands fixture-breaks: every 4 ├──▶ first_out  │ │\n",
-            "│ └────────┘ │  │ └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │  │ └─────────────────────────────────┘  └────────────┘ │\n",
+            "│            │  │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │  │                                                     │\n",
+            "│            │  │ ┆ fixture-breaks · implied ┆ │  │ ┌─────────────────────────────────┐                 │\n",
+            "│ ┌────────┐ │  │ ┆  fixture-breaks(first)   ┆ │  │ │          first_breaks           │  ┌────────────┐ │\n",
+            "│ │ first  ├─┼──┼─▶          device          ├─┼──┼─▶ demands fixture-breaks: every 4 ├──▶ first_out  │ │\n",
+            "│ └────────┘ │  │ ┆  every 4 ← first_breaks  ┆ │  │ └─────────────────────────────────┘  └────────────┘ │\n",
+            "│            │  │ └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │  │                                                     │\n",
             "│            │  │                              │  │                                                     │\n",
             "└────────────┘  └──────────────────────────────┘  └─────────────────────────────────────────────────────┘\n",
             "\n",
             "┌ region 1… ─┐  ┌ region 4 · stream ───────────┐  ┌ region 5 · frame ───────────────────────────────────┐\n",
             "│            │  │                              │  │                                                     │\n",
-            "│            │  │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │  │ ┌─────────────────────────────────┐                 │\n",
-            "│ ┌────────┐ │  │ ┆ fixture-breaks · implied ┆ │  │ │          second_breaks          │  ┌────────────┐ │\n",
-            "│ │ second ├─┼──┼─▶ every 8 ← second_breaks  ├─┼──┼─▶ demands fixture-breaks: every 8 ├──▶ second_out │ │\n",
-            "│ └────────┘ │  │ └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │  │ └─────────────────────────────────┘  └────────────┘ │\n",
+            "│            │  │ ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │  │                                                     │\n",
+            "│            │  │ ┆ fixture-breaks · implied ┆ │  │ ┌─────────────────────────────────┐                 │\n",
+            "│ ┌────────┐ │  │ ┆  fixture-breaks(second)  ┆ │  │ │          second_breaks          │  ┌────────────┐ │\n",
+            "│ │ second ├─┼──┼─▶          device          ├─┼──┼─▶ demands fixture-breaks: every 8 ├──▶ second_out │ │\n",
+            "│ └────────┘ │  │ ┆ every 8 ← second_breaks  ┆ │  │ └─────────────────────────────────┘  └────────────┘ │\n",
+            "│            │  │ └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │  │                                                     │\n",
             "│            │  │                              │  │                                                     │\n",
             "└────────────┘  └──────────────────────────────┘  └─────────────────────────────────────────────────────┘\n",
             "\n",
@@ -755,11 +813,11 @@ fn the_example_pipeline_draws_exactly() {
             "│                                                                 │      │                                                                                                                  │             │            │      │                                                                │       │          │\n",
             "│                  ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐                     │      │                                                                       ┌────────┐                                 │             │            │      │                                                                │       │          │\n",
             "│ ┌────────┐       ┆    scenes · implied    ┆  ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐ │      │            ┌───────────────────────────┐        ┌────────┐            │ merge  │┐  ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐             │             │ ┌────────┐ │      │                ┌─────────────────────────────────┐             │       │ ┌──────┐ │\n",
-            "│ │ source │       ┆          host          ┆  ┆ upload(scenes) ┆ │      │            │          denoise          │┐       │ deband │┐           │ gpu ×8 ││  ┆ unload(merge) ┆┐            │             │ │ dither │ │      │                │             encode              │┐            │       │ │ mux  │ │\n",
-            "│ │  host  ├─┬─clip▶   natural ← denoise    ├──▶      gpu       ├─┼──clip┼─▶ ◁ 1:8 ───▶          gpu ×8           │├─┬─clip▶ gpu ×8 │├───────base▶        │├──▶    host ×8    ┆├──▶ ▷ 8:1 ──┼──┬──────clip┼─▶  host  ├─┼──clip┼─▶ ◁ 1:6 ───────▶             host ×6             │├──▶ ▷ 6:1 ──┼──video┼─▶ host │ │\n",
-            "│ └────────┘ │     ┆ limited ≤10 s ← encode ┆  ┆    host→gpu    ┆ │      │            │ chunks on scenes: natural ││ │     └────────┘│ ┌──overlay▶        ││  ┆   gpu→host    ┆┆            │  │          │ └────────┘ │      │                │ chunks on scenes: limited ≤10 s ││            │       │ └──────┘ │\n",
-            "│            │     └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘  └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │      │            └───────────────────────────┘│ │      └────────┘ │┌────mask▶        ││  └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘┆            │  │          │            │      │                └─────────────────────────────────┘│            │       │          │\n",
-            "│            │                                                    │      │             └───────────────────────────┘ │                 ││        └────────┘│   └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘            │  │          │            │      │                 └─────────────────────────────────┘            │       │          │\n",
+            "│ │ source │       ┆     scenes(source)     ┆  ┆ upload(scenes) ┆ │      │            │          denoise          │┐       │ deband │┐           │ gpu ×8 ││  ┆ unload(merge) ┆┐            │             │ │ dither │ │      │                │             encode              │┐            │       │ │ mux  │ │\n",
+            "│ │  host  ├─┬─clip▶          meta          ├──▶      gpu       ├─┼──clip┼─▶ ◁ 1:8 ───▶          gpu ×8           │├─┬─clip▶ gpu ×8 │├───────base▶        │├──▶    host ×8    ┆├──▶ ▷ 8:1 ──┼──┬──────clip┼─▶  host  ├─┼──clip┼─▶ ◁ 1:6 ───────▶             host ×6             │├──▶ ▷ 6:1 ──┼──video┼─▶ host │ │\n",
+            "│ └────────┘ │     ┆   natural ← denoise    ┆  ┆    host→gpu    ┆ │      │            │ chunks on scenes: natural ││ │     └────────┘│ ┌──overlay▶        ││  ┆   gpu→host    ┆┆            │  │          │ └────────┘ │      │                │ chunks on scenes: limited ≤10 s ││            │       │ └──────┘ │\n",
+            "│            │     ┆ limited ≤10 s ← encode ┆  └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘ │      │            └───────────────────────────┘│ │      └────────┘ │┌────mask▶        ││  └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘┆            │  │          │            │      │                └─────────────────────────────────┘│            │       │          │\n",
+            "│            │     └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘                     │      │             └───────────────────────────┘ │                 ││        └────────┘│   └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘            │  │          │            │      │                 └─────────────────────────────────┘            │       │          │\n",
             "│            │                                                    │      │                                           │                 ││         └────────┘                                │  │          │            │      │                                                                │       │          │\n",
             "│            │                                                    │      │                                           │                 ││                                                   │  │          │            │      │                                                                │       │          │\n",
             "└────────────┼────────────────────────────────────────────────────┘      │                                           │                 ││                                                   │  │          └────────────┘      └────────────────────────────────────────────────────────────────┘       └──────────┘\n",

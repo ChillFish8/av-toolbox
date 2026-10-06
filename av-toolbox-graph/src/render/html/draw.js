@@ -170,8 +170,9 @@
         const block = blocksById.get(box.block);
         const lines = [box.name, box.identifier];
 
-        if (box.residency !== null) {
-            lines.push("side: " + box.residency);
+        const side = box.provider !== null ? box.provider.side : box.residency;
+        if (side !== null) {
+            lines.push("side: " + side);
         }
 
         if (block.granularity !== null) {

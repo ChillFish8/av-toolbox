@@ -68,7 +68,7 @@ fn table(registry: &PipelineRegistry) -> String {
     drawn.push_str(PROVIDERS_HEADING);
     drawn.push('\n');
 
-    let provider_rows = rows(&providers, width);
+    let provider_rows = provider_rows(registry, &providers, width);
     drawn.push_str(&provider_rows);
 
     drawn
@@ -84,6 +84,29 @@ fn rows(stages: &[StageInfo<'_>], width: usize) -> String {
         let tags = tag_names(tags_list);
         let stage_type = info.full_identifier();
         let row = format!("{stage_type:<width$}  {kind:<9}  {tags}\n");
+
+        drawn.push_str(&row);
+    }
+
+    drawn
+}
+
+/// One row per provider, its type padded to `width`, then the demand kind it serves and its side.
+fn provider_rows(registry: &PipelineRegistry, providers: &[StageInfo<'_>], width: usize) -> String {
+    let mut drawn = String::new();
+
+    for info in providers {
+        let stage_type = info.full_identifier();
+        let served = registry
+            .providers()
+            .find(|(identifier, _, _)| *identifier == stage_type);
+        let Some((_, kind, residency)) = served else {
+            continue;
+        };
+
+        let kind = kind.name();
+        let side = residency.provider_tag();
+        let row = format!("{stage_type:<width$}  {kind:<11}  {side}\n");
 
         drawn.push_str(&row);
     }

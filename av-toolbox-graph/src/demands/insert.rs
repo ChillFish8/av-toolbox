@@ -153,6 +153,10 @@ fn provider_node(
         .provider_for(instance.kind)
         .expect("every placed kind has a provider");
 
+    let side = registry
+        .provider_side(instance.kind)
+        .expect("every placed kind has a provider");
+
     let first = placements.first_demander(index);
     let root = placements.root_stage(first);
     let span = graph.node(root).span();
@@ -166,6 +170,7 @@ fn provider_node(
         placement: ProviderPlacement {
             kind: instance.kind,
             node: instance.node,
+            side,
             layers: served_layers(graph, registry, placements, index),
         },
     }

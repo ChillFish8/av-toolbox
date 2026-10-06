@@ -171,14 +171,18 @@ impl Block {
 impl DiagramBox {
     /// The lines of text the box holds, in the order they are printed.
     ///
-    /// A provider is titled with its kind rather than its name. A box's demands come last, one
-    /// line each and in order.
+    /// A provider is titled with its kind, then names its instance and the side it was registered
+    /// for. A box's demands come last, one line each and in order.
     pub(crate) fn lines(&self, options: &RenderOptions) -> Vec<String> {
         let title = match &self.provider {
             Some(placement) => format!("{} · implied", placement.kind.name()),
             None => self.name.clone(),
         };
         let mut lines = vec![title];
+
+        if self.provider.is_some() {
+            lines.push(self.name.clone());
+        }
 
         if options.show_identifier {
             lines.push(self.identifier.clone());
@@ -215,6 +219,10 @@ impl DiagramBox {
 
     /// The side the box runs on, followed by how many workers run it when that is more than one.
     fn side_line(&self) -> Option<String> {
+        if let Some(placement) = &self.provider {
+            return Some(placement.side.provider_tag().to_string());
+        }
+
         match (self.residency, self.width) {
             (Some(residency), 1) => Some(residency.to_string()),
             (Some(residency), width) => Some(format!("{residency} ×{width}")),
@@ -916,7 +924,9 @@ mod tests {
             lines,
             vec![
                 "fixture-breaks · implied",
+                "fixture-breaks(input)",
                 "test/breaking",
+                "device",
                 "every 4 ← first",
                 "every 8 ← second",
             ]
