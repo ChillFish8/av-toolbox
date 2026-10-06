@@ -4,6 +4,7 @@ mod failures;
 mod flushes;
 mod limits;
 mod profiling;
+mod progress;
 mod running;
 mod shapes;
 mod workers;

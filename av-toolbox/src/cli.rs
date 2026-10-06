@@ -111,6 +111,13 @@ pub(crate) struct ExecuteArgs {
     /// Worker counts written by `av-toolbox profile`, for every stage that declares none.
     #[arg(long, value_name = "PATH")]
     pub(crate) profile: Option<PathBuf>,
+
+    /// When to show the run's progress.
+    ///
+    /// `auto` draws a live view on a terminal and logs a progress line every ten seconds otherwise. `always`
+    /// draws the live view everywhere and `never` shows nothing.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub(crate) progress: ProgressMode,
 }
 
 #[derive(Debug, clap::Args)]
@@ -244,6 +251,13 @@ impl ColorMode {
     pub(crate) fn enabled(self) -> bool {
         self.choice() != ColorChoice::Never
     }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
+pub(crate) enum ProgressMode {
+    Auto,
+    Always,
+    Never,
 }
 
 #[cfg(test)]

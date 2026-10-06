@@ -60,7 +60,7 @@ pub(crate) use self::worker::run_worker;
 use self::wrap::{SinkTally, wrap_head_source, wrap_sinks};
 use crate::profile::Profiler;
 use crate::worker::RegionRunner;
-use crate::{Aggregate, Cancel, Disperse, NodeTiming, Profiling, RunError};
+use crate::{Aggregate, Cancel, Disperse, NodeTiming, Profiling, Progress, RunError};
 
 /// What one run of an [Engine] is allowed to keep in flight.
 #[derive(Debug, Clone, Default)]
@@ -113,6 +113,7 @@ pub struct RunReport {
 pub struct Engine {
     prepared: Vec<PreparedRegion>,
     tally: Arc<SinkTally>,
+    progress: Progress,
     dropped: Arc<AtomicUsize>,
     cancel: Arc<Cancel>,
     profiler: Option<Arc<Profiler>>,
@@ -187,6 +188,7 @@ impl Engine {
 
         let mut diagnostics = Diagnostics::new();
         let tally = Arc::new(SinkTally::new(settings.warmup));
+        let progress = Progress::new(graph.sinks());
         let dropped = Arc::new(AtomicUsize::new(0));
         let cancel = Arc::new(Cancel::new());
         let profiler = settings.profiling.clone().map(Profiler::new).map(Arc::new);
@@ -268,7 +270,7 @@ impl Engine {
                     Some(region.head()),
                     "a region's stages must list its head first"
                 );
-                let nodes = wrap_sinks(nodes, tally.clone());
+                let nodes = wrap_sinks(nodes, tally.clone(), &progress);
 
                 if is_source_region(graph, region) {
                     let budget = source_budget(source_share, settings.stall_deadline);
@@ -283,7 +285,12 @@ impl Engine {
 
                     let context = make_context().with_budget(budget.clone());
                     let exhausted = Arc::new(AtomicBool::new(false));
-                    let nodes = wrap_head_source(nodes, exhausted.clone(), settings.frame_limit);
+                    let nodes = wrap_head_source(
+                        nodes,
+                        exhausted.clone(),
+                        settings.frame_limit,
+                        progress.read_counter(),
+                    );
                     let edges = build_region_edges(graph, region);
                     let runner = RegionRunner::new(nodes, edges)
                         .routed_on(region.route())
@@ -382,7 +389,7 @@ impl Engine {
                     Some(region.head()),
                     "a region's stages must list its head first"
                 );
-                let nodes = wrap_sinks(nodes, tally.clone());
+                let nodes = wrap_sinks(nodes, tally.clone(), &progress);
                 let edges = build_region_edges(graph, region);
                 let runner = RegionRunner::new(nodes, edges)
                     .routed_on(region.route())
@@ -424,6 +431,7 @@ impl Engine {
         Ok(Engine {
             prepared,
             tally,
+            progress,
             dropped,
             cancel,
             profiler,
@@ -436,6 +444,11 @@ impl Engine {
     /// [Engine::run] answers with a report saying it was cancelled and what it was still holding.
     pub fn cancel_handle(&self) -> Arc<Cancel> {
         self.cancel.clone()
+    }
+
+    /// A live view of this run, readable from any thread while it goes.
+    pub fn progress(&self) -> Progress {
+        self.progress.clone()
     }
 
     /// Spawns every worker, disperse and aggregate thread the plan needs, and waits for them
@@ -455,12 +468,14 @@ impl Engine {
         let Engine {
             prepared,
             tally,
+            progress,
             dropped,
             cancel,
             profiler,
         } = self;
 
         let started = Instant::now();
+        progress.start();
         let outcome = Arc::new(Outcome {
             cancel: cancel.clone(),
             error: Mutex::new(None),

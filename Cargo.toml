@@ -25,6 +25,9 @@ debug-assertions = true
 overflow-checks = true
 
 [workspace.dependencies]
+indicatif = "0.18"
+tracing-indicatif = "0.3"
+console = "0.16"
 av-toolbox-gpu = { path = "av-toolbox-gpu" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 serde = { version = "1.0.229", features = ["derive"] }

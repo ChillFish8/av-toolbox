@@ -6,7 +6,10 @@ use av_toolbox_core::{Inputs, MetaInputs, MetaSink, Sink, Source, StageError, St
 use av_toolbox_gpu::{FrameContext, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
-/// Wraps a source so the engine can tell, from outside, when it has produced its last frame.
+use crate::Progress;
+
+/// Wraps a source so the engine can tell, from outside, when it has produced its last frame, and counts
+/// the frames it reads.
 ///
 /// `Source::next` only ever returns `None` once, per its own contract, so storing that once is
 /// enough to know the source will never be called again.
@@ -15,6 +18,7 @@ pub(super) struct WatchedSource<S: Side> {
     exhausted: Arc<AtomicBool>,
     limit: Option<u64>,
     produced: u64,
+    read: Arc<AtomicU64>,
 }
 
 impl<S: Side> StageInstance for WatchedSource<S> {
@@ -33,7 +37,10 @@ impl<S: Side> Source<S> for WatchedSource<S> {
 
         let frame = self.inner.next(context)?;
         match frame {
-            Some(_) => self.produced += 1,
+            Some(_) => {
+                self.produced += 1;
+                self.read.fetch_add(1, Ordering::Relaxed);
+            },
             None => self.exhausted.store(true, Ordering::SeqCst),
         }
 
@@ -86,10 +93,12 @@ impl SinkTally {
 }
 
 /// Wraps a sink so the engine can count what reached it, for
-/// [RunReport::frames](crate::engine::RunReport::frames).
+/// [RunReport::frames](crate::engine::RunReport::frames), and counts its steps for
+/// [Progress](crate::Progress).
 struct CountingSink<S: Side> {
     inner: Box<dyn Sink<S>>,
     tally: Arc<SinkTally>,
+    steps: Arc<AtomicU64>,
 }
 
 impl<S: Side> StageInstance for CountingSink<S> {
@@ -112,6 +121,10 @@ impl<S: Side> Sink<S> for CountingSink<S> {
         }
 
         self.tally.add(seen);
+        if seen > 0 {
+            self.steps.fetch_add(1, Ordering::Relaxed);
+        }
+
         self.inner.consume(context, Inputs::from_slots(slots))
     }
 
@@ -120,10 +133,12 @@ impl<S: Side> Sink<S> for CountingSink<S> {
     }
 }
 
-/// Wraps a metadata-only sink so the engine can count what reached it.
+/// Wraps a metadata-only sink so the engine can count what reached it, and counts its steps for
+/// [Progress](crate::Progress).
 struct CountingMetaSink {
     inner: Box<dyn MetaSink>,
     tally: Arc<SinkTally>,
+    steps: Arc<AtomicU64>,
 }
 
 impl StageInstance for CountingMetaSink {
@@ -136,6 +151,9 @@ impl MetaSink for CountingMetaSink {
     fn consume(&mut self, context: &mut FrameContext, inputs: MetaInputs) -> Result<(), StageError> {
         let seen = inputs.filled() as u64;
         self.tally.add(seen);
+        if seen > 0 {
+            self.steps.fetch_add(1, Ordering::Relaxed);
+        }
 
         self.inner.consume(context, inputs)
     }
@@ -150,6 +168,7 @@ pub(super) fn wrap_head_source(
     nodes: Vec<(NodeId, StageBox)>,
     exhausted: Arc<AtomicBool>,
     limit: Option<u64>,
+    read: Arc<AtomicU64>,
 ) -> Vec<(NodeId, StageBox)> {
     nodes
         .into_iter()
@@ -166,6 +185,7 @@ pub(super) fn wrap_head_source(
                                 exhausted,
                                 limit,
                                 produced: 0,
+                                read: read.clone(),
                             })),
                         );
                     },
@@ -178,6 +198,7 @@ pub(super) fn wrap_head_source(
                                 exhausted,
                                 limit,
                                 produced: 0,
+                                read: read.clone(),
                             })),
                         );
                     },
@@ -191,31 +212,44 @@ pub(super) fn wrap_head_source(
 }
 
 /// Replaces every sink in a region's stages with a counting one.
-pub(super) fn wrap_sinks(nodes: Vec<(NodeId, StageBox)>, tally: Arc<SinkTally>) -> Vec<(NodeId, StageBox)> {
+pub(super) fn wrap_sinks(
+    nodes: Vec<(NodeId, StageBox)>,
+    tally: Arc<SinkTally>,
+    progress: &Progress,
+) -> Vec<(NodeId, StageBox)> {
     nodes
         .into_iter()
         .map(|(id, stage)| match stage {
-            StageBox::Sink(inner) => (
-                id,
-                StageBox::Sink(Box::new(CountingSink {
+            StageBox::Sink(inner) => {
+                let steps = progress.sink_counter(id);
+                let sink = CountingSink {
                     inner,
                     tally: tally.clone(),
-                })),
-            ),
-            StageBox::HostSink(inner) => (
-                id,
-                StageBox::HostSink(Box::new(CountingSink {
+                    steps,
+                };
+
+                (id, StageBox::Sink(Box::new(sink)))
+            },
+            StageBox::HostSink(inner) => {
+                let steps = progress.sink_counter(id);
+                let sink = CountingSink {
                     inner,
                     tally: tally.clone(),
-                })),
-            ),
-            StageBox::MetaSink(inner) => (
-                id,
-                StageBox::MetaSink(Box::new(CountingMetaSink {
+                    steps,
+                };
+
+                (id, StageBox::HostSink(Box::new(sink)))
+            },
+            StageBox::MetaSink(inner) => {
+                let steps = progress.sink_counter(id);
+                let sink = CountingMetaSink {
                     inner,
                     tally: tally.clone(),
-                })),
-            ),
+                    steps,
+                };
+
+                (id, StageBox::MetaSink(Box::new(sink)))
+            },
             other => (id, other),
         })
         .collect()
