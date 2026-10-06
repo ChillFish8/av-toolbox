@@ -239,6 +239,11 @@ impl ColorMode {
             Self::Auto => ColorChoice::Never,
         }
     }
+
+    /// Whether stderr gets coloured output.
+    pub(crate) fn enabled(self) -> bool {
+        self.choice() != ColorChoice::Never
+    }
 }
 
 #[cfg(test)]

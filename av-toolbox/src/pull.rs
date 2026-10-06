@@ -7,8 +7,7 @@ use std::time::Duration;
 
 use av_toolbox_models::{InstallError, Registry, Store, is_release_tag, registry};
 
-use crate::cli::{Args, PullArgs};
-use crate::report;
+use crate::cli::PullArgs;
 
 const REPOSITORY: &str = "ChillFish8/av-toolbox";
 const USER_AGENT: &str = concat!("av-toolbox/", env!("CARGO_PKG_VERSION"));
@@ -72,8 +71,7 @@ pub(crate) enum Outcome {
     },
 }
 
-pub(crate) fn run(args: &Args, pull_args: &PullArgs) -> ExitCode {
-    let mut stderr = report::stderr(args.color);
+pub(crate) fn run(pull_args: &PullArgs) -> ExitCode {
     let store = Store::from_environment();
     let registry = registry();
     let fetch = UreqFetch::new();
@@ -83,22 +81,21 @@ pub(crate) fn run(args: &Args, pull_args: &PullArgs) -> ExitCode {
     match outcome {
         Ok(Outcome::AlreadyInstalled(path)) => {
             let shown = path.display();
-            eprintln!("{identifier} is already installed at {shown}. Pass --force to download it again");
+            tracing::info!("{identifier} is already installed at {shown}. Pass --force to download it again");
             ExitCode::SUCCESS
         },
         Ok(Outcome::Installed { path, tag, pruned }) => {
             let shown = path.display();
-            eprintln!("installed {identifier} {tag} to {shown}");
+            tracing::info!("installed {identifier} {tag} to {shown}");
 
             for old in &pruned {
-                eprintln!("removed {identifier} {old}");
+                tracing::info!("removed {identifier} {old}");
             }
 
             ExitCode::SUCCESS
         },
         Err(error) => {
-            let message = error.to_string();
-            report::error_line(&mut stderr, &message);
+            tracing::error!("{error}");
             ExitCode::FAILURE
         },
     }

@@ -68,13 +68,14 @@ fn explain_writes_html_to_a_path() {
         page.to_str().expect("utf-8 path"),
     ]);
     let stderr = text(&output.stderr);
+    let stdout = text(&output.stdout);
 
     assert!(output.status.success(), "{stderr}");
     let html = std::fs::read_to_string(&page).expect("the page was written");
     assert!(html.contains("<html"));
 
     let announced = format!("wrote {}", page.display());
-    assert!(stderr.contains(&announced), "{stderr}");
+    assert!(stdout.contains(&announced), "{stdout}");
 }
 
 #[test]
@@ -90,12 +91,13 @@ fn explain_writes_plan_html_in_the_working_directory_by_default() {
         .output()
         .expect("the binary runs");
     let stderr = text(&output.stderr);
+    let stdout = text(&output.stdout);
 
     assert!(output.status.success(), "{stderr}");
     let page = directory.path().join("plan.html");
     let html = std::fs::read_to_string(&page).expect("the page was written");
     assert!(html.contains("<html"));
-    assert!(stderr.contains("wrote plan.html"), "{stderr}");
+    assert!(stdout.contains("wrote plan.html"), "{stdout}");
 }
 
 #[test]

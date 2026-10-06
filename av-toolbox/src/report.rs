@@ -13,34 +13,6 @@ pub(crate) fn stderr(mode: ColorMode) -> StandardStream {
     StandardStream::stderr(choice)
 }
 
-/// Prints `error: <message>` with the level coloured.
-pub(crate) fn error_line(writer: &mut dyn WriteColor, message: &str) {
-    // Nothing is left to report a failed write to stderr to.
-    let _ = write_line(writer, "error", Color::Red, message);
-}
-
-/// Prints `warning: <message>` with the level coloured.
-pub(crate) fn warning_line(writer: &mut dyn WriteColor, message: &str) {
-    // Nothing is left to report a failed write to stderr to.
-    let _ = write_line(writer, "warning", Color::Yellow, message);
-}
-
-/// Prints `<message>` with no level, for saying what is happening.
-pub(crate) fn progress_line(writer: &mut dyn WriteColor, message: &str) {
-    // Nothing is left to report a failed write to stderr to.
-    let _ = writeln!(writer, "{message}");
-}
-
-fn write_line(writer: &mut dyn WriteColor, level: &str, colour: Color, message: &str) -> std::io::Result<()> {
-    let mut spec = ColorSpec::new();
-    spec.set_fg(Some(colour)).set_bold(true);
-
-    writer.set_color(&spec)?;
-    write!(writer, "{level}")?;
-    writer.reset()?;
-    writeln!(writer, ": {message}")
-}
-
 /// Every file a pipeline was read from, for pointing diagnostics at.
 pub(crate) struct PipelineFiles {
     files: SimpleFiles<String, String>,
@@ -159,6 +131,16 @@ fn write_summary(writer: &mut dyn WriteColor, diagnostics: &[Diagnostic]) -> std
     }
 }
 
+fn write_line(writer: &mut dyn WriteColor, level: &str, colour: Color, message: &str) -> std::io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(colour)).set_bold(true);
+
+    writer.set_color(&spec)?;
+    write!(writer, "{level}")?;
+    writer.reset()?;
+    writeln!(writer, ": {message}")
+}
+
 fn count(diagnostics: &[Diagnostic], severity: Severity) -> usize {
     diagnostics
         .iter()
@@ -176,7 +158,7 @@ fn plural(count: usize, noun: &str) -> String {
 /// Prints a failed run at the stage that failed.
 ///
 /// A node the compiler inserted, such as a host/device transfer, has no written stage to point
-/// at, so it prints a plain line naming the transfer instead of the error's own `Display`, which
+/// at, so it logs an error naming the transfer instead of the error's own `Display`, which
 /// would otherwise leak the node's internal id. A node id nothing in the run names at all falls
 /// back to the error's own `Display`.
 pub(crate) fn run_error(
@@ -187,7 +169,7 @@ pub(crate) fn run_error(
 ) {
     let Some(stage) = stage else {
         let message = plain_message(error);
-        error_line(writer, &message);
+        tracing::error!("{message}");
 
         return;
     };
@@ -272,16 +254,6 @@ mod tests {
             span,
             "no filter is registered",
         )
-    }
-
-    #[test]
-    fn an_error_line_names_its_level() {
-        let mut writer = NoColor::new(Vec::new());
-
-        error_line(&mut writer, "cannot read pipeline.toml");
-        let written = String::from_utf8(writer.into_inner()).expect("utf-8");
-
-        assert_eq!(written, "error: cannot read pipeline.toml\n");
     }
 
     #[test]
@@ -465,16 +437,14 @@ mod tests {
     }
 
     #[test]
-    fn a_run_error_with_no_stage_is_a_plain_line() {
+    fn a_run_error_with_no_node_keeps_its_own_message() {
         let failure = RunError::DroppedItems { dropped: 3 };
-        let mut writer = NoColor::new(Vec::new());
 
-        run_error(&mut writer, &file(TEXT), &failure, None);
-        let output = String::from_utf8(writer.into_inner()).expect("utf-8");
+        let message = plain_message(&failure);
 
         assert_eq!(
-            output,
-            "error: the run finished with 3 items that never reached a worker\n"
+            message,
+            "the run finished with 3 items that never reached a worker"
         );
     }
 
@@ -484,15 +454,12 @@ mod tests {
             node: NodeId::new(3),
             source: StageError::msg("the device was lost"),
         };
-        let mut writer = NoColor::new(Vec::new());
 
-        run_error(&mut writer, &file(TEXT), &failure, None);
-        let output = String::from_utf8(writer.into_inner()).expect("utf-8");
+        let message = plain_message(&failure);
 
         assert_eq!(
-            output,
-            "error: a transfer between host and device failed: the device was lost\n"
+            message,
+            "a transfer between host and device failed: the device was lost"
         );
-        assert!(!output.contains("NodeId"));
     }
 }

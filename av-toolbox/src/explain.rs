@@ -20,14 +20,14 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
 
     let mut profile = None;
     if let Some(path) = &explain.profile {
-        let Some(read) = load::apply_profile(path, &mut loaded, &mut stderr) else {
+        let Some(read) = load::apply_profile(path, &mut loaded) else {
             return ExitCode::FAILURE;
         };
 
         profile = Some(read);
     }
 
-    let Some(registry) = load::registry(&mut stderr) else {
+    let Some(registry) = load::registry() else {
         return ExitCode::FAILURE;
     };
 
@@ -45,12 +45,12 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
         return draw_structure(&pipeline, explain, &loaded, &mut stderr);
     }
 
-    let Some(backend) = load::backend(args, &mut stderr) else {
+    let Some(backend) = load::backend(args) else {
         return ExitCode::FAILURE;
     };
 
     if let Some(profile) = &profile {
-        load::warn_on_other_device(profile, &backend, args, &mut stderr);
+        load::warn_on_other_device(profile, &backend, args);
     }
 
     let Some(compiled) = load::compile(pipeline, &backend, &loaded.files, &mut stderr) else {
@@ -62,7 +62,7 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
     } else {
         compiled.render_ascii()
     };
-    output(explain, &drawn, &mut stderr)
+    output(explain, &drawn)
 }
 
 fn draw_structure(
@@ -80,7 +80,7 @@ fn draw_structure(
         pipeline.render_ascii()
     };
 
-    output(explain, &drawn, stderr)
+    output(explain, &drawn)
 }
 
 fn log_live_sources(live_sources: &[LiveSource<'_>]) {
@@ -95,7 +95,7 @@ fn log_live_sources(live_sources: &[LiveSource<'_>]) {
     }
 }
 
-fn output(explain: &ExplainArgs, drawn: &str, stderr: &mut dyn WriteColor) -> ExitCode {
+fn output(explain: &ExplainArgs, drawn: &str) -> ExitCode {
     if !explain.html {
         print!("{drawn}");
         return ExitCode::SUCCESS;
@@ -104,16 +104,14 @@ fn output(explain: &ExplainArgs, drawn: &str, stderr: &mut dyn WriteColor) -> Ex
     let default_path = Path::new(DEFAULT_HTML_PATH);
     let path = explain.path.as_deref().unwrap_or(default_path);
     let written = fs::write(path, drawn);
-    let display = path.display();
+    let shown = path.display();
     let Err(error) = written else {
-        let message = format!("wrote {display}");
-        report::progress_line(stderr, &message);
+        println!("wrote {shown}");
 
         return ExitCode::SUCCESS;
     };
 
-    let message = format!("cannot write {display}: {error}");
-    report::error_line(stderr, &message);
+    tracing::error!("cannot write {shown}: {error}");
 
     ExitCode::FAILURE
 }

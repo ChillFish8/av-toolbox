@@ -19,14 +19,14 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
 
     let mut profile = None;
     if let Some(path) = &execute.profile {
-        let Some(read) = load::apply_profile(path, &mut loaded, &mut stderr) else {
+        let Some(read) = load::apply_profile(path, &mut loaded) else {
             return ExitCode::FAILURE;
         };
 
         profile = Some(read);
     }
 
-    let Some(registry) = load::registry(&mut stderr) else {
+    let Some(registry) = load::registry() else {
         return ExitCode::FAILURE;
     };
 
@@ -34,12 +34,12 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let Some(backend) = load::backend(args, &mut stderr) else {
+    let Some(backend) = load::backend(args) else {
         return ExitCode::FAILURE;
     };
 
     if let Some(profile) = &profile {
-        load::warn_on_other_device(profile, &backend, args, &mut stderr);
+        load::warn_on_other_device(profile, &backend, args);
     }
 
     let Some(compiled) = load::compile(pipeline, &backend, &loaded.files, &mut stderr) else {

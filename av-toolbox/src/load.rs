@@ -10,15 +10,14 @@ use crate::cli::Args;
 use crate::profile::file::{self, ProfileFile};
 use crate::report::{self, PipelineFiles};
 
-/// Every built-in stage, or `None` after saying why they could not be registered.
-pub(crate) fn registry(stderr: &mut dyn WriteColor) -> Option<PipelineRegistry> {
+/// Every built-in stage, or `None` after logging why they could not be registered.
+pub(crate) fn registry() -> Option<PipelineRegistry> {
     let registered = av_toolbox_pipeline::registry();
 
     match registered {
         Ok(registry) => Some(registry),
         Err(error) => {
-            let message = format!("the built-in stages could not be registered: {error}");
-            report::error_line(stderr, &message);
+            tracing::error!("the built-in stages could not be registered: {error}");
 
             None
         },
@@ -79,7 +78,7 @@ pub(crate) fn build<'r>(
 }
 
 /// Installs the kernel cache and opens the first backend that starts on the chosen device.
-pub(crate) fn backend(args: &Args, stderr: &mut dyn WriteColor) -> Option<Backend> {
+pub(crate) fn backend(args: &Args) -> Option<Backend> {
     let installed = install_compilation_cache();
     match installed {
         Ok(Some(path)) => tracing::info!(?path, "caching compiled kernels"),
@@ -88,8 +87,7 @@ pub(crate) fn backend(args: &Args, stderr: &mut dyn WriteColor) -> Option<Backen
              {COMPILATION_CACHE_ENV} to turn it back on"
         ),
         Err(error) => {
-            let message = format!("unable to install the kernel cache: {error}");
-            report::error_line(stderr, &message);
+            tracing::error!("unable to install the kernel cache: {error}");
 
             return None;
         },
@@ -104,8 +102,7 @@ pub(crate) fn backend(args: &Args, stderr: &mut dyn WriteColor) -> Option<Backen
             Some(backend)
         },
         Err(error) => {
-            let message = error.to_string();
-            report::error_line(stderr, &message);
+            tracing::error!("{error}");
 
             None
         },
@@ -172,17 +169,12 @@ fn print_error(
 }
 
 /// Reads the profile at `path` and applies its worker counts, warning about keys that name no stage.
-pub(crate) fn apply_profile(
-    path: &Path,
-    loaded: &mut Loaded,
-    stderr: &mut dyn WriteColor,
-) -> Option<ProfileFile> {
+pub(crate) fn apply_profile(path: &Path, loaded: &mut Loaded) -> Option<ProfileFile> {
     let read = file::read(path);
     let profile = match read {
         Ok(profile) => profile,
         Err(error) => {
-            let message = error.to_string();
-            report::error_line(stderr, &message);
+            tracing::error!("{error}");
 
             return None;
         },
@@ -190,24 +182,18 @@ pub(crate) fn apply_profile(
 
     let unknown = file::apply(&profile.workers, &mut loaded.specs);
     for key in unknown {
-        let message = format!("the profile names {key}, which is not a stage of this pipeline");
-        report::warning_line(stderr, &message);
+        tracing::warn!("the profile names {key}, which is not a stage of this pipeline");
     }
 
     Some(profile)
 }
 
-pub(crate) fn warn_on_other_device(
-    profile: &ProfileFile,
-    backend: &Backend,
-    args: &Args,
-    stderr: &mut dyn WriteColor,
-) {
+pub(crate) fn warn_on_other_device(profile: &ProfileFile, backend: &Backend, args: &Args) {
     let accelerator = backend.accelerator();
     let opened = file::device_label(accelerator, args.device);
 
     if let Some(message) = device_mismatch(&profile.device, &opened) {
-        report::warning_line(stderr, &message);
+        tracing::warn!("{message}");
     }
 }
 

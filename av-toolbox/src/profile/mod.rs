@@ -45,7 +45,7 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let Some(registry) = load::registry(&mut stderr) else {
+    let Some(registry) = load::registry() else {
         return ExitCode::FAILURE;
     };
 
@@ -56,7 +56,7 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let Some(backend) = load::backend(args, &mut stderr) else {
+    let Some(backend) = load::backend(args) else {
         return ExitCode::FAILURE;
     };
 
@@ -93,8 +93,7 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
     let path = output_path(profile);
     let saved = file::write(&path, &profile_file);
     if let Err(error) = saved {
-        let message = error.to_string();
-        diagnostics::error_line(&mut stderr, &message);
+        tracing::error!("{error}");
 
         return ExitCode::FAILURE;
     }
@@ -145,11 +144,10 @@ fn reads_only_files(
         return true;
     };
 
-    let message = format!(
+    tracing::error!(
         "profile runs the pipeline three times, so {} cannot be read again. Give it a file source instead",
         first.stage_type
     );
-    diagnostics::error_line(stderr, &message);
 
     false
 }
@@ -168,17 +166,17 @@ fn profile_passes(
         sync: setup.backend.device_sync(),
         warmup: profile.warmup,
     };
-    let measuring = format!(
+    tracing::info!(
         "measuring every stage over {} + {} frames (pass 1 of 3)",
-        profile.warmup, profile.frames
+        profile.warmup,
+        profile.frames
     );
-    diagnostics::progress_line(stderr, &measuring);
 
     let measure_settings = pass_settings(profile, warmup_items, Some(profiling));
     let undeclared = specs::undeclared(written);
     let measure_end = run_pass(setup, &undeclared, measure_settings, Warnings::Show, stderr);
     let measured = finished(measure_end, setup.interrupt)?;
-    let counted = timed_frames(&measured.report, profile, warmup_items, sink_inputs, stderr)?;
+    let counted = timed_frames(&measured.report, profile, warmup_items, sink_inputs)?;
 
     let costs = summary::costs(&measured);
     let max_workers = max_workers(profile);
@@ -186,12 +184,12 @@ fn profile_passes(
     mark_declared(&mut tuned, written);
 
     let plain_settings = pass_settings(profile, warmup_items, None);
-    diagnostics::progress_line(stderr, "running the pipeline as written (pass 2 of 3)");
+    tracing::info!("running the pipeline as written (pass 2 of 3)");
     let baseline_end = run_pass(setup, written, plain_settings.clone(), Warnings::Hide, stderr);
     let baseline = finished(baseline_end, setup.interrupt)?;
     let baseline_fps = frame_rate(&baseline.report, warmup_items, sink_inputs);
 
-    diagnostics::progress_line(stderr, "running the suggested widths (pass 3 of 3)");
+    tracing::info!("running the suggested widths (pass 3 of 3)");
     let confirmed = confirm(setup, written, &mut tuned, &plain_settings, stderr)?;
     let tuned_fps = frame_rate(&confirmed.report, warmup_items, sink_inputs);
 
@@ -242,7 +240,7 @@ fn confirm(
             return Err(ExitCode::FAILURE);
         }
 
-        diagnostics::warning_line(stderr, "the confirm pass failed, trying again with fewer workers");
+        tracing::warn!("the confirm pass failed, trying again with fewer workers");
     }
 }
 
@@ -267,37 +265,33 @@ fn timed_frames(
     profile: &ProfileArgs,
     warmup_items: u64,
     sink_inputs: u64,
-    stderr: &mut dyn WriteColor,
 ) -> Result<u64, ExitCode> {
     let counted = specs::counted_frames(report.frames, warmup_items, sink_inputs);
     let ended_after = report.frames / sink_inputs;
 
     let Some(counted) = counted else {
-        let message = format!(
+        tracing::error!(
             "the pipeline ended after {ended_after} frames, before its {} warmup frames",
             profile.warmup
         );
-        diagnostics::error_line(stderr, &message);
 
         return Err(ExitCode::FAILURE);
     };
 
     if counted == 0 {
-        let message = format!(
+        tracing::error!(
             "the pipeline ended after {ended_after} frames, so none were left to time after its {} warmup frames",
             profile.warmup
         );
-        diagnostics::error_line(stderr, &message);
 
         return Err(ExitCode::FAILURE);
     }
 
     if counted < profile.frames {
-        let message = format!(
+        tracing::warn!(
             "only {counted} frames were timed, fewer than the {} asked for",
             profile.frames
         );
-        diagnostics::warning_line(stderr, &message);
     }
 
     Ok(counted)

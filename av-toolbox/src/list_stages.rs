@@ -2,12 +2,11 @@ use std::process::ExitCode;
 
 use av_toolbox_core::{InputSignature, PipelineRegistry, StageInfo, StageKind, StreamType, Tag};
 
-use crate::cli::{Args, ListStagesArgs};
-use crate::{load, report};
+use crate::cli::ListStagesArgs;
+use crate::load;
 
-pub(crate) fn run(args: &Args, list: &ListStagesArgs) -> ExitCode {
-    let mut stderr = report::stderr(args.color);
-    let Some(registry) = load::registry(&mut stderr) else {
+pub(crate) fn run(list: &ListStagesArgs) -> ExitCode {
+    let Some(registry) = load::registry() else {
         return ExitCode::FAILURE;
     };
 
@@ -25,7 +24,7 @@ pub(crate) fn run(args: &Args, list: &ListStagesArgs) -> ExitCode {
             ExitCode::SUCCESS
         },
         Err(message) => {
-            report::error_line(&mut stderr, &message);
+            tracing::error!("{message}");
             ExitCode::FAILURE
         },
     }
