@@ -50,7 +50,7 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
     };
 
     if let Some(profile) = &profile {
-        load::warn_on_other_device(profile, &backend, args);
+        load::warn_on_other_device(profile, &backend);
     }
 
     let Some(compiled) = load::compile(pipeline, &backend, &loaded.files, &mut stderr) else {

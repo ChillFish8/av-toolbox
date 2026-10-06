@@ -82,7 +82,8 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
     };
 
     let accelerator = backend.accelerator();
-    let device = file::device_label(accelerator, args.device);
+    let opened = backend.device();
+    let device = file::device_label(accelerator, opened);
     let profile_file = ProfileFile {
         pipeline: profile.pipeline.display().to_string(),
         device: device.clone(),

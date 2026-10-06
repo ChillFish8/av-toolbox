@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use av_toolbox_core::PipelineRegistry;
-use av_toolbox_gpu::{Backend, COMPILATION_CACHE_ENV, install_compilation_cache};
+use av_toolbox_gpu::{Accelerator, Backend, COMPILATION_CACHE_ENV, Device, install_compilation_cache};
 use av_toolbox_graph::{Diagnostic, StageSpec};
 use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline, PipelineError, Supplied};
 use codespan_reporting::term::termcolor::WriteColor;
@@ -188,13 +188,24 @@ pub(crate) fn apply_profile(path: &Path, loaded: &mut Loaded) -> Option<ProfileF
     Some(profile)
 }
 
-pub(crate) fn warn_on_other_device(profile: &ProfileFile, backend: &Backend, args: &Args) {
+pub(crate) fn warn_on_other_device(profile: &ProfileFile, backend: &Backend) {
     let accelerator = backend.accelerator();
-    let opened = file::device_label(accelerator, args.device);
+    if names_the_default(&profile.device, accelerator) {
+        return;
+    }
+
+    let device = backend.device();
+    let opened = file::device_label(accelerator, device);
 
     if let Some(message) = device_mismatch(&profile.device, &opened) {
         tracing::warn!("{message}");
     }
+}
+
+/// Whether a profile names the default device, which matches whatever device the backend picks.
+fn names_the_default(profile_device: &str, accelerator: Accelerator) -> bool {
+    let unresolved = file::device_label(accelerator, Device::Default);
+    profile_device == unresolved
 }
 
 /// The warning for a profile measured on a different device than the one opened, if they differ.
@@ -215,6 +226,12 @@ mod tests {
     #[test]
     fn a_profile_from_the_opened_device_raises_no_warning() {
         assert_eq!(device_mismatch("vulkan discrete:1", "vulkan discrete:1"), None);
+    }
+
+    #[test]
+    fn a_profile_naming_the_default_device_matches_any() {
+        assert!(names_the_default("vulkan default", Accelerator::Vulkan));
+        assert!(!names_the_default("vulkan discrete:0", Accelerator::Vulkan));
     }
 
     #[test]

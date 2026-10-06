@@ -29,6 +29,8 @@ mod frame;
 mod memory;
 mod negotiate;
 mod probe;
+#[cfg(any(feature = "vulkan", feature = "metal"))]
+mod resolve;
 mod side;
 mod sniff;
 mod stack;

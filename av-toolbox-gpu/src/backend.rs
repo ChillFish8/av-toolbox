@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::Runtime;
@@ -6,6 +6,8 @@ use cubecl::stream_id::StreamId;
 
 use crate::memory::{BufferPool, ClientAllocator};
 use crate::probe::{open_client, supported_device};
+#[cfg(any(feature = "vulkan", feature = "metal"))]
+use crate::resolve;
 use crate::{Accelerator, Capabilities, Device, FrameContext, RuntimeError, StreamPolicy};
 
 /// The one stream every client of a [StreamPolicy::SharedStream] backend queues on.
@@ -110,6 +112,11 @@ pub type DeviceSync = Arc<dyn Fn() -> Result<(), RuntimeError> + Send + Sync>;
 /// An opened accelerator, ready to build stages against.
 pub struct Backend {
     accelerator: Accelerator,
+    device: Device,
+    /// The device `CUBECL_WGPU_DEFAULT_DEVICE` named when [Device::Default] was opened.
+    #[cfg(any(feature = "vulkan", feature = "metal"))]
+    wgpu_override: Option<Device>,
+    resolved: OnceLock<Device>,
     inner: Opened,
 }
 
@@ -128,6 +135,14 @@ impl Backend {
     /// Unlike probing, the client is kept, because everything built against this backend launches
     /// its kernels on it.
     pub fn open(accelerator: Accelerator, device: Device) -> Option<Self> {
+        // CubeCL reads the override as the client opens, and only for the default device.
+        #[cfg(any(feature = "vulkan", feature = "metal"))]
+        let wgpu_override = if device == Device::Default {
+            resolve::wgpu_override()
+        } else {
+            None
+        };
+
         let inner = match accelerator {
             #[cfg(feature = "cuda")]
             Accelerator::Cuda => {
@@ -168,7 +183,14 @@ impl Backend {
             _ => unreachable!(),
         };
 
-        Some(Self { accelerator, inner })
+        Some(Self {
+            accelerator,
+            device,
+            #[cfg(any(feature = "vulkan", feature = "metal"))]
+            wgpu_override,
+            resolved: OnceLock::new(),
+            inner,
+        })
     }
 
     /// Opens the first accelerator this build enables that starts on `device`.
@@ -183,6 +205,29 @@ impl Backend {
 
     pub const fn accelerator(&self) -> Accelerator {
         self.accelerator
+    }
+
+    /// The device this backend runs on, with [Device::Default] resolved to the one the backend picked.
+    ///
+    /// It stays [Device::Default] only when no selector can name the device picked. Resolving
+    /// asks the backend for its devices on the first call, and later calls reuse the answer.
+    pub fn device(&self) -> Device {
+        if self.device != Device::Default {
+            return self.device;
+        }
+
+        *self.resolved.get_or_init(|| self.resolve_default())
+    }
+
+    fn resolve_default(&self) -> Device {
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            Opened::Cuda(_) => Device::Discrete { index: 0 },
+            #[cfg(feature = "rocm")]
+            Opened::Rocm(_) => Device::Discrete { index: 0 },
+            #[cfg(any(feature = "vulkan", feature = "metal"))]
+            Opened::Wgpu(context) => resolve::wgpu_default(context.client(), self.wgpu_override),
+        }
     }
 
     /// What this backend's device can do.
@@ -307,6 +352,26 @@ mod tests {
     #[test]
     fn a_device_the_backend_does_not_have_does_not_open() {
         assert!(Backend::open(TEST_ACCELERATOR, Device::Discrete { index: 99 }).is_none());
+    }
+
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    #[test]
+    fn the_default_device_resolves_to_one_the_backend_lists() {
+        // Opening the default device would leave the GPU the tests are pinned to.
+        if test_device() != Device::Default {
+            return;
+        }
+
+        let backend = Backend::open(TEST_ACCELERATOR, Device::Default).expect("should open");
+        let reported = crate::enumerate_devices(&[TEST_ACCELERATOR]);
+
+        let resolved = backend.device();
+
+        assert_ne!(resolved, Device::Default);
+        assert!(
+            reported[0].devices.contains(&resolved),
+            "{resolved} is not listed"
+        );
     }
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
