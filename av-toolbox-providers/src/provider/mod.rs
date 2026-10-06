@@ -35,7 +35,7 @@ use av_toolbox_gpu::{
     StreamFormat,
 };
 
-pub use self::demand::{SceneBreaks, SceneRequest, SceneSpeed, Scenes};
+pub use self::demand::{SceneBreaks, SceneChunk, SceneRequest, SceneSpeed, Scenes};
 use self::detection::Detection;
 use self::hold::LayerHold;
 use self::layers::{LONGEST_SCENE, LayerBreaks, limit_of};

@@ -11,7 +11,7 @@ mod tests;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
-pub use self::provider::{SceneBreaks, SceneRequest, SceneSpeed, Scenes};
+pub use self::provider::{SceneBreaks, SceneChunk, SceneRequest, SceneSpeed, Scenes};
 
 /// Registers every provider this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {

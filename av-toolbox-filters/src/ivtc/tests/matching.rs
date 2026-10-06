@@ -1,4 +1,4 @@
-use av_toolbox_core::{AnyDemand, FilterDefinition, Parallelism, StageDefinition, StageError};
+use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition, StageError};
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -331,6 +331,6 @@ fn it_holds_two_frames_and_runs_by_chunk() {
     let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
 
     assert_eq!(Match::held_frames(&parsed, &formats), 2);
-    let scenes = AnyDemand::new::<Scenes>(SceneRequest::natural());
-    assert_eq!(Match::parallelism(&parsed), Parallelism::Chunk(scenes));
+    let scenes = Parallelism::chunk::<Scenes>(SceneRequest::natural());
+    assert_eq!(Match::parallelism(&parsed), scenes);
 }

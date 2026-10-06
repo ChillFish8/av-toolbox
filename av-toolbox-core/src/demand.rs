@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::sync::{Mutex, OnceLock};
 
 use schemars::JsonSchema;
@@ -12,6 +13,9 @@ use thiserror::Error;
 pub trait DemandDefinition: 'static {
     /// What a stage asks for, such as which scene breaks.
     type Request: Clone + PartialEq + Debug + Serialize + DeserializeOwned + JsonSchema + Send + Sync;
+
+    /// What a provider writes onto each frame for one request.
+    type Output: Clone + Eq + Hash + Debug + Send + Sync + 'static;
 
     /// The name the kind is registered under, such as `scenes`.
     fn kind() -> &'static str;

@@ -15,7 +15,7 @@ use av_toolbox_core::{
     Sink,
     Source,
 };
-use av_toolbox_gpu::{Backend, HostSide, LayerId, ResolvedFormats};
+use av_toolbox_gpu::{Backend, HostSide, ResolvedFormats};
 
 use crate::demands::note_demanders;
 use crate::diagnostic::{args_path, stage_path};
@@ -252,20 +252,22 @@ fn arguments_for(graph: &CompiledGraph, node: &Node) -> Vec<InputArgument> {
                 None => InputArgument::positional(handle, stream),
             };
 
-            match demanded_layer(node, edge) {
-                Some(layer) => argument.in_layer(layer),
-                None => argument,
-            }
+            demanded_on(argument, node, edge)
         })
         .collect()
 }
 
-/// The layer of the first demand `node` made on the input `edge` fills.
-fn demanded_layer(node: &Node, edge: &Edge) -> Option<LayerId> {
-    let input = edge.param().or(edge.name())?;
-    let demand = node.demands().iter().find(|demand| demand.input == input)?;
+/// `argument` carrying the kind and layer of every demand `node` made on the input `edge` fills.
+fn demanded_on(mut argument: InputArgument, node: &Node, edge: &Edge) -> InputArgument {
+    let Some(input) = edge.param().or(edge.name()) else {
+        return argument;
+    };
 
-    Some(demand.layer)
+    for demand in node.demands().iter().filter(|demand| demand.input == input) {
+        argument = argument.with_demand(demand.kind, demand.layer);
+    }
+
+    argument
 }
 
 fn build_stage(

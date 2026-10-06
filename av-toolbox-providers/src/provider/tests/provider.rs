@@ -106,6 +106,7 @@ fn a_demand_of_another_kind_is_refused() {
 
     impl DemandDefinition for Other {
         type Request = ();
+        type Output = ();
 
         fn kind() -> &'static str {
             "other"

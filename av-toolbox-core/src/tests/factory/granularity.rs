@@ -17,7 +17,6 @@ use super::{ExampleFilter, reference_input};
 use crate::factory::Definition;
 use crate::testing::FixtureCuts;
 use crate::{
-    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -35,10 +34,6 @@ use crate::{
     StageKind,
     StreamType,
 };
-
-fn fixture_cuts() -> AnyDemand {
-    AnyDemand::new::<FixtureCuts>(())
-}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct TemporalArgs {
@@ -62,7 +57,7 @@ impl StageDefinition for TemporalExample {
         if args.radius == 0 {
             Parallelism::Frame
         } else {
-            Parallelism::Chunk(fixture_cuts())
+            Parallelism::chunk::<FixtureCuts>(())
         }
     }
 
@@ -128,10 +123,10 @@ fn a_prepared_stage_reports_the_granularity_its_arguments_asked_for() {
     .expect("should prepare");
 
     assert_eq!(wide.parallelism(), Parallelism::Frame);
-    assert_eq!(narrow.parallelism(), Parallelism::Chunk(fixture_cuts()));
+    assert_eq!(narrow.parallelism(), Parallelism::chunk::<FixtureCuts>(()));
 
     let erased = PreparedStage::Filter(narrow);
-    assert_eq!(erased.parallelism(), Parallelism::Chunk(fixture_cuts()));
+    assert_eq!(erased.parallelism(), Parallelism::chunk::<FixtureCuts>(()));
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -16,6 +16,7 @@ use av_toolbox_gpu::{
 };
 
 use crate::{
+    ChunkKey,
     DemandDefinition,
     InputParam,
     InputSignature,
@@ -62,11 +63,22 @@ pub fn fixture_chunk_of(meta: &FrameMeta) -> u64 {
     0
 }
 
+/// The value fixture providers write for their demands.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct FixtureChunk(pub u64);
+
+impl ChunkKey for FixtureChunk {
+    fn chunk(&self) -> u64 {
+        self.0
+    }
+}
+
 /// A demand kind for test fixtures that need a chunk request but no particular breaks.
 pub struct FixtureCuts;
 
 impl DemandDefinition for FixtureCuts {
     type Request = ();
+    type Output = FixtureChunk;
 
     fn kind() -> &'static str {
         "fixture-cuts"
@@ -78,6 +90,7 @@ pub struct HostFixtureCuts;
 
 impl DemandDefinition for HostFixtureCuts {
     type Request = ();
+    type Output = FixtureChunk;
 
     fn kind() -> &'static str {
         "host-fixture-cuts"
@@ -181,6 +194,7 @@ impl<S: Side> Provider<S> for StampingInstance {
         let chunk = fixture_chunk_of(meta);
         for layer in &self.layers {
             meta.chunks.set(*layer, chunk);
+            meta.provided.set(*layer, FixtureChunk(chunk));
         }
 
         let stamped = S::from_any(any).map_err(|_| other_side())?;

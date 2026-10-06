@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::testing::FixtureChunk;
 use crate::{AnyDemand, DemandDefinition, DemandKind, Granularity, Parallelism, RequestError};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -12,6 +13,7 @@ pub(crate) struct Cuts;
 
 impl DemandDefinition for Cuts {
     type Request = Breaks;
+    type Output = FixtureChunk;
 
     fn kind() -> &'static str {
         "cuts"
@@ -22,6 +24,7 @@ struct Other;
 
 impl DemandDefinition for Other {
     type Request = Breaks;
+    type Output = FixtureChunk;
 
     fn kind() -> &'static str {
         "other"
@@ -94,7 +97,7 @@ fn a_demand_survives_json() {
 #[test]
 fn a_chunk_request_carries_its_demand() {
     let demand = AnyDemand::new::<Cuts>(Breaks { every: 4 });
-    let chunked = Parallelism::Chunk(demand.clone());
+    let chunked = Parallelism::chunk::<Cuts>(Breaks { every: 4 });
 
     assert_eq!(chunked.granularity(), Granularity::Chunk);
     assert_eq!(chunked.demand(), Some(&demand));

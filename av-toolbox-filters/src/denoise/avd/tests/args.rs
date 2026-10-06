@@ -6,7 +6,7 @@ use av_denoise_core::{
     NlmeansAlgorithm,
     PrefilterMode,
 };
-use av_toolbox_core::{AnyDemand, Parallelism, StageDefinition};
+use av_toolbox_core::{Parallelism, StageDefinition};
 use av_toolbox_providers::{SceneRequest, Scenes};
 use serde_json::json;
 
@@ -212,8 +212,7 @@ fn an_unknown_preset_is_refused() {
 
 #[test]
 fn every_engine_chunks_on_natural_scenes() {
-    let natural = AnyDemand::new::<Scenes>(SceneRequest::natural());
-    let chunked = Parallelism::Chunk(natural);
+    let chunked = Parallelism::chunk::<Scenes>(SceneRequest::natural());
 
     let nlmeans: NlmeansArgs = parsed(json!({}));
     let nlmeans_hq: NlmeansHqArgs = parsed(json!({}));

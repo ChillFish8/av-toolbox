@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use av_toolbox_gpu::{HostFrame, LayerId};
 
+use super::demand::SceneChunk;
 use super::layers::LayerBreaks;
 
 /// One layer with the chunks it has placed that no frame has been stamped with yet.
@@ -73,7 +74,9 @@ impl LayerHold {
                     .placed
                     .pop_front()
                     .expect("every layer placed the frame being released");
-                frame.meta_mut().chunks.set(held.layer, chunk);
+                let meta = frame.meta_mut();
+                meta.chunks.set(held.layer, chunk);
+                meta.provided.set(held.layer, SceneChunk(chunk));
             }
 
             released.push(frame);

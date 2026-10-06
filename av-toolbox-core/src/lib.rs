@@ -31,6 +31,7 @@ mod meta;
 mod open;
 mod parallelism;
 mod provider;
+mod provision;
 mod registry;
 mod residency;
 mod sink;
@@ -84,6 +85,7 @@ pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, run_meta_sin
 pub use self::open::OpenSlot;
 pub use self::parallelism::{Granularity, Parallelism};
 pub use self::provider::{LayerDemand, Placement, Provider, ProviderDefinition};
+pub use self::provision::{ChunkKey, Provision, ProvisionError};
 pub use self::registry::PipelineRegistry;
 pub use self::residency::{
     BuiltFilter,

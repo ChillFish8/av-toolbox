@@ -284,6 +284,7 @@ struct ExampleScenes;
 
 impl DemandDefinition for ExampleScenes {
     type Request = ();
+    type Output = ();
 
     fn kind() -> &'static str {
         "scenes"

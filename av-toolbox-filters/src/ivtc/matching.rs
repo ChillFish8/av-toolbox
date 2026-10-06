@@ -1,5 +1,4 @@
 use av_toolbox_core::{
-    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -374,9 +373,7 @@ impl StageDefinition for Match {
 
     // It restarts only at real cuts, and whole scenes still spread across workers.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        let demand = AnyDemand::new::<Scenes>(SceneRequest::natural());
-
-        Parallelism::Chunk(demand)
+        Parallelism::chunk::<Scenes>(SceneRequest::natural())
     }
 
     // The current frame, whose output waits on the next, and the previous frame it reads.

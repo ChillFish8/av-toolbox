@@ -17,6 +17,7 @@ use av_toolbox_core::{
     Inputs,
     Parallelism,
     PipelineRegistry,
+    Provision,
     Sink,
     SinkDefinition,
     StageDefinition,
@@ -34,7 +35,6 @@ use av_toolbox_gpu::{
     FrameMeta,
     HostFrame,
     HostSide,
-    LayerId,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -78,19 +78,17 @@ static WHOLE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 /// Every `(index, chunk)` the sink demanding limited scenes saw.
 static PIECES: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 
-/// Records `meta`'s index and its chunk in `layer`.
-fn record(seen: &Mutex<Vec<(u64, u64)>>, meta: &FrameMeta, layer: LayerId) {
-    let chunk = meta.chunks.get(layer);
-    seen.lock().expect("not poisoned").push((meta.index, chunk));
+/// Records `meta`'s index and its scene.
+fn record(seen: &Mutex<Vec<(u64, u64)>>, meta: &FrameMeta, scenes: Provision<Scenes>) {
+    let scene = scenes.get(meta).expect("the provider stamped the frame");
+    seen.lock().expect("not poisoned").push((meta.index, scene.0));
 }
 
-/// The layer the graph gave a stage's demand on its `input`.
-fn input_layer(inputs: &BoundInputs) -> Result<LayerId, StageError> {
-    inputs.layer_for("input").ok_or_else(no_layer)
-}
-
-fn no_layer() -> StageError {
-    StageError::msg("the stage demanded scenes on its input but was given no layer")
+/// What the graph provided for a stage's scenes demand on its `input`.
+fn input_scenes(inputs: &BoundInputs) -> Result<Provision<Scenes>, StageError> {
+    inputs
+        .provision::<Scenes>("input")
+        .map_err(|error| StageError::msg(error.to_string()))
 }
 
 /// Scenes split into pieces of at most 12 frames.
@@ -107,7 +105,7 @@ fn pieces_request() -> SceneRequest {
     }
 }
 
-struct ChunkedFilter(LayerId);
+struct ChunkedFilter(Provision<Scenes>);
 
 impl StageInstance for ChunkedFilter {}
 
@@ -148,9 +146,7 @@ impl StageDefinition for Chunked {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        let demand = AnyDemand::new::<Scenes>(SceneRequest::natural());
-
-        Parallelism::Chunk(demand)
+        Parallelism::chunk::<Scenes>(SceneRequest::natural())
     }
 }
 
@@ -188,16 +184,16 @@ impl FilterDefinition for Chunked {
         inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter<HostSide>>, StageError> {
-        let layer = input_layer(&inputs)?;
+        let scenes = input_scenes(&inputs)?;
 
-        Ok(Box::new(ChunkedFilter(layer)))
+        Ok(Box::new(ChunkedFilter(scenes)))
     }
 }
 
 /// A host sink recording every frame's index and its chunk in one layer into a shared static.
 struct RecordingInstance {
     seen: &'static Mutex<Vec<(u64, u64)>>,
-    layer: LayerId,
+    scenes: Provision<Scenes>,
 }
 
 impl StageInstance for RecordingInstance {}
@@ -212,7 +208,7 @@ impl Sink<HostSide> for RecordingInstance {
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
 
-        record(self.seen, frame.meta(), self.layer);
+        record(self.seen, frame.meta(), self.scenes);
 
         Ok(())
     }
@@ -267,8 +263,8 @@ impl SinkDefinition for Whole {
         inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Sink<HostSide>>, StageError> {
-        let layer = input_layer(&inputs)?;
-        let instance = RecordingInstance { seen: &WHOLE, layer };
+        let scenes = input_scenes(&inputs)?;
+        let instance = RecordingInstance { seen: &WHOLE, scenes };
 
         Ok(Box::new(instance))
     }
@@ -322,8 +318,11 @@ impl SinkDefinition for Pieces {
         inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Sink<HostSide>>, StageError> {
-        let layer = input_layer(&inputs)?;
-        let instance = RecordingInstance { seen: &PIECES, layer };
+        let scenes = input_scenes(&inputs)?;
+        let instance = RecordingInstance {
+            seen: &PIECES,
+            scenes,
+        };
 
         Ok(Box::new(instance))
     }

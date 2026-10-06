@@ -8,7 +8,6 @@ mod testing;
 use std::time::Duration;
 
 use av_toolbox_core::{
-    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -235,9 +234,7 @@ impl StageDefinition for Qtgmc {
 
     // It restarts only at real cuts, and whole scenes still spread across workers.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        let demand = AnyDemand::new::<Scenes>(SceneRequest::natural());
-
-        Parallelism::Chunk(demand)
+        Parallelism::chunk::<Scenes>(SceneRequest::natural())
     }
 
     // The entries the output trails the input by, and the frames they and the current frame come from.

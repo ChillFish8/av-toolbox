@@ -12,7 +12,7 @@ mod shared;
 mod specs;
 
 use av_toolbox_core::testing::{FixtureCuts, HostStamping, Stamping};
-use av_toolbox_core::{AnyDemand, Parallelism, PipelineRegistry};
+use av_toolbox_core::{Parallelism, PipelineRegistry};
 
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
@@ -36,9 +36,7 @@ pub(crate) use self::specs::{named, positional, spec};
 
 /// One chunk at a time, chunked by the fixture demand kind.
 pub(crate) fn chunked() -> Parallelism {
-    let demand = AnyDemand::new::<FixtureCuts>(());
-
-    Parallelism::Chunk(demand)
+    Parallelism::chunk::<FixtureCuts>(())
 }
 
 pub(crate) fn registry() -> PipelineRegistry {

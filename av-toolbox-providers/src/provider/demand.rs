@@ -1,5 +1,5 @@
 use av_scenechange::SceneDetectionSpeed;
-use av_toolbox_core::{DemandDefinition, StageError};
+use av_toolbox_core::{ChunkKey, DemandDefinition, StageError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +8,7 @@ pub struct Scenes;
 
 impl DemandDefinition for Scenes {
     type Request = SceneRequest;
+    type Output = SceneChunk;
 
     fn kind() -> &'static str {
         "scenes"
@@ -38,6 +39,16 @@ impl DemandDefinition for Scenes {
         }
 
         parts.join(" ")
+    }
+}
+
+/// The scene a frame belongs to, counted from zero.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct SceneChunk(pub u64);
+
+impl ChunkKey for SceneChunk {
+    fn chunk(&self) -> u64 {
+        self.0
     }
 }
 

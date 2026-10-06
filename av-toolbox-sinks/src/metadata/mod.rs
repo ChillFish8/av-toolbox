@@ -13,6 +13,7 @@ use av_toolbox_core::{
     MetaInputs,
     MetaSink,
     MetaSinkDefinition,
+    Provision,
     StageDefinition,
     StageError,
     StageInstance,
@@ -22,7 +23,6 @@ use av_toolbox_gpu::{
     Capabilities,
     FormatSet,
     FrameContext,
-    LayerId,
     Offered,
     ResolvedFormats,
     Runtime,
@@ -112,8 +112,8 @@ impl MetaSinkDefinition for Ndjson {
         let path = args.path.as_deref();
         let file = open_target(STAGE, args.fd, path)?;
         let filter = KeyFilter::new(args.include, args.exclude);
-        let layer = inputs.layer_for("input");
-        let sink = NdjsonSink::new(file, filter, layer);
+        let scenes = inputs.provision::<Scenes>("input").ok();
+        let sink = NdjsonSink::new(file, filter, scenes);
 
         Ok(Box::new(sink))
     }
@@ -134,15 +134,15 @@ fn accepts(offered: StreamFormat) -> Result<FormatSet, StageError> {
 pub(crate) struct NdjsonSink<W: Write> {
     output: BufWriter<W>,
     filter: KeyFilter,
-    layer: Option<LayerId>,
+    scenes: Option<Provision<Scenes>>,
 }
 
 impl<W: Write> NdjsonSink<W> {
-    pub(crate) fn new(output: W, filter: KeyFilter, layer: Option<LayerId>) -> Self {
+    pub(crate) fn new(output: W, filter: KeyFilter, scenes: Option<Provision<Scenes>>) -> Self {
         Self {
             output: BufWriter::new(output),
             filter,
-            layer,
+            scenes,
         }
     }
 }
@@ -156,7 +156,10 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
         };
 
         let meta = item.meta();
-        let chunk = self.layer.map(|layer| meta.chunks.get(layer));
+        let chunk = self
+            .scenes
+            .and_then(|scenes| scenes.get(meta))
+            .map(|scene| scene.0);
         let written = write_line(&mut self.output, meta, chunk, &self.filter);
 
         written.map_err(|error| {
@@ -200,7 +203,15 @@ mod tests {
     use std::path::Path;
     use std::{fs, io};
 
-    use av_toolbox_core::{end_meta_sink, run_meta_sink};
+    use av_toolbox_core::{
+        DemandKind,
+        InputArgument,
+        StageHandle,
+        StreamType,
+        bind_inputs,
+        end_meta_sink,
+        run_meta_sink,
+    };
     use av_toolbox_gpu::{
         AnyItem,
         HostStreamItem,
@@ -211,7 +222,7 @@ mod tests {
         default_accelerators,
         testing_context,
     };
-    use av_toolbox_providers::{SceneRequest, Scenes};
+    use av_toolbox_providers::{SceneChunk, SceneRequest, Scenes};
 
     use super::*;
     use crate::shared::testing::{SharedBuffer, filled_frame, yuv420};
@@ -339,9 +350,18 @@ mod tests {
     fn chunked_item(index: u64, chunk: u64) -> AnyItem {
         let format = yuv420(4, 2, SampleFormat::U8, None);
         let mut frame = filled_frame(&format, index, 0);
-        frame.meta_mut().chunks.set(LayerId(0), chunk);
+        frame.meta_mut().provided.set(LayerId(0), SceneChunk(chunk));
 
         AnyItem::Host(HostStreamItem::from(frame))
+    }
+
+    fn scenes_provision() -> Provision<Scenes> {
+        let kind = DemandKind::of::<Scenes>();
+        let argument =
+            InputArgument::positional(StageHandle::new(0), StreamType::Frames).with_demand(kind, LayerId(0));
+        let bound = bind_inputs(Ndjson::inputs(), &[argument]).expect("binds");
+
+        bound.provision::<Scenes>("input").expect("demanded")
     }
 
     fn written_lines(buffer: &SharedBuffer) -> Vec<serde_json::Value> {
@@ -355,7 +375,7 @@ mod tests {
     #[test]
     fn the_ndjson_sink_writes_the_layer_it_asks_for() {
         let buffer = SharedBuffer::default();
-        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), Some(LayerId(0)));
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), Some(scenes_provision()));
         let items = vec![chunked_item(0, 0), chunked_item(1, 0), chunked_item(2, 1)];
 
         run(&mut sink, items).expect("runs");

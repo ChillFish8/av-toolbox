@@ -102,7 +102,7 @@ impl StageDefinition for DemandingExample {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(cuts())
+        Parallelism::chunk::<Cuts>(Breaks { every: 4 })
     }
 
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
@@ -146,7 +146,7 @@ impl StageDefinition for VariadicExample {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk(cuts())
+        Parallelism::chunk::<Cuts>(Breaks { every: 4 })
     }
 
     fn inputs() -> &'static InputSignature {

@@ -1,4 +1,4 @@
-use av_toolbox_core::testing::HostFixtureCuts;
+use av_toolbox_core::testing::{FixtureChunk, HostFixtureCuts};
 use av_toolbox_core::{
     AnyDemand,
     BoundInputs,
@@ -51,6 +51,7 @@ pub(crate) struct FixtureBreaks;
 
 impl DemandDefinition for FixtureBreaks {
     type Request = BreaksRequest;
+    type Output = FixtureChunk;
 
     fn kind() -> &'static str {
         "fixture-breaks"
@@ -66,6 +67,7 @@ pub(crate) struct Unprovided;
 
 impl DemandDefinition for Unprovided {
     type Request = ();
+    type Output = FixtureChunk;
 
     fn kind() -> &'static str {
         "unprovided"
@@ -170,6 +172,13 @@ pub(crate) struct DemandingArgs {
 }
 
 impl DemandingArgs {
+    fn request(&self) -> BreaksRequest {
+        BreaksRequest {
+            every: self.every,
+            after: self.after.clone(),
+        }
+    }
+
     fn demand(&self) -> AnyDemand {
         if self.unprovided {
             return AnyDemand::new::<Unprovided>(());
@@ -179,12 +188,19 @@ impl DemandingArgs {
             return AnyDemand::new::<HostFixtureCuts>(());
         }
 
-        let request = BreaksRequest {
-            every: self.every,
-            after: self.after.clone(),
-        };
+        AnyDemand::new::<FixtureBreaks>(self.request())
+    }
 
-        AnyDemand::new::<FixtureBreaks>(request)
+    fn chunked(&self) -> Parallelism {
+        if self.unprovided {
+            return Parallelism::chunk::<Unprovided>(());
+        }
+
+        if self.host_cuts {
+            return Parallelism::chunk::<HostFixtureCuts>(());
+        }
+
+        Parallelism::chunk::<FixtureBreaks>(self.request())
     }
 }
 
@@ -218,7 +234,7 @@ impl StageDefinition for Demanding {
 
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.chunks {
-            true => Parallelism::Chunk(args.demand()),
+            true => args.chunked(),
             false => Parallelism::Frame,
         }
     }

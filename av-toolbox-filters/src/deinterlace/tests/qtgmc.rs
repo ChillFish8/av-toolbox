@@ -1,4 +1,4 @@
-use av_toolbox_core::{AnyDemand, FilterDefinition, Parallelism, StageDefinition, StageError};
+use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition, StageError};
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -333,17 +333,17 @@ fn it_holds_frames_by_the_lag_and_runs_by_chunk() {
     let input = StreamFormat::Frames(interlaced());
     let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
 
-    let scenes = AnyDemand::new::<Scenes>(SceneRequest::natural());
+    let scenes = Parallelism::chunk::<Scenes>(SceneRequest::natural());
 
     let defaults = args(json!({}));
     assert_eq!(defaults.lag(), 5);
     assert_eq!(Qtgmc::held_frames(&defaults, &formats), 4);
-    assert_eq!(Qtgmc::parallelism(&defaults), Parallelism::Chunk(scenes.clone()));
+    assert_eq!(Qtgmc::parallelism(&defaults), scenes.clone());
 
     let widest = args(json!({ "tr0": 2, "tr1": 2, "tr2": 3 }));
     assert_eq!(widest.lag(), 8);
     assert_eq!(Qtgmc::held_frames(&widest, &formats), 6);
-    assert_eq!(Qtgmc::parallelism(&widest), Parallelism::Chunk(scenes));
+    assert_eq!(Qtgmc::parallelism(&widest), scenes);
 }
 
 #[test]

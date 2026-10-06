@@ -7,7 +7,6 @@ mod tests;
 use std::marker::PhantomData;
 
 use av_toolbox_core::{
-    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -75,9 +74,7 @@ impl<A: AvdArgs> StageDefinition for Denoise<A> {
 
     // Denoising across a cut blends two scenes, so it restarts at every cut.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        let demand = AnyDemand::new::<Scenes>(SceneRequest::natural());
-
-        Parallelism::Chunk(demand)
+        Parallelism::chunk::<Scenes>(SceneRequest::natural())
     }
 
     fn held_frames(args: &Self::Args, _formats: &ResolvedFormats) -> usize {
