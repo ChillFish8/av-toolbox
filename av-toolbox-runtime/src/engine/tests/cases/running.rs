@@ -12,7 +12,6 @@ use crate::engine::tests::specs::{
     host_source_spec,
     meta_sink_spec,
     pairing_spec,
-    restamp_spec,
     sink_spec,
     source_spec,
 };
@@ -36,18 +35,17 @@ fn a_single_region_graph_runs_end_to_end() {
 }
 
 #[test]
-fn an_all_host_chain_with_a_meta_transform_runs_end_to_end() {
+fn an_all_host_chain_runs_end_to_end() {
     clear_recorded();
 
     let specs = vec![
         host_source_spec("input", &[0, 0, 0], 0),
-        restamp_spec("restamp", "input"),
-        host_pass_spec("pass", "restamp", None),
+        host_pass_spec("pass", "input", None),
         host_sink_spec("out", "pass"),
     ];
     let engine = build_engine(&specs, Settings::default());
 
-    let report = run_with_watchdog(engine, "an_all_host_chain_with_a_meta_transform_runs_end_to_end");
+    let report = run_with_watchdog(engine, "an_all_host_chain_runs_end_to_end");
 
     assert_eq!(recorded(), vec![0, 1, 2]);
     assert_eq!(report.frames, 3);

@@ -139,7 +139,7 @@ fn a_node_producing_several_items_runs_its_consumer_once_per_item() {
     let sink = NodeId::new(1);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let nodes = vec![
-        (head, StageBox::Transform(Box::new(Multiply { copies: 3 }))),
+        (head, StageBox::Filter(Box::new(Multiply { copies: 3 }))),
         (sink, StageBox::Sink(Box::new(Recording { seen: seen.clone() }))),
     ];
     let feeds = vec![vec![Feed {
@@ -163,7 +163,7 @@ fn a_node_producing_nothing_does_not_run_its_consumer() {
     let sink = NodeId::new(1);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let nodes = vec![
-        (head, StageBox::Transform(Box::new(Multiply { copies: 0 }))),
+        (head, StageBox::Filter(Box::new(Multiply { copies: 0 }))),
         (sink, StageBox::Sink(Box::new(Recording { seen: seen.clone() }))),
     ];
     let feeds = vec![vec![Feed {

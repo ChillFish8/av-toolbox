@@ -10,17 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use av_toolbox_core::{
-    Filter,
-    Inputs,
-    MetaInputs,
-    MetaItem,
-    MetaTransform,
-    Sink,
-    StageError,
-    StageInstance,
-    Transform,
-};
+use av_toolbox_core::{Filter, Inputs, Sink, StageError, StageInstance};
 use av_toolbox_gpu::{
     AnyItem,
     ColourInfo,
@@ -57,13 +47,27 @@ fn format() -> FrameFormat {
     }
 }
 
+/// A frame at `index`, in `chunk` of layer 0.
 fn frame(context: &FrameContext, index: u64, chunk: u64) -> Frame {
-    let meta = FrameMeta::at(index).in_chunk(chunk);
+    let meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
     context.alloc_frame(&format(), meta)
 }
 
 fn item(context: &FrameContext, index: u64, chunk: u64) -> AnyItem {
     StreamItem::Frame(frame(context, index, chunk)).into()
+}
+
+/// Restarts each of `chunked` on layer 0, the layer [frame] puts its chunk in.
+trait OnLayerZero {
+    fn chunked_on_layer_zero(self, chunked: HashSet<NodeId>) -> Self;
+}
+
+impl OnLayerZero for RegionEdges {
+    fn chunked_on_layer_zero(self, chunked: HashSet<NodeId>) -> Self {
+        let layers = chunked.iter().map(|node| (*node, LayerId(0))).collect();
+
+        self.with_chunked(chunked).with_layers(layers)
+    }
 }
 
 /// A fresh context for a call, since `FrameContext` cannot be cloned or shared mutably
@@ -155,7 +159,7 @@ impl Filter for Lagging {
     }
 }
 
-/// Passes its input through, moving it to chunk 1 from frame `switch_at` onwards.
+/// Passes its input through, moving it to chunk 1 of layer 0 from frame `switch_at` onwards.
 struct Rechunking {
     switch_at: u64,
 }
@@ -166,7 +170,8 @@ impl Filter for Rechunking {
     fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let mut frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
         let index = frame.meta().index;
-        frame.meta_mut().chunk = u64::from(index >= self.switch_at);
+        let chunk = u64::from(index >= self.switch_at);
+        frame.meta_mut().chunks.set(LayerId(0), chunk);
 
         Ok(vec![frame])
     }
@@ -257,12 +262,8 @@ struct Buffering {
 
 impl StageInstance for Buffering {}
 
-impl Transform for Buffering {
-    fn process(
-        &mut self,
-        _context: &mut FrameContext,
-        mut inputs: Inputs,
-    ) -> Result<Vec<StreamItem>, StageError> {
+impl Filter for Buffering {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let frame = inputs
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
@@ -270,8 +271,8 @@ impl Transform for Buffering {
         Ok(Vec::new())
     }
 
-    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<StreamItem>, StageError> {
-        Ok(self.held.drain(..).map(StreamItem::Frame).collect())
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
+        Ok(std::mem::take(&mut self.held))
     }
 }
 
@@ -282,17 +283,11 @@ struct Multiply {
 
 impl StageInstance for Multiply {}
 
-impl Transform for Multiply {
-    fn process(
-        &mut self,
-        _context: &mut FrameContext,
-        mut inputs: Inputs,
-    ) -> Result<Vec<StreamItem>, StageError> {
-        let item = inputs
-            .take(0)
-            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+impl Filter for Multiply {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
 
-        Ok((0..self.copies).map(|_| item.clone()).collect())
+        Ok((0..self.copies).map(|_| frame.clone()).collect())
     }
 }
 
@@ -371,39 +366,31 @@ struct Tagging;
 
 impl StageInstance for Tagging {}
 
-impl MetaTransform for Tagging {
-    fn process(
-        &mut self,
-        _context: &mut FrameContext,
-        mut inputs: MetaInputs,
-    ) -> Result<Vec<MetaItem>, StageError> {
-        let mut item = inputs.take(0).expect("an item");
-        item.meta_mut().attach("seen", MetaValue::Bool(true));
+impl Filter for Tagging {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let mut frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+        frame.meta_mut().attach("seen", MetaValue::Bool(true));
 
-        Ok(vec![item])
+        Ok(vec![frame])
     }
 }
 
 /// Holds each item back one step, releasing the last on end of stream.
 struct Delaying {
-    held: Option<MetaItem>,
+    held: Option<Frame>,
 }
 
 impl StageInstance for Delaying {}
 
-impl MetaTransform for Delaying {
-    fn process(
-        &mut self,
-        _context: &mut FrameContext,
-        mut inputs: MetaInputs,
-    ) -> Result<Vec<MetaItem>, StageError> {
-        let arrived = inputs.take(0).expect("an item");
+impl Filter for Delaying {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let arrived = inputs.take_frame(0).ok_or_else(missing_frame)?;
         let released = self.held.replace(arrived);
 
         Ok(released.into_iter().collect())
     }
 
-    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<MetaItem>, StageError> {
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
         let released = self.held.take();
 
         Ok(released.into_iter().collect())
@@ -412,24 +399,20 @@ impl MetaTransform for Delaying {
 
 /// Holds every item, releasing it stamped with `flushed` once the stream ends.
 struct HoldingUntilEnd {
-    held: Option<MetaItem>,
+    held: Option<Frame>,
 }
 
 impl StageInstance for HoldingUntilEnd {}
 
-impl MetaTransform for HoldingUntilEnd {
-    fn process(
-        &mut self,
-        _context: &mut FrameContext,
-        mut inputs: MetaInputs,
-    ) -> Result<Vec<MetaItem>, StageError> {
-        let arrived = inputs.take(0).expect("an item");
+impl Filter for HoldingUntilEnd {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let arrived = inputs.take_frame(0).ok_or_else(missing_frame)?;
         self.held = Some(arrived);
 
         Ok(vec![])
     }
 
-    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<MetaItem>, StageError> {
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
         let mut released = self.held.take().expect("an item was held");
         released.meta_mut().attach("flushed", MetaValue::Bool(true));
 
@@ -567,7 +550,7 @@ fn lagging_diamond_chunked(
         },
     ];
     let feeds = vec![vec![head_feed], vec![head_feed], join_feeds];
-    let edges = RegionEdges::new(feeds, vec![join]).with_chunked(chunked);
+    let edges = RegionEdges::new(feeds, vec![join]).chunked_on_layer_zero(chunked);
     let runner = RegionRunner::new(nodes, edges);
 
     (runner, join)

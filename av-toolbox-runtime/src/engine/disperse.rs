@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
@@ -8,9 +7,8 @@ use av_toolbox_gpu::AnyItem;
 use super::channel::{AggregateSignal, ExitMessage, send_routed};
 use super::freedom::{FirstIdle, WorkerFreedom};
 use super::region::DisperseSide;
-use crate::chunks::chunk_in;
 use crate::disperse::Dropped;
-use crate::{Cancel, Disperse, ExchangeError, RunError, RunWarning, WorkItem};
+use crate::{Cancel, Disperse, ExchangeError, RunError, WorkItem};
 
 /// Drives a region's disperse from its one merged, slot-tagged upstream channel.
 ///
@@ -34,19 +32,10 @@ use crate::{Cancel, Disperse, ExchangeError, RunError, RunWarning, WorkItem};
 /// other wait is a receive that ends when its senders do. Once it gives up waiting, whatever is
 /// still queued or still held has missed its run, so it is counted into `dropped` rather than
 /// going quietly.
-///
-/// This is also where [RunWarning::DetectorOnWrongBranch] and [RunWarning::NothingChunked] are
-/// noticed. Every slot's item is visible here before it is offered, which is the one place both
-/// the authority's chunk id and every other slot's can be read from the same bundle. A region
-/// with only one slot never runs the branch that could mark another slot chunked, since there is
-/// no other slot to read. A frame routed region routes by no slot's chunk id, so nothing there
-/// is observed at all, and no warning follows from an authority that was never there to begin
-/// with.
 pub(super) fn drive_disperse(
     side: DisperseSide,
     cancel: &Cancel,
     dropped: &AtomicUsize,
-    warnings: &Mutex<Vec<RunWarning>>,
 ) -> Result<(), RunError> {
     let DisperseSide {
         mut disperse,
@@ -55,17 +44,11 @@ pub(super) fn drive_disperse(
         freedom,
         work_senders,
         assignment_sender,
-        authority,
-        layer,
-        width,
-        head,
     } = side;
 
     let mut queues: HashMap<usize, VecDeque<AnyItem>> =
         slots.iter().map(|&slot| (slot, VecDeque::new())).collect();
     let mut done: HashSet<usize> = HashSet::new();
-    let mut authority_chunked = false;
-    let mut other_chunked = false;
 
     'routing: loop {
         if cancel.is_stopped() {
@@ -79,11 +62,6 @@ pub(super) fn drive_disperse(
                     .expect("every bound slot keeps its own queue")
                     .pop_front()
                     .expect("this slot's queue was just confirmed non-empty");
-
-                if let Some(authority) = authority {
-                    let chunk = chunk_in(item.meta(), layer);
-                    note_chunk(slot, authority, chunk, &mut authority_chunked, &mut other_chunked);
-                }
 
                 let offered = disperse.offer(slot, item);
                 let routed = offered.map_err(refused_offer)?;
@@ -128,37 +106,7 @@ pub(super) fn drive_disperse(
     let queued: usize = queues.values().map(VecDeque::len).sum();
     dropped.fetch_add(queued + dropped_items(finished.dropped), Ordering::SeqCst);
 
-    if width > 1 && authority.is_some() && !authority_chunked && !cancel.is_stopped() {
-        let warning = if other_chunked {
-            RunWarning::DetectorOnWrongBranch { node: head }
-        } else {
-            RunWarning::NothingChunked { node: head }
-        };
-
-        warnings.lock().expect("not poisoned").push(warning);
-    }
-
     Ok(())
-}
-
-/// Folds one slot's chunk id into whether the authority, or some other slot, has been seen
-/// carrying a chunk above zero anywhere in the run so far.
-fn note_chunk(
-    slot: usize,
-    authority: usize,
-    chunk: u64,
-    authority_chunked: &mut bool,
-    other_chunked: &mut bool,
-) {
-    if chunk == 0 {
-        return;
-    }
-
-    if slot == authority {
-        *authority_chunked = true;
-    } else {
-        *other_chunked = true;
-    }
 }
 
 /// What a refused offer means for the run.

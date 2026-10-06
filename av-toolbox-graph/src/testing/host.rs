@@ -6,11 +6,8 @@ use av_toolbox_core::{
     InputSignature,
     Inputs,
     MetaInputs,
-    MetaItem,
     MetaSink,
     MetaSinkDefinition,
-    MetaTransform,
-    MetaTransformDefinition,
     Parallelism,
     Sink,
     SinkDefinition,
@@ -219,23 +216,28 @@ impl SinkDefinition for HostStdout {
     }
 }
 
-struct RestampStage;
+struct HostJoinStage;
 
-impl StageInstance for RestampStage {}
+impl StageInstance for HostJoinStage {}
 
-impl MetaTransform for RestampStage {
+impl Filter<HostSide> for HostJoinStage {
     fn process(
         &mut self,
         _context: &mut FrameContext,
-        mut inputs: MetaInputs,
-    ) -> Result<Vec<MetaItem>, StageError> {
-        Ok(inputs.take(0).into_iter().collect())
+        mut inputs: Inputs<HostSide>,
+    ) -> Result<Vec<HostFrame>, StageError> {
+        let frame = inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
     }
 }
 
-pub(super) struct Restamp;
+/// A host filter passing its input through, lined up by an optional guide.
+pub(super) struct HostJoin;
 
-impl StageDefinition for Restamp {
+impl StageDefinition for HostJoin {
     type Args = NoArgs;
 
     fn package() -> &'static str {
@@ -243,7 +245,7 @@ impl StageDefinition for Restamp {
     }
 
     fn identifier() -> &'static str {
-        "restamp"
+        "host-join"
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -261,7 +263,9 @@ impl StageDefinition for Restamp {
     }
 }
 
-impl MetaTransformDefinition for Restamp {
+impl FilterDefinition for HostJoin {
+    type Side = HostSide;
+
     fn accepts_input(
         _capabilities: &Capabilities,
         _args: &Self::Args,
@@ -290,8 +294,8 @@ impl MetaTransformDefinition for Restamp {
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
-    ) -> Result<Box<dyn MetaTransform>, StageError> {
-        Ok(Box::new(RestampStage))
+    ) -> Result<Box<dyn Filter<HostSide>>, StageError> {
+        Ok(Box::new(HostJoinStage))
     }
 }
 
@@ -323,8 +327,12 @@ impl StageDefinition for Log {
     }
 
     fn inputs() -> &'static InputSignature {
-        const SIGNATURE: &InputSignature =
-            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[
+            InputParam::required("input").accepting(StreamType::Frames),
+            InputParam::optional("guide")
+                .accepting(StreamType::Frames)
+                .chunk_authority(),
+        ]);
         SIGNATURE
     }
 }

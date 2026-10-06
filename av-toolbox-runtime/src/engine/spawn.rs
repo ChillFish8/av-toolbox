@@ -8,7 +8,7 @@ use super::aggregate::{run_aggregate, run_relay};
 use super::disperse::drive_disperse;
 use super::region::ExchangedRegion;
 use super::worker::run_worker;
-use crate::{Cancel, RunError, RunWarning};
+use crate::{Cancel, RunError};
 
 /// The first failure a run's threads reported, and the signal that stops the others.
 ///
@@ -79,7 +79,6 @@ pub(super) fn spawn_exchanged(
     outcome: &Arc<Outcome>,
     cancel: &Arc<Cancel>,
     dropped: &Arc<AtomicUsize>,
-    warnings: &Arc<Mutex<Vec<RunWarning>>>,
 ) {
     let ExchangedRegion {
         disperse,
@@ -92,9 +91,8 @@ pub(super) fn spawn_exchanged(
 
     let disperse_cancel = cancel.clone();
     let disperse_dropped = dropped.clone();
-    let disperse_warnings = warnings.clone();
     spawn(handles, outcome, move || {
-        drive_disperse(disperse, &disperse_cancel, &disperse_dropped, &disperse_warnings)
+        drive_disperse(disperse, &disperse_cancel, &disperse_dropped)
     });
 
     let merge_cancel = cancel.clone();

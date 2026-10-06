@@ -7,6 +7,7 @@ use av_toolbox_gpu::{
     FrameFormat,
     FrameLayout,
     FrameMeta,
+    LayerId,
     SampleFormat,
     StreamItem,
     Subsampling,
@@ -35,7 +36,7 @@ fn format() -> FrameFormat {
 /// back out. `timestamp` is never touched, so it is what a test can use to tell frames apart.
 fn item(index: u64, chunk: u64, position: u64) -> AnyItem {
     let context = testing_context();
-    let mut meta = FrameMeta::at(index).in_chunk(chunk);
+    let mut meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
     meta.timestamp = Some(Duration::from_secs(position));
     StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
 }
@@ -53,7 +54,10 @@ fn indices(output: &[AnyItem]) -> Vec<u64> {
 }
 
 fn chunks(output: &[AnyItem]) -> Vec<u64> {
-    output.iter().map(|item| item.meta().chunk).collect()
+    output
+        .iter()
+        .map(|item| item.meta().chunks.get(LayerId(0)))
+        .collect()
 }
 
 /// The build-order timestamp of every item, in the order they came out.
@@ -129,7 +133,7 @@ where
     F: Fn(AnyItem) -> Vec<AnyItem>,
 {
     let workers = dispatch.workers();
-    let mut disperse = Disperse::new(&[true], 0, dispatch);
+    let mut disperse = Disperse::new(&[true], 0, dispatch).with_layer(Some(LayerId(0)));
     let mut work_queues = new_queues(workers);
 
     for stream_item in input {
@@ -265,7 +269,7 @@ fn the_same_stream_gives_the_same_output_at_any_width() {
 fn a_worker_changing_how_many_frames_it_emits_still_comes_back_dense() {
     let input = stream(&[(0, 0), (1, 1), (2, 2)]);
 
-    let output = run(input, 3, |item| match item.meta().chunk {
+    let output = run(input, 3, |item| match item.meta().chunks.get(LayerId(0)) {
         0 => vec![copy(&item), copy(&item), item],
         1 => vec![],
         _ => vec![item],
@@ -278,7 +282,7 @@ fn a_worker_changing_how_many_frames_it_emits_still_comes_back_dense() {
 fn a_chunk_that_produces_nothing_does_not_stall_the_stream() {
     let input = stream(&[(0, 0), (1, 1), (2, 2)]);
 
-    let output = run(input, 3, |item| match item.meta().chunk {
+    let output = run(input, 3, |item| match item.meta().chunks.get(LayerId(0)) {
         1 => vec![],
         _ => vec![item],
     });

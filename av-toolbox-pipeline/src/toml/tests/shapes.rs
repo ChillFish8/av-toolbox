@@ -58,8 +58,6 @@ type = "a/b"
 type = "a/b"
 [mask.c]
 type = "a/b"
-[transform.d]
-type = "a/b"
 [sink.e]
 type = "a/b"
 "#;
@@ -73,7 +71,6 @@ type = "a/b"
             StageKind::Source,
             StageKind::Filter,
             StageKind::Mask,
-            StageKind::Transform,
             StageKind::Sink
         ]
     );

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use av_toolbox_core::testing::fixture_chunk_of;
 use av_toolbox_core::{
     BoundInputs,
     Filter,
@@ -77,10 +78,10 @@ impl StageInstance for DelayInstance {}
 impl Filter for DelayInstance {
     fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
-        let chunk = frame.meta().chunk;
+        let chunk = fixture_chunk_of(frame.meta());
 
         if let Some(oldest) = self.held.front() {
-            let held_chunk = oldest.meta().chunk;
+            let held_chunk = fixture_chunk_of(oldest.meta());
 
             if held_chunk != chunk {
                 return Err(window_spans_chunks(held_chunk, chunk));

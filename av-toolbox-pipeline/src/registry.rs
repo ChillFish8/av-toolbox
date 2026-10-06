@@ -7,7 +7,7 @@ pub fn registry() -> Result<PipelineRegistry, RegistryError> {
     let mut registry = PipelineRegistry::new();
 
     av_toolbox_sources::register(&mut registry)?;
-    av_toolbox_transforms::register(&mut registry)?;
+    av_toolbox_providers::register(&mut registry)?;
     av_toolbox_filters::register(&mut registry)?;
     av_toolbox_masks::register(&mut registry)?;
     av_toolbox_sinks::register(&mut registry)?;
@@ -34,8 +34,7 @@ mod tests {
         assert!(registered(StageKind::Source, "y4m/pipe"));
         assert!(registered(StageKind::Sink, "y4m/stdout"));
         assert!(registered(StageKind::Sink, "y4m/pipe"));
-        assert!(registered(StageKind::Transform, "scene/detect"));
-        assert!(registered(StageKind::Transform, "scene/split"));
+        assert!(registered(StageKind::Provider, "provider/scenes"));
         assert!(registered(StageKind::Filter, "blend/masked"));
         assert!(registered(StageKind::Mask, "lines/adaptive"));
         assert!(registered(StageKind::Mask, "lines/canny"));

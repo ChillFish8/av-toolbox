@@ -87,12 +87,6 @@ pub(crate) struct BlurArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[expect(dead_code, reason = "the fixtures only deserialize their arguments")]
-pub(crate) struct SplitArgs {
-    pub(crate) seconds: u32,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct NoArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -49,42 +49,48 @@ A pipeline can call another pipeline file. The called file declares the streams 
 the streams it gives back as `[output.<name>]`.
 
 ```toml
-# parts/scenes.toml
-[variable.speed]
-type = "string"
-default = "standard"
-choices = ["standard", "fast"]
+# parts/shrink.toml
+[variable.width]
+type = "integer"
+default = 640
 
 [input.clip]
 
-[transform.detect]
-type = "scene/detect"
+[filter.shrink]
+type = "resize/bilinear"
 inputs = ["clip"]
-args.mode = "natural"
-args.speed = "{{ speed }}"
+args.width = "{{ width }}"
+args.height = 360
 
-[output.scenes]
-inputs = ["detect"]
+[output.shrunk]
+inputs = ["shrink"]
 ```
 
 ```toml
-# chunked.toml
-[call.scenes]
-path = "parts/scenes.toml"
+# pipeline.toml
+[call.parts]
+path = "parts/shrink.toml"
 inputs = ["input"]
-variables.speed = "fast"
+variables.width = 1280
 
 [sink.output]
 type = "y4m/pipe"
-inputs = ["scenes"]
+inputs = ["parts"]
 args.path = "{{ output }}"
 ```
 
 Read a call's output as `<call>.<output>`, or as `<call>` when the file has one output. Stages from a called file
-show up as `<call>.<stage>`, such as `scenes.detect`.
+show up as `<call>.<stage>`, such as `parts.shrink`.
+
+## Scene breaks
+
+A stage that works one scene at a time asks for scene breaks itself, and the pipeline finds them once for every
+stage asking. `chunked.toml` runs a denoise on two workers, each handed whole scenes. `metadata/ndjson` writes each
+frame's scene when given `args.scenes`.
 
 ```bash
 av-toolbox execute examples/chunked.toml --var input=clip.mkv --var output=output.y4m
+av-toolbox execute examples/scenes.toml --var input=clip.mkv --var scenes=scenes.ndjson
 ```
 
 ## Resizing and generated frames

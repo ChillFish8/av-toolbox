@@ -1,2 +1,1 @@
-mod detect;
 mod window;

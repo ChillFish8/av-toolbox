@@ -61,7 +61,7 @@ pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
     ) -> Result<Box<dyn Provider<Self::Side>>, StageError>;
 }
 
-/// The same shape as a transform. It passes every item through and writes what it supplies into their metadata.
+/// A built provider. It passes every item through and writes what it supplies into their metadata.
 pub trait Provider<S: Side = DeviceSide>: StageInstance {
     /// What this emits for one input, which may be nothing while it holds frames back.
     fn process(&mut self, context: &mut FrameContext, inputs: Inputs<S>) -> Result<Vec<S::Item>, StageError>;

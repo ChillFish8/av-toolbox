@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
@@ -10,6 +11,7 @@ use av_toolbox_gpu::{
     Frame,
     FrameContext,
     FrameMeta,
+    LayerId,
     Layers,
     StreamItem,
     testing_context,
@@ -52,17 +54,17 @@ use crate::{
     WorkResult,
 };
 
-/// A one-slot bundle carrying a single frame, for driving [run_worker] directly with a
-/// [WorkItem::Unit] rather than through a disperse.
+/// A one-slot bundle carrying a single frame in `chunk` of layer 0, for driving [run_worker]
+/// directly with a [WorkItem::Unit] rather than through a disperse.
 fn unit_bundle(context: &FrameContext, index: u64, chunk: u64) -> Vec<Option<AnyItem>> {
-    let meta = FrameMeta::at(index).in_chunk(chunk);
+    let meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
     vec![Some(
         StreamItem::Frame(context.alloc_frame(&format(), meta)).into(),
     )]
 }
 
-/// A worker slot around one fixture stage, with no disperse or aggregate in front of it, for
-/// sending [WorkItem]s to [run_worker] directly.
+/// A worker slot around one fixture stage reading its chunk from layer 0, with no disperse or
+/// aggregate in front of it, for sending [WorkItem]s to [run_worker] directly.
 fn one_node_worker(
     stage: StageBox,
     work_receiver: mpsc::Receiver<WorkItem>,
@@ -70,7 +72,8 @@ fn one_node_worker(
 ) -> WorkerSlot {
     let head = NodeId::new(0);
     let nodes = vec![(head, stage)];
-    let edges = RegionEdges::new(vec![], vec![head]);
+    let layers = HashMap::from([(head, LayerId(0))]);
+    let edges = RegionEdges::new(vec![], vec![head]).with_layers(layers);
 
     WorkerSlot {
         runner: RegionRunner::new(nodes, edges),
@@ -140,7 +143,7 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
     let (work_sender, work_receiver) = mpsc::channel();
     let (result_sender, result_receiver) = mpsc::sync_channel(64);
     let worker = one_node_worker(
-        StageBox::Transform(Box::new(MultiplyingInstance::new())),
+        StageBox::Filter(Box::new(MultiplyingInstance::new())),
         work_receiver,
         result_sender,
     );
@@ -149,10 +152,11 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
 
     let unit_ids: Vec<u64> = (100..108).collect();
     for &unit in &unit_ids {
+        let mut chunks = Layers::new();
+        chunks.set(LayerId(0), unit + 900);
         let meta = FrameMeta {
             index: unit,
-            chunk: unit + 900,
-            chunks: Layers::default(),
+            chunks,
             timestamp: Some(Duration::from_secs(unit)),
             scene_score: None,
             attachments: Attachments::new(),

@@ -466,10 +466,16 @@ mod tests {
         }
     }
 
+    /// A frame at `index`, in `chunk` of layer 0.
     fn item(index: u64, chunk: u64) -> AnyItem {
         let context = testing_context();
-        let meta = FrameMeta::at(index).in_chunk(chunk);
+        let meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
         StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
+    }
+
+    /// A disperse routing on layer 0, the layer [item] puts its chunk in.
+    fn chunked_disperse<D: Dispatch>(bound: &[bool], authority: usize, dispatch: D) -> Disperse<D> {
+        Disperse::new(bound, authority, dispatch).with_layer(Some(LayerId(0)))
     }
 
     fn item_in_chunk(index: u64, chunk: u64) -> AnyItem {
@@ -505,7 +511,7 @@ mod tests {
 
     #[test]
     fn a_bundle_is_held_back_until_every_slot_has_an_item() {
-        let mut disperse = Disperse::new(&[true, true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true, true], 0, RoundRobin::new(2));
 
         let ready = disperse.offer(0, item(0, 0)).expect("should accept");
         assert!(ready.is_empty());
@@ -521,7 +527,7 @@ mod tests {
 
     #[test]
     fn inputs_that_disagree_about_the_frame_are_an_error() {
-        let mut disperse = Disperse::new(&[true, true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true, true], 0, RoundRobin::new(2));
         disperse.offer(0, item(4, 0)).expect("should accept");
 
         let result = disperse.offer(1, item(5, 0));
@@ -543,7 +549,7 @@ mod tests {
 
     #[test]
     fn every_frame_of_one_chunk_goes_to_one_worker() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(4));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(4));
         disperse.offer(0, item(0, 7)).expect("should accept");
         let first = disperse.place().expect("round robin always has a free worker");
 
@@ -588,7 +594,7 @@ mod tests {
 
     #[test]
     fn a_new_chunk_closes_the_last_one_and_moves_worker() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(4));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(4));
         disperse.offer(0, item(0, 7)).expect("should accept");
         let first = disperse.place().expect("round robin always has a free worker");
         let first_worker = first.routed.worker;
@@ -607,7 +613,7 @@ mod tests {
 
     #[test]
     fn a_boundary_hands_back_the_close_before_a_worker_is_chosen() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 7)).expect("should accept");
         disperse.place().expect("round robin always has a free worker");
 
@@ -621,7 +627,7 @@ mod tests {
 
     #[test]
     fn offering_again_before_placing_a_held_bundle_is_an_error() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 7)).expect("should accept");
 
         let result = disperse.offer(0, item(1, 8));
@@ -639,7 +645,7 @@ mod tests {
     #[test]
     fn a_dispatch_with_no_free_worker_at_a_boundary_can_decline_without_panicking() {
         let script = [Some(0), None, Some(1)];
-        let mut disperse = Disperse::new(&[true], 0, ScriptedChoice::new(&script, 2));
+        let mut disperse = chunked_disperse(&[true], 0, ScriptedChoice::new(&script, 2));
 
         disperse.offer(0, item(0, 7)).expect("should accept");
         disperse
@@ -666,7 +672,7 @@ mod tests {
     #[test]
     fn the_first_chunk_can_also_defer_when_no_worker_is_free_yet() {
         let script = [None, Some(0)];
-        let mut disperse = Disperse::new(&[true], 0, ScriptedChoice::new(&script, 1));
+        let mut disperse = chunked_disperse(&[true], 0, ScriptedChoice::new(&script, 1));
 
         let ready = disperse.offer(0, item(0, 7)).expect("should accept");
 
@@ -686,7 +692,7 @@ mod tests {
     #[test]
     fn routing_follows_the_authority_slot_and_not_the_first_one() {
         // Slot 1 is the authority. Slot 0 carries a different chunking that must be ignored.
-        let mut disperse = Disperse::new(&[true, true], 1, RoundRobin::new(4));
+        let mut disperse = chunked_disperse(&[true, true], 1, RoundRobin::new(4));
 
         disperse.offer(0, item_in_chunk(0, 99)).expect("should accept");
         disperse.offer(1, item_in_chunk(0, 7)).expect("should accept");
@@ -701,7 +707,7 @@ mod tests {
     #[test]
     fn a_hole_before_the_authority_slot_still_selects_the_right_input() {
         // Slot 0 is unbound. Slot 2, the authority, must still be found past the hole.
-        let mut disperse = Disperse::new(&[false, true, true], 2, RoundRobin::new(4));
+        let mut disperse = chunked_disperse(&[false, true, true], 2, RoundRobin::new(4));
 
         let ready = disperse.offer(1, item_in_chunk(0, 9)).expect("should accept");
         assert!(ready.is_empty());
@@ -721,7 +727,7 @@ mod tests {
 
     #[test]
     fn a_signature_with_a_hole_completes_its_bundles_and_routes_them() {
-        let mut disperse = Disperse::new(&[true, false, true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true, false, true], 0, RoundRobin::new(2));
 
         let ready = disperse.offer(0, item(0, 0)).expect("should accept");
         assert!(ready.is_empty());
@@ -742,7 +748,7 @@ mod tests {
 
     #[test]
     fn offering_an_unbound_slot_is_an_error() {
-        let mut disperse = Disperse::new(&[true, false], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true, false], 0, RoundRobin::new(2));
 
         let result = disperse.offer(1, item(0, 0));
 
@@ -755,7 +761,7 @@ mod tests {
 
     #[test]
     fn offering_a_slot_out_of_range_is_an_error() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
 
         let result = disperse.offer(4, item(0, 0));
 
@@ -769,18 +775,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "chunk authority must be one of the disperse's slots")]
     fn an_authority_out_of_range_panics_at_construction() {
-        Disperse::new(&[true], 4, RoundRobin::new(2));
+        chunked_disperse(&[true], 4, RoundRobin::new(2));
     }
 
     #[test]
     #[should_panic(expected = "chunk authority slot must be bound")]
     fn an_unbound_authority_panics_at_construction() {
-        Disperse::new(&[true, false], 1, RoundRobin::new(2));
+        chunked_disperse(&[true, false], 1, RoundRobin::new(2));
     }
 
     #[test]
     fn a_chunk_id_that_goes_backwards_is_an_error() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 8)).expect("should accept");
         disperse.place().expect("round robin always has a free worker");
 
@@ -801,7 +807,7 @@ mod tests {
 
     #[test]
     fn a_chunk_id_may_skip() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 1)).expect("should accept");
         disperse.place().expect("round robin always has a free worker");
 
@@ -812,7 +818,7 @@ mod tests {
 
     #[test]
     fn finishing_closes_the_chunk_in_flight_and_ends_every_worker() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(3));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(3));
         disperse.offer(0, item(0, 7)).expect("should accept");
         disperse.place().expect("round robin always has a free worker");
 
@@ -830,7 +836,7 @@ mod tests {
 
     #[test]
     fn finishing_with_a_half_gathered_bundle_reports_it_instead_of_dropping_it() {
-        let mut disperse = Disperse::new(&[true, true], 0, RoundRobin::new(1));
+        let mut disperse = chunked_disperse(&[true, true], 0, RoundRobin::new(1));
         disperse.offer(0, item(0, 0)).expect("should accept");
 
         let finished = disperse.finish();
@@ -844,7 +850,7 @@ mod tests {
 
     #[test]
     fn finishing_with_a_held_bundle_reports_it_as_unplaced() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(1));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(1));
         disperse.offer(0, item(0, 7)).expect("should accept");
 
         assert!(disperse.is_holding());
@@ -861,7 +867,7 @@ mod tests {
     /// finishing on top of that must not close it again.
     #[test]
     fn finishing_while_holding_a_bundle_does_not_close_a_chunk_twice() {
-        let mut disperse = Disperse::new(&[true], 0, ScriptedChoice::new(&[Some(0), None], 1));
+        let mut disperse = chunked_disperse(&[true], 0, ScriptedChoice::new(&[Some(0), None], 1));
         disperse.offer(0, item(0, 7)).expect("should accept");
         disperse.place().expect("the script hands out worker zero");
 
@@ -882,7 +888,7 @@ mod tests {
 
     #[test]
     fn finishing_twice_is_a_no_op() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 7)).expect("should accept");
 
         let first = disperse.finish();
@@ -895,7 +901,7 @@ mod tests {
 
     #[test]
     fn offering_after_finish_is_an_error() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 7)).expect("should accept");
         disperse.finish();
 
@@ -910,7 +916,7 @@ mod tests {
 
     #[test]
     fn the_assignments_name_every_chunk_in_the_order_it_was_dispatched() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 7)).expect("should accept");
         disperse.place().expect("round robin always has a free worker");
 
@@ -928,7 +934,7 @@ mod tests {
 
     #[test]
     fn a_slot_offered_a_second_item_before_the_bundle_completes_is_an_error() {
-        let mut disperse = Disperse::new(&[true, true], 0, RoundRobin::new(2));
+        let mut disperse = chunked_disperse(&[true, true], 0, RoundRobin::new(2));
         disperse.offer(0, item(0, 0)).expect("should accept");
 
         let result = disperse.offer(0, item(1, 0));
@@ -1068,7 +1074,7 @@ mod tests {
     /// finishing invents no unit of its own the way frame routing does.
     #[test]
     fn chunk_routing_invents_no_unit_when_it_finishes() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(3));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(3));
         disperse.offer(0, item(0, 7)).expect("should accept");
         disperse.place().expect("round robin always has a free worker");
 
@@ -1082,7 +1088,7 @@ mod tests {
     /// as it did before frame routing existed.
     #[test]
     fn chunk_routing_is_unchanged_by_the_frame_path() {
-        let mut disperse = Disperse::new(&[true], 0, RoundRobin::new(4));
+        let mut disperse = chunked_disperse(&[true], 0, RoundRobin::new(4));
         disperse.offer(0, item(0, 7)).expect("should accept");
         let first = disperse.place().expect("round robin always has a free worker");
 

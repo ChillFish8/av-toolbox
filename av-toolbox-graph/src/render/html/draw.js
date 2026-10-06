@@ -276,12 +276,7 @@
         const boxWidth = width - shadow;
         const boxHeight = height - shadow;
 
-        const classes = ["box", box.kind];
-        if (box.crossing !== null) {
-            classes.push("crossing");
-        }
-
-        const group = element("g", { class: classes.join(" "), "data-box": box.id }, parent);
+        const group = element("g", { class: "box " + box.kind, "data-box": box.id }, parent);
         tooltip(group, tooltipOf(box));
         boxGroups.set(box.id, group);
 

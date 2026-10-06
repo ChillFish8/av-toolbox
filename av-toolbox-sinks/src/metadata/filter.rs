@@ -126,7 +126,7 @@ mod tests {
         assert!(filters.matches("filter.convert_colour"));
         assert!(filters.matches("filter.scenes.detect"));
         assert!(filters.matches("filter."));
-        assert!(!filters.matches("transform.detect"));
+        assert!(!filters.matches("sink.detect"));
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
         let debug = pattern("*.debug_*");
 
         assert!(debug.matches("filter.debug_levels"));
-        assert!(debug.matches("transform.scenes.debug_cut"));
+        assert!(debug.matches("mask.scenes.debug_cut"));
         assert!(!debug.matches("filter.levels"));
     }
 

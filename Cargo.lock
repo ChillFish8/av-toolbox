@@ -285,7 +285,7 @@ dependencies = [
  "av-toolbox-filters",
  "av-toolbox-gpu",
  "av-toolbox-models",
- "av-toolbox-transforms",
+ "av-toolbox-providers",
  "cubecl",
  "schemars",
  "serde",
@@ -361,16 +361,33 @@ dependencies = [
  "av-toolbox-graph",
  "av-toolbox-masks",
  "av-toolbox-models",
+ "av-toolbox-providers",
  "av-toolbox-runtime",
  "av-toolbox-sinks",
  "av-toolbox-sources",
- "av-toolbox-transforms",
  "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "toml 1.1.6+spec-1.1.0",
+ "y4m",
+]
+
+[[package]]
+name = "av-toolbox-providers"
+version = "0.1.0"
+dependencies = [
+ "av-scenechange",
+ "av-toolbox-core",
+ "av-toolbox-gpu",
+ "av-toolbox-graph",
+ "av-toolbox-runtime",
+ "av-toolbox-sources",
+ "schemars",
+ "serde",
+ "serde_json",
+ "v_frame",
  "y4m",
 ]
 
@@ -394,6 +411,7 @@ dependencies = [
  "av-toolbox-core",
  "av-toolbox-gpu",
  "av-toolbox-graph",
+ "av-toolbox-providers",
  "av-toolbox-runtime",
  "av-toolbox-sources",
  "schemars",
@@ -419,23 +437,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
- "y4m",
-]
-
-[[package]]
-name = "av-toolbox-transforms"
-version = "0.1.0"
-dependencies = [
- "av-scenechange",
- "av-toolbox-core",
- "av-toolbox-gpu",
- "av-toolbox-graph",
- "av-toolbox-runtime",
- "av-toolbox-sources",
- "schemars",
- "serde",
- "serde_json",
- "v_frame",
  "y4m",
 ]
 

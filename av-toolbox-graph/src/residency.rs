@@ -248,11 +248,11 @@ pub(crate) mod tests {
     fn a_nodes_path_is_its_kind_and_name() {
         let (graph, _) = placed(&[
             stage(StageKind::Source, "input", "test/host-file", &[]),
-            stage(StageKind::Transform, "scenes.detect", "test/restamp", &["input"]),
+            stage(StageKind::Filter, "scenes.detect", "test/host-blur", &["input"]),
             stage(StageKind::Sink, "out", "test/host-stdout", &["scenes.detect"]),
         ]);
 
-        assert_eq!(named(&graph, "scenes.detect").path(), "transform.scenes.detect");
+        assert_eq!(named(&graph, "scenes.detect").path(), "filter.scenes.detect");
     }
 
     #[test]
@@ -335,36 +335,34 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_either_transform_follows_its_only_inputs_side() {
+    fn an_either_sink_follows_its_only_inputs_side() {
         let (graph, _) = placed(&[
             stage(StageKind::Source, "input", "test/host-file", &[]),
-            stage(StageKind::Transform, "restamp", "test/restamp", &["input"]),
-            stage(StageKind::Sink, "out", "test/host-stdout", &["restamp"]),
+            stage(StageKind::Sink, "log", "test/log", &["input"]),
         ]);
 
-        assert_eq!(named(&graph, "restamp").residency(), Some(Residency::Host));
-        assert_eq!(graph.len(), 3);
+        assert_eq!(named(&graph, "log").residency(), Some(Residency::Host));
+        assert_eq!(graph.len(), 2);
     }
 
     #[test]
-    fn an_either_transform_transfers_only_the_input_off_its_authoritys_side() {
+    fn an_either_sink_transfers_only_the_input_off_its_authoritys_side() {
         let (graph, _) = placed(&[
             stage(StageKind::Source, "host", "test/host-file", &[]),
             stage(StageKind::Source, "gpu", "test/file", &[]),
-            stage(StageKind::Transform, "restamp", "test/restamp", &["host", "gpu"]),
-            stage(StageKind::Sink, "out", "test/stdout", &["restamp"]),
+            stage(StageKind::Sink, "log", "test/log", &["host", "gpu"]),
         ]);
 
-        let restamp = named(&graph, "restamp");
+        let log = named(&graph, "log");
         assert_eq!(
-            restamp.residency(),
+            log.residency(),
             Some(Residency::Device),
             "the authority is the device input"
         );
         let uploads = crossings(&graph, Crossing::Upload);
         assert_eq!(uploads.len(), 1);
-        assert_eq!(restamp.inputs()[0].source(), uploads[0].id());
-        assert_eq!(restamp.inputs()[1].source(), named(&graph, "gpu").id());
+        assert_eq!(log.inputs()[0].source(), uploads[0].id());
+        assert_eq!(log.inputs()[1].source(), named(&graph, "gpu").id());
     }
 
     #[test]
@@ -580,13 +578,8 @@ pub(crate) mod tests {
             stage(StageKind::Source, "input", "test/file", &[]),
             stage(StageKind::Source, "extra", "test/host-file", &[]),
             stage(StageKind::Filter, "detect", "test/host-blur", &["input"]),
-            stage(
-                StageKind::Transform,
-                "restamp",
-                "test/restamp",
-                &["detect", "extra"],
-            ),
-            stage(StageKind::Filter, "blur", "test/blur", &["restamp"]),
+            stage(StageKind::Filter, "join", "test/host-join", &["detect", "extra"]),
+            stage(StageKind::Filter, "blur", "test/blur", &["join"]),
             stage(StageKind::Sink, "out", "test/stdout", &["blur"]),
         ]);
 
@@ -598,7 +591,7 @@ pub(crate) mod tests {
             .to_string();
 
         assert!(message.contains("detect"));
-        assert!(message.contains("restamp"));
+        assert!(message.contains("join"));
         assert!(!message.contains("extra"));
     }
 }

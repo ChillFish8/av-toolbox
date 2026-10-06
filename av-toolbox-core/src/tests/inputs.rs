@@ -14,6 +14,7 @@ use av_toolbox_gpu::{
     HostPool,
     HostSide,
     HostStreamItem,
+    LayerId,
     Mask,
     MaskFormat,
     SampleFormat,
@@ -190,6 +191,19 @@ fn positional_and_named_inputs_mix() {
 }
 
 #[test]
+fn an_input_carries_its_layer_to_the_param_it_fills() {
+    let arguments = [
+        InputArgument::positional(handle(1), StreamType::Frames).in_layer(LayerId(2)),
+        InputArgument::named("mask", handle(2), StreamType::Frames),
+    ];
+    let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
+
+    assert_eq!(bound.layer_for("reference"), Some(LayerId(2)));
+    assert_eq!(bound.layer_for("mask"), None);
+    assert_eq!(bound.layer_for("unknown"), None);
+}
+
+#[test]
 fn an_omitted_optional_input_is_unbound() {
     let arguments = [InputArgument::positional(handle(1), StreamType::Frames)];
     let bound = bind_inputs(REFERENCE, &arguments).expect("should bind");
@@ -280,6 +294,18 @@ fn a_variadic_tail_collects_extra_inputs_in_order() {
     assert_eq!(bound.variadic()[0].name(), None);
     assert_eq!(bound.variadic()[0].handle(), handle(2));
     assert_eq!(bound.variadic()[1].name(), Some("overlay"));
+}
+
+#[test]
+fn a_named_variadic_input_carries_its_layer() {
+    let arguments = [
+        InputArgument::positional(handle(1), StreamType::Frames),
+        InputArgument::named("overlay", handle(2), StreamType::Frames).in_layer(LayerId(1)),
+    ];
+    let bound = bind_inputs(VARIADIC, &arguments).expect("should bind");
+
+    assert_eq!(bound.layer_for("overlay"), Some(LayerId(1)));
+    assert_eq!(bound.layer_for("reference"), None);
 }
 
 #[test]

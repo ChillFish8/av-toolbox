@@ -8,8 +8,15 @@ use serde::ser::{SerializeMap, Serializer};
 use super::filter::KeyFilter;
 
 /// Writes one frame's metadata as a JSON object followed by a newline.
-pub(crate) fn write_line<W: Write>(output: &mut W, meta: &FrameMeta, filter: &KeyFilter) -> io::Result<()> {
-    let line = Line { meta, filter };
+///
+/// `chunk` is the frame's chunk in the sink's scene layer, and is left out when there is none.
+pub(crate) fn write_line<W: Write>(
+    output: &mut W,
+    meta: &FrameMeta,
+    chunk: Option<u64>,
+    filter: &KeyFilter,
+) -> io::Result<()> {
+    let line = Line { meta, chunk, filter };
     serde_json::to_writer(&mut *output, &line)?;
 
     output.write_all(b"\n")
@@ -18,6 +25,7 @@ pub(crate) fn write_line<W: Write>(output: &mut W, meta: &FrameMeta, filter: &Ke
 /// One frame's metadata, written with its keys in a fixed order.
 struct Line<'a> {
     meta: &'a FrameMeta,
+    chunk: Option<u64>,
     filter: &'a KeyFilter,
 }
 
@@ -28,7 +36,11 @@ impl Serialize for Line<'_> {
 
         let mut map = serializer.serialize_map(None)?;
         self.entry(&mut map, "index", &self.meta.index)?;
-        self.entry(&mut map, "chunk", &self.meta.chunk)?;
+
+        if let Some(chunk) = self.chunk {
+            self.entry(&mut map, "chunk", &chunk)?;
+        }
+
         self.entry(&mut map, "timestamp", &timestamp)?;
         self.entry(&mut map, "scene_score", &scene_score)?;
 
@@ -95,9 +107,9 @@ mod tests {
     use super::*;
     use crate::metadata::filter::{KeyFilter, Pattern};
 
-    fn line_of(meta: &FrameMeta, filter: &KeyFilter) -> String {
+    fn line_of(meta: &FrameMeta, chunk: Option<u64>, filter: &KeyFilter) -> String {
         let mut output = Vec::new();
-        write_line(&mut output, meta, filter).expect("writes");
+        write_line(&mut output, meta, chunk, filter).expect("writes");
 
         String::from_utf8(output).expect("utf-8")
     }
@@ -120,7 +132,7 @@ mod tests {
         meta.attach("clipped", MetaValue::Bool(false));
         meta.attachments.stamp("filter.convert_colour");
         meta.attach("cut", MetaValue::Bool(true));
-        meta.attachments.stamp("transform.scenes.detect");
+        meta.attachments.stamp("filter.scenes.detect");
 
         meta
     }
@@ -129,12 +141,12 @@ mod tests {
     fn built_in_keys_come_first_then_stages_in_order() {
         let meta = stamped_meta();
         let filter = KeyFilter::default();
-        let line = line_of(&meta, &filter);
+        let line = line_of(&meta, Some(4), &filter);
 
         let expected = concat!(
-            r#"{"index":12,"chunk":0,"timestamp":0.5,"scene_score":2.5,"#,
+            r#"{"index":12,"chunk":4,"timestamp":0.5,"scene_score":2.5,"#,
             r#""filter.convert_colour":{"attr1":123,"clipped":false},"#,
-            r#""transform.scenes.detect":{"cut":true}}"#,
+            r#""filter.scenes.detect":{"cut":true}}"#,
             "\n",
         );
         assert_eq!(line, expected);
@@ -144,12 +156,21 @@ mod tests {
     fn unknown_built_ins_are_null() {
         let meta = FrameMeta::at(0);
         let filter = KeyFilter::default();
-        let line = line_of(&meta, &filter);
+        let line = line_of(&meta, Some(0), &filter);
 
         assert_eq!(
             line,
             "{\"index\":0,\"chunk\":0,\"timestamp\":null,\"scene_score\":null}\n"
         );
+    }
+
+    #[test]
+    fn no_chunk_is_written_without_one() {
+        let meta = FrameMeta::at(0);
+        let filter = KeyFilter::default();
+        let line = line_of(&meta, None, &filter);
+
+        assert_eq!(line, "{\"index\":0,\"timestamp\":null,\"scene_score\":null}\n");
     }
 
     #[test]
@@ -160,7 +181,7 @@ mod tests {
         meta.attachments.stamp("filter.measure");
 
         let filter = KeyFilter::default();
-        let line = line_of(&meta, &filter);
+        let line = line_of(&meta, None, &filter);
 
         assert!(
             line.contains(r#""filter.measure":{"nan":null,"infinite":null}"#),
@@ -176,7 +197,7 @@ mod tests {
         meta.attachments.stamp("filter.note");
 
         let filter = KeyFilter::default();
-        let line = line_of(&meta, &filter);
+        let line = line_of(&meta, None, &filter);
 
         assert_eq!(line.matches('\n').count(), 1);
         assert!(line.ends_with('\n'));
@@ -190,11 +211,8 @@ mod tests {
         let pattern_list = patterns(&["index", "*.scenes.*"]);
         let filter = KeyFilter::new(Some(pattern_list), None);
         let meta = stamped_meta();
-        let line = line_of(&meta, &filter);
+        let line = line_of(&meta, None, &filter);
 
-        assert_eq!(
-            line,
-            "{\"index\":12,\"transform.scenes.detect\":{\"cut\":true}}\n"
-        );
+        assert_eq!(line, "{\"index\":12,\"filter.scenes.detect\":{\"cut\":true}}\n");
     }
 }

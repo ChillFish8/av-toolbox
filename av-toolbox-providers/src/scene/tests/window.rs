@@ -13,29 +13,28 @@ use av_toolbox_gpu::{
     testing_context,
 };
 
-use crate::scene::args::{DetectArgs, Mode, Speed};
-use crate::scene::window::{Decision, LumaWindow, Settings, frame_rate};
+use crate::provider::SceneSpeed;
+use crate::scene::window::{Decision, DetectOptions, LumaWindow, Settings, frame_rate};
 use crate::tests::clip::{THREE_SCENES, clip, flat_clip, grey8, grey8_of, yuv420_ten_bit};
 
-fn natural(speed: Speed, min_scene_frames: usize, max_scene_frames: Option<usize>) -> DetectArgs {
+fn natural(speed: SceneSpeed, min_scene_frames: usize, max_scene_frames: Option<usize>) -> DetectOptions {
     let max_scene_frames = max_scene_frames.and_then(NonZeroUsize::new);
 
-    DetectArgs {
-        mode: Mode::Natural,
+    DetectOptions {
         speed,
         min_scene_frames,
         max_scene_frames,
     }
 }
 
-fn decide(format: &FrameFormat, args: &DetectArgs, scenes: &[(u64, u64)]) -> Vec<Decision> {
+fn decide(format: &FrameFormat, args: &DetectOptions, scenes: &[(u64, u64)]) -> Vec<Decision> {
     let context = testing_context();
     let frames = clip(&context, format, scenes);
 
     decide_frames(format, args, frames)
 }
 
-fn decide_frames(format: &FrameFormat, args: &DetectArgs, frames: Vec<HostFrame>) -> Vec<Decision> {
+fn decide_frames(format: &FrameFormat, args: &DetectOptions, frames: Vec<HostFrame>) -> Vec<Decision> {
     let settings = Settings::for_stream(format, args).expect("the clip is readable");
     let mut window = LumaWindow::new(settings);
 
@@ -62,7 +61,7 @@ fn scene_starts(decisions: &[Decision]) -> Vec<usize> {
 
 #[test]
 fn every_frame_gets_one_decision() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
 
     let decisions = decide(&grey8(), &args, THREE_SCENES);
 
@@ -71,7 +70,7 @@ fn every_frame_gets_one_decision() {
 
 #[test]
 fn hard_cuts_start_scenes_at_eight_bits() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
 
     let decisions = decide(&grey8(), &args, THREE_SCENES);
 
@@ -80,7 +79,7 @@ fn hard_cuts_start_scenes_at_eight_bits() {
 
 #[test]
 fn hard_cuts_start_scenes_at_ten_bits_in_yuv420() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
 
     let decisions = decide(&yuv420_ten_bit(), &args, THREE_SCENES);
 
@@ -89,7 +88,7 @@ fn hard_cuts_start_scenes_at_ten_bits_in_yuv420() {
 
 #[test]
 fn the_first_frame_and_the_last_four_go_unscored() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
 
     let decisions = decide(&grey8(), &args, THREE_SCENES);
 
@@ -104,7 +103,7 @@ fn the_first_frame_and_the_last_four_go_unscored() {
 
 #[test]
 fn a_cut_scores_above_the_frame_before_it() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
 
     let decisions = decide(&grey8(), &args, THREE_SCENES);
 
@@ -115,7 +114,7 @@ fn a_cut_scores_above_the_frame_before_it() {
 
 #[test]
 fn a_minimum_scene_length_suppresses_a_close_cut() {
-    let args = natural(Speed::Standard, 24, None);
+    let args = natural(SceneSpeed::Standard, 24, None);
 
     let decisions = decide(&grey8(), &args, &[(1, 30), (2, 10), (3, 30)]);
 
@@ -124,7 +123,7 @@ fn a_minimum_scene_length_suppresses_a_close_cut() {
 
 #[test]
 fn a_maximum_scene_length_forces_a_cut() {
-    let args = natural(Speed::Standard, 0, Some(20));
+    let args = natural(SceneSpeed::Standard, 0, Some(20));
 
     let decisions = decide(&grey8(), &args, &[(1, 50)]);
 
@@ -133,7 +132,7 @@ fn a_maximum_scene_length_forces_a_cut() {
 
 #[test]
 fn a_single_frame_is_one_scene() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
 
     let decisions = decide(&grey8(), &args, &[(1, 1)]);
 
@@ -142,7 +141,7 @@ fn a_single_frame_is_one_scene() {
 
 #[test]
 fn fast_speed_scores_frames() {
-    let args = natural(Speed::Fast, 0, None);
+    let args = natural(SceneSpeed::Fast, 0, None);
 
     let decisions = decide(&grey8(), &args, THREE_SCENES);
 
@@ -176,7 +175,7 @@ fn the_frame_rate_falls_back_to_thirty() {
 
 #[test]
 fn a_flat_clip_scores_only_finite_values() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
     let context = testing_context();
     let format = grey8();
     let frames = flat_clip(&context, &format, 40);
@@ -193,7 +192,7 @@ fn a_flat_clip_scores_only_finite_values() {
 
 #[test]
 fn a_height_not_a_multiple_of_sixty_four_does_not_panic() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
     let format = grey8_of(96, 40);
 
     decide(&format, &args, THREE_SCENES);
@@ -217,7 +216,7 @@ fn to_float_luma(context: &FrameContext, format: &FrameFormat, frame: &HostFrame
 
 #[test]
 fn float_luma_finds_the_same_cuts_as_integer_luma() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
     let context = testing_context();
     let integer_format = grey8();
     let float_format = FrameFormat {
@@ -239,7 +238,7 @@ fn float_luma_finds_the_same_cuts_as_integer_luma() {
 
 #[test]
 fn rgb_and_half_float_frames_are_refused() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
     let rgb = FrameFormat {
         layout: FrameLayout::Rgb,
         ..grey8()
@@ -255,7 +254,7 @@ fn rgb_and_half_float_frames_are_refused() {
 
 #[test]
 fn chroma_planes_are_refused() {
-    let args = natural(Speed::Standard, 0, None);
+    let args = natural(SceneSpeed::Standard, 0, None);
     let chroma = FrameFormat {
         layout: FrameLayout::Chroma {
             subsampling: Subsampling::Yuv420,

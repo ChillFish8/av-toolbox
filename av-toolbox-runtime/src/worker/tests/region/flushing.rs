@@ -55,7 +55,7 @@ fn ending_a_region_flushes_its_nodes_in_topological_order() {
         ),
         (
             downstream,
-            StageBox::Transform(Box::new(Buffering { held: Vec::new() })),
+            StageBox::Filter(Box::new(Buffering { held: Vec::new() })),
         ),
     ];
     let feeds = vec![vec![Feed {

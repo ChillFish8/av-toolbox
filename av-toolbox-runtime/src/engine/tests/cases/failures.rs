@@ -25,6 +25,7 @@ use crate::engine::tests::harness::{
     run_with_watchdog,
 };
 use crate::engine::tests::specs::{
+    chunked_failing_worker_spec,
     failing_spec,
     failing_worker_spec,
     filter_spec,
@@ -287,7 +288,7 @@ fn a_worker_whose_aggregate_has_gone_still_ends_what_it_started() {
 fn a_stage_failure_names_the_chunk_it_came_from() {
     let specs = vec![
         source_spec("input", &[5, 6, 7], 0),
-        failing_worker_spec("filter", "input", 0, 0, 2),
+        chunked_failing_worker_spec("filter", "input", 0, 0, 2),
         sink_spec("out", "filter"),
     ];
     let (graph, solved) = planned_graph(&specs);

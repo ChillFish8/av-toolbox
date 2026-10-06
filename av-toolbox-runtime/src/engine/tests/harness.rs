@@ -56,14 +56,7 @@ use crate::engine::tests::fixtures::gated::{
     TrackedInstance,
 };
 use crate::engine::tests::fixtures::joins::{Join, JoinInstance, Referring, ReferringInstance};
-use crate::engine::tests::fixtures::shaping::{
-    Masking,
-    MaskingInstance,
-    Multiplying,
-    MultiplyingInstance,
-    RestampDefinition,
-    RestampInstance,
-};
+use crate::engine::tests::fixtures::shaping::{Masking, MaskingInstance, Multiplying, MultiplyingInstance};
 use crate::engine::tests::fixtures::sinks::{
     Gated,
     GatedInstance,
@@ -101,7 +94,7 @@ fn registry() -> PipelineRegistry {
     registry.register_filter::<Double>().expect("should register");
     registry.register_mask::<Masking>().expect("should register");
     registry
-        .register_transform::<Multiplying>()
+        .register_filter::<Multiplying>()
         .expect("should register");
     registry.register_filter::<Join>().expect("should register");
     registry.register_filter::<Referring>().expect("should register");
@@ -118,9 +111,6 @@ fn registry() -> PipelineRegistry {
     registry.register_sink::<Hoarding>().expect("should register");
     registry.register_sink::<Pairing>().expect("should register");
     registry.register_sink::<Gated>().expect("should register");
-    registry
-        .register_meta_transform::<RestampDefinition>()
-        .expect("should register");
     registry
         .register_meta_sink::<MetaRecording>()
         .expect("should register");
@@ -169,7 +159,7 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
         },
         "test/double" => StageBox::Filter(Box::new(DoubleInstance::new())),
         "test/masking" => StageBox::Mask(Box::new(MaskingInstance::new())),
-        "test/multiplying" => StageBox::Transform(Box::new(MultiplyingInstance::new())),
+        "test/multiplying" => StageBox::Filter(Box::new(MultiplyingInstance::new())),
         "test/join" => StageBox::Filter(Box::new(JoinInstance::new())),
         "test/referring" => StageBox::Filter(Box::new(ReferringInstance::new())),
         "test/slow" => StageBox::Filter(Box::new(SlowInstance::for_worker(worker))),
@@ -186,7 +176,6 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
         "test/hoarding" => StageBox::Sink(Box::new(HoardingInstance::new())),
         "test/pairing" => StageBox::Sink(Box::new(PairingInstance::new())),
         "test/gated" => StageBox::Sink(Box::new(GatedInstance::new())),
-        "test/restamp" => StageBox::MetaTransform(Box::new(RestampInstance)),
         "test/meta-recording" => StageBox::MetaSink(Box::new(MetaRecordingInstance::new())),
         "test/stamping" => {
             let args: Vec<LayerDemand> =

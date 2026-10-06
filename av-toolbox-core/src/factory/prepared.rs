@@ -15,10 +15,8 @@ use crate::{
     BuiltProvider,
     BuiltSink,
     BuiltSource,
-    BuiltTransform,
     InputDemand,
     MetaSink,
-    MetaTransform,
     Parallelism,
     Residency,
     StageError,
@@ -132,46 +130,6 @@ pub trait PreparedMask: Send + Sync {
     ) -> Result<BuiltMask, BuildStageError>;
 }
 
-/// A transform whose arguments are deserialized and whose inputs are bound.
-pub trait PreparedTransform: Send + Sync {
-    /// The smallest unit of a stream this stage can be given on its own.
-    fn parallelism(&self) -> Parallelism;
-
-    /// Which input's chunk ids line this stage's inputs up.
-    fn chunk_authority(&self) -> Option<usize>;
-
-    /// What this stage asks of the frames reaching its inputs.
-    fn demands(&self) -> Vec<InputDemand>;
-
-    /// How many workers this stage would like when the pipeline does not say.
-    fn suggested_workers(&self) -> Option<usize>;
-
-    /// The most frames this stage may hold back at once, given its resolved formats.
-    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
-
-    fn accepts_input(
-        &self,
-        capabilities: &Capabilities,
-        index: usize,
-        offered: StreamFormat,
-        inputs: &[Offered],
-    ) -> Result<FormatSet, StageError>;
-
-    fn produces(
-        &self,
-        capabilities: &Capabilities,
-        chosen: &[Option<StreamFormat>],
-    ) -> Result<OutputFormats, StageError>;
-
-    fn residency(&self) -> Residency;
-
-    fn build(
-        self: Box<Self>,
-        backend: &Backend,
-        formats: &ResolvedFormats,
-    ) -> Result<BuiltTransform, BuildStageError>;
-}
-
 /// A provider whose demands are deserialized and whose input is bound.
 pub trait PreparedProvider: Send + Sync {
     /// Which input's chunk ids line this stage's inputs up.
@@ -196,46 +154,6 @@ pub trait PreparedProvider: Send + Sync {
         backend: &Backend,
         formats: &ResolvedFormats,
     ) -> Result<BuiltProvider, BuildStageError>;
-}
-
-/// A metadata-only transform whose arguments are deserialized and whose inputs are bound.
-pub trait PreparedMetaTransform: Send + Sync {
-    /// The smallest unit of a stream this stage can be given on its own.
-    fn parallelism(&self) -> Parallelism;
-
-    /// Which input's chunk ids line this stage's inputs up.
-    fn chunk_authority(&self) -> Option<usize>;
-
-    /// What this stage asks of the frames reaching its inputs.
-    fn demands(&self) -> Vec<InputDemand>;
-
-    /// How many workers this stage would like when the pipeline does not say.
-    fn suggested_workers(&self) -> Option<usize>;
-
-    /// The most frames this stage may hold back at once, given its resolved formats.
-    fn held_frames(&self, formats: &ResolvedFormats) -> usize;
-
-    fn accepts_input(
-        &self,
-        capabilities: &Capabilities,
-        index: usize,
-        offered: StreamFormat,
-        inputs: &[Offered],
-    ) -> Result<FormatSet, StageError>;
-
-    fn produces(
-        &self,
-        capabilities: &Capabilities,
-        chosen: &[Option<StreamFormat>],
-    ) -> Result<OutputFormats, StageError>;
-
-    /// Builds the instance against a real backend. A metadata-only transform has no side to build
-    /// for.
-    fn build(
-        self: Box<Self>,
-        backend: &Backend,
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn MetaTransform>, BuildStageError>;
 }
 
 /// A sink whose arguments are deserialized and whose inputs are bound.

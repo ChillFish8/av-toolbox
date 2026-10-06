@@ -5,7 +5,7 @@ fn a_chunk_node_flushes_its_tail_before_the_next_chunk() {
     let head = NodeId::new(0);
     let nodes = vec![(head, StageBox::Filter(Box::new(Lagging::new(2))))];
     let chunked = HashSet::from([head]);
-    let edges = RegionEdges::new(Vec::new(), vec![head]).with_chunked(chunked);
+    let edges = RegionEdges::new(Vec::new(), vec![head]).chunked_on_layer_zero(chunked);
     let mut runner = RegionRunner::new(nodes, edges);
 
     let items = [(0, 0), (1, 0), (2, 0), (3, 1), (4, 1)];
@@ -24,7 +24,7 @@ fn a_chunk_node_is_started_again_for_each_chunk() {
     let sink = StartRecording { seen: seen.clone() };
     let nodes = vec![(head, StageBox::Sink(Box::new(sink)))];
     let chunked = HashSet::from([head]);
-    let edges = RegionEdges::new(Vec::new(), vec![]).with_chunked(chunked);
+    let edges = RegionEdges::new(Vec::new(), vec![]).chunked_on_layer_zero(chunked);
     let mut runner = RegionRunner::new(nodes, edges);
 
     run_all(&mut runner, &[(0, 0), (1, 1), (2, 1), (3, 2)]);
@@ -63,7 +63,7 @@ fn chained_chunk_nodes_each_flush_in_turn() {
         slot: 0,
     }]];
     let chunked = HashSet::from([head, next]);
-    let edges = RegionEdges::new(feeds, vec![next]).with_chunked(chunked);
+    let edges = RegionEdges::new(feeds, vec![next]).chunked_on_layer_zero(chunked);
     let mut runner = RegionRunner::new(nodes, edges);
 
     let items = [(0, 0), (1, 0), (2, 1), (3, 1), (4, 1)];
@@ -104,7 +104,7 @@ fn a_chunk_nodes_flush_comes_ahead_of_what_the_new_chunk_produces() {
     let head = NodeId::new(0);
     let nodes = vec![(head, StageBox::Filter(Box::new(Holding { held: None })))];
     let chunked = HashSet::from([head]);
-    let edges = RegionEdges::new(Vec::new(), vec![head]).with_chunked(chunked);
+    let edges = RegionEdges::new(Vec::new(), vec![head]).chunked_on_layer_zero(chunked);
     let mut runner = RegionRunner::new(nodes, edges);
 
     let produced = run_all(&mut runner, &[(0, 0), (1, 0), (2, 1)]);
@@ -120,7 +120,7 @@ fn a_runner_started_again_does_not_restart_on_its_first_chunk() {
     let sink = StartRecording { seen: seen.clone() };
     let nodes = vec![(head, StageBox::Sink(Box::new(sink)))];
     let chunked = HashSet::from([head]);
-    let edges = RegionEdges::new(Vec::new(), vec![]).with_chunked(chunked);
+    let edges = RegionEdges::new(Vec::new(), vec![]).chunked_on_layer_zero(chunked);
     let mut runner = RegionRunner::new(nodes, edges);
 
     run_all(&mut runner, &[(0, 3)]);
@@ -140,7 +140,7 @@ fn a_head_restarts_when_the_chunk_in_its_authority_slot_changes() {
     let nodes = vec![(head, StageBox::Sink(Box::new(sink)))];
     let chunked = HashSet::from([head]);
     let edges = RegionEdges::new(Vec::new(), vec![])
-        .with_chunked(chunked)
+        .chunked_on_layer_zero(chunked)
         .with_authorities(HashMap::from([(head, 1)]));
     let mut runner = RegionRunner::new(nodes, edges);
 
@@ -188,7 +188,7 @@ fn a_non_head_node_restarts_when_the_chunk_in_its_authority_slot_changes() {
         ],
     ];
     let edges = RegionEdges::new(feeds, vec![])
-        .with_chunked(HashSet::from([target]))
+        .chunked_on_layer_zero(HashSet::from([target]))
         .with_authorities(HashMap::from([(target, 1)]));
     let mut runner = RegionRunner::new(nodes, edges);
 
@@ -204,7 +204,7 @@ fn a_failing_restart_flush_names_the_chunk_it_was_flushing() {
     let head = NodeId::new(0);
     let nodes = vec![(head, StageBox::Filter(Box::new(FailingFlush)))];
     let chunked = HashSet::from([head]);
-    let edges = RegionEdges::new(Vec::new(), vec![head]).with_chunked(chunked);
+    let edges = RegionEdges::new(Vec::new(), vec![head]).chunked_on_layer_zero(chunked);
     let mut runner = RegionRunner::new(nodes, edges);
     let context = testing_context();
 

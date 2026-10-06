@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn a_type_registered_under_another_kind_is_a_kind_mismatch() {
         let mut specs = working_specs();
-        specs[1].stage_type = Spanned::unknown(String::from("test/split"));
+        specs[1].stage_type = Spanned::unknown(String::from("test/merge"));
 
         let registry = testing::registry();
         let mut diagnostics = Diagnostics::new();
@@ -279,7 +279,7 @@ mod tests {
             .find(|entry| entry.code() == DiagnosticCode::KindMismatch)
             .expect("should report a kind mismatch");
 
-        assert!(mismatch.message().contains("transform"));
+        assert!(mismatch.message().contains("mask"));
     }
 
     #[test]

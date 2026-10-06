@@ -174,10 +174,7 @@ fn node_infos(graph: &CompiledGraph) -> Vec<NodeInfo> {
         let info = match node.role() {
             NodeRole::Stage | NodeRole::Provider(_) => {
                 let granularity = plan.node(*id).granularity();
-                let sized_kind = matches!(
-                    node.kind(),
-                    StageKind::Filter | StageKind::Mask | StageKind::Transform
-                );
+                let sized_kind = matches!(node.kind(), StageKind::Filter | StageKind::Mask);
 
                 NodeInfo {
                     id: *id,

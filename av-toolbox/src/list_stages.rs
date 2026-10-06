@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use av_toolbox_core::{InputSignature, PipelineRegistry, StageInfo, StreamType, Tag};
+use av_toolbox_core::{InputSignature, PipelineRegistry, StageInfo, StageKind, StreamType, Tag};
 
 use crate::cli::{Args, ListStagesArgs};
 use crate::{load, report};
@@ -31,7 +31,13 @@ pub(crate) fn run(args: &Args, list: &ListStagesArgs) -> ExitCode {
     }
 }
 
+/// What heads the providers, which the TOML cannot name.
+const PROVIDERS_HEADING: &str =
+    "PROVIDERS, placed by the graph where stages demand them and never named in a pipeline";
+
 /// Every registered stage, one row each, sorted by type and then kind.
+///
+/// Providers follow under their own heading.
 fn table(registry: &PipelineRegistry) -> String {
     let mut stages: Vec<StageInfo<'_>> = registry.stages().collect();
     stages.sort_by_key(|info| {
@@ -46,8 +52,33 @@ fn table(registry: &PipelineRegistry) -> String {
         .max()
         .unwrap_or(0);
 
+    let (providers, named): (Vec<StageInfo<'_>>, Vec<StageInfo<'_>>) = stages
+        .into_iter()
+        .partition(|info| info.kind() == StageKind::Provider);
+
     let mut drawn = format!("{:<width$}  {:<9}  TAGS\n", "TYPE", "KIND");
-    for info in &stages {
+    let named_rows = rows(&named, width);
+    drawn.push_str(&named_rows);
+
+    if providers.is_empty() {
+        return drawn;
+    }
+
+    drawn.push('\n');
+    drawn.push_str(PROVIDERS_HEADING);
+    drawn.push('\n');
+
+    let provider_rows = rows(&providers, width);
+    drawn.push_str(&provider_rows);
+
+    drawn
+}
+
+/// One row per stage, its type padded to `width`.
+fn rows(stages: &[StageInfo<'_>], width: usize) -> String {
+    let mut drawn = String::new();
+
+    for info in stages {
         let kind = info.kind().to_string();
         let tags_list = info.tags();
         let tags = tag_names(tags_list);
@@ -197,6 +228,15 @@ mod tests {
         av_toolbox_pipeline::registry().expect("the built-in stages register")
     }
 
+    /// The rows of the stage table, before the providers' heading.
+    fn stage_rows(drawn: &str) -> Vec<&str> {
+        drawn
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .collect()
+    }
+
     #[test]
     fn the_table_lists_every_stage_sorted_by_type() {
         let drawn = table(&built_in());
@@ -205,13 +245,30 @@ mod tests {
         assert!(lines[0].starts_with("TYPE"));
         assert!(drawn.contains("y4m/stdout"));
 
-        let types: Vec<&str> = lines[1..]
+        let types: Vec<&str> = stage_rows(&drawn)
             .iter()
             .map(|line| line.split_whitespace().next().expect("a row has a type"))
             .collect();
         let mut sorted = types.clone();
         sorted.sort();
         assert_eq!(types, sorted);
+    }
+
+    #[test]
+    fn providers_are_listed_under_their_own_heading() {
+        let drawn = table(&built_in());
+
+        let in_stages = stage_rows(&drawn)
+            .iter()
+            .any(|line| line.starts_with("provider/scenes"));
+        assert!(!in_stages, "{drawn}");
+
+        let heading = drawn
+            .lines()
+            .position(|line| line == PROVIDERS_HEADING)
+            .expect("a providers heading");
+        let rows: Vec<&str> = drawn.lines().skip(heading + 1).collect();
+        assert!(rows[0].starts_with("provider/scenes"), "{drawn}");
     }
 
     #[test]

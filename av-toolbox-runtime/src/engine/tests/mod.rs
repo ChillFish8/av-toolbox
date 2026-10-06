@@ -6,7 +6,7 @@ mod support;
 
 pub(crate) use self::fixtures::filters::FLUSHED_TIMESTAMP;
 pub(crate) use self::fixtures::gated::{SLOW_GATES, SLOW_PARKED};
-pub(crate) use self::fixtures::sinks::{GATED_GOT, GATED_RELEASE, HOARDED_EVERY};
+pub(crate) use self::fixtures::sinks::{GATED_GOT, GATED_RELEASE};
 pub(crate) use self::fixtures::sources::{SOURCE_BUDGET_PEAK, SOURCE_WAITING};
 pub(crate) use self::harness::{
     NOTHING_MORE_COMING,
@@ -31,15 +31,14 @@ pub(crate) use self::specs::{
     filter_spec,
     flushing_spec,
     gated_spec,
-    hoarding_spec,
     host_pass_spec,
     host_sink_spec,
     host_slow_spec,
     host_source_spec,
     join_spec,
     matching_spec,
+    meta_sink_spec,
     multiplying_spec,
-    restamp_spec,
     sink_spec,
     slow_spec,
     source_spec,

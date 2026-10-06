@@ -22,7 +22,7 @@ fn a_crossing_passes_its_one_input_through_and_runs_frame_by_frame() {
     assert_eq!(crossing.parallelism(), Parallelism::Frame);
     assert_eq!(crossing.chunk_authority(), Some(0));
     assert_eq!(crossing.residency(), Residency::Host);
-    assert_eq!(crossing.kind(), StageKind::Transform);
+    assert_eq!(crossing.kind(), StageKind::Crossing);
     assert_eq!(crossing.demands(), Vec::new());
     assert_eq!(crossing.suggested_workers(), None);
 }

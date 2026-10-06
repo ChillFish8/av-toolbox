@@ -13,7 +13,7 @@ members = [
     "av-toolbox-gpu",
     "av-toolbox-sinks",
     "av-toolbox-sources",
-    "av-toolbox-transforms",
+    "av-toolbox-providers",
 ]
 
 [workspace.package]

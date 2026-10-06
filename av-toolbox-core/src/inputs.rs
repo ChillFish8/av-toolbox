@@ -1,4 +1,4 @@
-use av_toolbox_gpu::{DeviceSide, Side, StreamItem};
+use av_toolbox_gpu::{DeviceSide, LayerId, Side, StreamItem};
 
 use crate::{BindInputsError, StreamType};
 
@@ -197,6 +197,7 @@ pub struct InputArgument {
     name: Option<String>,
     handle: StageHandle,
     stream: StreamType,
+    layer: Option<LayerId>,
 }
 
 impl InputArgument {
@@ -205,6 +206,7 @@ impl InputArgument {
             name: None,
             handle,
             stream,
+            layer: None,
         }
     }
 
@@ -213,7 +215,14 @@ impl InputArgument {
             name: Some(name.into()),
             handle,
             stream,
+            layer: None,
         }
+    }
+
+    /// The same input, carrying the scene layer the graph gave the stage's demand on it.
+    pub fn in_layer(mut self, layer: LayerId) -> Self {
+        self.layer = Some(layer);
+        self
     }
 
     pub fn name(&self) -> Option<&str> {
@@ -228,6 +237,10 @@ impl InputArgument {
     pub fn stream(&self) -> StreamType {
         self.stream
     }
+
+    pub fn layer(&self) -> Option<LayerId> {
+        self.layer
+    }
 }
 
 /// An input that landed in a signature's variadic tail.
@@ -236,6 +249,7 @@ pub struct VariadicInput {
     name: Option<String>,
     handle: StageHandle,
     stream: StreamType,
+    layer: Option<LayerId>,
 }
 
 impl VariadicInput {
@@ -258,6 +272,7 @@ struct BoundParam {
     name: &'static str,
     handle: Option<StageHandle>,
     stream: Option<StreamType>,
+    layer: Option<LayerId>,
 }
 
 /// A stage's inputs after they have been matched to its signature.
@@ -294,6 +309,17 @@ impl BoundInputs {
     /// Indexed the way [Inputs] indexes its slots. `None` when nothing was bound.
     pub fn chunk_authority(&self) -> Option<usize> {
         self.chunk_authority
+    }
+
+    /// The scene layer the graph gave this stage's demand on `input`, if it demanded one there.
+    pub fn layer_for(&self, input: &str) -> Option<LayerId> {
+        let param = self.params.iter().find(|param| param.name == input);
+        if let Some(param) = param {
+            return param.layer;
+        }
+
+        let variadic = self.variadic.iter().find(|bound| bound.name() == Some(input))?;
+        variadic.layer
     }
 }
 
@@ -381,6 +407,7 @@ pub fn bind_inputs(
             name: param.name(),
             handle: None,
             stream: None,
+            layer: None,
         })
         .collect();
 
@@ -468,6 +495,7 @@ fn bind_positional(
 
         params[*next_positional].handle = Some(argument.handle());
         params[*next_positional].stream = Some(argument.stream());
+        params[*next_positional].layer = argument.layer();
         *next_positional += 1;
         return Ok(());
     }
@@ -485,6 +513,7 @@ fn bind_positional(
         name: None,
         handle: argument.handle(),
         stream: argument.stream(),
+        layer: argument.layer(),
     });
 
     Ok(())
@@ -512,6 +541,7 @@ fn bind_named(
 
         params[index].handle = Some(argument.handle());
         params[index].stream = Some(argument.stream());
+        params[index].layer = argument.layer();
         return Ok(());
     }
 
@@ -528,6 +558,7 @@ fn bind_named(
         name: Some(name.to_string()),
         handle: argument.handle(),
         stream: argument.stream(),
+        layer: argument.layer(),
     });
 
     Ok(())

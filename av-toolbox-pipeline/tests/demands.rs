@@ -41,7 +41,7 @@ use av_toolbox_gpu::{
 };
 use av_toolbox_graph::DiagnosticCode;
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
-use av_toolbox_transforms::{SceneBreaks, SceneRequest, Scenes};
+use av_toolbox_providers::{SceneBreaks, SceneRequest, Scenes};
 use schemars::JsonSchema;
 use serde::Deserialize;
 

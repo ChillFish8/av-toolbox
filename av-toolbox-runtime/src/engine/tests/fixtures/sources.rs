@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
+use av_toolbox_core::testing::fixture_chunk;
 use av_toolbox_core::{
     BoundInputs,
     InputSignature,
@@ -128,7 +129,8 @@ impl Source for ListedInstance {
             return Ok(None);
         };
 
-        let mut meta = FrameMeta::at(self.index_base + self.position).in_chunk(chunk);
+        let at = FrameMeta::at(self.index_base + self.position);
+        let mut meta = fixture_chunk(at, chunk);
         meta.timestamp = Some(Duration::from_secs(self.position));
 
         if let Some(budget) = context.budget()
@@ -246,7 +248,8 @@ impl Source<HostSide> for HostListedInstance {
             return Ok(None);
         };
 
-        let mut meta = FrameMeta::at(self.index_base + self.position).in_chunk(chunk);
+        let at = FrameMeta::at(self.index_base + self.position);
+        let mut meta = fixture_chunk(at, chunk);
         meta.timestamp = Some(Duration::from_secs(self.position));
 
         if let Some(budget) = context.budget()

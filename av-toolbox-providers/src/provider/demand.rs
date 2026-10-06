@@ -1,3 +1,4 @@
+use av_scenechange::SceneDetectionSpeed;
 use av_toolbox_core::DemandDefinition;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -120,4 +121,13 @@ pub enum SceneSpeed {
     Standard,
     /// Compares downscaled pixels.
     Fast,
+}
+
+impl SceneSpeed {
+    pub(crate) const fn detection_speed(self) -> SceneDetectionSpeed {
+        match self {
+            Self::Standard => SceneDetectionSpeed::Standard,
+            Self::Fast => SceneDetectionSpeed::Fast,
+        }
+    }
 }

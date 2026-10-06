@@ -395,10 +395,6 @@ impl Engine {
                     freedom: freedom.clone(),
                     work_senders,
                     assignment_sender,
-                    authority,
-                    layer: region.layer(),
-                    width,
-                    head: region.head(),
                 },
                 freedom,
                 aggregate,
@@ -466,7 +462,7 @@ impl Engine {
                     spawn(&mut handles, &outcome, move || run_passthrough(region));
                 },
                 PreparedRegion::Exchanged(region) => {
-                    spawn_exchanged(region, &mut handles, &outcome, &cancel, &dropped, &warnings);
+                    spawn_exchanged(region, &mut handles, &outcome, &cancel, &dropped);
                 },
             }
         }

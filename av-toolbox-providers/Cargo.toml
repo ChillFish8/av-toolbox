@@ -1,5 +1,5 @@
 [package]
-name = "av-toolbox-transforms"
+name = "av-toolbox-providers"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true

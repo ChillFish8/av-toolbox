@@ -11,7 +11,7 @@ use v_frame::chroma::ChromaSubsampling;
 use v_frame::frame::{Frame, FrameBuilder};
 use v_frame::pixel::Pixel;
 
-use super::args::DetectArgs;
+use crate::provider::SceneSpeed;
 
 /// How many frames past the one being analysed the detector reads.
 pub(crate) const LOOKAHEAD: usize = 5;
@@ -38,6 +38,14 @@ impl Decision {
     };
 }
 
+/// What the detector is asked to find, whatever stream it reads.
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct DetectOptions {
+    pub(crate) speed: SceneSpeed,
+    pub(crate) min_scene_frames: usize,
+    pub(crate) max_scene_frames: Option<NonZeroUsize>,
+}
+
 /// The detector's settings for one stream.
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct Settings {
@@ -51,7 +59,7 @@ pub(crate) struct Settings {
 
 impl Settings {
     /// The settings for frames of `format`, or an error when the detector cannot read them.
-    pub(crate) fn for_stream(format: &FrameFormat, args: &DetectArgs) -> Result<Self, StageError> {
+    pub(crate) fn for_stream(format: &FrameFormat, options: &DetectOptions) -> Result<Self, StageError> {
         check_layout(format)?;
 
         let bit_depth = match format.sample {
@@ -67,14 +75,14 @@ impl Settings {
             },
         };
 
-        let max_scene_frames = args.max_scene_frames.map_or(usize::MAX, NonZeroUsize::get);
+        let max_scene_frames = options.max_scene_frames.map_or(usize::MAX, NonZeroUsize::get);
 
         Ok(Self {
             width: format.width as usize,
             height: format.height as usize,
             bit_depth,
-            speed: args.speed.detection_speed(),
-            min_scene_frames: args.min_scene_frames,
+            speed: options.speed.detection_speed(),
+            min_scene_frames: options.min_scene_frames,
             max_scene_frames,
         })
     }

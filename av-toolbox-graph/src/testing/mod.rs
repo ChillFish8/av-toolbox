@@ -17,19 +17,7 @@ use av_toolbox_core::{AnyDemand, Parallelism, PipelineRegistry};
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
 use self::endpoints::{Deep, File, FloatFirst, Stdout, Wide, WideningSource};
-use self::filters::{
-    Blur,
-    Deband,
-    Either,
-    Failing,
-    Narrow,
-    Precise,
-    Prefers16,
-    Recording,
-    Sparse,
-    Split,
-    Temporal,
-};
+use self::filters::{Blur, Deband, Either, Failing, Narrow, Precise, Prefers16, Recording, Sparse, Temporal};
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 pub(crate) use self::filters::{RECORDED_INPUT_WIDTH, TEMPORAL_BUILD_CALLS};
 pub(crate) use self::filters::{
@@ -38,7 +26,7 @@ pub(crate) use self::filters::{
     SPARSE_FILLED_SLOTS,
     SPARSE_OFFERED_SLOTS,
 };
-use self::host::{HostBlur, HostFile, HostStdout, Log, Restamp};
+use self::host::{HostBlur, HostFile, HostJoin, HostStdout, Log};
 use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
 use self::planes::{Blend, Combine, HostMasker, LayoutFile, PlainBlend};
 use self::providers::{Breaking, Demanding};
@@ -62,7 +50,6 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_filter::<Blur>().expect("should register");
     registry.register_filter::<Failing>().expect("should register");
     registry.register_mask::<Merge>().expect("should register");
-    registry.register_transform::<Split>().expect("should register");
     registry.register_sink::<Stdout>().expect("should register");
     registry.register_filter::<Deband>().expect("should register");
     registry.register_filter::<Recording>().expect("should register");
@@ -88,9 +75,7 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_source::<HostFile>().expect("should register");
     registry.register_filter::<HostBlur>().expect("should register");
     registry.register_sink::<HostStdout>().expect("should register");
-    registry
-        .register_meta_transform::<Restamp>()
-        .expect("should register");
+    registry.register_filter::<HostJoin>().expect("should register");
     registry.register_meta_sink::<Log>().expect("should register");
     registry.register_source::<Rated>().expect("should register");
     registry.register_filter::<Retime>().expect("should register");
@@ -118,7 +103,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 40);
+        assert_eq!(identifiers.len(), 39);
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
         assert!(identifiers.contains(&"test/blur"));
@@ -131,7 +116,7 @@ mod tests {
         assert!(identifiers.contains(&"test/host-file"));
         assert!(identifiers.contains(&"test/host-blur"));
         assert!(identifiers.contains(&"test/host-stdout"));
-        assert!(identifiers.contains(&"test/restamp"));
+        assert!(identifiers.contains(&"test/host-join"));
         assert!(identifiers.contains(&"test/log"));
         assert!(identifiers.contains(&"test/demanding"));
         assert!(identifiers.contains(&"test/stamping"));

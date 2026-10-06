@@ -73,14 +73,13 @@ fn a_round_trip_through_a_host_filter_still_runs() {
 }
 
 #[test]
-fn a_meta_transform_runs_on_whichever_side_its_input_is_on() {
-    let property = "a_meta_transform_runs_on_whichever_side_its_input_is_on";
+fn a_meta_sink_runs_on_whichever_side_its_input_is_on() {
+    let property = "a_meta_sink_runs_on_whichever_side_its_input_is_on";
     engine::clear_recorded();
 
     let specs = vec![
         engine::host_source_spec("input", &[0, 0, 1, 1], 0),
-        engine::restamp_spec("restamp", "input"),
-        engine::host_sink_spec("out", "restamp"),
+        engine::meta_sink_spec("log", "input"),
     ];
     let (graph, solved) = engine::planned_graph(&specs);
     assert_eq!(crossings_of(&graph, Crossing::Upload), 0);

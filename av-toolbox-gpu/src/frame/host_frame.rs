@@ -78,7 +78,7 @@ impl HostFrame {
         &mut self.meta
     }
 
-    /// Moves this to `index` in the stream, leaving its chunk and timestamp alone.
+    /// Moves this to `index` in the stream, leaving its chunks and timestamp alone.
     pub fn set_index(&mut self, index: u64) {
         self.meta.index = index;
     }
@@ -184,7 +184,7 @@ impl HostMask {
         &mut self.meta
     }
 
-    /// Moves this to `index` in the stream, leaving its chunk and timestamp alone.
+    /// Moves this to `index` in the stream, leaving its chunks and timestamp alone.
     pub fn set_index(&mut self, index: u64) {
         self.meta.index = index;
     }
@@ -348,7 +348,7 @@ mod tests {
         StreamFormat,
         Subsampling,
     };
-    use crate::{FrameBudget, HostPool};
+    use crate::{FrameBudget, HostPool, LayerId};
 
     fn format() -> FrameFormat {
         FrameFormat {
@@ -515,10 +515,10 @@ mod tests {
         let frame = HostPool::new().alloc_frame(&format(), FrameMeta::at(0)).freeze();
         let mut item = HostStreamItem::from(frame);
 
-        item.meta_mut().chunk = 5;
+        item.meta_mut().chunks.set(LayerId(0), 5);
         item.set_index(9);
 
-        assert_eq!(item.meta().chunk, 5);
+        assert_eq!(item.meta().chunks.get(LayerId(0)), 5);
         assert_eq!(item.meta().index, 9);
         assert_eq!(item.format(), StreamFormat::Frames(format()));
     }

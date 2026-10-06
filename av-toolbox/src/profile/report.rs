@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn a_long_label_widens_the_first_column_for_every_line() {
         let mut summary = summary();
-        summary.rows[0].label = "download -> transform.scenes.detect.output".to_string();
+        summary.rows[0].label = "download -> filter.scenes.denoise.output".to_string();
 
         let rendered = render(&summary, false);
 

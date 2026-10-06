@@ -8,7 +8,7 @@ use av_toolbox_cubek::testing::{
     reference_scene_changed,
     reference_shimmer,
 };
-use av_toolbox_gpu::{FieldOrder, FrameFormat, FrameMeta, Subsampling};
+use av_toolbox_gpu::{FieldOrder, FrameFormat, FrameMeta, LayerId, Subsampling};
 use serde_json::json;
 
 use super::formats::{at_16_bit, at_422, at_444};
@@ -445,7 +445,7 @@ fn progressive_modes_keep_every_frame_s_index_and_timestamp() {
     for (mode, _) in MODES {
         let mut chunk = inputs(&clip, &input, 10);
         for frame in &mut chunk {
-            frame.meta.chunk = 3;
+            frame.meta.chunks.set(LayerId(0), 3);
         }
         let input_metas: Vec<FrameMeta> = chunk.iter().map(|frame| frame.meta.clone()).collect();
 

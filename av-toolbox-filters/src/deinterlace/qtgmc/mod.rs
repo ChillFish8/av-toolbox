@@ -41,7 +41,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
-use av_toolbox_transforms::{SceneRequest, Scenes};
+use av_toolbox_providers::{SceneRequest, Scenes};
 
 pub(crate) use self::args::{Input, QtgmcArgs};
 use self::args::{checked_field_size, degrain_settings, mask_scene_change, motion_settings, scene_change};

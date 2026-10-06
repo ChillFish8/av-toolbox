@@ -14,7 +14,7 @@ use av_toolbox_gpu::{
     Subsampling,
     default_accelerators,
 };
-use av_toolbox_transforms::{SceneBreaks, SceneRequest, Scenes};
+use av_toolbox_providers::{SceneBreaks, SceneRequest, Scenes};
 use serde_json::json;
 
 use crate::deinterlace::spatial::Spatial;

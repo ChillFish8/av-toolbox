@@ -13,7 +13,7 @@ av-toolbox-masks = { path = "../av-toolbox-masks" }
 av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 av-toolbox-sinks = { path = "../av-toolbox-sinks" }
 av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
-av-toolbox-transforms = { path = "../av-toolbox-transforms" }
+av-toolbox-providers = { path = "../av-toolbox-providers" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
@@ -39,7 +39,7 @@ vulkan = [
     "av-toolbox-runtime/vulkan",
     "av-toolbox-sinks/vulkan",
     "av-toolbox-sources/vulkan",
-    "av-toolbox-transforms/vulkan",
+    "av-toolbox-providers/vulkan",
 ]
 metal = [
     "av-toolbox-gpu/metal",
@@ -50,7 +50,7 @@ metal = [
     "av-toolbox-runtime/metal",
     "av-toolbox-sinks/metal",
     "av-toolbox-sources/metal",
-    "av-toolbox-transforms/metal",
+    "av-toolbox-providers/metal",
 ]
 cuda = [
     "av-toolbox-gpu/cuda",
@@ -61,7 +61,7 @@ cuda = [
     "av-toolbox-runtime/cuda",
     "av-toolbox-sinks/cuda",
     "av-toolbox-sources/cuda",
-    "av-toolbox-transforms/cuda",
+    "av-toolbox-providers/cuda",
 ]
 rocm = [
     "av-toolbox-gpu/rocm",
@@ -72,6 +72,6 @@ rocm = [
     "av-toolbox-runtime/rocm",
     "av-toolbox-sinks/rocm",
     "av-toolbox-sources/rocm",
-    "av-toolbox-transforms/rocm",
+    "av-toolbox-providers/rocm",
 ]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]

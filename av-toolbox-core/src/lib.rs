@@ -1,19 +1,18 @@
 //! Core interfaces for building video processing pipelines
 //!
-//! A pipeline is made of stages, and every stage falls into one of six kinds:
+//! A pipeline is made of stages, and every stage falls into one of five kinds:
 //!
 //! - [Source], which produces frames.
 //! - [Filter], which changes the frames.
 //! - [Mask], which selects pixels from two or more inputs.
-//! - [Transform], which changes the stream rather than the frames.
 //! - [Provider], which supplies what other stages demand. The graph places these itself.
 //! - [Sink], which consumes the finished stream.
 //!
 //! Every kind trait is typed over the side it runs on, defaulting to the device.
 //!
 //! A stage type is written as a [StageDefinition] plus the matching kind trait, one of
-//! [SourceDefinition], [FilterDefinition], [MaskDefinition], [TransformDefinition],
-//! [ProviderDefinition] or [SinkDefinition]. [StageDefinition] declares its arguments as a type, which supplies a JSON
+//! [SourceDefinition], [FilterDefinition], [MaskDefinition], [ProviderDefinition] or
+//! [SinkDefinition]. [StageDefinition] declares its arguments as a type, which supplies a JSON
 //! schema, and its inputs as an [InputSignature]. The kind trait declares what formats it accepts
 //! and produces, and how to build it. Stages are registered with a [PipelineRegistry], which
 //! validates arguments against the schema and binds inputs to the signature before handing them
@@ -41,7 +40,6 @@ mod stream;
 mod tag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
-mod transform;
 
 #[cfg(test)]
 mod tests;
@@ -63,12 +61,10 @@ pub use self::factory::{
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,
-    PreparedMetaTransform,
     PreparedProvider,
     PreparedSink,
     PreparedSource,
     PreparedStage,
-    PreparedTransform,
     StageFactory,
     StageInfo,
 };
@@ -84,16 +80,7 @@ pub use self::inputs::{
     bind_inputs,
 };
 pub use self::mask::Mask;
-pub use self::meta::{
-    MetaInputs,
-    MetaItem,
-    MetaSink,
-    MetaTransform,
-    end_meta_sink,
-    end_meta_transform,
-    run_meta_sink,
-    run_meta_transform,
-};
+pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, run_meta_sink};
 pub use self::open::OpenSlot;
 pub use self::parallelism::{Granularity, Parallelism};
 pub use self::provider::{LayerDemand, Placement, Provider, ProviderDefinition};
@@ -104,7 +91,6 @@ pub use self::residency::{
     BuiltProvider,
     BuiltSink,
     BuiltSource,
-    BuiltTransform,
     Residency,
     Sided,
     StageSide,
@@ -115,14 +101,11 @@ pub use self::stage::{
     FilterDefinition,
     MaskDefinition,
     MetaSinkDefinition,
-    MetaTransformDefinition,
     SinkDefinition,
     SourceDefinition,
     StageDefinition,
     StageInstance,
     StageKind,
-    TransformDefinition,
 };
 pub use self::stream::StreamType;
 pub use self::tag::Tag;
-pub use self::transform::Transform;

@@ -243,27 +243,57 @@ choices = ["standard", "fast"]
 [source.input]
 type = "y4m/stdin"
 
-[transform.scenes]
-type = "scene/detect"
+[sink.output]
+type = "y4m/stdout"
 inputs = ["input"]
-args.mode = "natural"
-args.speed = "{{ speed }}"
+
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["input"]
+args.path = "scenes.ndjson"
+args.scenes = { breaks = { mode = "natural" }, speed = "{{ speed }}" }
+"#;
+
+const CALLED_PART: &str = r#"
+[input.clip]
+
+[filter.shrink]
+type = "resize/bilinear"
+inputs = ["clip"]
+args.width = 32
+args.height = 32
+
+[output.shrunk]
+inputs = ["shrink"]
+"#;
+
+const CALLING_PIPELINE: &str = r#"
+[source.input]
+type = "y4m/stdin"
+
+[call.parts]
+path = "part.toml"
+inputs = ["input"]
 
 [sink.output]
 type = "y4m/stdout"
-inputs = ["scenes"]
+inputs = ["parts"]
 "#;
 
 #[test]
 fn explain_shows_the_prefixed_names_of_called_stages() {
-    let path = example("chunked.toml");
-    let path = path.to_str().expect("utf-8 path");
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let part_path = directory.path().join("part.toml");
+    let pipeline_path = directory.path().join("pipeline.toml");
+    std::fs::write(&part_path, CALLED_PART).expect("writes the part");
+    std::fs::write(&pipeline_path, CALLING_PIPELINE).expect("writes the pipeline");
+    let path = pipeline_path.to_str().expect("utf-8 path");
 
     let output = toolbox(&["explain", path, "--structure-only"]);
     let stderr = text(&output.stderr);
 
     assert!(output.status.success(), "{stderr}");
-    assert!(text(&output.stdout).contains("scenes.detect"));
+    assert!(text(&output.stdout).contains("parts.shrink"));
 }
 
 #[test]
@@ -678,13 +708,38 @@ frames = 4
         for (position, line) in lines.iter().enumerate() {
             assert_eq!(line["index"], position as u64, "{lines:?}");
         }
+    }
+
+    #[test]
+    fn executing_the_scenes_example_logs_every_frames_scene() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let log_path = directory.path().join("scenes.ndjson");
+        let log_path = log_path.to_str().expect("utf-8 path");
+        let scenes_var = format!("scenes={log_path}");
+
+        let run = execute("scenes.toml", &[&scenes_var], Some(textured_y4m_stream()));
+        let stderr = text(&run.output.stderr);
+
+        assert!(run.output.status.success(), "{stderr}");
+
+        let logged = std::fs::read_to_string(log_path).expect("reads the log");
+        let lines: Vec<serde_json::Value> = logged
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("valid json"))
+            .collect();
+        assert_eq!(lines.len() as u64, METADATA_FRAME_COUNT);
+
+        for (position, line) in lines.iter().enumerate() {
+            assert_eq!(line["index"], position as u64, "{lines:?}");
+            assert!(line["chunk"].is_u64(), "{lines:?}");
+        }
 
         let has_a_real_score = lines.iter().any(|line| line["scene_score"].is_number());
         assert!(has_a_real_score, "{lines:?}");
     }
 
     #[test]
-    fn executing_the_chunked_example_runs_through_the_called_file() {
+    fn executing_the_chunked_example_denoises_on_two_workers() {
         let run = execute("chunked.toml", &[], Some(y4m_stream()));
         let stderr = text(&run.output.stderr);
 

@@ -77,9 +77,7 @@ impl StageDefinition for Join {
         "join"
     }
 
-    // Per chunk, so a region headed by one routes by chunk. `RunWarning::DetectorOnWrongBranch`
-    // and `RunWarning::NothingChunked` are only ever noticed on that path, and this is the
-    // fixture every test of them is written around.
+    // Per chunk, so a region headed by one routes by chunk.
     fn parallelism(_args: &Self::Args) -> Parallelism {
         chunked()
     }

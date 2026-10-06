@@ -23,6 +23,7 @@ use av_toolbox_gpu::{
     FrameLayout,
     FrameMeta,
     FrameRate,
+    LayerId,
     MetaValue,
     SampleFormat,
     Subsampling,
@@ -449,7 +450,7 @@ fn each_chunk_is_matched_on_its_own() {
     let format = clip_format(&clip, false);
     let mut inputs = clip_inputs(&clip, &format);
     for input in &mut inputs[5..] {
-        input.meta.chunk = 1;
+        input.meta.chunks.set(LayerId(0), 1);
     }
 
     let second_chunk = inputs.split_off(5);

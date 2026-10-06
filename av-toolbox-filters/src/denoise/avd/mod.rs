@@ -32,7 +32,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
-use av_toolbox_transforms::{SceneRequest, Scenes};
+use av_toolbox_providers::{SceneRequest, Scenes};
 
 pub(crate) use self::args::{AvdArgs, Nl4dArgs, NlmeansArgs, NlmeansHqArgs};
 use self::planes::{checked_layout, engine_sample, engine_specs};

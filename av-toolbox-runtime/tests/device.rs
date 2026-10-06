@@ -89,9 +89,7 @@ impl Source for FramesInstance {
             return Ok(None);
         }
 
-        // Every frame gets its own chunk id, so a filter widened downstream has something to
-        // route by. A run that never widens never reads it.
-        let meta = FrameMeta::at(self.emitted).in_chunk(self.emitted);
+        let meta = FrameMeta::at(self.emitted);
         let frame = context.alloc_frame(&frame_format(), meta);
         self.emitted += 1;
 

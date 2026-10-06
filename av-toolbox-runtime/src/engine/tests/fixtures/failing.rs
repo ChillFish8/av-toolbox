@@ -31,6 +31,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::chunked;
 use crate::engine::tests::support::StageLife;
 
 // A filter that fails on a chosen call, and that a test can hold back until it says so, which
@@ -48,6 +49,9 @@ pub(crate) struct FailingArgs {
     /// Every worker fails when this is unset.
     #[serde(default)]
     failing_worker: Option<usize>,
+    /// Declares the stage per chunk rather than per frame.
+    #[serde(default)]
+    per_chunk: bool,
 }
 
 /// How many times each `Failing` stage has been called, by its `id`.
@@ -160,8 +164,11 @@ impl StageDefinition for Failing {
         "failing"
     }
 
-    fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Frame
+    fn parallelism(args: &Self::Args) -> Parallelism {
+        match args.per_chunk {
+            true => chunked(),
+            false => Parallelism::Frame,
+        }
     }
 
     fn inputs() -> &'static InputSignature {

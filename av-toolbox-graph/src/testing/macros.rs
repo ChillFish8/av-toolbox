@@ -68,10 +68,10 @@ macro_rules! fixture_source {
     };
 }
 
-/// Writes the kind-specific instance method for a filter, mask or transform fixture.
+/// Writes the kind-specific instance method for a filter or mask fixture.
 ///
-/// Each does the minimum its trait requires: a filter and a transform pass their first bound
-/// input through, and a mask allocates a fresh one in the fixture format.
+/// Each does the minimum its trait requires: a filter passes its first bound input through, and a
+/// mask allocates a fresh one in the fixture format.
 macro_rules! fixture_kind_method {
     (Filter, $instance:ident) => {
         impl Filter for $instance {
@@ -95,20 +95,9 @@ macro_rules! fixture_kind_method {
             }
         }
     };
-    (Transform, $instance:ident) => {
-        impl Transform for $instance {
-            fn process(
-                &mut self,
-                _context: &mut FrameContext,
-                mut inputs: Inputs,
-            ) -> Result<Vec<StreamItem>, StageError> {
-                Ok(inputs.take(0).into_iter().collect())
-            }
-        }
-    };
 }
 
-/// Writes a filter, mask or transform fixture: something with both an input and an output side.
+/// Writes a filter or mask fixture, something with both an input and an output side.
 ///
 /// It accepts whatever it is offered and produces what it was given, which is the least
 /// surprising behaviour for a test stage.

@@ -14,18 +14,15 @@ use crate::{
     InputArgument,
     MaskDefinition,
     MetaSinkDefinition,
-    MetaTransformDefinition,
     OpenSlot,
     Placement,
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,
-    PreparedMetaTransform,
     PreparedProvider,
     PreparedSink,
     PreparedSource,
     PreparedStage,
-    PreparedTransform,
     ProviderDefinition,
     RegistryError,
     SinkDefinition,
@@ -34,7 +31,6 @@ use crate::{
     StageFactory,
     StageInfo,
     StageKind,
-    TransformDefinition,
 };
 
 type Factories<P> = HashMap<String, Box<dyn StageFactory<P>>>;
@@ -61,8 +57,6 @@ pub struct PipelineRegistry {
     sources: Factories<dyn PreparedSource>,
     filters: Factories<dyn PreparedFilter>,
     masks: Factories<dyn PreparedMask>,
-    transforms: Factories<dyn PreparedTransform>,
-    meta_transforms: Factories<dyn PreparedMetaTransform>,
     providers: Factories<dyn PreparedProvider>,
     sinks: Factories<dyn PreparedSink>,
     meta_sinks: Factories<dyn PreparedMetaSink>,
@@ -97,33 +91,6 @@ impl PipelineRegistry {
         let definition = Definition::<D>::new(StageKind::Mask)?;
 
         insert(&mut self.masks, definition)
-    }
-
-    pub fn register_transform<D: TransformDefinition>(&mut self) -> Result<(), RegistryError> {
-        let definition = Definition::<D>::new(StageKind::Transform)?;
-        let identifier = definition.full_identifier();
-        if self.meta_transforms.contains_key(identifier) {
-            return Err(RegistryError::DuplicateStage {
-                kind: StageKind::Transform,
-                identifier: identifier.to_string(),
-            });
-        }
-
-        insert(&mut self.transforms, definition)
-    }
-
-    /// Registers a metadata-only transform, which shares the transform identifiers.
-    pub fn register_meta_transform<D: MetaTransformDefinition>(&mut self) -> Result<(), RegistryError> {
-        let definition = Definition::<D>::new(StageKind::Transform)?;
-        let identifier = definition.full_identifier();
-        if self.transforms.contains_key(identifier) {
-            return Err(RegistryError::DuplicateStage {
-                kind: StageKind::Transform,
-                identifier: identifier.to_string(),
-            });
-        }
-
-        insert(&mut self.meta_transforms, definition)
     }
 
     /// Registers the provider of `P::Demand`, registering that demand kind too if it is new.
@@ -218,16 +185,14 @@ impl PipelineRegistry {
             StageKind::Mask => {
                 prepare(&self.masks, kind, identifier, args, inputs, slot).map(PreparedStage::Mask)
             },
-            StageKind::Transform if self.meta_transforms.contains_key(identifier) => {
-                prepare(&self.meta_transforms, kind, identifier, args, inputs, slot)
-                    .map(PreparedStage::MetaTransform)
-            },
-            StageKind::Transform => {
-                prepare(&self.transforms, kind, identifier, args, inputs, slot).map(PreparedStage::Transform)
-            },
             StageKind::Provider => {
                 prepare(&self.providers, kind, identifier, args, inputs, slot).map(PreparedStage::Provider)
             },
+            // The graph places crossings itself, so none is ever registered.
+            StageKind::Crossing => Err(BuildStageError::UnknownStage {
+                kind,
+                identifier: identifier.to_string(),
+            }),
             StageKind::Sink if self.meta_sinks.contains_key(identifier) => {
                 prepare(&self.meta_sinks, kind, identifier, args, inputs, slot).map(PreparedStage::MetaSink)
             },
@@ -286,8 +251,6 @@ impl PipelineRegistry {
         let sources = self.sources.values().map(|factory| factory.info());
         let filters = self.filters.values().map(|factory| factory.info());
         let masks = self.masks.values().map(|factory| factory.info());
-        let transforms = self.transforms.values().map(|factory| factory.info());
-        let meta_transforms = self.meta_transforms.values().map(|factory| factory.info());
         let providers = self.providers.values().map(|factory| factory.info());
         let sinks = self.sinks.values().map(|factory| factory.info());
         let meta_sinks = self.meta_sinks.values().map(|factory| factory.info());
@@ -295,8 +258,6 @@ impl PipelineRegistry {
         sources
             .chain(filters)
             .chain(masks)
-            .chain(transforms)
-            .chain(meta_transforms)
             .chain(providers)
             .chain(sinks)
             .chain(meta_sinks)
@@ -397,10 +358,8 @@ mod tests {
         InputSignature,
         Inputs,
         MetaInputs,
-        MetaItem,
         MetaSink,
         MetaSinkDefinition,
-        MetaTransform,
         Residency,
         Sink,
         Source,
@@ -408,7 +367,6 @@ mod tests {
         StageHandle,
         StageInstance,
         StreamType,
-        Transform,
     };
 
     #[derive(Debug, Deserialize, JsonSchema)]
@@ -711,174 +669,8 @@ mod tests {
         ));
     }
 
-    struct Restamp;
-
-    impl StageInstance for Restamp {}
-
-    impl MetaTransform for Restamp {
-        fn process(
-            &mut self,
-            _context: &mut FrameContext,
-            mut inputs: MetaInputs,
-        ) -> Result<Vec<MetaItem>, StageError> {
-            Ok(inputs.take(0).into_iter().collect())
-        }
-    }
-
     #[derive(Debug, Deserialize, JsonSchema)]
     struct NoArgs {}
-
-    struct RestampDefinition;
-
-    impl StageDefinition for RestampDefinition {
-        type Args = NoArgs;
-
-        fn package() -> &'static str {
-            "builtin"
-        }
-
-        fn identifier() -> &'static str {
-            "restamp"
-        }
-
-        fn inputs() -> &'static InputSignature {
-            const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
-            SIGNATURE
-        }
-    }
-
-    impl MetaTransformDefinition for RestampDefinition {
-        fn accepts_input(
-            _capabilities: &Capabilities,
-            _args: &Self::Args,
-            _index: usize,
-            offered: StreamFormat,
-            _inputs: &[Offered],
-        ) -> Result<FormatSet, StageError> {
-            Ok(FormatSet::of([offered.sample()]))
-        }
-
-        fn produces(
-            _capabilities: &Capabilities,
-            _args: &Self::Args,
-            chosen: &[Option<StreamFormat>],
-        ) -> Result<OutputFormats, StageError> {
-            let format = chosen.iter().flatten().next().copied().expect("an input");
-            Ok(OutputFormats {
-                template: StreamTemplate::from_format(&format),
-                samples: FormatSet::of([format.sample()]),
-            })
-        }
-
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
-            _args: Self::Args,
-            _inputs: BoundInputs,
-            _formats: &ResolvedFormats,
-        ) -> Result<Box<dyn MetaTransform>, StageError> {
-            Ok(Box::new(Restamp))
-        }
-    }
-
-    #[test]
-    fn a_meta_transform_prepares_as_a_transform_that_runs_on_either_side() {
-        let mut registry = PipelineRegistry::new();
-        registry
-            .register_meta_transform::<RestampDefinition>()
-            .expect("should register");
-        let input = vec![InputArgument::positional(StageHandle::new(1), StreamType::Frames)];
-
-        let prepared = registry
-            .prepare(
-                StageKind::Transform,
-                "builtin/restamp",
-                &serde_json::json!({}),
-                &input,
-            )
-            .expect("should prepare");
-
-        assert_eq!(prepared.kind(), StageKind::Transform);
-        assert_eq!(prepared.residency(), Residency::Either);
-        assert!(matches!(prepared, PreparedStage::MetaTransform(_)));
-    }
-
-    struct RestampTransformDefinition;
-
-    impl StageDefinition for RestampTransformDefinition {
-        type Args = NoArgs;
-
-        fn package() -> &'static str {
-            "builtin"
-        }
-
-        fn identifier() -> &'static str {
-            "restamp"
-        }
-
-        fn inputs() -> &'static InputSignature {
-            const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
-            SIGNATURE
-        }
-    }
-
-    impl TransformDefinition for RestampTransformDefinition {
-        type Side = DeviceSide;
-
-        fn accepts_input(
-            _capabilities: &Capabilities,
-            _args: &Self::Args,
-            _index: usize,
-            _offered: StreamFormat,
-            _inputs: &[Offered],
-        ) -> Result<FormatSet, StageError> {
-            unreachable!("not exercised by these tests")
-        }
-
-        fn produces(
-            _capabilities: &Capabilities,
-            _args: &Self::Args,
-            _chosen: &[Option<StreamFormat>],
-        ) -> Result<OutputFormats, StageError> {
-            unreachable!("not exercised by these tests")
-        }
-
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
-            _args: Self::Args,
-            _inputs: BoundInputs,
-            _formats: &ResolvedFormats,
-        ) -> Result<Box<dyn Transform>, StageError> {
-            unreachable!("not exercised by these tests")
-        }
-    }
-
-    #[test]
-    fn a_meta_transform_cannot_share_an_identifier_with_a_transform() {
-        let mut registry = PipelineRegistry::new();
-        registry
-            .register_transform::<RestampTransformDefinition>()
-            .expect("should register");
-
-        let error = registry
-            .register_meta_transform::<RestampDefinition>()
-            .expect_err("should not register beside the transform");
-
-        assert!(matches!(error, RegistryError::DuplicateStage { .. }));
-    }
-
-    #[test]
-    fn a_transform_cannot_share_an_identifier_with_a_meta_transform() {
-        let mut registry = PipelineRegistry::new();
-        registry
-            .register_meta_transform::<RestampDefinition>()
-            .expect("should register");
-
-        let error = registry
-            .register_transform::<RestampTransformDefinition>()
-            .expect_err("should not register beside the meta transform");
-
-        assert!(matches!(error, RegistryError::DuplicateStage { .. }));
-    }
 
     struct LogStage;
 

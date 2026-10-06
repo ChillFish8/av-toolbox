@@ -6,7 +6,9 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use av_toolbox_core::{
+    AnyDemand,
     BoundInputs,
+    InputDemand,
     InputSignature,
     MetaInputs,
     MetaSink,
@@ -20,11 +22,13 @@ use av_toolbox_gpu::{
     Capabilities,
     FormatSet,
     FrameContext,
+    LayerId,
     Offered,
     ResolvedFormats,
     Runtime,
     StreamFormat,
 };
+use av_toolbox_providers::{SceneRequest, Scenes};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -45,6 +49,9 @@ pub(crate) struct NdjsonArgs {
     pub(crate) include: Option<Vec<Pattern>>,
     /// Keys to drop, which wins over `include`.
     pub(crate) exclude: Option<Vec<Pattern>>,
+    /// Scene breaks to write each frame's chunk in, as its `chunk`.
+    #[serde(default)]
+    pub(crate) scenes: Option<SceneRequest>,
 }
 
 pub(crate) struct Ndjson;
@@ -58,6 +65,19 @@ impl StageDefinition for Ndjson {
 
     fn identifier() -> &'static str {
         "ndjson"
+    }
+
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        let Some(request) = args.scenes.clone() else {
+            return Vec::new();
+        };
+
+        let demand = AnyDemand::new::<Scenes>(request);
+
+        vec![InputDemand {
+            input: "input",
+            demand,
+        }]
     }
 
     fn inputs() -> &'static InputSignature {
@@ -82,13 +102,14 @@ impl MetaSinkDefinition for Ndjson {
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
         args: Self::Args,
-        _inputs: BoundInputs,
+        inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn MetaSink>, StageError> {
         let path = args.path.as_deref();
         let file = open_target(STAGE, args.fd, path)?;
         let filter = KeyFilter::new(args.include, args.exclude);
-        let sink = NdjsonSink::new(file, filter);
+        let layer = inputs.layer_for("input");
+        let sink = NdjsonSink::new(file, filter, layer);
 
         Ok(Box::new(sink))
     }
@@ -104,16 +125,20 @@ fn accepts(offered: StreamFormat) -> Result<FormatSet, StageError> {
 }
 
 /// A sink writing each frame's metadata as one line of JSON.
+///
+/// With a scene layer, each line carries the frame's chunk in that layer.
 pub(crate) struct NdjsonSink<W: Write> {
     output: BufWriter<W>,
     filter: KeyFilter,
+    layer: Option<LayerId>,
 }
 
 impl<W: Write> NdjsonSink<W> {
-    pub(crate) fn new(output: W, filter: KeyFilter) -> Self {
+    pub(crate) fn new(output: W, filter: KeyFilter, layer: Option<LayerId>) -> Self {
         Self {
             output: BufWriter::new(output),
             filter,
+            layer,
         }
     }
 }
@@ -127,7 +152,8 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
         };
 
         let meta = item.meta();
-        let written = write_line(&mut self.output, meta, &self.filter);
+        let chunk = self.layer.map(|layer| meta.chunks.get(layer));
+        let written = write_line(&mut self.output, meta, chunk, &self.filter);
 
         written.map_err(|error| {
             let position = format!("frame {}", meta.index);
@@ -171,7 +197,16 @@ mod tests {
     use std::{fs, io};
 
     use av_toolbox_core::{end_meta_sink, run_meta_sink};
-    use av_toolbox_gpu::{AnyItem, HostStreamItem, MaskFormat, MetaValue, SampleFormat, testing_context};
+    use av_toolbox_gpu::{
+        AnyItem,
+        HostStreamItem,
+        LayerId,
+        MaskFormat,
+        MetaValue,
+        SampleFormat,
+        testing_context,
+    };
+    use av_toolbox_providers::{SceneRequest, Scenes};
 
     use super::*;
     use crate::shared::testing::{SharedBuffer, filled_frame, yuv420};
@@ -204,7 +239,7 @@ mod tests {
     #[test]
     fn each_frame_is_one_line_in_order() {
         let buffer = SharedBuffer::default();
-        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default());
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
 
         run(&mut sink, vec![frame_item(0, true), frame_item(1, false)]).expect("runs");
 
@@ -219,7 +254,7 @@ mod tests {
     #[test]
     fn an_empty_stream_writes_nothing() {
         let buffer = SharedBuffer::default();
-        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default());
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
 
         run(&mut sink, Vec::new()).expect("runs");
 
@@ -229,7 +264,7 @@ mod tests {
     #[test]
     fn ending_twice_is_harmless() {
         let buffer = SharedBuffer::default();
-        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default());
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
         let mut context = testing_context();
 
         run(&mut sink, vec![frame_item(0, false)]).expect("runs");
@@ -253,7 +288,7 @@ mod tests {
             }
         }
 
-        let mut sink = NdjsonSink::new(ClosedReader, KeyFilter::default());
+        let mut sink = NdjsonSink::new(ClosedReader, KeyFilter::default(), None);
 
         let error = run(&mut sink, vec![frame_item(0, false)]).expect_err("the reader is gone");
 
@@ -287,13 +322,80 @@ mod tests {
         let folder = tempfile::tempdir().expect("a temp dir");
         let path = folder.path().join("out.ndjson");
         let file = open_target("metadata/ndjson", None, Some(&path)).expect("opens");
-        let mut sink = NdjsonSink::new(file, KeyFilter::default());
+        let mut sink = NdjsonSink::new(file, KeyFilter::default(), None);
 
         run(&mut sink, vec![frame_item(0, false)]).expect("runs");
         drop(sink);
 
         let text = fs::read_to_string(&path).expect("reads");
         assert_eq!(text.lines().count(), 1);
+    }
+
+    fn chunked_item(index: u64, chunk: u64) -> AnyItem {
+        let format = yuv420(4, 2, SampleFormat::U8, None);
+        let mut frame = filled_frame(&format, index, 0);
+        frame.meta_mut().chunks.set(LayerId(0), chunk);
+
+        AnyItem::Host(HostStreamItem::from(frame))
+    }
+
+    fn written_lines(buffer: &SharedBuffer) -> Vec<serde_json::Value> {
+        let text = String::from_utf8(buffer.contents()).expect("utf-8");
+
+        text.lines()
+            .map(|line| serde_json::from_str(line).expect("valid json"))
+            .collect()
+    }
+
+    #[test]
+    fn the_ndjson_sink_writes_the_layer_it_asks_for() {
+        let buffer = SharedBuffer::default();
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), Some(LayerId(0)));
+        let items = vec![chunked_item(0, 0), chunked_item(1, 0), chunked_item(2, 1)];
+
+        run(&mut sink, items).expect("runs");
+
+        let lines = written_lines(&buffer);
+        let chunks: Vec<&serde_json::Value> = lines.iter().map(|line| &line["chunk"]).collect();
+        assert_eq!(chunks, [0, 0, 1]);
+    }
+
+    #[test]
+    fn the_ndjson_sink_writes_no_chunk_without_scenes() {
+        let buffer = SharedBuffer::default();
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
+
+        run(&mut sink, vec![chunked_item(0, 3)]).expect("runs");
+
+        let lines = written_lines(&buffer);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].get("chunk").is_none(), "{lines:?}");
+    }
+
+    #[test]
+    fn scenes_demand_scene_breaks_on_the_input() {
+        let value = serde_json::json!({
+            "path": "out.ndjson",
+            "scenes": { "breaks": { "mode": "natural" } },
+        });
+        let args: NdjsonArgs = serde_json::from_value(value).expect("parses");
+
+        let demands = Ndjson::demands(&args);
+
+        assert_eq!(demands.len(), 1);
+        assert_eq!(demands[0].input, "input");
+        let request = demands[0].demand.request::<Scenes>();
+        assert_eq!(request, Some(SceneRequest::natural()));
+    }
+
+    #[test]
+    fn without_scenes_nothing_is_demanded() {
+        let value = serde_json::json!({ "path": "out.ndjson" });
+        let args: NdjsonArgs = serde_json::from_value(value).expect("parses");
+
+        let demands = Ndjson::demands(&args);
+
+        assert!(demands.is_empty());
     }
 
     #[test]

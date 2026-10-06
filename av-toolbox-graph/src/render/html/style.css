@@ -14,8 +14,8 @@
     --filter-stroke: #166534;
     --mask-fill: #fef3c7;
     --mask-stroke: #92400e;
-    --transform-fill: #ede9fe;
-    --transform-stroke: #5b21b6;
+    --crossing-fill: #ede9fe;
+    --crossing-stroke: #5b21b6;
     --sink-fill: #fee2e2;
     --sink-stroke: #991b1b;
     --provider-fill: #ccfbf1;
@@ -41,8 +41,8 @@
         --filter-stroke: #86efac;
         --mask-fill: #78350f;
         --mask-stroke: #fcd34d;
-        --transform-fill: #4c1d95;
-        --transform-stroke: #c4b5fd;
+        --crossing-fill: #4c1d95;
+        --crossing-stroke: #c4b5fd;
         --sink-fill: #7f1d1d;
         --sink-stroke: #fca5a5;
         --provider-fill: #134e4a;
@@ -148,9 +148,9 @@ header {
     stroke: var(--mask-stroke);
 }
 
-.box.transform .shape {
-    fill: var(--transform-fill);
-    stroke: var(--transform-stroke);
+.box.crossing .shape {
+    fill: var(--crossing-fill);
+    stroke: var(--crossing-stroke);
 }
 
 .box.sink .shape {

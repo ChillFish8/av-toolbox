@@ -13,7 +13,7 @@ use av_toolbox_gpu::{
 use serde_json::Value;
 
 use super::definition::{Definition, Prepared, keep};
-use super::prepared::{PreparedFilter, PreparedMask, PreparedSink, PreparedSource, PreparedTransform};
+use super::prepared::{PreparedFilter, PreparedMask, PreparedSink, PreparedSource};
 use super::{StageFactory, StageInfo};
 use crate::chroma::add_chroma_plane;
 use crate::{
@@ -23,7 +23,6 @@ use crate::{
     BuiltMask,
     BuiltSink,
     BuiltSource,
-    BuiltTransform,
     FilterDefinition,
     InputArgument,
     InputDemand,
@@ -35,7 +34,6 @@ use crate::{
     SourceDefinition,
     StageError,
     StageSide,
-    TransformDefinition,
 };
 
 /// Writes a stage kind's build task and factory, handing each built stage to `$finish`.
@@ -358,14 +356,5 @@ impl_stage_factory!(
     BuiltMask,
     mask,
     add_chroma_plane
-);
-impl_stage_factory!(
-    Transform,
-    TransformDefinition,
-    PreparedTransform,
-    BuildTransform,
-    BuiltTransform,
-    transform,
-    keep
 );
 impl_sink_factory!(BuildSink);

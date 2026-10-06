@@ -36,7 +36,7 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
-use av_toolbox_transforms::{SceneRequest, Scenes};
+use av_toolbox_providers::{SceneRequest, Scenes};
 use schemars::JsonSchema;
 use serde::Deserialize;
 

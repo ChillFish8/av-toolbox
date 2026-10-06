@@ -34,20 +34,6 @@ fn a_filter_emitting_several_frames_in_a_frame_routed_region_runs() {
 }
 
 #[test]
-fn a_transform_emitting_nothing_in_a_frame_routed_region_runs() {
-    let context = testing_context();
-    let head = NodeId::new(0);
-    let nodes = vec![(head, StageBox::Transform(Box::new(Multiply { copies: 0 })))];
-    let edges = RegionEdges::new(Vec::new(), vec![head]).frame_routed();
-    let mut runner = RegionRunner::new(nodes, edges);
-
-    let bundle = vec![Some(item(&context, 0, 0))];
-    let produced = runner.run(&mut context_of(&context), bundle).expect("should run");
-
-    assert!(produced.is_empty());
-}
-
-#[test]
 fn ending_a_frame_routed_region_does_not_check_flushes() {
     let context = testing_context();
     let head = NodeId::new(0);

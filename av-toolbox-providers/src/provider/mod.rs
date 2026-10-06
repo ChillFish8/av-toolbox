@@ -38,7 +38,6 @@ pub use self::demand::{SceneBreaks, SceneRequest, SceneSpeed, Scenes};
 use self::detection::Detection;
 use self::hold::LayerHold;
 use self::layers::{LONGEST_SCENE, LayerBreaks, limit_of};
-use crate::scene::args::Speed;
 use crate::scene::window::{LOOKAHEAD, check_layout};
 
 /// Finds scene cuts once and breaks the stream into scenes for every layer demanding them.
@@ -143,9 +142,9 @@ impl ServeScenes {
             .iter()
             .any(|(_, request)| request.speed == SceneSpeed::Standard);
         let speed = if any_standard {
-            Speed::Standard
+            SceneSpeed::Standard
         } else {
-            Speed::Fast
+            SceneSpeed::Fast
         };
         let detection = Detection::new(format, speed)?;
 

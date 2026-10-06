@@ -1,9 +1,16 @@
-# Decodes a video, splits it at scene changes and writes it out as y4m.
+# Decodes a video, writes it out as y4m and logs where its scenes break as one line of JSON per frame.
+#
+# Each line carries the frame's scene as `chunk`, and how strongly the detector favoured a cut before it.
 
 [variable.input]
 type = "path"
 description = "The video to decode"
 default = "input.mkv"
+
+[variable.scenes]
+type = "path"
+description = "Where to write the scene log"
+default = "scenes.ndjson"
 
 [variable.output]
 type = "path"
@@ -14,12 +21,13 @@ default = "output.y4m"
 type = "ffms2/file"
 args.path = "{{ input }}"
 
-[transform.scenes]
-type = "scene/detect"
-inputs = ["clip"]
-args.mode = "natural"
-
 [sink.output]
 type = "y4m/pipe"
-inputs = ["scenes"]
+inputs = ["clip"]
 args.path = "{{ output }}"
+
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["clip"]
+args.path = "{{ scenes }}"
+args.scenes = { breaks = { mode = "natural" } }

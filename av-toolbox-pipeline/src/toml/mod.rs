@@ -90,11 +90,10 @@ enum Table {
     Output,
 }
 
-const TABLES: [(&str, Table); 9] = [
+const TABLES: [(&str, Table); 8] = [
     ("source", Table::Stage(StageKind::Source)),
     ("filter", Table::Stage(StageKind::Filter)),
     ("mask", Table::Stage(StageKind::Mask)),
-    ("transform", Table::Stage(StageKind::Transform)),
     ("sink", Table::Stage(StageKind::Sink)),
     ("variable", Table::Variable),
     ("call", Table::Call),
@@ -206,7 +205,13 @@ fn unknown_table(key: &TomlSpanned<Cow<'_, str>>, file: FileId) -> Diagnostic {
     let name = key.get_ref();
     let range = key.span();
     let span = Span::in_file(file, range.start, range.end);
-    let allowed = "use source, filter, mask, transform, sink, variable, call, input or output";
+
+    if name == "transform" {
+        let message = "transforms were removed, stages now request scene breaks themselves";
+        return Diagnostic::error(DiagnosticCode::RemovedTransforms, "transform", span, message);
+    }
+
+    let allowed = "use source, filter, mask, sink, variable, call, input or output";
     let message = format!("{name} is not a table a pipeline holds, {allowed}");
     let path = name.to_string();
     let diagnostic = Diagnostic::error(DiagnosticCode::InvalidDefinition, path, span, message);

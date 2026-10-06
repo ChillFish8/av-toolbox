@@ -121,12 +121,12 @@ pub(crate) fn masking_spec(name: &str, input: &str) -> StageSpec {
     mask
 }
 
-/// A transform emitting three frames, then none, then one, cycling with each input's timestamp.
+/// A filter emitting three frames, then none, then one, cycling with each input's timestamp.
 pub(crate) fn multiplying_spec(name: &str, input: &str, workers: Option<usize>) -> StageSpec {
-    let mut transform = spec(StageKind::Transform, name, "test/multiplying");
-    transform.inputs = vec![positional(input)];
-    transform.workers = workers;
-    transform
+    let mut filter = spec(StageKind::Filter, name, "test/multiplying");
+    filter.inputs = vec![positional(input)];
+    filter.workers = workers;
+    filter
 }
 
 pub(crate) fn join_spec(name: &str, base: &str, overlay: &str) -> StageSpec {
@@ -204,6 +204,20 @@ pub(crate) fn failing_worker_spec(
     failing
 }
 
+/// The same as [failing_worker_spec], declared per chunk so its region routes on a scene layer.
+pub(crate) fn chunked_failing_worker_spec(
+    name: &str,
+    input: &str,
+    id: usize,
+    failing_worker: usize,
+    workers: usize,
+) -> StageSpec {
+    let mut failing = failing_worker_spec(name, input, id, failing_worker, workers);
+    let args = json!({ "id": id, "fail_at": 1, "failing_worker": failing_worker, "per_chunk": true });
+    failing.args = Spanned::unknown(args);
+    failing
+}
+
 pub(crate) fn panicking_spec(name: &str, input: &str, workers: usize) -> StageSpec {
     let mut panicking = spec(StageKind::Filter, name, "test/panicking");
     panicking.inputs = vec![positional(input)];
@@ -240,12 +254,6 @@ pub(crate) fn gated_spec(name: &str, input: &str) -> StageSpec {
     let mut sink = spec(StageKind::Sink, name, "test/gated");
     sink.inputs = vec![positional(input)];
     sink
-}
-
-pub(crate) fn restamp_spec(name: &str, input: &str) -> StageSpec {
-    let mut transform = spec(StageKind::Transform, name, "test/restamp");
-    transform.inputs = vec![positional(input)];
-    transform
 }
 
 pub(crate) fn meta_sink_spec(name: &str, input: &str) -> StageSpec {

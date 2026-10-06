@@ -32,6 +32,22 @@ fn an_unknown_top_level_table_is_refused() {
 }
 
 #[test]
+fn a_transform_table_is_refused_as_removed() {
+    let text = "[transform.x]\ntype = \"scene/detect\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::RemovedTransforms]);
+    assert_eq!(diagnostics[0].path(), "transform");
+    assert_eq!(diagnostics[0].span(), locate(text, "transform"));
+    assert!(
+        diagnostics[0]
+            .message()
+            .contains("transforms were removed, stages now request scene breaks themselves")
+    );
+}
+
+#[test]
 fn a_plural_kind_suggests_the_singular() {
     let diagnostics = reported("[sources.a]\ntype = \"a/b\"\n");
 

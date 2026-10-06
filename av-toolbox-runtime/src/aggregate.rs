@@ -124,6 +124,7 @@ mod tests {
         FrameFormat,
         FrameLayout,
         FrameMeta,
+        LayerId,
         SampleFormat,
         StreamItem,
         Subsampling,
@@ -148,7 +149,7 @@ mod tests {
 
     fn item(index: u64, chunk: u64) -> AnyItem {
         let context = testing_context();
-        let meta = FrameMeta::at(index).in_chunk(chunk);
+        let meta = FrameMeta::at(index).in_layer(LayerId(0), chunk);
         StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
     }
 
@@ -192,7 +193,7 @@ mod tests {
             .accept(0, WorkResult::Item(item(40, 7)))
             .expect("should accept");
 
-        assert_eq!(emitted[0].meta().chunk, 7);
+        assert_eq!(emitted[0].meta().chunks.get(LayerId(0)), 7);
     }
 
     #[test]

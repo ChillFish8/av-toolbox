@@ -21,7 +21,6 @@ use crate::{
     InputSignature,
     Mask,
     MetaSink,
-    MetaTransform,
     Parallelism,
     Sink,
     Source,
@@ -29,7 +28,6 @@ use crate::{
     StageSide,
     StreamType,
     Tag,
-    Transform,
 };
 
 /// The category a stage belongs to.
@@ -38,9 +36,10 @@ pub enum StageKind {
     Source,
     Filter,
     Mask,
-    Transform,
     /// Supplies what other stages demand, placed by the graph rather than the pipeline.
     Provider,
+    /// Moves a stream between host and device, placed by the graph rather than the pipeline.
+    Crossing,
     Sink,
 }
 
@@ -48,7 +47,7 @@ impl StageKind {
     /// What a stage of this kind produces, or `None` for a sink.
     pub const fn output(&self) -> Option<StreamType> {
         match self {
-            Self::Source | Self::Filter | Self::Transform | Self::Provider => Some(StreamType::Frames),
+            Self::Source | Self::Filter | Self::Provider | Self::Crossing => Some(StreamType::Frames),
             Self::Mask => Some(StreamType::Mask),
             Self::Sink => None,
         }
@@ -61,8 +60,8 @@ impl fmt::Display for StageKind {
             Self::Source => "source",
             Self::Filter => "filter",
             Self::Mask => "mask",
-            Self::Transform => "transform",
             Self::Provider => "provider",
+            Self::Crossing => "crossing",
             Self::Sink => "sink",
         };
 
@@ -365,80 +364,6 @@ pub trait MaskDefinition: StageDefinition {
     ) -> Result<Box<dyn Mask<Self::Side>>, StageError>;
 }
 
-/// A stage that changes the pipeline stream rather than the frames within it.
-pub trait TransformDefinition: StageDefinition {
-    /// The side this stage runs on.
-    type Side: StageSide;
-
-    /// Which sample formats this stage will take on one input, most preferred first.
-    ///
-    /// The offered layout, dimensions and colour information are the stage's to validate, and an
-    /// unusable one is an error rather than an empty set. Raise one only for those, because the
-    /// stage is asked once per sample its producer could emit and an error stops the whole edge
-    /// rather than the one sample. A sample the stage cannot work in is left out of the set.
-    ///
-    /// `inputs` holds every input in signature order, including this one at `index`. A stage whose
-    /// answer depends on more than one input reads it, and what it returns is binding only when
-    /// every other input is [Offered::Resolved](av_toolbox_gpu::Offered::Resolved). While any of them is
-    /// [Offered::Proposed](av_toolbox_gpu::Offered::Proposed) or
-    /// [Offered::Unknown](av_toolbox_gpu::Offered::Unknown), leaving a sample out reads as a preference
-    /// rather than a refusal, so the solver may still settle on it when nothing else suits every
-    /// reader. An optional input nobody bound never settles, so it does not hold an answer back.
-    /// The stage is asked again once everything is decided, and that answer is the one that holds.
-    /// Apply the same check from whichever input is asked about, so the answer does not depend on
-    /// which came first.
-    fn accepts_input(
-        capabilities: &Capabilities,
-        args: &Self::Args,
-        index: usize,
-        offered: StreamFormat,
-        inputs: &[Offered],
-    ) -> Result<FormatSet, StageError>;
-
-    /// What it could produce, given what it will be given.
-    fn produces(
-        capabilities: &Capabilities,
-        args: &Self::Args,
-        chosen: &[Option<StreamFormat>],
-    ) -> Result<OutputFormats, StageError>;
-
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
-        args: Self::Args,
-        inputs: BoundInputs,
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Transform<Self::Side>>, StageError>;
-}
-
-/// A transform that only touches where items sit in the stream, and so runs on either side.
-pub trait MetaTransformDefinition: StageDefinition {
-    /// Which sample formats this stage will take on one input, most preferred first.
-    ///
-    /// The same contract as [TransformDefinition::accepts_input](crate::TransformDefinition::accepts_input).
-    fn accepts_input(
-        capabilities: &Capabilities,
-        args: &Self::Args,
-        index: usize,
-        offered: StreamFormat,
-        inputs: &[Offered],
-    ) -> Result<FormatSet, StageError>;
-
-    /// What it could produce, given what it will be given.
-    fn produces(
-        capabilities: &Capabilities,
-        args: &Self::Args,
-        chosen: &[Option<StreamFormat>],
-    ) -> Result<OutputFormats, StageError>;
-
-    /// Builds the instance. A metadata-only transform has no side to build for.
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
-        args: Self::Args,
-        inputs: BoundInputs,
-        formats: &ResolvedFormats,
-    ) -> Result<Box<dyn MetaTransform>, StageError>;
-}
-
 /// A sink that only reads where items sit in the stream, and so runs on either side.
 pub trait MetaSinkDefinition: StageDefinition {
     /// Which sample formats this stage will take on one input, most preferred first.
@@ -643,9 +568,14 @@ mod tests {
     fn every_kind_but_a_sink_produces_a_stream() {
         assert_eq!(StageKind::Source.output(), Some(StreamType::Frames));
         assert_eq!(StageKind::Filter.output(), Some(StreamType::Frames));
-        assert_eq!(StageKind::Transform.output(), Some(StreamType::Frames));
         assert_eq!(StageKind::Provider.output(), Some(StreamType::Frames));
+        assert_eq!(StageKind::Crossing.output(), Some(StreamType::Frames));
         assert_eq!(StageKind::Mask.output(), Some(StreamType::Mask));
         assert_eq!(StageKind::Sink.output(), None);
+    }
+
+    #[test]
+    fn a_crossing_displays_as_crossing() {
+        assert_eq!(StageKind::Crossing.to_string(), "crossing");
     }
 }

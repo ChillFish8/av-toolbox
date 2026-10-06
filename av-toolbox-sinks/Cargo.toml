@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-gpu = { workspace = true }
+av-toolbox-providers = { path = "../av-toolbox-providers" }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -20,8 +21,8 @@ tempfile = { workspace = true }
 y4m = { workspace = true }
 
 [features]
-vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan"]
-metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal"]
-cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda"]
-rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm"]
+vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-providers/vulkan"]
+metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-providers/metal"]
+cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda", "av-toolbox-providers/cuda"]
+rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-providers/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]

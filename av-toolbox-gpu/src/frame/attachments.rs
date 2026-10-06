@@ -191,7 +191,7 @@ mod tests {
         attachments.stamp("filter.a");
         let before = attachments.clone();
 
-        attachments.stamp("transform.b");
+        attachments.stamp("filter.b");
 
         assert_eq!(attachments, before);
         assert_eq!(attachments.stages().count(), 1);

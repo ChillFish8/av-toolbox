@@ -20,11 +20,9 @@ pub use self::prepared::{
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,
-    PreparedMetaTransform,
     PreparedProvider,
     PreparedSink,
     PreparedSource,
-    PreparedTransform,
 };
 use crate::{
     BuildStageError,
@@ -105,8 +103,6 @@ pub enum PreparedStage {
     Source(Box<dyn PreparedSource>),
     Filter(Box<dyn PreparedFilter>),
     Mask(Box<dyn PreparedMask>),
-    Transform(Box<dyn PreparedTransform>),
-    MetaTransform(Box<dyn PreparedMetaTransform>),
     Provider(Box<dyn PreparedProvider>),
     Sink(Box<dyn PreparedSink>),
     MetaSink(Box<dyn PreparedMetaSink>),
@@ -120,7 +116,7 @@ impl PreparedStage {
             Self::Source(_) => StageKind::Source,
             Self::Filter(_) => StageKind::Filter,
             Self::Mask(_) => StageKind::Mask,
-            Self::Transform(_) | Self::MetaTransform(_) | Self::Crossing(_) => StageKind::Transform,
+            Self::Crossing(_) => StageKind::Crossing,
             Self::Provider(_) => StageKind::Provider,
             Self::Sink(_) | Self::MetaSink(_) => StageKind::Sink,
         }
@@ -131,8 +127,6 @@ impl PreparedStage {
             Self::Source(prepared) => prepared.parallelism(),
             Self::Filter(prepared) => prepared.parallelism(),
             Self::Mask(prepared) => prepared.parallelism(),
-            Self::Transform(prepared) => prepared.parallelism(),
-            Self::MetaTransform(prepared) => prepared.parallelism(),
             // A provider reads the whole stream in order to supply it.
             Self::Provider(_) => Parallelism::Stream,
             Self::Sink(prepared) => prepared.parallelism(),
@@ -147,8 +141,6 @@ impl PreparedStage {
             Self::Source(prepared) => prepared.chunk_authority(),
             Self::Filter(prepared) => prepared.chunk_authority(),
             Self::Mask(prepared) => prepared.chunk_authority(),
-            Self::Transform(prepared) => prepared.chunk_authority(),
-            Self::MetaTransform(prepared) => prepared.chunk_authority(),
             Self::Provider(prepared) => prepared.chunk_authority(),
             Self::Sink(prepared) => prepared.chunk_authority(),
             Self::MetaSink(prepared) => prepared.chunk_authority(),
@@ -162,8 +154,6 @@ impl PreparedStage {
             Self::Source(prepared) => prepared.demands(),
             Self::Filter(prepared) => prepared.demands(),
             Self::Mask(prepared) => prepared.demands(),
-            Self::Transform(prepared) => prepared.demands(),
-            Self::MetaTransform(prepared) => prepared.demands(),
             Self::Provider(_) => Vec::new(),
             Self::Sink(prepared) => prepared.demands(),
             Self::MetaSink(prepared) => prepared.demands(),
@@ -177,8 +167,6 @@ impl PreparedStage {
             Self::Source(prepared) => prepared.suggested_workers(),
             Self::Filter(prepared) => prepared.suggested_workers(),
             Self::Mask(prepared) => prepared.suggested_workers(),
-            Self::Transform(prepared) => prepared.suggested_workers(),
-            Self::MetaTransform(prepared) => prepared.suggested_workers(),
             Self::Provider(_) => None,
             Self::Sink(prepared) => prepared.suggested_workers(),
             Self::MetaSink(prepared) => prepared.suggested_workers(),
@@ -191,8 +179,6 @@ impl PreparedStage {
             Self::Source(prepared) => prepared.held_frames(formats),
             Self::Filter(prepared) => prepared.held_frames(formats),
             Self::Mask(prepared) => prepared.held_frames(formats),
-            Self::Transform(prepared) => prepared.held_frames(formats),
-            Self::MetaTransform(prepared) => prepared.held_frames(formats),
             Self::Provider(prepared) => prepared.held_frames(formats),
             Self::Sink(prepared) => prepared.held_frames(formats),
             Self::MetaSink(prepared) => prepared.held_frames(formats),
@@ -214,8 +200,6 @@ impl PreparedStage {
             )),
             Self::Filter(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::Mask(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
-            Self::Transform(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
-            Self::MetaTransform(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::Provider(prepared) => prepared.accepts_input(capabilities, offered),
             Self::Sink(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
             Self::MetaSink(prepared) => prepared.accepts_input(capabilities, index, offered, inputs),
@@ -234,8 +218,6 @@ impl PreparedStage {
             Self::Source(prepared) => prepared.produces(capabilities),
             Self::Filter(prepared) => prepared.produces(capabilities, chosen),
             Self::Mask(prepared) => prepared.produces(capabilities, chosen),
-            Self::Transform(prepared) => prepared.produces(capabilities, chosen),
-            Self::MetaTransform(prepared) => prepared.produces(capabilities, chosen),
             Self::Provider(prepared) => prepared.produces(chosen),
             Self::Sink(_) | Self::MetaSink(_) => Err(StageError::msg(
                 "produces was asked of a sink, which produces no stream, so reaching this is a solver bug",
@@ -255,16 +237,15 @@ impl PreparedStage {
 
     /// Which side this stage runs on.
     ///
-    /// A metadata-only transform or sink reports [Residency::Either](crate::Residency::Either), and a
+    /// A metadata-only sink reports [Residency::Either](crate::Residency::Either), and a
     /// crossing reports the side it leads to.
     pub fn residency(&self) -> Residency {
         match self {
             Self::Source(prepared) => prepared.residency(),
             Self::Filter(prepared) => prepared.residency(),
             Self::Mask(prepared) => prepared.residency(),
-            Self::Transform(prepared) => prepared.residency(),
             Self::Provider(prepared) => prepared.residency(),
-            Self::MetaTransform(_) | Self::MetaSink(_) => Residency::Either,
+            Self::MetaSink(_) => Residency::Either,
             Self::Sink(prepared) => prepared.residency(),
             Self::Crossing(crossing) => crossing.to_side(),
         }

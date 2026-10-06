@@ -7,7 +7,7 @@ use av_denoise_core::{
     PrefilterMode,
 };
 use av_toolbox_core::{AnyDemand, Parallelism, StageDefinition};
-use av_toolbox_transforms::{SceneRequest, Scenes};
+use av_toolbox_providers::{SceneRequest, Scenes};
 use serde_json::json;
 
 use crate::denoise::avd::Denoise;

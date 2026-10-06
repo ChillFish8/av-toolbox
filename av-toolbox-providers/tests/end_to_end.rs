@@ -11,6 +11,7 @@ use av_toolbox_core::{
     BoundInputs,
     Filter,
     FilterDefinition,
+    InputDemand,
     InputParam,
     InputSignature,
     Inputs,
@@ -33,6 +34,7 @@ use av_toolbox_gpu::{
     FrameMeta,
     HostFrame,
     HostSide,
+    LayerId,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -41,9 +43,20 @@ use av_toolbox_gpu::{
     StreamTemplate,
     test_device,
 };
-use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec, build, place_transfers, plan, solve};
+use av_toolbox_graph::{
+    ArgSpans,
+    InputRef,
+    Span,
+    Spanned,
+    StageSpec,
+    build,
+    place_transfers,
+    plan,
+    satisfy_demands,
+    solve,
+};
+use av_toolbox_providers::{SceneBreaks, SceneRequest, Scenes};
 use av_toolbox_runtime::{Engine, Settings};
-use av_toolbox_transforms::{SceneRequest, Scenes};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -62,14 +75,39 @@ static FILTERED: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 /// Every `(index, chunk)` the sink after the filter saw.
 static WHOLE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 
-/// Every `(index, chunk)` the sink after `scene/split` saw.
+/// Every `(index, chunk)` the sink demanding limited scenes saw.
 static PIECES: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 
-fn record(seen: &Mutex<Vec<(u64, u64)>>, meta: &FrameMeta) {
-    seen.lock().expect("not poisoned").push((meta.index, meta.chunk));
+/// Records `meta`'s index and its chunk in `layer`.
+fn record(seen: &Mutex<Vec<(u64, u64)>>, meta: &FrameMeta, layer: LayerId) {
+    let chunk = meta.chunks.get(layer);
+    seen.lock().expect("not poisoned").push((meta.index, chunk));
 }
 
-struct ChunkedFilter;
+/// The layer the graph gave a stage's demand on its `input`.
+fn input_layer(inputs: &BoundInputs) -> Result<LayerId, StageError> {
+    inputs.layer_for("input").ok_or_else(no_layer)
+}
+
+fn no_layer() -> StageError {
+    StageError::msg("the stage demanded scenes on its input but was given no layer")
+}
+
+/// Scenes split into pieces of at most 12 frames.
+fn pieces_request() -> SceneRequest {
+    let breaks = SceneBreaks::Limited {
+        min_frames: 0,
+        max_frames: Some(12),
+        max_seconds: None,
+    };
+
+    SceneRequest {
+        breaks,
+        ..SceneRequest::natural()
+    }
+}
+
+struct ChunkedFilter(LayerId);
 
 impl StageInstance for ChunkedFilter {}
 
@@ -83,7 +121,7 @@ impl Filter<HostSide> for ChunkedFilter {
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
 
-        record(&FILTERED, frame.meta());
+        record(&FILTERED, frame.meta(), self.0);
 
         Ok(vec![frame])
     }
@@ -147,15 +185,20 @@ impl FilterDefinition for Chunked {
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
         _args: Self::Args,
-        _inputs: BoundInputs,
+        inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter<HostSide>>, StageError> {
-        Ok(Box::new(ChunkedFilter))
+        let layer = input_layer(&inputs)?;
+
+        Ok(Box::new(ChunkedFilter(layer)))
     }
 }
 
-/// A host sink recording every frame's index and chunk into a shared static.
-struct RecordingInstance(&'static Mutex<Vec<(u64, u64)>>);
+/// A host sink recording every frame's index and its chunk in one layer into a shared static.
+struct RecordingInstance {
+    seen: &'static Mutex<Vec<(u64, u64)>>,
+    layer: LayerId,
+}
 
 impl StageInstance for RecordingInstance {}
 
@@ -169,7 +212,7 @@ impl Sink<HostSide> for RecordingInstance {
             .take_frame(0)
             .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
 
-        record(self.0, frame.meta());
+        record(self.seen, frame.meta(), self.layer);
 
         Ok(())
     }
@@ -186,6 +229,16 @@ impl StageDefinition for Whole {
 
     fn identifier() -> &'static str {
         "whole"
+    }
+
+    /// The same scenes the filter before it chunks on, so the two share one layer.
+    fn demands(_args: &Self::Args) -> Vec<InputDemand> {
+        let demand = AnyDemand::new::<Scenes>(SceneRequest::natural());
+
+        vec![InputDemand {
+            input: "input",
+            demand,
+        }]
     }
 
     fn inputs() -> &'static InputSignature {
@@ -211,10 +264,13 @@ impl SinkDefinition for Whole {
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
         _args: Self::Args,
-        _inputs: BoundInputs,
+        inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Sink<HostSide>>, StageError> {
-        Ok(Box::new(RecordingInstance(&WHOLE)))
+        let layer = input_layer(&inputs)?;
+        let instance = RecordingInstance { seen: &WHOLE, layer };
+
+        Ok(Box::new(instance))
     }
 }
 
@@ -229,6 +285,15 @@ impl StageDefinition for Pieces {
 
     fn identifier() -> &'static str {
         "pieces"
+    }
+
+    fn demands(_args: &Self::Args) -> Vec<InputDemand> {
+        let demand = AnyDemand::new::<Scenes>(pieces_request());
+
+        vec![InputDemand {
+            input: "input",
+            demand,
+        }]
     }
 
     fn inputs() -> &'static InputSignature {
@@ -254,10 +319,13 @@ impl SinkDefinition for Pieces {
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
         _args: Self::Args,
-        _inputs: BoundInputs,
+        inputs: BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Sink<HostSide>>, StageError> {
-        Ok(Box::new(RecordingInstance(&PIECES)))
+        let layer = input_layer(&inputs)?;
+        let instance = RecordingInstance { seen: &PIECES, layer };
+
+        Ok(Box::new(instance))
     }
 }
 
@@ -265,7 +333,7 @@ fn registry() -> PipelineRegistry {
     let mut registry = PipelineRegistry::new();
 
     av_toolbox_sources::register(&mut registry).expect("should register the source stages");
-    av_toolbox_transforms::register(&mut registry).expect("should register the transform stages");
+    av_toolbox_providers::register(&mut registry).expect("should register the providers");
     registry.register_filter::<Chunked>().expect("should register");
     registry.register_sink::<Whole>().expect("should register");
     registry.register_sink::<Pieces>().expect("should register");
@@ -362,33 +430,17 @@ fn positional(target: &str) -> Spanned<InputRef> {
 fn pipeline(fd: RawFd) -> Vec<StageSpec> {
     let source = stage(StageKind::Source, "source", "y4m/pipe", json!({ "fd": fd }));
 
-    let mut detect = stage(
-        StageKind::Transform,
-        "detect",
-        "scene/detect",
-        json!({ "mode": "natural" }),
-    );
-    detect.inputs = vec![positional("source")];
-
     let mut chunked = stage(StageKind::Filter, "chunked", "end-to-end-test/chunked", json!({}));
-    chunked.inputs = vec![positional("detect")];
+    chunked.inputs = vec![positional("source")];
     chunked.workers = Some(2);
 
     let mut whole = stage(StageKind::Sink, "whole", "end-to-end-test/whole", json!({}));
     whole.inputs = vec![positional("chunked")];
 
-    let mut split = stage(
-        StageKind::Transform,
-        "split",
-        "scene/split",
-        json!({ "max_frames": 12 }),
-    );
-    split.inputs = vec![positional("detect")];
-
     let mut pieces = stage(StageKind::Sink, "pieces", "end-to-end-test/pieces", json!({}));
-    pieces.inputs = vec![positional("split")];
+    pieces.inputs = vec![positional("source")];
 
-    vec![source, detect, chunked, whole, split, pieces]
+    vec![source, chunked, whole, pieces]
 }
 
 /// Room for four of the longest scene's frames at once.
@@ -426,7 +478,7 @@ fn assert_split_chunks(pieces: &[(u64, u64)], limit: usize) {
 }
 
 #[test]
-fn scene_detect_and_scene_split_run_through_the_engine_on_a_real_device() {
+fn the_scene_provider_runs_through_the_engine_on_a_real_device() {
     let stream = y4m_stream();
     let (fd, feeder) = piped(stream);
     let registry = registry();
@@ -434,6 +486,7 @@ fn scene_detect_and_scene_split_run_through_the_engine_on_a_real_device() {
 
     let built = build(&registry, &specs).expect("should build");
     let mut graph = built.into_graph();
+    satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
 
     let backend = Backend::open_default(test_device()).expect("should open a device");
     let capabilities = backend.capabilities();
@@ -471,7 +524,7 @@ fn scene_detect_and_scene_split_run_through_the_engine_on_a_real_device() {
     let pieces = PIECES.lock().expect("not poisoned").clone();
     let indices: Vec<u64> = pieces.iter().map(|(index, _)| *index).collect();
     let expected_indices: Vec<u64> = (0..60).collect();
-    assert_eq!(indices, expected_indices, "the split branch keeps stream order");
+    assert_eq!(indices, expected_indices, "the limited branch keeps stream order");
     assert_split_chunks(&pieces, 12);
     assert_ne!(pieces[29].1, pieces[30].1, "the scene cut stays a chunk boundary");
 
@@ -482,6 +535,6 @@ fn scene_detect_and_scene_split_run_through_the_engine_on_a_real_device() {
         .collect();
     assert_eq!(
         chunks, expected_chunks,
-        "the split branch's chunk ids are deterministic"
+        "the limited branch's chunk ids are deterministic"
     );
 }

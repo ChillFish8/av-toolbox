@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use av_toolbox_gpu::{FieldOrder, FrameFormat, FrameMeta};
+use av_toolbox_gpu::{FieldOrder, FrameFormat, FrameMeta, LayerId};
 use serde_json::json;
 
 use super::{
@@ -27,7 +27,7 @@ fn cubic_args() -> serde_json::Value {
 fn chunk_three_inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input> {
     let mut chunk = inputs(clip, format, first);
     for input in &mut chunk {
-        input.meta.chunk = 3;
+        input.meta.chunks.set(LayerId(0), 3);
     }
 
     chunk

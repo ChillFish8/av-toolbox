@@ -8,19 +8,17 @@ use av_toolbox_core::{
     InputArgument,
     Mask,
     MetaSink,
-    MetaTransform,
     PipelineRegistry,
     PreparedStage,
     Provider,
     Sided,
     Sink,
     Source,
-    Transform,
 };
-use av_toolbox_gpu::{Backend, HostSide, ResolvedFormats};
+use av_toolbox_gpu::{Backend, HostSide, LayerId, ResolvedFormats};
 
 use crate::diagnostic::{args_path, stage_path};
-use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
+use crate::graph::{CompiledGraph, Edge, Node, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics, Region, SolvedFormats};
 
 /// A built stage, in whichever kind and on whichever side it belongs to.
@@ -28,15 +26,12 @@ pub enum StageBox {
     Source(Box<dyn Source>),
     Filter(Box<dyn Filter>),
     Mask(Box<dyn Mask>),
-    Transform(Box<dyn Transform>),
-    MetaTransform(Box<dyn MetaTransform>),
     Provider(Box<dyn Provider>),
     Sink(Box<dyn Sink>),
     MetaSink(Box<dyn MetaSink>),
     HostSource(Box<dyn Source<HostSide>>),
     HostFilter(Box<dyn Filter<HostSide>>),
     HostMask(Box<dyn Mask<HostSide>>),
-    HostTransform(Box<dyn Transform<HostSide>>),
     HostProvider(Box<dyn Provider<HostSide>>),
     HostSink(Box<dyn Sink<HostSide>>),
     /// A crossing that moves one item between host and device.
@@ -49,15 +44,12 @@ impl fmt::Debug for StageBox {
             Self::Source(_) => "Source",
             Self::Filter(_) => "Filter",
             Self::Mask(_) => "Mask",
-            Self::Transform(_) => "Transform",
-            Self::MetaTransform(_) => "MetaTransform",
             Self::Provider(_) => "Provider",
             Self::Sink(_) => "Sink",
             Self::MetaSink(_) => "MetaSink",
             Self::HostSource(_) => "HostSource",
             Self::HostFilter(_) => "HostFilter",
             Self::HostMask(_) => "HostMask",
-            Self::HostTransform(_) => "HostTransform",
             Self::HostProvider(_) => "HostProvider",
             Self::HostSink(_) => "HostSink",
             Self::Crossing(_) => "Crossing",
@@ -242,6 +234,8 @@ impl CompiledGraph {
 }
 
 /// Rebuilds the input list exactly as the definition wrote it, so binding repeats what it did.
+///
+/// An input the node demanded something on carries the layer the demand pass gave that demand.
 fn arguments_for(graph: &CompiledGraph, node: &Node) -> Vec<InputArgument> {
     node.inputs()
         .iter()
@@ -252,12 +246,25 @@ fn arguments_for(graph: &CompiledGraph, node: &Node) -> Vec<InputArgument> {
                 .output_stream()
                 .expect("a sink cannot be an input");
 
-            match edge.name() {
+            let argument = match edge.name() {
                 Some(name) => InputArgument::named(name, handle, stream),
                 None => InputArgument::positional(handle, stream),
+            };
+
+            match demanded_layer(node, edge) {
+                Some(layer) => argument.in_layer(layer),
+                None => argument,
             }
         })
         .collect()
+}
+
+/// The layer of the first demand `node` made on the input `edge` fills.
+fn demanded_layer(node: &Node, edge: &Edge) -> Option<LayerId> {
+    let input = edge.param().or(edge.name())?;
+    let demand = node.demands().iter().find(|demand| demand.input == input)?;
+
+    Some(demand.layer)
 }
 
 fn build_stage(
@@ -277,15 +284,6 @@ fn build_stage(
         PreparedStage::Mask(prepared) => match prepared.build(backend, formats)? {
             Sided::Device(stage) => StageBox::Mask(stage),
             Sided::Host(stage) => StageBox::HostMask(stage),
-        },
-        PreparedStage::Transform(prepared) => match prepared.build(backend, formats)? {
-            Sided::Device(stage) => StageBox::Transform(stage),
-            Sided::Host(stage) => StageBox::HostTransform(stage),
-        },
-        PreparedStage::MetaTransform(prepared) => {
-            let stage = prepared.build(backend, formats)?;
-
-            StageBox::MetaTransform(stage)
         },
         PreparedStage::Provider(prepared) => match prepared.build(backend, formats)? {
             Sided::Device(stage) => StageBox::Provider(stage),

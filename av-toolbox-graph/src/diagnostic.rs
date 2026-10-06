@@ -56,6 +56,7 @@ pub enum DiagnosticCode {
     UnsatisfiedDemand,
     ConflictingPlacement,
     UnknownAfter,
+    RemovedTransforms,
 }
 
 impl DiagnosticCode {
@@ -93,6 +94,7 @@ impl DiagnosticCode {
             Self::UnsatisfiedDemand => "unsatisfied-demand",
             Self::ConflictingPlacement => "conflicting-placement",
             Self::UnknownAfter => "unknown-after",
+            Self::RemovedTransforms => "removed-transforms",
         }
     }
 }

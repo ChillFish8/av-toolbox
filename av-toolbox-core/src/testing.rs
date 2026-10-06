@@ -5,8 +5,10 @@ use av_toolbox_gpu::{
     FormatSet,
     FrameContext,
     FrameFormat,
+    FrameMeta,
     HostSide,
     LayerId,
+    MetaValue,
     ResolvedFormats,
     Runtime,
     Side,
@@ -27,6 +29,38 @@ use crate::{
     StageInstance,
     StreamType,
 };
+
+/// The attachment key a fixture's chunk is kept under, for [Stamping] and [HostStamping] to copy.
+pub const FIXTURE_CHUNK: &str = "fixture_chunk";
+
+/// The path a fixture's chunk is filed under.
+const FIXTURE_PATH: &str = "fixture";
+
+/// `meta` carrying `chunk` for [Stamping] or [HostStamping] to copy into every layer they serve.
+pub fn fixture_chunk(mut meta: FrameMeta, chunk: u64) -> FrameMeta {
+    let value = i64::try_from(chunk).expect("a fixture chunk fits an attachment");
+    meta.attach(FIXTURE_CHUNK, MetaValue::Int(value));
+    meta.attachments.stamp(FIXTURE_PATH);
+
+    meta
+}
+
+/// The chunk a fixture gave `meta`, or 0 when it gave none.
+pub fn fixture_chunk_of(meta: &FrameMeta) -> u64 {
+    let values = meta
+        .attachments
+        .stages()
+        .filter(|(path, _)| *path == FIXTURE_PATH)
+        .flat_map(|(_, values)| values.iter());
+
+    for (key, value) in values {
+        if let (FIXTURE_CHUNK, MetaValue::Int(chunk)) = (key.as_str(), value) {
+            return u64::try_from(*chunk).expect("a fixture chunk is never negative");
+        }
+    }
+
+    0
+}
 
 /// A demand kind for test fixtures that need a chunk request but no particular breaks.
 pub struct FixtureCuts;
@@ -106,8 +140,8 @@ macro_rules! stamping_provider {
 
 /// Serves [FixtureCuts] directly after the source, on the device.
 ///
-/// Every layer it serves takes each frame's `meta.chunk`, so a fixture that stamps chunks at its
-/// source keeps the same chunks once the graph routes on layers.
+/// Every layer it serves takes the chunk [fixture_chunk] gave each frame, so a fixture that stamps
+/// chunks at its source keeps the same chunks once the graph routes on layers.
 pub struct Stamping;
 
 stamping_provider!(Stamping, DeviceSide, FixtureCuts, "stamping");
@@ -144,8 +178,9 @@ impl<S: Side> Provider<S> for StampingInstance {
 
         let mut any = S::into_any(item);
         let meta = any.meta_mut();
+        let chunk = fixture_chunk_of(meta);
         for layer in &self.layers {
-            meta.chunks.set(*layer, meta.chunk);
+            meta.chunks.set(*layer, chunk);
         }
 
         let stamped = S::from_any(any).map_err(|_| other_side())?;
@@ -156,4 +191,23 @@ impl<S: Side> Provider<S> for StampingInstance {
 
 fn other_side() -> StageError {
     StageError::msg("an item changed sides while its layers were stamped")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fixture_chunk_reads_back() {
+        let meta = fixture_chunk(FrameMeta::at(3), 7);
+
+        assert_eq!(fixture_chunk_of(&meta), 7);
+    }
+
+    #[test]
+    fn metadata_without_a_fixture_chunk_is_in_chunk_zero() {
+        let meta = FrameMeta::at(3);
+
+        assert_eq!(fixture_chunk_of(&meta), 0);
+    }
 }

@@ -199,10 +199,6 @@ impl Hash for SceneScore {
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct FrameMeta {
     pub index: u64,
-    /// The chunk this frame belongs to.
-    ///
-    /// A stream nothing has split is one chunk, so this stays zero until a stage sets it.
-    pub chunk: u64,
     /// The chunk this frame belongs to in each scene layer it carries.
     pub chunks: Layers,
     pub timestamp: Option<Duration>,
@@ -212,22 +208,15 @@ pub struct FrameMeta {
 }
 
 impl FrameMeta {
-    /// Metadata for the frame at `index`, in the first chunk, with no timestamp.
+    /// Metadata for the frame at `index`, in no scene layer, with no timestamp.
     pub const fn at(index: u64) -> Self {
         Self {
             index,
-            chunk: 0,
             chunks: Layers::new(),
             timestamp: None,
             scene_score: None,
             attachments: Attachments::new(),
         }
-    }
-
-    /// The same metadata in `chunk`.
-    pub fn in_chunk(mut self, chunk: u64) -> Self {
-        self.chunk = chunk;
-        self
     }
 
     /// The same metadata in `chunk` of `layer`.
@@ -355,7 +344,7 @@ impl Frame {
 
     /// Moves this to `index` in the stream.
     ///
-    /// The chunk it belongs to and its timestamp are unchanged.
+    /// The chunks it belongs to and its timestamp are unchanged.
     pub fn set_index(&mut self, index: u64) {
         self.meta.index = index;
     }
@@ -472,7 +461,7 @@ impl Mask {
 
     /// Moves this to `index` in the stream.
     ///
-    /// The chunk it belongs to is unchanged.
+    /// The chunks it belongs to are unchanged.
     pub fn set_index(&mut self, index: u64) {
         self.meta.index = index;
     }
@@ -631,6 +620,14 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::{Backend, test_device};
     use crate::{BufferPool, HostPlanes, RingSpec, StreamFormat, StreamPolicy};
+
+    /// Chunks holding `chunk` in layer 0.
+    fn layer_zero(chunk: u64) -> Layers {
+        let mut chunks = Layers::new();
+        chunks.set(LayerId(0), chunk);
+
+        chunks
+    }
 
     fn format() -> FrameFormat {
         FrameFormat {
@@ -1070,19 +1067,20 @@ mod tests {
     }
 
     #[test]
-    fn metadata_starts_in_the_first_chunk() {
+    fn metadata_starts_in_no_scene_layer() {
         let meta = FrameMeta::at(7);
 
         assert_eq!(meta.index, 7);
-        assert_eq!(meta.chunk, 0);
+        assert_eq!(meta.chunks.iter().count(), 0);
+        assert_eq!(meta.chunks.get(LayerId(0)), 0);
     }
 
     #[test]
-    fn metadata_can_be_moved_into_another_chunk() {
-        let meta = FrameMeta::at(7).in_chunk(3);
+    fn metadata_can_be_moved_into_a_chunk_of_a_layer() {
+        let meta = FrameMeta::at(7).in_layer(LayerId(0), 3);
 
         assert_eq!(meta.index, 7);
-        assert_eq!(meta.chunk, 3);
+        assert_eq!(meta.chunks.get(LayerId(0)), 3);
     }
 
     #[test]
@@ -1091,8 +1089,7 @@ mod tests {
         let planes = vec![plane(64, 64), plane(32, 32), plane(32, 32)];
         let meta = FrameMeta {
             index: 7,
-            chunk: 3,
-            chunks: Layers::default(),
+            chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
@@ -1102,7 +1099,7 @@ mod tests {
         frame.set_index(11);
 
         assert_eq!(frame.meta().index, 11);
-        assert_eq!(frame.meta().chunk, 3);
+        assert_eq!(frame.meta().chunks.get(LayerId(0)), 3);
         assert_eq!(frame.meta().timestamp, Some(Duration::from_millis(500)));
     }
 
@@ -1116,8 +1113,7 @@ mod tests {
         };
         let meta = FrameMeta {
             index: 7,
-            chunk: 3,
-            chunks: Layers::default(),
+            chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
@@ -1127,7 +1123,7 @@ mod tests {
         mask.set_index(11);
 
         assert_eq!(mask.meta().index, 11);
-        assert_eq!(mask.meta().chunk, 3);
+        assert_eq!(mask.meta().chunks.get(LayerId(0)), 3);
         assert_eq!(mask.meta().timestamp, Some(Duration::from_millis(500)));
     }
 
@@ -1137,8 +1133,7 @@ mod tests {
         let planes = vec![plane(64, 64), plane(32, 32), plane(32, 32)];
         let meta = FrameMeta {
             index: 7,
-            chunk: 3,
-            chunks: Layers::default(),
+            chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
@@ -1149,7 +1144,7 @@ mod tests {
         item.set_index(11);
 
         assert_eq!(item.meta().index, 11);
-        assert_eq!(item.meta().chunk, 3);
+        assert_eq!(item.meta().chunks.get(LayerId(0)), 3);
         assert_eq!(item.meta().timestamp, Some(Duration::from_millis(500)));
     }
 
@@ -1163,8 +1158,7 @@ mod tests {
         };
         let meta = FrameMeta {
             index: 7,
-            chunk: 3,
-            chunks: Layers::default(),
+            chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
             attachments: Attachments::new(),
@@ -1175,7 +1169,7 @@ mod tests {
         item.set_index(11);
 
         assert_eq!(item.meta().index, 11);
-        assert_eq!(item.meta().chunk, 3);
+        assert_eq!(item.meta().chunks.get(LayerId(0)), 3);
         assert_eq!(item.meta().timestamp, Some(Duration::from_millis(500)));
     }
 
@@ -1222,9 +1216,9 @@ mod tests {
         let mut meta = FrameMeta::at(0);
 
         meta.attach("cut", MetaValue::Bool(true));
-        meta.attachments.stamp("transform.detect");
+        meta.attachments.stamp("filter.detect");
 
         let stages: Vec<&str> = meta.attachments.stages().map(|(path, _)| path).collect();
-        assert_eq!(stages, vec!["transform.detect"]);
+        assert_eq!(stages, vec!["filter.detect"]);
     }
 }

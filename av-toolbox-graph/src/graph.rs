@@ -223,7 +223,7 @@ impl Node {
         self.kind
     }
 
-    /// The kind and name as one path, such as `transform.scenes.detect`.
+    /// The kind and name as one path, such as `filter.scenes.denoise`.
     pub fn path(&self) -> String {
         stage_path(self.kind, &self.name)
     }
@@ -411,7 +411,7 @@ impl CompiledGraph {
         let node = Node {
             id,
             name: format!("{}({})", crossing.verb(), source.name()),
-            kind: StageKind::Transform,
+            kind: StageKind::Crossing,
             identifier: crossing.identifier().to_string(),
             args: Value::Object(Default::default()),
             args_span: source.span(),

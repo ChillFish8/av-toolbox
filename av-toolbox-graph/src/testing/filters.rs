@@ -12,8 +12,6 @@ use av_toolbox_core::{
     StageError,
     StageInstance,
     StreamType,
-    Transform,
-    TransformDefinition,
 };
 use av_toolbox_gpu::{
     BuildContext,
@@ -30,12 +28,11 @@ use av_toolbox_gpu::{
     Runtime,
     SampleFormat,
     StreamFormat,
-    StreamItem,
     StreamTemplate,
 };
 
 use super::chunked;
-use super::shared::{BlurArgs, NoArgs, SplitArgs, TemporalArgs, first_bound, frames_template};
+use super::shared::{BlurArgs, NoArgs, TemporalArgs, first_bound, frames_template};
 
 fixture_stage!(
     Blur,
@@ -45,17 +42,6 @@ fixture_stage!(
     "blur",
     BlurArgs,
     &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]),
-    frames_template
-);
-
-fixture_stage!(
-    Split,
-    SplitStage,
-    Transform,
-    TransformDefinition,
-    "split",
-    SplitArgs,
-    &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]),
     frames_template
 );
 

@@ -122,7 +122,7 @@ mod tests {
     fn profile() -> ProfileFile {
         let mut workers = BTreeMap::new();
         workers.insert("filter.based".to_string(), 1);
-        workers.insert("transform.scenes.detect".to_string(), 3);
+        workers.insert("filter.scenes.denoise".to_string(), 3);
 
         ProfileFile {
             pipeline: "examples/anti-aliasing.toml".to_string(),
@@ -152,7 +152,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).expect("reads");
 
         assert!(text.starts_with(HEADER), "{text}");
-        assert!(text.contains("\"transform.scenes.detect\" = 3"), "{text}");
+        assert!(text.contains("\"filter.scenes.denoise\" = 3"), "{text}");
     }
 
     #[test]
@@ -169,7 +169,7 @@ mod tests {
     fn applying_sets_undeclared_stages_and_keeps_declared_ones() {
         let mut specs = vec![
             spec(StageKind::Filter, "based", Some(2)),
-            spec(StageKind::Transform, "scenes.detect", None),
+            spec(StageKind::Filter, "scenes.denoise", None),
         ];
 
         let unknown = apply(&profile().workers, &mut specs);
@@ -185,6 +185,6 @@ mod tests {
 
         let unknown = apply(&profile().workers, &mut specs);
 
-        assert_eq!(unknown, vec!["transform.scenes.detect".to_string()]);
+        assert_eq!(unknown, vec!["filter.scenes.denoise".to_string()]);
     }
 }

@@ -327,6 +327,7 @@ mod tests {
         FrameBudget,
         FrameLayout,
         HostStreamItem,
+        LayerId,
         Layers,
         MetaValue,
         SampleFormat,
@@ -334,6 +335,14 @@ mod tests {
         Subsampling,
         default_accelerators,
     };
+
+    /// Chunks holding `chunk` in layer 0.
+    fn layer_zero(chunk: u64) -> Layers {
+        let mut chunks = Layers::new();
+        chunks.set(LayerId(0), chunk);
+
+        chunks
+    }
 
     fn any_accelerator() -> Accelerator {
         default_accelerators()[0]
@@ -623,7 +632,6 @@ mod tests {
         let context = FrameContext::for_testing(allocator, capabilities());
         let stamped = FrameMeta {
             index: 12,
-            chunk: 0,
             chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: Some(SceneScore::new(2.5)),
@@ -757,8 +765,7 @@ mod tests {
         let context = FrameContext::for_testing(allocator.clone(), capabilities());
         let stamped = FrameMeta {
             index: 12,
-            chunk: 3,
-            chunks: Layers::default(),
+            chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(40)),
             scene_score: Some(SceneScore::new(2.5)),
             attachments: Attachments::new(),
@@ -788,11 +795,10 @@ mod tests {
         let context = FrameContext::for_testing(allocator, capabilities());
         let mut attachments = Attachments::new();
         attachments.attach("scene", MetaValue::Bool(true));
-        attachments.stamp("scene/detect");
+        attachments.stamp("filter.scenes");
         let stamped = FrameMeta {
             index: 6,
-            chunk: 1,
-            chunks: Layers::default(),
+            chunks: layer_zero(1),
             timestamp: None,
             scene_score: None,
             attachments,
@@ -824,7 +830,7 @@ mod tests {
     fn an_unloaded_frame_lands_as_a_host_frame_in_the_same_place() {
         let allocator = Arc::new(CountingAllocator::new(64));
         let context = FrameContext::for_testing(allocator, capabilities());
-        let stamped = FrameMeta::at(8).in_chunk(2);
+        let stamped = FrameMeta::at(8).in_layer(LayerId(0), 2);
         let frame = context.alloc_frame(&frame_format(), stamped.clone());
 
         let landed = context

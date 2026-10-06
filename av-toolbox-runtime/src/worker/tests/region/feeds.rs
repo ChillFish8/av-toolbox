@@ -10,9 +10,9 @@ fn feeds_that_still_disagree_when_the_region_ends_are_an_error() {
     let right = NodeId::new(2);
     let join = NodeId::new(3);
     let nodes = vec![
-        (head, StageBox::Transform(Box::new(Multiply { copies: 1 }))),
-        (left, StageBox::Transform(Box::new(Multiply { copies: 2 }))),
-        (right, StageBox::Transform(Box::new(Multiply { copies: 1 }))),
+        (head, StageBox::Filter(Box::new(Multiply { copies: 1 }))),
+        (left, StageBox::Filter(Box::new(Multiply { copies: 2 }))),
+        (right, StageBox::Filter(Box::new(Multiply { copies: 1 }))),
         (
             join,
             StageBox::Sink(Box::new(Recording {
@@ -68,9 +68,9 @@ fn feeds_that_agree_on_how_many_items_they_supply_run_that_many_times() {
     let join = NodeId::new(3);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let nodes = vec![
-        (head, StageBox::Transform(Box::new(Multiply { copies: 1 }))),
-        (left, StageBox::Transform(Box::new(Multiply { copies: 2 }))),
-        (right, StageBox::Transform(Box::new(Multiply { copies: 2 }))),
+        (head, StageBox::Filter(Box::new(Multiply { copies: 1 }))),
+        (left, StageBox::Filter(Box::new(Multiply { copies: 2 }))),
+        (right, StageBox::Filter(Box::new(Multiply { copies: 2 }))),
         (join, StageBox::Sink(Box::new(Recording { seen: seen.clone() }))),
     ];
     let feeds = vec![

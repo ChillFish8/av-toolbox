@@ -10,9 +10,8 @@ use av_toolbox_gpu::{
 };
 
 use super::{breaks_of, chunks_in, demands, finish, limited, process, serve};
-use crate::provider::{SceneProvider, SceneRequest, ServeScenes};
-use crate::scene::args::{DetectArgs, Mode, Speed};
-use crate::scene::window::{LumaWindow, Settings};
+use crate::provider::{SceneProvider, SceneRequest, SceneSpeed, ServeScenes};
+use crate::scene::window::{DetectOptions, LumaWindow, Settings};
 use crate::split::split_lengths;
 use crate::tests::clip::{THREE_SCENES, clip, grey8};
 
@@ -49,13 +48,12 @@ fn split_ids(frames: &[HostFrame], scenes: &[std::ops::Range<usize>], limit: usi
 fn detector_starts(min_scene_frames: usize, scenes: &[(u64, u64)]) -> Vec<usize> {
     let context = testing_context();
     let frames = clip(&context, &grey8(), scenes);
-    let args = DetectArgs {
-        mode: Mode::Natural,
-        speed: Speed::Standard,
+    let options = DetectOptions {
+        speed: SceneSpeed::Standard,
         min_scene_frames,
         max_scene_frames: None,
     };
-    let settings = Settings::for_stream(&grey8(), &args).expect("the clip is readable");
+    let settings = Settings::for_stream(&grey8(), &options).expect("the clip is readable");
     let mut window = LumaWindow::new(settings);
 
     let mut decisions = Vec::new();

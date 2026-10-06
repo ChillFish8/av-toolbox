@@ -213,7 +213,7 @@ impl From<HostMask> for AnyItem {
 mod tests {
     use super::*;
     use crate::frame::{ColourInfo, FrameFormat, FrameLayout, MaskFormat, SampleFormat, Subsampling};
-    use crate::{HostPool, testing_context};
+    use crate::{HostPool, LayerId, testing_context};
 
     fn format() -> FrameFormat {
         FrameFormat {
@@ -282,10 +282,11 @@ mod tests {
         let mut device = AnyItem::from(device_item(0));
         let mut host = AnyItem::from(host_item(0));
 
-        device.meta_mut().chunk = 3;
+        device.meta_mut().chunks.set(LayerId(0), 3);
         host.set_index(7);
 
-        assert_eq!(device.into_device().expect("device").meta().chunk, 3);
+        let device = device.into_device().expect("device");
+        assert_eq!(device.meta().chunks.get(LayerId(0)), 3);
         assert_eq!(host.into_host().expect("host").meta().index, 7);
     }
 

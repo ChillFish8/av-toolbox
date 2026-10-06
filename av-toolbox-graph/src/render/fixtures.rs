@@ -377,7 +377,7 @@ fn example_crossing(name: &'static str, crossing: Crossing, block: usize) -> Exa
     ExampleStage {
         name,
         identifier: crossing.identifier(),
-        kind: StageKind::Transform,
+        kind: StageKind::Crossing,
         residency: crossing.to_side(),
         crossing: Some(crossing),
         provider: None,
@@ -429,7 +429,7 @@ fn example_node(index: usize) -> Endpoint {
 ///
 /// Region 0 decodes, finds scenes for the denoise and the encode, and uploads. Region 1 runs eight
 /// workers on the gpu, where a denoise feeds a deband and an edge mask and a blend reads all three.
-/// Region 2 re-splits scenes, region 3 encodes on six workers, region 4 muxes, and region 5 scores
+/// Region 2 dithers, region 3 encodes on six workers, region 4 muxes, and region 5 scores
 /// the output against the source.
 pub(crate) fn example_diagram() -> Diagram {
     let stages = vec![
@@ -452,11 +452,11 @@ pub(crate) fn example_diagram() -> Diagram {
         example_stage("edges", "mask/sobel", StageKind::Mask, Residency::Device, 1),
         example_stage("merge", "mask/blend", StageKind::Mask, Residency::Device, 1),
         example_crossing("unload(merge)", Crossing::Unload, 1),
-        example_stage("chunks", "scene/split", StageKind::Transform, Residency::Host, 2),
+        example_stage("dither", "dither/ordered", StageKind::Filter, Residency::Host, 2),
         example_chunking(
             "encode",
             "svt-av1/encode",
-            StageKind::Transform,
+            StageKind::Filter,
             Residency::Host,
             3,
             (1, "limited ≤10 s"),

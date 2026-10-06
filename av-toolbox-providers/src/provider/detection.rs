@@ -3,8 +3,8 @@ use std::collections::VecDeque;
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{FrameFormat, HostFrame};
 
-use crate::scene::args::{DetectArgs, Mode, Speed};
-use crate::scene::window::{Decision, LumaWindow, Settings};
+use super::demand::SceneSpeed;
+use crate::scene::window::{Decision, DetectOptions, LumaWindow, Settings};
 
 /// A frame the detector has decided, scored, with whether it starts a scene.
 pub(crate) struct Decided {
@@ -19,14 +19,13 @@ pub(crate) struct Detection {
 }
 
 impl Detection {
-    pub(crate) fn new(format: &FrameFormat, speed: Speed) -> Result<Self, StageError> {
-        let args = DetectArgs {
-            mode: Mode::Natural,
+    pub(crate) fn new(format: &FrameFormat, speed: SceneSpeed) -> Result<Self, StageError> {
+        let options = DetectOptions {
             speed,
             min_scene_frames: 0,
             max_scene_frames: None,
         };
-        let settings = Settings::for_stream(format, &args)?;
+        let settings = Settings::for_stream(format, &options)?;
         let window = LumaWindow::new(settings);
 
         Ok(Self {

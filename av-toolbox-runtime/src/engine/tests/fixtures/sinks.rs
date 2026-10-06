@@ -236,10 +236,6 @@ static HOARDED: Mutex<Vec<StreamItem>> = Mutex::new(Vec::new());
 /// never dropped, so whatever budget it was charged to is never credited back.
 pub(crate) static HOARDED_ONE: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
 
-/// Signalled every time a `Hoarding` sink takes an item, so a test can wait for a specific count
-/// of items to have been permanently held rather than only the first.
-pub(crate) static HOARDED_EVERY: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
-
 pub(crate) struct HoardingInstance {
     _life: StageLife,
 }
@@ -263,10 +259,6 @@ impl Sink for HoardingInstance {
         HOARDED.lock().expect("not poisoned").push(item);
 
         if let Some(sender) = HOARDED_ONE.lock().expect("not poisoned").take() {
-            sender.send(()).ok();
-        }
-
-        if let Some(sender) = HOARDED_EVERY.lock().expect("not poisoned").as_ref() {
             sender.send(()).ok();
         }
 

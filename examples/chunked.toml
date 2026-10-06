@@ -1,17 +1,11 @@
-# Reads a video, marks its scene changes and writes it out as y4m.
+# Reads a video, denoises it on two workers and writes it out as y4m.
 #
-# The scene detection lives in parts/scenes.toml, which this file calls.
+# The denoise asks for scene breaks, so each worker is handed whole scenes to filter.
 
 [variable.input]
 type = "path"
 description = "The video to decode"
 default = "input.mkv"
-
-[variable.speed]
-type = "string"
-description = "How carefully to compare frames"
-default = "standard"
-choices = ["standard", "fast"]
 
 [variable.output]
 type = "path"
@@ -22,12 +16,12 @@ default = "output.y4m"
 type = "ffms2/file"
 args.path = "{{ input }}"
 
-[call.scenes]
-path = "parts/scenes.toml"
+[filter.denoise]
+type = "av-denoise/nl4d"
 inputs = ["input"]
-variables.speed = "{{ speed }}"
+workers = 2
 
 [sink.output]
 type = "y4m/pipe"
-inputs = ["scenes"]
+inputs = ["denoise"]
 args.path = "{{ output }}"

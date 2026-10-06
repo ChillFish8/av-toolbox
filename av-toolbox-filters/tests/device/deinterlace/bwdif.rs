@@ -19,6 +19,7 @@ use av_toolbox_gpu::{
     FrameLayout,
     FrameMeta,
     FrameRate,
+    LayerId,
     SampleFormat,
     Subsampling,
 };
@@ -267,7 +268,7 @@ fn single_rate_keeps_every_frame_and_its_metadata() {
     let output = deinterlaced(input, false);
     let mut clip = moving_clip(&input, 10..14);
     for input in &mut clip {
-        input.meta.chunk = 3;
+        input.meta.chunks.set(LayerId(0), 3);
     }
 
     let outputs = run(json!({ "rate": "single" }), input, output, vec![clip.clone()]);
