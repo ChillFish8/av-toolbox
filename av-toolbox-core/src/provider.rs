@@ -56,8 +56,6 @@ pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
     type Demand: DemandDefinition;
 
     /// Picks the edge on a demand's path to serve `request` from.
-    ///
-    /// Demands of one kind placed after the same stage share one provider.
     fn place(
         request: &<Self::Demand as DemandDefinition>::Request,
         path: &PathView<'_>,

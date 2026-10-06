@@ -68,8 +68,9 @@ pub(super) fn path_view<'g>(graph: &'g CompiledGraph, steps: &[Step]) -> PathVie
             }
         })
         .collect();
+    let stages = graph.nodes().iter().map(Node::name).collect();
 
-    PathView::new(nodes)
+    PathView::new(nodes, stages)
 }
 
 /// The edges a demand on `input` of `node` travels along from its source, source end first.

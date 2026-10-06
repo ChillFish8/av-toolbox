@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use crate::{PathNode, PathView};
 
+/// A path through `stages`, in a graph that also holds a stage named `elsewhere`.
 fn path_of<'g>(stages: &[(&'g str, &'g str)], args: &'g Value) -> PathView<'g> {
     let nodes = stages
         .iter()
@@ -11,8 +12,10 @@ fn path_of<'g>(stages: &[(&'g str, &'g str)], args: &'g Value) -> PathView<'g> {
             args,
         })
         .collect();
+    let mut names: Vec<&str> = stages.iter().map(|(name, _)| *name).collect();
+    names.push("elsewhere");
 
-    PathView::new(nodes)
+    PathView::new(nodes, names)
 }
 
 #[test]
@@ -45,6 +48,19 @@ fn after_named_refuses_a_node_off_the_path() {
         error.to_string(),
         "`elsewhere` is not a stage on the path this demand travels, so the provider cannot go after it",
     );
+}
+
+#[test]
+fn after_named_refuses_a_name_no_stage_has() {
+    let args = json!({});
+    let stages = [("input", "y4m/stdin"), ("soften", "test/blur")];
+    let path = path_of(&stages, &args);
+
+    let Err(error) = path.after_named("sofen") else {
+        panic!("a name no stage has should be refused");
+    };
+
+    assert_eq!(error.to_string(), "there is no stage named `sofen`");
 }
 
 #[test]

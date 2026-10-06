@@ -28,7 +28,7 @@ fn after(name: &str, speed: SceneSpeed) -> SceneRequest {
 }
 
 #[test]
-fn two_layers_are_served_by_one_detection() {
+fn two_layers_are_split_from_one_stream_of_scores() {
     let mut context = testing_context();
     let frames = clip(&context, &grey8(), THREE_SCENES);
     let requests = [SceneRequest::natural(), limited(0, Some(12))];

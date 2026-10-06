@@ -296,9 +296,7 @@ impl Provider<DeviceSide> for MarkingInstance {
         _context: &mut FrameContext,
         mut inputs: Inputs,
     ) -> Result<Vec<StreamItem>, StageError> {
-        let mut item = inputs
-            .take(0)
-            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+        let mut item = inputs.take(0).ok_or_else(missing_item)?;
 
         let meta = item.meta_mut();
         let breaks = self.breaks.get(meta).copied();
@@ -309,6 +307,14 @@ impl Provider<DeviceSide> for MarkingInstance {
 
         Ok(vec![item])
     }
+}
+
+fn missing_item() -> StageError {
+    StageError::msg("expected an item in slot 0")
+}
+
+fn missing_frame() -> StageError {
+    StageError::msg("expected a frame in slot 0")
 }
 
 /// A demand kind served by [Relaying], which passes each request on to [Marking].
@@ -570,9 +576,7 @@ impl StageInstance for TagReadingInstance {}
 
 impl MetaSink for TagReadingInstance {
     fn consume(&mut self, _context: &mut FrameContext, mut inputs: MetaInputs) -> Result<(), StageError> {
-        let item = inputs
-            .take(0)
-            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+        let item = inputs.take(0).ok_or_else(missing_item)?;
 
         let tag = self.tags.get(item.meta());
         if tag != Some(&Tag(true)) {
@@ -679,9 +683,7 @@ impl StageInstance for DemandingStage {}
 
 impl Filter for DemandingStage {
     fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
-        let frame = inputs
-            .take_frame(0)
-            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+        let frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
 
         Ok(vec![frame])
     }

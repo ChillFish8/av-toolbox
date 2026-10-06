@@ -268,3 +268,11 @@ pub(crate) fn tag_recording_spec(name: &str, input: &str) -> StageSpec {
     sink.inputs = vec![positional(input)];
     sink
 }
+
+/// The same as [tag_recording_spec], with the tags provider reading host cuts from a host provider.
+pub(crate) fn host_cut_tag_recording_spec(name: &str, input: &str) -> StageSpec {
+    let mut sink = spec(StageKind::Sink, name, "test/tag-recording");
+    sink.inputs = vec![positional(input)];
+    sink.args = Spanned::unknown(json!({ "host_cuts": true }));
+    sink
+}

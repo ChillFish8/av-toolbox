@@ -18,6 +18,7 @@ use crate::engine::tests::harness::{
 };
 use crate::engine::tests::specs::{
     filter_spec,
+    host_cut_tag_recording_spec,
     host_pass_spec,
     host_sink_spec,
     host_source_spec,
@@ -114,6 +115,32 @@ fn a_meta_provider_in_its_producers_region_tags_every_host_frame_in_order() {
         host_pass_spec("pass", "input", None),
         "a_meta_provider_in_its_producers_region_tags_every_host_frame_in_order",
     );
+}
+
+#[test]
+fn a_meta_provider_in_a_host_providers_region_tags_every_frame_in_order() {
+    TAGGED.lock().expect("not poisoned").clear();
+
+    let specs = vec![
+        host_source_spec("input", &[0, 0, 1, 1, 1], 0),
+        host_pass_spec("pass", "input", None),
+        host_cut_tag_recording_spec("out", "pass"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+    assert!(share_a_region(&graph, "host-fixture-cuts(input)", "tags(input)"));
+    assert!(!share_a_region(&graph, "input", "tags(input)"));
+    assert!(!share_a_region(&graph, "tags(input)", "pass"));
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(
+        engine,
+        "a_meta_provider_in_a_host_providers_region_tags_every_frame_in_order",
+    );
+
+    let tagged = TAGGED.lock().expect("not poisoned").clone();
+    let expected: Vec<(u64, Option<Tag>)> = (0..5).map(|timestamp| (timestamp, Some(Tag(true)))).collect();
+    assert_eq!(tagged, expected);
+    assert_eq!(report.frames, 5);
 }
 
 #[test]

@@ -10,7 +10,7 @@ use super::filter::KeyFilter;
 
 /// Writes one frame's metadata as a JSON object followed by a newline.
 ///
-/// `chunk` is the frame's chunk in the sink's scene layer, and is left out when there is none.
+/// `chunk` is the frame's scene chunk, and is left out when there is none.
 /// `score` is the frame's scene cut score, written as `null` when there is none.
 pub(crate) fn write_line<W: Write>(
     output: &mut W,

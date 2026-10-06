@@ -164,7 +164,7 @@ fn path_of<'g>(names: &[&'g str], args: &'g serde_json::Value) -> PathView<'g> {
         })
         .collect();
 
-    PathView::new(nodes)
+    PathView::new(nodes, names.to_vec())
 }
 
 fn input() -> Vec<InputArgument> {

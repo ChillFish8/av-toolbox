@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::scene::place;
 
-/// The path of a demand made by `log`, which reads `denoise`.
+/// The path of a demand made by `log`, which reads `denoise`, in a graph that also holds `elsewhere`.
 fn path_of(args: &Value) -> PathView<'_> {
     let input = PathNode {
         name: "input",
@@ -16,7 +16,9 @@ fn path_of(args: &Value) -> PathView<'_> {
         args,
     };
 
-    PathView::new(vec![input, denoise])
+    let stages = vec!["input", "denoise", "log", "elsewhere"];
+
+    PathView::new(vec![input, denoise], stages)
 }
 
 #[test]
@@ -64,4 +66,16 @@ fn after_naming_a_stage_off_the_path_is_refused() {
         error.to_string(),
         "`elsewhere` is not a stage on the path this demand travels, so the provider cannot go after it",
     );
+}
+
+#[test]
+fn after_naming_no_stage_at_all_is_refused() {
+    let args = json!({});
+    let path = path_of(&args);
+
+    let Err(error) = place(Some("denoize"), &path) else {
+        panic!("a name no stage has should be refused");
+    };
+
+    assert_eq!(error.to_string(), "there is no stage named `denoize`");
 }

@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use av_toolbox_core::testing::HostFixtureCuts;
 use av_toolbox_core::{
     AnyDemand,
     BoundInputs,
@@ -36,7 +37,7 @@ use av_toolbox_gpu::{
     StreamFormat,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Every item a `TagRecording` sink consumed, as `(timestamp, tag)` pairs, in consumption order.
 pub(crate) static TAGGED: Mutex<Vec<(u64, Option<Tag>)>> = Mutex::new(Vec::new());
@@ -45,11 +46,19 @@ pub(crate) static TAGGED: Mutex<Vec<(u64, Option<Tag>)>> = Mutex::new(Vec::new()
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct Tag(pub(crate) bool);
 
+/// Asks `Tagging` for tags.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct TagsRequest {
+    /// Whether `Tagging` demands [HostFixtureCuts] of its own input.
+    #[serde(default)]
+    pub(crate) host_cuts: bool,
+}
+
 /// A demand kind served by `Tagging`, which runs on metadata alone.
 pub(crate) struct FixtureTags;
 
 impl DemandDefinition for FixtureTags {
-    type Request = ();
+    type Request = TagsRequest;
     type Output = Tag;
 
     fn kind() -> &'static str {
@@ -88,6 +97,8 @@ impl MetaProvider for TaggingInstance {
 }
 
 /// Serves [FixtureTags] directly after the source, on metadata alone.
+///
+/// It demands [HostFixtureCuts] of its input when any request it serves asks it to.
 pub(crate) struct Tagging;
 
 impl StageDefinition for Tagging {
@@ -101,6 +112,21 @@ impl StageDefinition for Tagging {
         "tagging"
     }
 
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        let reads_host_cuts = args
+            .iter()
+            .filter_map(|served| served.demand.request::<FixtureTags>())
+            .any(|request| request.host_cuts);
+        if !reads_host_cuts {
+            return Vec::new();
+        }
+
+        vec![InputDemand {
+            input: "input",
+            demand: AnyDemand::new::<HostFixtureCuts>(()),
+        }]
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
         SIGNATURE
@@ -111,7 +137,7 @@ impl ProviderDefinition for Tagging {
     type Side = MetaSide;
     type Demand = FixtureTags;
 
-    fn place(_request: &(), path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+    fn place(_request: &TagsRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
         Ok(path.after_source())
     }
 
@@ -138,7 +164,11 @@ impl ProviderDefinition for Tagging {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
-pub(crate) struct TagRecordingArgs {}
+pub(crate) struct TagRecordingArgs {
+    /// Whether the tags it demands are served by reading host cuts.
+    #[serde(default)]
+    host_cuts: bool,
+}
 
 /// Records the timestamp and tag of every item it consumes, reading the tag from `layer`.
 pub(crate) struct TagRecordingInstance {
@@ -185,10 +215,14 @@ impl StageDefinition for TagRecording {
         "tag-recording"
     }
 
-    fn demands(_args: &Self::Args) -> Vec<InputDemand> {
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        let request = TagsRequest {
+            host_cuts: args.host_cuts,
+        };
+
         vec![InputDemand {
             input: "input",
-            demand: AnyDemand::new::<FixtureTags>(()),
+            demand: AnyDemand::new::<FixtureTags>(request),
         }]
     }
 

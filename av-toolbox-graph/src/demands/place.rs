@@ -106,6 +106,11 @@ pub(super) fn place_demand(
     let chosen = match place(&asked.demand.demand, &view) {
         Ok(chosen) => chosen,
         Err(error) => {
+            let reason = error.to_string();
+            if !placements.first_place_failure(asked.demander, reason) {
+                return;
+            }
+
             let message = format!("`{demander}` demands {} on `{input}`, but {error}", kind.name());
             let code = DiagnosticCode::PlaceFailed;
             let diagnostic = placements.error_for(graph, kind, asked.demander, code, message);
@@ -315,6 +320,21 @@ impl Placements {
         }
 
         None
+    }
+
+    /// Records that a provider refused to place a demand of `demander` because of `reason`, and
+    /// returns whether this is the first such refusal for the stage that started its chain.
+    ///
+    /// One mistake, such as a misspelt `after`, is often behind demands of several kinds.
+    fn first_place_failure(&mut self, demander: Demander, reason: String) -> bool {
+        let root = self.root_stage(demander);
+        let failure = (root, reason);
+        if self.place_failures.contains(&failure) {
+            return false;
+        }
+
+        self.place_failures.push(failure);
+        true
     }
 
     /// What made the first demand filed under `instance`.

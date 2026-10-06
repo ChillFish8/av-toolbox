@@ -213,7 +213,7 @@ fn live_sources<'a>(graph: &'a CompiledGraph, registry: &PipelineRegistry) -> Ve
 mod tests {
     use std::path::Path;
 
-    use av_toolbox_graph::{DiagnosticCode, Node, NodeId};
+    use av_toolbox_graph::{Diagnostic, DiagnosticCode, Node, NodeId};
 
     use super::*;
     use crate::testing::MemoryFiles;
@@ -390,6 +390,47 @@ args.scenes = { breaks = { mode = "natural" }, after = "denoise" }
             .collect();
         assert_eq!(before_demanders, [["denoise".to_string()]]);
         assert_eq!(after_demanders, [["log".to_string()]]);
+    }
+
+    #[test]
+    fn an_after_typo_is_reported_once_at_the_sink() {
+        let registry = crate::registry().expect("the built-in stages register");
+        let text = r#"
+[source.input]
+type = "y4m/stdin"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["denoise"]
+
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["denoise"]
+args.path = "scenes.ndjson"
+args.scenes = { breaks = { mode = "natural" }, after = "denoize" }
+"#;
+        let specs = specs(text);
+
+        let result = Pipeline::build(&registry, &specs);
+        let Err(error) = result else {
+            panic!("should fail");
+        };
+        let diagnostics: Vec<&Diagnostic> = error.diagnostics().iter().collect();
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].code(), DiagnosticCode::PlaceFailed);
+        assert_eq!(diagnostics[0].path(), "sink.log");
+        assert!(
+            diagnostics[0]
+                .message()
+                .contains("there is no stage named `denoize`"),
+            "{}",
+            diagnostics[0].message(),
+        );
     }
 
     fn nodes_of<'a>(graph: &'a CompiledGraph, identifier: &str) -> Vec<&'a Node> {

@@ -102,10 +102,14 @@ fn narrow<S: Side>(node: NodeId, slots: Vec<Option<AnyItem>>) -> Inputs<S> {
 fn only_item(node: NodeId, slots: Vec<Option<AnyItem>>) -> Result<AnyItem, RunError> {
     let item = slots.into_iter().next().flatten();
 
-    item.ok_or_else(|| RunError::Stage {
+    item.ok_or_else(|| missing_item(node))
+}
+
+fn missing_item(node: NodeId) -> RunError {
+    RunError::Stage {
         node,
         source: StageError::msg("expected an item in slot 0"),
-    })
+    }
 }
 
 /// Signals the start of a chunk to whichever kind `stage` is.

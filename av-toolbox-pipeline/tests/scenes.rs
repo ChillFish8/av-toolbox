@@ -355,3 +355,42 @@ fn the_metadata_sink_writes_scores_only_when_it_demands_scenes() {
         "{undemanded_scores:?}"
     );
 }
+
+#[test]
+fn a_scene_split_runs_in_its_scores_region() {
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let input = folder.path().join("input.y4m");
+    let pipeline_path = folder.path().join("pipeline.toml");
+    let (opening, closing) = two_scene_lumas();
+    let lumas = [opening, closing].concat();
+    let clip = clip_with_lumas(&lumas);
+    fs::write(&input, clip).expect("writes the input");
+
+    let filter = r#"type = "av-denoise/nlmeans""#;
+    let pipeline_text = logged_denoise_pipeline(filter, r#"{ mode = "natural" }"#)
+        .replace("{input}", utf8(&input))
+        .replace("{output}", "output.y4m")
+        .replace("{log}", "log.ndjson");
+    fs::write(&pipeline_path, pipeline_text).expect("writes the pipeline");
+
+    let supplied = Supplied::new();
+    let loaded =
+        av_toolbox_pipeline::load(&pipeline_path, &DiskFiles, &supplied).expect("the pipeline loads");
+    let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+    let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
+    let compiled = pipeline.compile(&backend).expect("should compile");
+
+    let graph = compiled.graph();
+    let plan = graph.execution_plan().expect("a compiled pipeline is planned");
+    let split = graph
+        .nodes()
+        .iter()
+        .find(|node| node.identifier() == "provider/scene-split")
+        .expect("a scene split is placed");
+    let score = graph.node(split.inputs()[0].source());
+    let score_region = plan.node(score.id()).region();
+
+    assert_eq!(score.identifier(), "provider/scene-score");
+    assert_eq!(plan.region(score_region).nodes(), &[score.id(), split.id()]);
+}

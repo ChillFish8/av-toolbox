@@ -184,6 +184,7 @@ impl DemandDefinition for SceneScores {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScoreRequest {
+    /// Which of the detector's analyses to score frames with.
     #[serde(default)]
     pub speed: SceneSpeed,
     /// The stage to score frames after, in place of where the provider would go.

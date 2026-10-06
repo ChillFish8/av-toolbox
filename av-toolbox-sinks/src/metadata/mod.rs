@@ -159,7 +159,7 @@ impl SceneProvisions {
 
 /// A sink writing each frame's metadata as one line of JSON.
 ///
-/// With scene layers, each line carries the frame's chunk and scene cut score from them.
+/// When it demands scenes, each line also carries the frame's scene chunk and scene cut score.
 pub(crate) struct NdjsonSink<W: Write> {
     output: BufWriter<W>,
     filter: KeyFilter,

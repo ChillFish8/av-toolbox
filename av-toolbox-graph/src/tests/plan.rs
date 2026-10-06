@@ -353,9 +353,33 @@ fn a_host_provider_stays_in_a_region_of_its_own() {
 
     let input_id = node_named(&graph, "input");
     let provider_id = node_named(&graph, "host-fixture-cuts(input)");
+    let consumer_id = graph.node(provider_id).consumers()[0];
     let provider_region = plan.node(provider_id).region();
     assert_ne!(plan.node(input_id).region(), provider_region);
+    assert_ne!(plan.node(consumer_id).region(), provider_region);
     assert_eq!(plan.region(provider_region).nodes(), &[provider_id]);
+}
+
+#[test]
+fn a_meta_provider_joins_the_host_provider_it_reads() {
+    let specs = [
+        testing::spec(StageKind::Source, "input", "test/host-file"),
+        demanding("wants", "input", json!({ "tags": true, "host_cuts": true })),
+        sink("out", "wants"),
+    ];
+
+    let (graph, plan) = provided_graph_and_plan_of(&specs);
+
+    let input_id = node_named(&graph, "input");
+    let host_id = node_named(&graph, "host-fixture-cuts(input)");
+    let tags_id = node_named(&graph, "tags(input)");
+    let host_region = plan.node(host_id).region();
+    assert_ne!(plan.node(input_id).region(), host_region);
+    assert_eq!(plan.region(host_region).nodes(), &[host_id, tags_id]);
+    assert_eq!(plan.region(host_region).head(), host_id);
+
+    let tags_consumer = graph.node(tags_id).consumers()[0];
+    assert_ne!(plan.node(tags_consumer).region(), host_region);
 }
 
 #[test]

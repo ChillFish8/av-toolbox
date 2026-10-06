@@ -115,6 +115,8 @@ struct Placements {
     next_layer: u32,
     /// The round being filed.
     round: u32,
+    /// Each stage a provider refused to place a demand for, with the reason it gave.
+    place_failures: Vec<(NodeId, String)>,
 }
 
 /// Inserts a provider for every group of demands that place themselves behind the same node, and
@@ -211,7 +213,7 @@ pub(crate) fn note_demanders(graph: &CompiledGraph, node: &Node, diagnostic: Dia
 
 /// How a demand reached a provider, and the stage whose demand started it.
 pub(crate) struct DemandChain<'g> {
-    /// Such as "`scenes` demanded by `scene-split(input)`, demanded by `bwdif`".
+    /// The chain spelled out, such as "`scenes` demanded by `scene-split(input)`, demanded by `bwdif`".
     pub(crate) text: String,
     pub(crate) stage: Option<&'g Node>,
 }
@@ -388,6 +390,7 @@ fn instance_name(graph: &CompiledGraph, instances: &[Instance], index: usize) ->
     }
 
     let after = graph.node(instance.node).name();
+
     format!("{kind}({source} after {after})")
 }
 

@@ -84,7 +84,7 @@ pub use self::inputs::{
 pub use self::mask::Mask;
 pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, run_meta_sink};
 pub use self::open::OpenSlot;
-pub use self::parallelism::{Granularity, Parallelism};
+pub use self::parallelism::{ChunkRequest, Granularity, Parallelism};
 pub use self::placement::{PathEdge, PathNode, PathView, PlaceError, PlaceFn};
 pub use self::provider::{
     DemandsFn,

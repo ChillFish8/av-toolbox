@@ -229,7 +229,7 @@ impl<D: StageDefinition> Prepared<D> {
     pub(super) fn stage_demands(&self) -> Vec<InputDemand> {
         let mut demands = D::demands(&self.args);
 
-        let Parallelism::Chunk { demand, .. } = D::parallelism(&self.args) else {
+        let Parallelism::Chunk(chunk) = D::parallelism(&self.args) else {
             return demands;
         };
 
@@ -237,7 +237,10 @@ impl<D: StageDefinition> Prepared<D> {
             return demands;
         };
 
-        demands.push(InputDemand { input, demand });
+        demands.push(InputDemand {
+            input,
+            demand: chunk.demand().clone(),
+        });
         demands
     }
 }

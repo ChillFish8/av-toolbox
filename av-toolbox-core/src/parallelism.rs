@@ -28,30 +28,37 @@ impl fmt::Display for Granularity {
 }
 
 /// The smallest unit of a stream a stage can be given on its own.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Parallelism {
     Frame,
     /// One chunk at a time, chunked by the value its demand is served with.
-    Chunk {
-        demand: AnyDemand,
-        key: ChunkKeyFn,
-    },
+    ///
+    /// Only [Parallelism::chunk] makes one.
+    Chunk(ChunkRequest),
     Stream,
 }
 
-/// Two chunk parallelisms are equal when they demand the same thing, as the demand fixes the key.
-impl PartialEq for Parallelism {
+/// The demand a chunk stage is chunked by, and how it reads the chunk out of the value served.
+#[derive(Debug, Clone)]
+pub struct ChunkRequest {
+    demand: AnyDemand,
+    key: ChunkKeyFn,
+}
+
+impl ChunkRequest {
+    pub fn demand(&self) -> &AnyDemand {
+        &self.demand
+    }
+
+    pub fn key(&self) -> ChunkKeyFn {
+        self.key
+    }
+}
+
+/// Two chunk requests are equal when they demand the same thing, as the demand fixes the key.
+impl PartialEq for ChunkRequest {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Frame, Self::Frame) | (Self::Stream, Self::Stream) => true,
-            (
-                Self::Chunk { demand, .. },
-                Self::Chunk {
-                    demand: other_demand, ..
-                },
-            ) => demand == other_demand,
-            _ => false,
-        }
+        self.demand == other.demand
     }
 }
 
@@ -72,16 +79,18 @@ impl Parallelism {
     where
         D::Output: ChunkKey,
     {
-        Self::Chunk {
+        let chunk = ChunkRequest {
             demand: AnyDemand::new::<D>(request),
             key: key_of::<D>,
-        }
+        };
+
+        Self::Chunk(chunk)
     }
 
     pub fn granularity(&self) -> Granularity {
         match self {
             Self::Frame => Granularity::Frame,
-            Self::Chunk { .. } => Granularity::Chunk,
+            Self::Chunk(_) => Granularity::Chunk,
             Self::Stream => Granularity::Stream,
         }
     }
@@ -89,7 +98,7 @@ impl Parallelism {
     /// The demand a chunk stage is chunked by.
     pub fn demand(&self) -> Option<&AnyDemand> {
         match self {
-            Self::Chunk { demand, .. } => Some(demand),
+            Self::Chunk(chunk) => Some(chunk.demand()),
             Self::Frame | Self::Stream => None,
         }
     }
@@ -97,7 +106,7 @@ impl Parallelism {
     /// How a chunk stage reads the chunk out of the value its demand is served with.
     pub fn chunk_key(&self) -> Option<ChunkKeyFn> {
         match self {
-            Self::Chunk { key, .. } => Some(*key),
+            Self::Chunk(chunk) => Some(chunk.key()),
             Self::Frame | Self::Stream => None,
         }
     }

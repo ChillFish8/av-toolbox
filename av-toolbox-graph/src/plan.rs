@@ -200,12 +200,14 @@ impl ExecutionPlan {
 ///
 /// Once every width is settled, nodes are grouped into regions in the same topological order. A
 /// node joins its producer's region when every input comes from that one region and the width
-/// matches, and heads a region of its own otherwise. A node with a scene layer also needs the
-/// region to route on that layer, or on none yet. A crossing only joins when it is its producer's
-/// only consumer.
+/// matches, and heads a region of its own otherwise. A node with a chunk route also needs the
+/// region to route on that same route, or on none yet. A crossing only joins when it is its
+/// producer's only consumer.
 ///
-/// A provider on the host or the device always runs alone in a region of its own, so its detection
-/// runs on its own thread. A provider running on metadata alone is placed like any other node.
+/// A provider on the host or the device heads a region of its own, so its detection runs on its
+/// own thread. The only node that may join it is a provider running on metadata alone that is its
+/// only consumer, when both run one wide. Otherwise a provider running on metadata alone is placed
+/// like any other node.
 ///
 /// A region may have at most one exit. When one has more, a node at its branch is sealed, so
 /// nothing reading it may join its region, and the regions are placed again.
@@ -254,7 +256,7 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
     planner.finish()
 }
 
-/// Whether `node` is a provider on the host or the device, which runs alone in a region of its own.
+/// Whether `node` is a provider on the host or the device, which heads a region of its own.
 fn runs_alone(node: &Node, prepared: &[Option<PreparedStage>]) -> bool {
     if !matches!(node.role(), NodeRole::Provider(_)) {
         return false;
@@ -385,6 +387,11 @@ impl Planner<'_> {
             return;
         }
 
+        if let Some(region) = self.provider_region_to_join(id, &sources, width) {
+            self.join_region(id, region);
+            return;
+        }
+
         match self.shared_producer_region(&sources, width, node.route()) {
             Some(region) => self.join_region(id, region),
             None => {
@@ -399,10 +406,35 @@ impl Planner<'_> {
             .all(|source| self.graph.node(*source).consumers() == [id])
     }
 
+    /// The region of the host or device provider a metadata provider reads, when it may join it.
+    ///
+    /// It may when it is that provider's only consumer, and both run one wide.
+    fn provider_region_to_join(&self, id: NodeId, sources: &[NodeId], width: usize) -> Option<RegionId> {
+        let node = self.graph.node(id);
+        if !matches!(node.role(), NodeRole::Provider(_)) {
+            return None;
+        }
+
+        let [source] = sources else {
+            return None;
+        };
+
+        let producer = self.graph.node(*source);
+        if !runs_alone(producer, &self.prepared) || producer.consumers() != [id] {
+            return None;
+        }
+
+        let candidate = self.region_of(*source);
+        let region = &self.regions[candidate.index()];
+
+        (width == 1 && region.width == 1).then_some(candidate)
+    }
+
     /// The one region every input already shares, when its width matches this node's own.
     ///
-    /// A sealed input never counts, so a node reading one heads a region of its own. A node with a
-    /// route only joins a region routed on that same layer, or on none yet.
+    /// A sealed input never counts, so a node reading one heads a region of its own. Neither does
+    /// a region headed by a host or device provider. A node with a route only joins a region
+    /// routed on that same layer, or on none yet.
     fn shared_producer_region(
         &self,
         sources: &[NodeId],
@@ -424,6 +456,11 @@ impl Planner<'_> {
         }
 
         let region = &self.regions[candidate.index()];
+        let head = self.graph.node(region.head);
+        if runs_alone(head, &self.prepared) {
+            return None;
+        }
+
         let same_route = route.is_none() || region.route.is_none() || route == region.route;
 
         (region.width == width && same_route).then_some(candidate)
@@ -436,7 +473,9 @@ impl Planner<'_> {
             .expect("a producer is placed into a region before its consumer, since order is topological")
     }
 
-    /// Adds a node to an existing region, which routes on the node's route when it had none.
+    /// Adds a node to an existing region.
+    ///
+    /// A region with no chunk route yet takes the node's own, when it has one.
     fn join_region(&mut self, id: NodeId, region: RegionId) {
         let joined = &mut self.regions[region.index()];
         joined.nodes.push(id);
