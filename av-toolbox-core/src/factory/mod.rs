@@ -154,7 +154,7 @@ impl PreparedStage {
             Self::Source(prepared) => prepared.demands(),
             Self::Filter(prepared) => prepared.demands(),
             Self::Mask(prepared) => prepared.demands(),
-            Self::Provider(_) => Vec::new(),
+            Self::Provider(prepared) => prepared.demands(),
             Self::Sink(prepared) => prepared.demands(),
             Self::MetaSink(prepared) => prepared.demands(),
             Self::Crossing(_) => Vec::new(),

@@ -1,4 +1,4 @@
-use av_toolbox_core::testing::{FixtureChunk, HostFixtureCuts};
+use av_toolbox_core::testing::{FixtureChunk, FixtureCuts, HostFixtureCuts, StampingInstance};
 use av_toolbox_core::{
     AnyDemand,
     BoundInputs,
@@ -16,6 +16,8 @@ use av_toolbox_core::{
     PlaceError,
     Provider,
     ProviderDefinition,
+    Provision,
+    ProvisionError,
     StageDefinition,
     StageError,
     StageInstance,
@@ -29,6 +31,7 @@ use av_toolbox_gpu::{
     Frame,
     FrameContext,
     FrameFormat,
+    LayerId,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -79,28 +82,35 @@ impl DemandDefinition for Unprovided {
     }
 }
 
-struct PassItems;
+/// Asks for marks every `every` frames, which [Marking] copies from breaks.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct MarksRequest {
+    pub(crate) every: u32,
+    /// Whether [Marking] demands marks of its own input rather than breaks.
+    #[serde(default)]
+    pub(crate) cycle: bool,
+}
 
-impl StageInstance for PassItems {}
+/// A demand kind served by [Marking], which itself demands [FixtureBreaks].
+pub(crate) struct FixtureMarks;
 
-impl Provider<DeviceSide> for PassItems {
-    fn process(
-        &mut self,
-        _context: &mut FrameContext,
-        mut inputs: Inputs,
-    ) -> Result<Vec<StreamItem>, StageError> {
-        let item = inputs
-            .take(0)
-            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+impl DemandDefinition for FixtureMarks {
+    type Request = MarksRequest;
+    type Output = FixtureChunk;
 
-        Ok(vec![item])
+    fn kind() -> &'static str {
+        "fixture-marks"
+    }
+
+    fn describe(request: &MarksRequest) -> String {
+        format!("marks every {}", request.every)
     }
 }
 
 /// Serves [FixtureBreaks] after the stage a request names, or after the source.
 ///
-/// It refuses to place a request marked `refuse`, and refuses a request for a break every 0 frames
-/// once it sees its input.
+/// Every layer it serves takes the chunk the source stamped on each frame. It refuses to place a
+/// request marked `refuse`, and refuses a request for a break every 0 frames once it sees its input.
 pub(super) struct Breaking;
 
 impl StageDefinition for Breaking {
@@ -160,10 +170,217 @@ impl ProviderDefinition for Breaking {
 
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
-        _args: Self::Args,
+        args: Self::Args,
+        _inputs: &BoundInputs,
         _formats: &ResolvedFormats,
     ) -> Result<Box<dyn Provider<DeviceSide>>, StageError> {
-        Ok(Box::new(PassItems))
+        let instance = StampingInstance::new(&args);
+
+        Ok(Box::new(instance))
+    }
+}
+
+/// Serves [FixtureMarks] after the source, copying each frame's breaks into its own layers.
+///
+/// It demands one set of breaks on its input, every as many frames as its smallest request asks.
+/// When any request is marked `cycle`, it demands marks of itself instead.
+pub(super) struct Marking;
+
+impl StageDefinition for Marking {
+    type Args = Vec<LayerDemand>;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "marking"
+    }
+
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        let requests: Vec<MarksRequest> = args
+            .iter()
+            .filter_map(|served| served.demand.request::<FixtureMarks>())
+            .collect();
+        let Some(demand) = marking_demand(&requests) else {
+            return Vec::new();
+        };
+
+        vec![InputDemand {
+            input: "input",
+            demand,
+        }]
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl ProviderDefinition for Marking {
+    type Side = DeviceSide;
+    type Demand = FixtureMarks;
+
+    fn place(_request: &MarksRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+        Ok(path.after_source())
+    }
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        offered: StreamFormat,
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn check(_args: &Self::Args, _input: &FrameFormat) -> Result<(), StageError> {
+        Ok(())
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: &BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Provider<DeviceSide>>, StageError> {
+        let breaks = inputs
+            .provision::<FixtureBreaks>("input")
+            .map_err(unprovided_breaks)?;
+        let layers = args.iter().map(|served| served.layer).collect();
+
+        Ok(Box::new(MarkingInstance { breaks, layers }))
+    }
+}
+
+/// What [Marking] demands to serve `requests`, or nothing when it serves none.
+fn marking_demand(requests: &[MarksRequest]) -> Option<AnyDemand> {
+    let cycle = requests.iter().find(|request| request.cycle);
+    if let Some(request) = cycle {
+        let demand = AnyDemand::new::<FixtureMarks>(request.clone());
+        return Some(demand);
+    }
+
+    let every = requests.iter().map(|request| request.every).min()?;
+    let breaks = BreaksRequest {
+        every,
+        after: None,
+        refuse: false,
+    };
+
+    Some(AnyDemand::new::<FixtureBreaks>(breaks))
+}
+
+fn unprovided_breaks(error: ProvisionError) -> StageError {
+    StageError::with_source("the marking fixture was given no breaks", error)
+}
+
+/// The instance [Marking] builds.
+struct MarkingInstance {
+    breaks: Provision<FixtureBreaks>,
+    layers: Vec<LayerId>,
+}
+
+impl StageInstance for MarkingInstance {}
+
+impl Provider<DeviceSide> for MarkingInstance {
+    fn process(
+        &mut self,
+        _context: &mut FrameContext,
+        mut inputs: Inputs,
+    ) -> Result<Vec<StreamItem>, StageError> {
+        let mut item = inputs
+            .take(0)
+            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+
+        let meta = item.meta_mut();
+        let breaks = self.breaks.get(meta).copied();
+        let chunk = breaks.unwrap_or(FixtureChunk(0));
+        for layer in &self.layers {
+            meta.provided.set(*layer, chunk);
+        }
+
+        Ok(vec![item])
+    }
+}
+
+/// A demand kind served by [Relaying], which passes each request on to [Marking].
+pub(crate) struct FixtureRelays;
+
+impl DemandDefinition for FixtureRelays {
+    type Request = u32;
+    type Output = FixtureChunk;
+
+    fn kind() -> &'static str {
+        "fixture-relays"
+    }
+}
+
+/// Serves [FixtureRelays] after the source by demanding marks every as many frames as each request.
+pub(super) struct Relaying;
+
+impl StageDefinition for Relaying {
+    type Args = Vec<LayerDemand>;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "relaying"
+    }
+
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        args.iter()
+            .filter_map(|served| served.demand.request::<FixtureRelays>())
+            .map(|every| {
+                let request = MarksRequest { every, cycle: false };
+
+                InputDemand {
+                    input: "input",
+                    demand: AnyDemand::new::<FixtureMarks>(request),
+                }
+            })
+            .collect()
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl ProviderDefinition for Relaying {
+    type Side = DeviceSide;
+    type Demand = FixtureRelays;
+
+    fn place(_request: &u32, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+        Ok(path.after_source())
+    }
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        offered: StreamFormat,
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn check(_args: &Self::Args, _input: &FrameFormat) -> Result<(), StageError> {
+        Ok(())
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        args: Self::Args,
+        _inputs: &BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Provider<DeviceSide>>, StageError> {
+        let instance = StampingInstance::new(&args);
+
+        Ok(Box::new(instance))
     }
 }
 
@@ -185,6 +402,18 @@ pub(crate) struct DemandingArgs {
     /// Whether the stage demands [HostFixtureCuts] instead, which a host provider serves.
     #[serde(default)]
     host_cuts: bool,
+    /// Whether the stage demands [FixtureMarks] instead.
+    #[serde(default)]
+    marks: bool,
+    /// Whether the marks request asks [Marking] to demand marks of itself.
+    #[serde(default)]
+    cycle: bool,
+    /// Whether the stage also demands [FixtureCuts], listed before its own demand.
+    #[serde(default)]
+    cuts: bool,
+    /// Whether the stage demands [FixtureRelays] instead.
+    #[serde(default)]
+    relays: bool,
 }
 
 impl DemandingArgs {
@@ -203,6 +432,19 @@ impl DemandingArgs {
 
         if self.host_cuts {
             return AnyDemand::new::<HostFixtureCuts>(());
+        }
+
+        if self.relays {
+            return AnyDemand::new::<FixtureRelays>(self.every);
+        }
+
+        if self.marks {
+            let request = MarksRequest {
+                every: self.every,
+                cycle: self.cycle,
+            };
+
+            return AnyDemand::new::<FixtureMarks>(request);
         }
 
         AnyDemand::new::<FixtureBreaks>(self.request())
@@ -261,12 +503,20 @@ impl StageDefinition for Demanding {
             return Vec::new();
         }
 
-        let demand = InputDemand {
+        let mut demands = Vec::new();
+        if args.cuts {
+            demands.push(InputDemand {
+                input: "input",
+                demand: AnyDemand::new::<FixtureCuts>(()),
+            });
+        }
+
+        demands.push(InputDemand {
             input: "input",
             demand: args.demand(),
-        };
+        });
 
-        vec![demand]
+        demands
     }
 
     fn inputs() -> &'static InputSignature {

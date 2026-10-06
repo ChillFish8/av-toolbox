@@ -18,9 +18,11 @@ use super::definition::{Definition, Prepared};
 use super::prepared::PreparedProvider;
 use super::{StageFactory, StageInfo};
 use crate::{
+    BoundInputs,
     BuildStageError,
     BuiltProvider,
     InputArgument,
+    InputDemand,
     LayerDemand,
     OpenSlot,
     ProviderDefinition,
@@ -32,6 +34,7 @@ use crate::{
 /// Carries a provider's demands into whichever runtime the backend opened.
 struct BuildProvider<'a, D: ProviderDefinition> {
     args: Vec<LayerDemand>,
+    inputs: BoundInputs,
     formats: &'a ResolvedFormats,
     marker: PhantomData<fn() -> D>,
 }
@@ -40,7 +43,7 @@ impl<'a, D: ProviderDefinition> BuildTask for BuildProvider<'a, D> {
     type Output = Result<BuiltProvider, StageError>;
 
     fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-        let stage = D::build::<R>(context, self.args, self.formats)?;
+        let stage = D::build::<R>(context, self.args, &self.inputs, self.formats)?;
 
         Ok(<D::Side as StageSide>::provider(stage))
     }
@@ -49,6 +52,10 @@ impl<'a, D: ProviderDefinition> BuildTask for BuildProvider<'a, D> {
 impl<D: ProviderDefinition> PreparedProvider for Prepared<D> {
     fn chunk_authority(&self) -> Option<usize> {
         self.inputs.chunk_authority()
+    }
+
+    fn demands(&self) -> Vec<InputDemand> {
+        D::demands(&self.args)
     }
 
     fn held_frames(&self, formats: &ResolvedFormats) -> usize {
@@ -88,6 +95,7 @@ impl<D: ProviderDefinition> PreparedProvider for Prepared<D> {
         let identifier = self.identifier;
         let task = BuildProvider::<D> {
             args: self.args,
+            inputs: self.inputs,
             formats,
             marker: PhantomData,
         };

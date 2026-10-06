@@ -10,8 +10,11 @@ use crate::{
     Crossing,
     DemandDefinition,
     DemandKind,
+    DemandsFn,
     FilterDefinition,
     InputArgument,
+    InputDemand,
+    LayerDemand,
     MaskDefinition,
     MetaSinkDefinition,
     OpenSlot,
@@ -32,6 +35,7 @@ use crate::{
     SinkDefinition,
     SourceDefinition,
     StageDefinition,
+    StageError,
     StageFactory,
     StageInfo,
     StageKind,
@@ -50,6 +54,7 @@ struct RegisteredDemand {
 struct RegisteredProvider {
     full_identifier: String,
     place: PlaceFn,
+    demands: DemandsFn,
 }
 
 /// The registry tracks all stages available for use within the pipeline.
@@ -117,6 +122,7 @@ impl PipelineRegistry {
         let registered = RegisteredProvider {
             full_identifier,
             place: place_erased::<P>,
+            demands: demands_erased::<P>,
         };
         self.served.insert(kind, registered);
 
@@ -128,6 +134,13 @@ impl PipelineRegistry {
         let registered = self.served.get(&kind)?;
 
         Some((&registered.full_identifier, registered.place))
+    }
+
+    /// How the provider serving `kind` reports its own demands from its args.
+    pub fn provider_demands(&self, kind: DemandKind) -> Option<DemandsFn> {
+        let registered = self.served.get(&kind)?;
+
+        Some(registered.demands)
     }
 
     pub fn register_sink<D: SinkDefinition>(&mut self) -> Result<(), RegistryError> {
@@ -284,6 +297,17 @@ fn place_erased<P: ProviderDefinition>(
     let request = demand.try_request::<P::Demand>().map_err(unreadable_request)?;
 
     P::place(&request, path)
+}
+
+/// Reads `args` as `P`'s layer demands and reports what `P` demands for them.
+fn demands_erased<P: ProviderDefinition>(args: &Value) -> Result<Vec<InputDemand>, StageError> {
+    let layers: Vec<LayerDemand> = serde_json::from_value(args.clone()).map_err(unreadable_args)?;
+
+    Ok(P::demands(&layers))
+}
+
+fn unreadable_args(error: serde_json::Error) -> StageError {
+    StageError::with_source("the provider's layer demands cannot be read", error)
 }
 
 fn unreadable_request(error: RequestError) -> PlaceError {

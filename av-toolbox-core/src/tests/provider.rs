@@ -13,11 +13,14 @@ use av_toolbox_gpu::{
 };
 use serde_json::json;
 
-use super::demand::{Breaks, Cuts};
+use super::demand::{Breaks, Cuts, Other};
 use super::factory::{capabilities, frame_format};
 use crate::{
+    AnyDemand,
+    BoundInputs,
     DemandKind,
     InputArgument,
+    InputDemand,
     InputParam,
     InputSignature,
     Inputs,
@@ -78,6 +81,16 @@ macro_rules! cuts_provider {
                 args.len()
             }
 
+            fn demands(args: &Self::Args) -> Vec<InputDemand> {
+                args.iter()
+                    .filter_map(|served| served.demand.request::<Cuts>())
+                    .map(|request| InputDemand {
+                        input: "input",
+                        demand: AnyDemand::new::<Other>(request),
+                    })
+                    .collect()
+            }
+
             fn inputs() -> &'static InputSignature {
                 const SIGNATURE: &InputSignature =
                     &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
@@ -111,6 +124,7 @@ macro_rules! cuts_provider {
             fn build<R: Runtime>(
                 _context: &BuildContext<R>,
                 _args: Self::Args,
+                _inputs: &BoundInputs,
                 _formats: &ResolvedFormats,
             ) -> Result<Box<dyn Provider<HostSide>>, StageError> {
                 Ok(Box::new(PassThrough))
@@ -179,7 +193,6 @@ fn a_provider_registers_under_its_demand_kind() {
     assert_eq!(prepared.parallelism(), Parallelism::Stream);
     assert_eq!(prepared.chunk_authority(), Some(0));
     assert_eq!(prepared.residency(), Residency::Host);
-    assert!(prepared.demands().is_empty());
 }
 
 #[test]
@@ -188,7 +201,7 @@ fn registering_a_provider_registers_its_demand_kind() {
 
     assert_eq!(registry.demand_kind("cuts"), Some(DemandKind::of::<Cuts>()));
 
-    let demand = crate::AnyDemand::new::<Cuts>(Breaks { every: 4 });
+    let demand = AnyDemand::new::<Cuts>(Breaks { every: 4 });
     assert_eq!(registry.describe(&demand), "cuts");
 }
 
@@ -262,7 +275,7 @@ fn a_registered_provider_places_through_its_definition() {
         .expect("cuts has a provider");
     let args = json!({});
     let path = path_of(&["input", "soften"], &args);
-    let demand = crate::AnyDemand::new::<Cuts>(Breaks { every: 4 });
+    let demand = AnyDemand::new::<Cuts>(Breaks { every: 4 });
 
     let edge = place(&demand, &path).expect("should place");
 
@@ -278,11 +291,54 @@ fn a_registered_provider_refuses_a_request_it_cannot_read() {
     let args = json!({});
     let path = path_of(&["input"], &args);
     let value = json!({ "kind": "cuts", "request": { "every": "often" } });
-    let malformed: crate::AnyDemand = serde_json::from_value(value).expect("deserialises");
+    let malformed: AnyDemand = serde_json::from_value(value).expect("deserialises");
 
     let Err(error) = place(&malformed, &path) else {
         panic!("an unreadable request should be refused");
     };
 
     assert!(error.to_string().contains("cannot be read"), "{error}");
+}
+
+#[test]
+fn a_registered_provider_reports_its_demands() {
+    let registry = registry_with_cuts();
+    let demands_of = registry
+        .provider_demands(DemandKind::of::<Cuts>())
+        .expect("cuts has a provider");
+
+    let demands = demands_of(&provider_args()).expect("should read its args");
+
+    let expected = vec![InputDemand {
+        input: "input",
+        demand: AnyDemand::new::<Other>(Breaks { every: 4 }),
+    }];
+    assert_eq!(demands, expected);
+}
+
+#[test]
+fn a_registered_provider_refuses_args_it_cannot_read() {
+    let registry = registry_with_cuts();
+    let demands_of = registry
+        .provider_demands(DemandKind::of::<Cuts>())
+        .expect("cuts has a provider");
+
+    let refused = demands_of(&json!({ "layer": "first" }));
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn a_prepared_provider_reports_its_demands_on_its_input() {
+    let registry = registry_with_cuts();
+    let args = provider_args();
+    let prepared = registry
+        .prepare(StageKind::Provider, "provider/cuts", &args, &input())
+        .expect("should prepare");
+
+    let expected = vec![InputDemand {
+        input: "input",
+        demand: AnyDemand::new::<Other>(Breaks { every: 4 }),
+    }];
+    assert_eq!(prepared.demands(), expected);
 }

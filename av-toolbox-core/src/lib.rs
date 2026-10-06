@@ -86,7 +86,7 @@ pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, run_meta_sin
 pub use self::open::OpenSlot;
 pub use self::parallelism::{Granularity, Parallelism};
 pub use self::placement::{PathEdge, PathNode, PathView, PlaceError, PlaceFn};
-pub use self::provider::{LayerDemand, Provider, ProviderDefinition};
+pub use self::provider::{DemandsFn, LayerDemand, Provider, ProviderDefinition};
 pub use self::provision::{ChunkKey, Provision, ProvisionError};
 pub use self::registry::PipelineRegistry;
 pub use self::residency::{

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use av_toolbox_core::{Crossing, PipelineRegistry, PreparedStage, Residency};
 use av_toolbox_gpu::ResolvedFormats;
 
+use crate::demands::demand_chain;
 use crate::diagnostic::stage_path;
 use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics, SolvedFormats};
@@ -149,7 +150,7 @@ pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnost
 
         for id in &host_stages {
             let stage = graph.node(*id);
-            if let Some(implied) = implied_provider(stage) {
+            if let Some(implied) = implied_provider(graph, stage) {
                 message.push_str(". ");
                 message.push_str(&implied);
             }
@@ -164,27 +165,27 @@ pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnost
     }
 }
 
-/// Why a provider runs on the host, naming the stages whose demands placed it.
-fn implied_provider(node: &Node) -> Option<String> {
+/// Why a provider runs on the host, spelling out how each demand it serves reached it.
+fn implied_provider(graph: &CompiledGraph, node: &Node) -> Option<String> {
     let NodeRole::Provider(placement) = node.role() else {
         return None;
     };
 
-    let mut demanders: Vec<String> = Vec::new();
+    let mut chains: Vec<String> = Vec::new();
     for served in &placement.layers {
         for name in &served.demanded_by {
-            let quoted = format!("`{name}`");
-            if !demanders.contains(&quoted) {
-                demanders.push(quoted);
+            let chain = demand_chain(graph, placement.kind, name);
+            if !chains.contains(&chain.text) {
+                chains.push(chain.text);
             }
         }
     }
 
     let kind = placement.kind.name();
     let message = format!(
-        "{} was placed for the {kind} that {} demands, and the {kind} provider reads its frames on the host",
+        "{} was placed for {}, and the {kind} provider reads its frames on the host",
         node.name(),
-        demanders.join(", "),
+        chains.join(" and "),
     );
 
     Some(message)

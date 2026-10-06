@@ -135,6 +135,9 @@ pub trait PreparedProvider: Send + Sync {
     /// Which input's chunk ids line this stage's inputs up.
     fn chunk_authority(&self) -> Option<usize>;
 
+    /// What this provider asks of the frames reaching its input.
+    fn demands(&self) -> Vec<InputDemand>;
+
     /// The most frames this stage may hold back at once, given its resolved formats.
     fn held_frames(&self, formats: &ResolvedFormats) -> usize;
 

@@ -510,15 +510,19 @@ mod diagnostics_tests {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use av_toolbox_core::StageKind;
+    use av_toolbox_core::testing::{FixtureChunk, fixture_chunk};
+    use av_toolbox_core::{Inputs, StageKind};
     use av_toolbox_gpu::{
         ColourInfo,
         FrameFormat,
         FrameLayout,
+        FrameMeta,
         SampleFormat,
         StreamFormat,
+        StreamItem,
         Subsampling,
         test_device,
+        testing_context,
     };
     use serde_json::json;
 
@@ -749,6 +753,77 @@ mod tests {
         // Each call built its own copy of the region's one node. A cached or shared box would
         // leave this at one no matter how many times the region was instantiated.
         assert_eq!(testing::TEMPORAL_BUILD_CALLS.load(Ordering::SeqCst), 2);
+    }
+
+    /// Runs one frame through the provider named `name`, as the region would.
+    fn provide(stages: &mut [StageBox], graph: &CompiledGraph, name: &str, item: StreamItem) -> StreamItem {
+        let node = graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == name)
+            .unwrap_or_else(|| panic!("the graph has no node named {name}"));
+        let StageBox::Provider(provider) = &mut stages[node.id().index()] else {
+            panic!("{name} is not a device provider");
+        };
+
+        let mut context = testing_context();
+        let inputs = Inputs::new(vec![Some(item)]);
+        let mut emitted = provider.process(&mut context, inputs).expect("should provide");
+
+        emitted.remove(0)
+    }
+
+    #[test]
+    fn a_provider_reads_its_demands_through_provisions() {
+        let mut source = testing::spec(StageKind::Source, "input", "test/file");
+        source.args = Spanned::unknown(json!({ "path": "example.mkv" }));
+        let mut wants = testing::spec(StageKind::Filter, "wants", "test/demanding");
+        wants.inputs = vec![testing::positional("input")];
+        wants.args = Spanned::unknown(json!({ "every": 4, "marks": true }));
+        let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+        sink.inputs = vec![testing::positional("wants")];
+
+        let registry = testing::registry();
+        let mut graph = build(&registry, &[source, wants, sink])
+            .expect("should build")
+            .into_graph();
+        crate::satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+        let backend = backend();
+        let solved = formats(&graph, &registry, &backend);
+
+        let mut stages = graph
+            .instantiate(&registry, &backend, &solved)
+            .expect("should instantiate");
+
+        let context = testing_context();
+        let format = frames(64).as_frames().copied().expect("frames");
+        let meta = fixture_chunk(FrameMeta::at(0), 7);
+        let frame = context.alloc_frame(&format, meta);
+
+        let broken = provide(
+            &mut stages,
+            &graph,
+            "fixture-breaks(input)",
+            StreamItem::Frame(frame),
+        );
+        let marked = provide(&mut stages, &graph, "fixture-marks(input)", broken);
+
+        let marking = graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == "fixture-marks(input)")
+            .expect("a marks provider");
+        let wanting = graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == "wants")
+            .expect("the demanding stage");
+        let breaks_layer = marking.demands()[0].layer;
+        let marks_layer = wanting.demands()[0].layer;
+
+        let provided = &marked.meta().provided;
+        assert_eq!(provided.get::<FixtureChunk>(breaks_layer), Some(&FixtureChunk(7)));
+        assert_eq!(provided.get::<FixtureChunk>(marks_layer), Some(&FixtureChunk(7)));
     }
 
     #[test]

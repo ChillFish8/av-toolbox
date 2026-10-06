@@ -449,8 +449,7 @@ impl CompiledGraph {
         let id = NodeId::new(self.nodes.len());
         let producer = &self.nodes[after.index()];
         let mut input = Edge::new(None, Some(provider.input), 0, after, producer.span());
-        let reads = self.reads_of(after);
-        if reads == moved.len() {
+        if self.moves_every_read(after, moved) {
             input.set_sharing(Sharing::Move);
         }
 
@@ -483,13 +482,15 @@ impl CompiledGraph {
         id
     }
 
-    /// How many edges read `producer`, counted from the edges themselves.
-    fn reads_of(&self, producer: NodeId) -> usize {
-        self.nodes
-            .iter()
-            .flat_map(|node| node.inputs())
-            .filter(|edge| edge.source() == producer)
-            .count()
+    /// Whether every edge reading `producer` is one of `moved`, so the new provider is its only reader.
+    fn moves_every_read(&self, producer: NodeId, moved: &[EdgeId]) -> bool {
+        self.nodes.iter().all(|node| {
+            node.inputs()
+                .iter()
+                .enumerate()
+                .filter(|(_, edge)| edge.source() == producer)
+                .all(|(index, _)| moved.contains(&EdgeId::new(node.id(), index)))
+        })
     }
 
     pub(crate) fn redirect(&mut self, consumer: NodeId, edge: usize, source: NodeId) {

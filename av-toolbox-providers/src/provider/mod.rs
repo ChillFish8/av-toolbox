@@ -6,6 +6,7 @@ mod layers;
 mod tests;
 
 use av_toolbox_core::{
+    BoundInputs,
     InputParam,
     InputSignature,
     Inputs,
@@ -121,6 +122,7 @@ impl ProviderDefinition for SceneProvider {
     fn build<R: Runtime>(
         _context: &BuildContext<R>,
         args: Self::Args,
+        _inputs: &BoundInputs,
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn Provider<HostSide>>, StageError> {
         let input = formats.input(0).ok_or_else(missing_input_format)?;

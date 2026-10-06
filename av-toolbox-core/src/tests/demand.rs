@@ -20,7 +20,7 @@ impl DemandDefinition for Cuts {
     }
 }
 
-struct Other;
+pub(crate) struct Other;
 
 impl DemandDefinition for Other {
     type Request = Breaks;

@@ -16,6 +16,7 @@ use av_toolbox_gpu::{
 };
 
 use crate::{
+    BoundInputs,
     ChunkKey,
     DemandDefinition,
     InputParam,
@@ -143,6 +144,7 @@ macro_rules! stamping_provider {
             fn build<R: Runtime>(
                 _context: &BuildContext<R>,
                 args: Self::Args,
+                _inputs: &BoundInputs,
                 _formats: &ResolvedFormats,
             ) -> Result<Box<dyn Provider<$side>>, StageError> {
                 let instance = StampingInstance::new(&args);

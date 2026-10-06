@@ -55,6 +55,7 @@ pub enum DiagnosticCode {
     HeldInFrameRegion,
     UnsatisfiedDemand,
     PlaceFailed,
+    ProviderCycle,
     RemovedTransforms,
 }
 
@@ -92,6 +93,7 @@ impl DiagnosticCode {
             Self::HeldInFrameRegion => "held-in-frame-region",
             Self::UnsatisfiedDemand => "unsatisfied-demand",
             Self::PlaceFailed => "place-failed",
+            Self::ProviderCycle => "provider-cycle",
             Self::RemovedTransforms => "removed-transforms",
         }
     }

@@ -4,7 +4,7 @@ use av_toolbox_gpu::LayerId;
 use serde_json::{Value, json};
 
 use crate::graph::{CompiledGraph, Node, NodeRole};
-use crate::testing::{BreaksRequest, FixtureBreaks};
+use crate::testing::{BreaksRequest, FixtureBreaks, FixtureMarks, MarksRequest};
 use crate::{
     Diagnostic,
     DiagnosticCode,
@@ -146,6 +146,19 @@ fn breaks(every: u32, after: Option<&str>) -> AnyDemand {
     };
 
     AnyDemand::new::<FixtureBreaks>(request)
+}
+
+fn marks(every: u32) -> AnyDemand {
+    let request = MarksRequest { every, cycle: false };
+
+    AnyDemand::new::<FixtureMarks>(request)
+}
+
+fn provider_names(graph: &CompiledGraph) -> Vec<&str> {
+    let mut names: Vec<&str> = providers(graph).iter().map(|node| node.name()).collect();
+    names.sort_unstable();
+
+    names
 }
 
 fn served(layer: u32, demand: AnyDemand, description: &str, demanded_by: &[&str]) -> ServedLayer {
@@ -667,4 +680,302 @@ fn a_provider_refusal_points_at_the_demanding_stage_and_notes_its_source() {
         .find(|note| note.span == Span::new(0, 10))
         .unwrap_or_else(|| panic!("no note points at the source: {refusal:?}"));
     assert!(source_note.message.contains("`input`"), "{refusal:?}");
+}
+
+#[test]
+fn a_provider_demand_places_its_dependency() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "every": 4, "marks": true })),
+        sink("out", "wants"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    assert_eq!(
+        provider_names(&graph),
+        vec!["fixture-breaks(input)", "fixture-marks(input)"]
+    );
+
+    let marking = named(&graph, "fixture-marks(input)");
+    assert_eq!(
+        placement(marking).layers,
+        vec![served(0, marks(4), "marks every 4", &["wants"])]
+    );
+
+    let breaking = named(&graph, "fixture-breaks(input)");
+    assert_eq!(
+        placement(breaking).layers,
+        vec![served(1, breaks(4, None), "every 4", &["fixture-marks(input)"])]
+    );
+
+    let expected_demands = vec![NodeDemand {
+        input: "input",
+        kind: DemandKind::of::<FixtureBreaks>(),
+        description: "every 4".to_string(),
+        layer: LayerId(1),
+        chunks: false,
+    }];
+    assert_eq!(marking.demands(), expected_demands.as_slice());
+}
+
+#[test]
+fn a_provider_dependency_sits_upstream_in_its_stack() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "every": 4, "marks": true })),
+        sink("out", "wants"),
+        sink("raw", "input"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "input");
+    assert_eq!(reads(&graph, "fixture-marks(input)", 0), "fixture-breaks(input)");
+    assert_eq!(reads(&graph, "wants", 0), "fixture-marks(input)");
+    assert_eq!(reads(&graph, "raw", 0), "input");
+}
+
+#[test]
+fn a_stage_and_a_provider_demanding_one_request_share_a_layer() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "every": 4, "marks": true })),
+        demanding("plain", "input", json!({ "every": 4 })),
+        sink("wants_out", "wants"),
+        sink("plain_out", "plain"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    let breaking = named(&graph, "fixture-breaks(input)");
+    assert_eq!(
+        placement(breaking).layers,
+        vec![served(
+            1,
+            breaks(4, None),
+            "every 4",
+            &["plain", "fixture-marks(input)"]
+        )]
+    );
+    assert_eq!(named(&graph, "plain").demands()[0].layer, LayerId(1));
+    assert_eq!(
+        named(&graph, "fixture-marks(input)").demands()[0].layer,
+        LayerId(1)
+    );
+}
+
+#[test]
+fn each_instance_in_a_stack_takes_only_its_demanders_edges() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "every": 4, "marks": true })),
+        demanding("plain", "input", json!({ "every": 8 })),
+        sink("wants_out", "wants"),
+        sink("plain_out", "plain"),
+        sink("raw", "input"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    assert_eq!(
+        consumer_names(&graph, "input"),
+        vec!["raw", "fixture-breaks(input)"]
+    );
+    assert_eq!(
+        consumer_names(&graph, "fixture-breaks(input)"),
+        vec!["plain", "fixture-marks(input)"]
+    );
+    assert_eq!(consumer_names(&graph, "fixture-marks(input)"), vec!["wants"]);
+}
+
+#[test]
+fn unrelated_instances_in_a_stack_are_ordered_by_kind_name() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "every": 4, "cuts": true })),
+        sink("out", "wants"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "input");
+    assert_eq!(reads(&graph, "fixture-cuts(input)", 0), "fixture-breaks(input)");
+    assert_eq!(reads(&graph, "wants", 0), "fixture-cuts(input)");
+}
+
+#[test]
+fn a_provider_cycle_is_refused_with_its_chain() {
+    let mut wants = demanding(
+        "wants",
+        "input",
+        json!({ "every": 4, "marks": true, "cycle": true }),
+    );
+    wants.span = Span::new(20, 30);
+
+    let specs = [source("input"), wants, sink("out", "wants")];
+
+    let diagnostics = refused(&specs);
+
+    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::ProviderCycle]);
+    assert_eq!(diagnostics[0].path(), "filter.wants");
+    assert_eq!(diagnostics[0].span(), Span::new(20, 30));
+
+    let message = diagnostics[0].message();
+    assert!(
+        message.contains("fixture-marks(input) → fixture-marks(input)"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_provider_demand_error_notes_the_chain_that_led_to_it() {
+    let mut wants = demanding(
+        "wants",
+        "input",
+        json!({ "every": 4, "marks": true, "cycle": true }),
+    );
+    wants.span = Span::new(20, 30);
+
+    let specs = [source("input"), wants, sink("out", "wants")];
+
+    let diagnostics = refused(&specs);
+
+    let notes: Vec<&str> = diagnostics[0]
+        .notes()
+        .iter()
+        .map(|note| note.message.as_str())
+        .collect();
+    assert!(
+        notes.contains(&"`fixture-marks` demanded by `fixture-marks(input)`, demanded by `wants`"),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn a_refusal_by_a_demanded_provider_notes_its_chain_at_the_stage() {
+    let mut eager = demanding("eager", "input", json!({ "every": 0, "marks": true }));
+    eager.span = Span::new(20, 30);
+
+    let specs = [source("input"), eager, sink("out", "eager")];
+    let registry = testing::registry();
+    let capabilities = residency::tests::capabilities();
+    let graph = satisfied(&specs);
+
+    let Err(diagnostics) = solve(&graph, &registry, &capabilities) else {
+        panic!("a break every 0 frames should be refused");
+    };
+    let diagnostics: Vec<Diagnostic> = Diagnostics::into_inner(diagnostics);
+
+    let refusal = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.path() == "provider.fixture-breaks(input)")
+        .unwrap_or_else(|| panic!("no diagnostic names the provider: {diagnostics:?}"));
+    assert_eq!(refusal.span(), Span::new(20, 30));
+
+    let chain = refusal
+        .notes()
+        .iter()
+        .find(|note| {
+            note.message
+                .contains("demanded by `fixture-marks(input)`, demanded by `eager`")
+        })
+        .unwrap_or_else(|| panic!("no note spells out the chain: {refusal:?}"));
+    assert_eq!(chain.span, Span::new(20, 30));
+}
+
+#[test]
+fn a_provider_on_a_wider_edge_set_sits_upstream_of_a_narrower_one() {
+    let specs = [
+        source("input"),
+        demanding("wide", "input", json!({ "every": 4, "cuts": true })),
+        chunked("plain", "input"),
+        sink("wide_out", "wide"),
+        sink("plain_out", "plain"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    assert_eq!(reads(&graph, "fixture-cuts(input)", 0), "input");
+    assert_eq!(reads(&graph, "plain", 0), "fixture-cuts(input)");
+    assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "fixture-cuts(input)");
+    assert_eq!(reads(&graph, "wide", 0), "fixture-breaks(input)");
+    assert_eq!(
+        consumer_names(&graph, "fixture-cuts(input)"),
+        vec!["plain", "fixture-breaks(input)"]
+    );
+    assert_eq!(consumer_names(&graph, "fixture-breaks(input)"), vec!["wide"]);
+}
+
+#[test]
+fn partly_overlapping_instances_in_a_stack_form_one_chain() {
+    let specs = [
+        source("input"),
+        demanding("first", "input", json!({ "every": 4 })),
+        demanding("both", "input", json!({ "every": 4, "cuts": true })),
+        chunked("last", "input"),
+        sink("first_out", "first"),
+        sink("both_out", "both"),
+        sink("last_out", "last"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "input");
+    assert_eq!(
+        consumer_names(&graph, "fixture-breaks(input)"),
+        vec!["first", "fixture-cuts(input)"]
+    );
+    assert_eq!(
+        consumer_names(&graph, "fixture-cuts(input)"),
+        vec!["both", "last"]
+    );
+}
+
+#[test]
+fn a_regrown_provider_replaces_its_earlier_demands() {
+    let specs = [
+        source("input"),
+        demanding("direct", "input", json!({ "every": 8, "marks": true })),
+        demanding("relayed", "input", json!({ "every": 4, "relays": true })),
+        sink("direct_out", "direct"),
+        sink("relayed_out", "relayed"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    let marking = named(&graph, "fixture-marks(input)");
+    let expected_demands = vec![NodeDemand {
+        input: "input",
+        kind: DemandKind::of::<FixtureBreaks>(),
+        description: "every 4".to_string(),
+        layer: LayerId(4),
+        chunks: false,
+    }];
+    assert_eq!(marking.demands(), expected_demands.as_slice());
+
+    let breaking = named(&graph, "fixture-breaks(input)");
+    assert_eq!(
+        placement(breaking).layers,
+        vec![served(4, breaks(4, None), "every 4", &["fixture-marks(input)"])]
+    );
+}
+
+#[test]
+fn a_failed_provider_demand_is_reported_once_when_asked_again() {
+    let specs = [
+        source("input"),
+        demanding(
+            "direct",
+            "input",
+            json!({ "every": 8, "marks": true, "cycle": true }),
+        ),
+        demanding("relayed", "input", json!({ "every": 4, "relays": true })),
+        sink("direct_out", "direct"),
+        sink("relayed_out", "relayed"),
+    ];
+
+    let diagnostics = refused(&specs);
+
+    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::ProviderCycle]);
 }
