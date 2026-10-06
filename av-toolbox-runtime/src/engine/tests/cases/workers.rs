@@ -161,6 +161,7 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
             chunks,
             timestamp: Some(Duration::from_secs(unit)),
             scene_score: None,
+            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let item = AnyItem::from(StreamItem::Frame(build_context.alloc_frame(&format(), meta)));

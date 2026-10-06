@@ -647,6 +647,7 @@ mod tests {
             chunks: Layers::default(),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: Some(SceneScore::new(2.5)),
+            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let items = vec![
@@ -780,6 +781,7 @@ mod tests {
             chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(40)),
             scene_score: Some(SceneScore::new(2.5)),
+            provided: Default::default(),
             attachments: Attachments::new(),
         };
 
@@ -813,6 +815,7 @@ mod tests {
             chunks: layer_zero(1),
             timestamp: None,
             scene_score: None,
+            provided: Default::default(),
             attachments,
         };
 

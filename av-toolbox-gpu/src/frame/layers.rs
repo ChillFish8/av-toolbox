@@ -3,7 +3,7 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A scene layer, numbered by the graph per distinct scene demand.
+/// One distinct request on one provider instance, numbered by the graph.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, JsonSchema)]
 pub struct LayerId(pub u32);
 

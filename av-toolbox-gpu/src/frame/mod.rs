@@ -14,6 +14,7 @@ mod host;
 mod host_frame;
 mod layers;
 mod layout;
+mod provided;
 mod rate;
 mod sample;
 #[cfg(test)]
@@ -48,5 +49,6 @@ pub use self::host::{HostItem, HostPlanes};
 pub use self::host_frame::{HostFrame, HostFrameMut, HostMask, HostMaskMut, HostPlane, HostStreamItem};
 pub use self::layers::{LayerId, Layers};
 pub use self::layout::{Channel, FrameLayout, Subsampling};
+pub use self::provided::{ChunkKeyFn, ChunkRoute, Provided, ProvidedValue};
 pub use self::rate::FrameRate;
 pub use self::sample::{Depth, DepthError, SampleFormat};

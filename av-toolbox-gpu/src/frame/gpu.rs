@@ -9,6 +9,7 @@ use crate::frame::attachments::{Attachments, MetaValue};
 use crate::frame::format::{ColourInfo, FrameFormat, MaskChroma, MaskFormat, StreamFormat};
 use crate::frame::layers::{LayerId, Layers};
 use crate::frame::layout::{Channel, FrameLayout};
+use crate::frame::provided::{Provided, ProvidedValue};
 use crate::memory::FrameBudget;
 
 /// Where a plane's memory goes when its last holder drops it.
@@ -220,6 +221,8 @@ pub struct FrameMeta {
     pub timestamp: Option<Duration>,
     /// How strongly scene detection favoured a cut just before this frame, when it was scored.
     pub scene_score: Option<SceneScore>,
+    /// The values providers wrote onto this frame, by layer.
+    pub provided: Provided,
     pub attachments: Attachments,
 }
 
@@ -231,6 +234,7 @@ impl FrameMeta {
             chunks: Layers::new(),
             timestamp: None,
             scene_score: None,
+            provided: Provided::new(),
             attachments: Attachments::new(),
         }
     }
@@ -238,6 +242,12 @@ impl FrameMeta {
     /// The same metadata in `chunk` of `layer`.
     pub fn in_layer(mut self, layer: LayerId, chunk: u64) -> Self {
         self.chunks.set(layer, chunk);
+        self
+    }
+
+    /// The same metadata carrying `value` for `layer`.
+    pub fn with_provided<T: ProvidedValue>(mut self, layer: LayerId, value: T) -> Self {
+        self.provided.set(layer, value);
         self
     }
 
@@ -1108,6 +1118,7 @@ mod tests {
             chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let mut frame = Frame::new(format, planes, meta);
@@ -1132,6 +1143,7 @@ mod tests {
             chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let mut mask = Mask::new(format, plane(64, 64), meta, None);
@@ -1152,6 +1164,7 @@ mod tests {
             chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let frame = Frame::new(format, planes, meta);
@@ -1177,6 +1190,7 @@ mod tests {
             chunks: layer_zero(3),
             timestamp: Some(Duration::from_millis(500)),
             scene_score: None,
+            provided: Default::default(),
             attachments: Attachments::new(),
         };
         let mask = Mask::new(format, plane(64, 64), meta, None);

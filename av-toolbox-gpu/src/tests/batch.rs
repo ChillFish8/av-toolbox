@@ -191,6 +191,7 @@ fn a_host_frame_keeps_its_bytes_and_place_through_an_upload_and_unload() {
         chunks: layer_zero(3),
         timestamp: Some(Duration::from_millis(480)),
         scene_score: Some(SceneScore::new(2.5)),
+        provided: Default::default(),
         attachments: Attachments::new(),
     };
 
