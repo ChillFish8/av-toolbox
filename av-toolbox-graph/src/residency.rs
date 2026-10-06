@@ -93,6 +93,8 @@ fn insert_crossings(graph: &mut CompiledGraph, sides: &[Residency], formats: &mu
         }
     }
 
+    let redirects = shared_through_providers(graph, sides, redirects);
+
     let mut producers: Vec<NodeId> = redirects.keys().copied().collect();
     producers.sort();
 
@@ -112,6 +114,84 @@ fn insert_crossings(graph: &mut CompiledGraph, sides: &[Residency], formats: &mu
 }
 
 /// Warns about every stream that leaves the device only to be uploaded again.
+/// Moves the readers of each crossing producer onto the crossing after its providers, when there is one.
+///
+/// A provider passes every frame through untouched and only adds to its metadata, so a stream read
+/// directly and the same stream read after a chain of providers hold the same pixels. Crossing both
+/// would move the same frames twice, so the readers of the earlier one read the later one instead.
+/// A reader that is itself on that chain keeps its own crossing, since it feeds the later one.
+fn shared_through_providers(
+    graph: &CompiledGraph,
+    sides: &[Residency],
+    redirects: HashMap<NodeId, Vec<(NodeId, usize)>>,
+) -> HashMap<NodeId, Vec<(NodeId, usize)>> {
+    let mut producers: Vec<NodeId> = redirects.keys().copied().collect();
+    producers.sort();
+
+    let chains: HashMap<NodeId, Vec<NodeId>> = producers
+        .iter()
+        .map(|producer| (*producer, providers_behind(graph, *producer)))
+        .collect();
+
+    let mut shared: HashMap<NodeId, Vec<(NodeId, usize)>> = HashMap::new();
+    for producer in &producers {
+        let target = crossing_target(&producers, &chains, sides, *producer);
+        let chain = &chains[&target];
+
+        for &(consumer, edge) in &redirects[producer] {
+            let feeds_target = consumer == target || chain.contains(&consumer);
+            let crossed_from = if feeds_target { *producer } else { target };
+
+            shared.entry(crossed_from).or_default().push((consumer, edge));
+        }
+    }
+
+    shared
+}
+
+/// The nodes `node`'s stream passed through to reach it, nearest first, for as long as they are providers.
+///
+/// The list ends with the first node that is not a provider, where the pixels came from.
+fn providers_behind(graph: &CompiledGraph, node: NodeId) -> Vec<NodeId> {
+    let mut behind = Vec::new();
+    let mut current = graph.node(node);
+
+    while matches!(current.role(), NodeRole::Provider(_)) {
+        let producer = current.inputs()[0].source();
+        behind.push(producer);
+        current = graph.node(producer);
+    }
+
+    behind
+}
+
+/// The crossing producer `producer`'s readers should read through.
+///
+/// That is the furthest crossing producer on the same side reached from `producer` through
+/// providers alone, the lowest node id when several branches reach that far, or `producer`
+/// itself when none do.
+fn crossing_target(
+    producers: &[NodeId],
+    chains: &HashMap<NodeId, Vec<NodeId>>,
+    sides: &[Residency],
+    producer: NodeId,
+) -> NodeId {
+    let side = sides[producer.index()];
+    let reached: Vec<NodeId> = producers
+        .iter()
+        .copied()
+        .filter(|candidate| sides[candidate.index()] == side)
+        .filter(|candidate| chains[candidate].contains(&producer))
+        .collect();
+
+    let furthest = reached
+        .iter()
+        .copied()
+        .find(|candidate| reached.iter().all(|other| !chains[other].contains(candidate)));
+
+    furthest.unwrap_or(producer)
+}
+
 pub(crate) fn warn_round_trips(
     graph: &CompiledGraph,
     prepared: &[Option<PreparedStage>],
@@ -695,5 +775,76 @@ pub(crate) mod tests {
         assert!(message.contains("detect"));
         assert!(message.contains("join"));
         assert!(!message.contains("extra"));
+    }
+
+    fn provided_and_placed(specs: &[StageSpec]) -> CompiledGraph {
+        let registry = testing::registry();
+        let mut graph = build(&registry, specs).expect("should build").into_graph();
+        crate::satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+
+        let mut formats = solve(&graph, &registry, &capabilities()).expect("should solve");
+        place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+
+        graph
+    }
+
+    fn wanting(args: serde_json::Value) -> StageSpec {
+        let mut wants = stage(StageKind::Filter, "wants", "test/demanding", &["input"]);
+        wants.args = Spanned::unknown(args);
+
+        wants
+    }
+
+    #[test]
+    fn a_plain_branch_shares_the_upload_after_a_host_provider() {
+        let graph = provided_and_placed(&[
+            stage(StageKind::Source, "input", "test/host-file", &[]),
+            wanting(json!({ "host_cuts": true })),
+            stage(StageKind::Filter, "plain", "test/blur", &["input"]),
+            stage(StageKind::Sink, "a", "test/stdout", &["wants"]),
+            stage(StageKind::Sink, "b", "test/stdout", &["plain"]),
+        ]);
+
+        let uploads = crossings(&graph, Crossing::Upload);
+        assert_eq!(uploads.len(), 1);
+
+        let provider = named(&graph, "host-fixture-cuts(input)").id();
+        assert_eq!(uploads[0].inputs()[0].source(), provider);
+        assert_eq!(named(&graph, "wants").inputs()[0].source(), uploads[0].id());
+        assert_eq!(named(&graph, "plain").inputs()[0].source(), uploads[0].id());
+    }
+
+    #[test]
+    fn a_plain_branch_shares_the_upload_after_a_chain_of_providers() {
+        let graph = provided_and_placed(&[
+            stage(StageKind::Source, "input", "test/host-file", &[]),
+            wanting(json!({ "tags": true, "host_cuts": true })),
+            stage(StageKind::Filter, "plain", "test/blur", &["input"]),
+            stage(StageKind::Sink, "a", "test/stdout", &["wants"]),
+            stage(StageKind::Sink, "b", "test/stdout", &["plain"]),
+        ]);
+
+        let uploads = crossings(&graph, Crossing::Upload);
+        assert_eq!(uploads.len(), 1);
+
+        let end_of_chain = named(&graph, "wants").inputs()[0].source();
+        assert_eq!(end_of_chain, uploads[0].id());
+        assert_eq!(named(&graph, "plain").inputs()[0].source(), uploads[0].id());
+    }
+
+    #[test]
+    fn a_host_reader_of_a_provided_source_keeps_reading_it_directly() {
+        let graph = provided_and_placed(&[
+            stage(StageKind::Source, "input", "test/host-file", &[]),
+            wanting(json!({ "host_cuts": true })),
+            stage(StageKind::Filter, "plain", "test/blur", &["input"]),
+            stage(StageKind::Sink, "a", "test/stdout", &["wants"]),
+            stage(StageKind::Sink, "b", "test/stdout", &["plain"]),
+            stage(StageKind::Sink, "host", "test/host-stdout", &["input"]),
+        ]);
+
+        let input = named(&graph, "input").id();
+        assert_eq!(named(&graph, "host").inputs()[0].source(), input);
+        assert_eq!(crossings(&graph, Crossing::Upload).len(), 1);
     }
 }
