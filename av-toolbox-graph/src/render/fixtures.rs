@@ -345,7 +345,7 @@ fn example_chunking(
     }
 }
 
-/// The example's scene provider, serving each layer as `(description, demanded by)`.
+/// The example's scene provider behind its source, serving each layer as `(description, demanded by)`.
 fn example_provider(name: &'static str, block: usize, layers: &[(&str, &str)]) -> ExampleStage {
     let layers = layers
         .iter()
@@ -359,6 +359,7 @@ fn example_provider(name: &'static str, block: usize, layers: &[(&str, &str)]) -
         .collect();
     let placement = ProviderPlacement {
         kind: DemandKind::of::<ExampleScenes>(),
+        node: NodeId::new(0),
         layers,
     };
 

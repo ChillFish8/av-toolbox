@@ -53,6 +53,14 @@ fn chunked(name: &str, input: &str) -> StageSpec {
     spec
 }
 
+fn demanding_pair(name: &str, clip: &str, other: &str, args: Value) -> StageSpec {
+    let mut spec = testing::spec(StageKind::Filter, name, "test/demanding-pair");
+    spec.inputs = vec![testing::named("clip", clip), testing::named("other", other)];
+    spec.args = Spanned::unknown(args);
+
+    spec
+}
+
 fn demanding(name: &str, input: &str, args: Value) -> StageSpec {
     let mut spec = testing::spec(StageKind::Filter, name, "test/demanding");
     spec.inputs = vec![testing::positional(input)];
@@ -134,6 +142,7 @@ fn breaks(every: u32, after: Option<&str>) -> AnyDemand {
     let request = BreaksRequest {
         every,
         after: after.map(str::to_string),
+        refuse: false,
     };
 
     AnyDemand::new::<FixtureBreaks>(request)
@@ -175,6 +184,7 @@ fn a_chunk_stage_gets_a_provider_after_its_source() {
 
     let expected = ProviderPlacement {
         kind: DemandKind::of::<FixtureCuts>(),
+        node: named(&graph, "input").id(),
         layers: vec![served(0, cuts(), "fixture-cuts", &["denoise"])],
     };
     assert_eq!(*placement(provider), expected);
@@ -355,7 +365,7 @@ fn a_demand_follows_the_chunk_authority_through_a_join() {
 }
 
 #[test]
-fn shared_placement_goes_before_the_common_node() {
+fn demands_through_a_shared_stage_go_after_the_source() {
     let specs = [
         source("input"),
         blur("soften", "input"),
@@ -377,22 +387,7 @@ fn shared_placement_goes_before_the_common_node() {
 }
 
 #[test]
-fn shared_placement_of_one_demand_goes_directly_before_it() {
-    let specs = [
-        source("input"),
-        blur("soften", "input"),
-        demanding("wants", "soften", json!({ "every": 4 })),
-        sink("out", "wants"),
-    ];
-
-    let graph = satisfied(&specs);
-
-    assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "soften");
-    assert_eq!(reads(&graph, "wants", 0), "fixture-breaks(input)");
-}
-
-#[test]
-fn after_overrides_the_placement() {
+fn an_after_places_the_provider_after_that_stage() {
     let mut deband = testing::spec(StageKind::Filter, "deband", "test/deband");
     deband.inputs = vec![testing::positional("soften")];
 
@@ -406,13 +401,90 @@ fn after_overrides_the_placement() {
 
     let graph = satisfied(&specs);
 
+    let found = providers(&graph);
+    assert_eq!(found.len(), 1);
+    assert_eq!(placement(found[0]).node, named(&graph, "soften").id());
     assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "soften");
     assert_eq!(reads(&graph, "deband", 0), "fixture-breaks(input)");
     assert_eq!(reads(&graph, "wants", 0), "deband");
 }
 
 #[test]
-fn conflicting_after_stages_are_refused() {
+fn demands_placed_behind_one_node_merge_into_one_instance() {
+    let specs = [
+        source("input"),
+        blur("soften", "input"),
+        demanding("first", "soften", json!({ "every": 4, "after": "soften" })),
+        demanding("second", "soften", json!({ "every": 8, "after": "soften" })),
+        sink("first_out", "first"),
+        sink("second_out", "second"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    let found = providers(&graph);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].name(), "fixture-breaks(input)");
+    assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "soften");
+    assert_eq!(reads(&graph, "first", 0), "fixture-breaks(input)");
+    assert_eq!(reads(&graph, "second", 0), "fixture-breaks(input)");
+    assert_eq!(
+        placement(found[0]).layers,
+        vec![
+            served(0, breaks(4, Some("soften")), "every 4", &["first"]),
+            served(1, breaks(8, Some("soften")), "every 8", &["second"]),
+        ]
+    );
+}
+
+#[test]
+fn demands_from_two_inputs_behind_one_node_merge_into_one_instance() {
+    let specs = [
+        source("input"),
+        demanding_pair("pair", "input", "input", json!({ "every": 4, "both": true })),
+        sink("out", "pair"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    let found = providers(&graph);
+    assert_eq!(found.len(), 1);
+    assert_eq!(reads(&graph, "pair", 0), "fixture-breaks(input)");
+    assert_eq!(reads(&graph, "pair", 1), "fixture-breaks(input)");
+    assert_eq!(
+        placement(found[0]).layers,
+        vec![served(0, breaks(4, None), "every 4", &["pair"])]
+    );
+}
+
+#[test]
+fn demands_placed_behind_different_nodes_get_separate_instances() {
+    let specs = [
+        source("input"),
+        blur("soften", "input"),
+        demanding("first", "soften", json!({ "every": 4, "after": "soften" })),
+        demanding("second", "input", json!({ "every": 4 })),
+        sink("first_out", "first"),
+        sink("second_out", "second"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    let mut names: Vec<&str> = providers(&graph).iter().map(|node| node.name()).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec!["fixture-breaks(input after soften)", "fixture-breaks(input)"]
+    );
+    assert_eq!(reads(&graph, "fixture-breaks(input after soften)", 0), "soften");
+    assert_eq!(reads(&graph, "first", 0), "fixture-breaks(input after soften)");
+    assert_eq!(reads(&graph, "fixture-breaks(input)", 0), "input");
+    assert_eq!(reads(&graph, "second", 0), "fixture-breaks(input)");
+    assert_eq!(reads(&graph, "soften", 0), "input");
+}
+
+#[test]
+fn different_after_stages_on_one_path_get_separate_instances() {
     let mut deband = testing::spec(StageKind::Filter, "deband", "test/deband");
     deband.inputs = vec![testing::positional("soften")];
 
@@ -426,51 +498,92 @@ fn conflicting_after_stages_are_refused() {
         sink("second_out", "second"),
     ];
 
-    let diagnostics = refused(&specs);
+    let graph = satisfied(&specs);
 
-    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::ConflictingPlacement]);
-    assert_eq!(diagnostics[0].path(), "filter.second");
-    assert!(diagnostics[0].message().contains("`second`"), "{diagnostics:?}");
-    assert!(diagnostics[0].message().contains("`first`"), "{diagnostics:?}");
+    assert_eq!(providers(&graph).len(), 2);
+    assert_eq!(reads(&graph, "fixture-breaks(input after soften)", 0), "soften");
+    assert_eq!(reads(&graph, "deband", 0), "fixture-breaks(input after soften)");
+    assert_eq!(reads(&graph, "fixture-breaks(input after deband)", 0), "deband");
+    assert_eq!(reads(&graph, "first", 0), "deband");
+    assert_eq!(reads(&graph, "second", 0), "fixture-breaks(input after deband)");
 }
 
 #[test]
-fn an_after_off_the_demands_path_is_refused() {
+fn equal_requests_on_separate_instances_get_separate_layers() {
     let specs = [
-        source("input"),
-        blur("elsewhere", "input"),
-        demanding("wants", "input", json!({ "every": 4, "after": "elsewhere" })),
-        sink("out", "wants"),
-        sink("other_out", "elsewhere"),
+        source("clip"),
+        source("other"),
+        demanding("first", "clip", json!({ "every": 4 })),
+        demanding("second", "other", json!({ "every": 4 })),
+        sink("first_out", "first"),
+        sink("second_out", "second"),
     ];
 
-    let diagnostics = refused(&specs);
+    let graph = satisfied(&specs);
 
-    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::AfterOffPath]);
-    assert_eq!(diagnostics[0].path(), "filter.wants");
-    assert!(diagnostics[0].message().contains("`wants`"), "{diagnostics:?}");
-    assert!(
-        diagnostics[0].message().contains("`elsewhere`"),
-        "{diagnostics:?}"
+    let clip = named(&graph, "fixture-breaks(clip)");
+    let other = named(&graph, "fixture-breaks(other)");
+    assert_eq!(
+        placement(clip).layers,
+        vec![served(0, breaks(4, None), "every 4", &["first"])]
     );
+    assert_eq!(
+        placement(other).layers,
+        vec![served(1, breaks(4, None), "every 4", &["second"])]
+    );
+    assert_eq!(named(&graph, "first").demands()[0].layer, LayerId(0));
+    assert_eq!(named(&graph, "second").demands()[0].layer, LayerId(1));
 }
 
 #[test]
-fn an_after_naming_no_stage_is_reported_as_unknown() {
+fn an_instance_only_takes_its_demanders_edges() {
     let specs = [
         source("input"),
-        chunked("denoise", "input"),
-        demanding("wants", "denoise", json!({ "every": 4, "after": "missing" })),
+        demanding("wants", "input", json!({ "every": 4 })),
         sink("out", "wants"),
+        sink("raw", "input"),
     ];
+
+    let graph = satisfied(&specs);
+
+    assert_eq!(reads(&graph, "wants", 0), "fixture-breaks(input)");
+    assert_eq!(reads(&graph, "raw", 0), "input");
+    assert_eq!(consumer_names(&graph, "fixture-breaks(input)"), vec!["wants"]);
+}
+
+#[test]
+fn a_demand_on_one_input_leaves_the_other_input_alone() {
+    let specs = [
+        source("clip"),
+        source("other"),
+        demanding_pair("pair", "clip", "other", json!({ "every": 4 })),
+        sink("out", "pair"),
+    ];
+
+    let graph = satisfied(&specs);
+
+    let found = providers(&graph);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].name(), "fixture-breaks(clip)");
+    assert_eq!(reads(&graph, "pair", 0), "fixture-breaks(clip)");
+    assert_eq!(reads(&graph, "pair", 1), "other");
+}
+
+#[test]
+fn a_place_refusal_names_the_demanding_stage() {
+    let mut wants = demanding("wants", "input", json!({ "every": 4, "refuse": true }));
+    wants.span = Span::new(20, 30);
+
+    let specs = [source("input"), wants, sink("out", "wants")];
 
     let diagnostics = refused(&specs);
 
-    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::UnknownAfter]);
+    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::PlaceFailed]);
     assert_eq!(diagnostics[0].path(), "filter.wants");
-    assert!(
-        diagnostics[0].message().contains("no stage named `missing`"),
-        "{diagnostics:?}"
+    assert_eq!(diagnostics[0].span(), Span::new(20, 30));
+    assert_eq!(
+        diagnostics[0].message(),
+        "`wants` demands fixture-breaks on `input`, but the fixture refuses to place this request",
     );
 }
 

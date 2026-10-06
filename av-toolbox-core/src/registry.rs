@@ -15,7 +15,10 @@ use crate::{
     MaskDefinition,
     MetaSinkDefinition,
     OpenSlot,
-    Placement,
+    PathEdge,
+    PathView,
+    PlaceError,
+    PlaceFn,
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,
@@ -25,6 +28,7 @@ use crate::{
     PreparedStage,
     ProviderDefinition,
     RegistryError,
+    RequestError,
     SinkDefinition,
     SourceDefinition,
     StageDefinition,
@@ -45,7 +49,7 @@ struct RegisteredDemand {
 /// The provider registered for one demand kind.
 struct RegisteredProvider {
     full_identifier: String,
-    placement: Placement,
+    place: PlaceFn,
 }
 
 /// The registry tracks all stages available for use within the pipeline.
@@ -112,18 +116,18 @@ impl PipelineRegistry {
 
         let registered = RegisteredProvider {
             full_identifier,
-            placement: P::placement(),
+            place: place_erased::<P>,
         };
         self.served.insert(kind, registered);
 
         Ok(())
     }
 
-    /// The full identifier and placement of the provider serving `kind`.
-    pub fn provider_for(&self, kind: DemandKind) -> Option<(&str, Placement)> {
+    /// The full identifier of the provider serving `kind`, and how it places itself.
+    pub fn provider_for(&self, kind: DemandKind) -> Option<(&str, PlaceFn)> {
         let registered = self.served.get(&kind)?;
 
-        Some((&registered.full_identifier, registered.placement))
+        Some((&registered.full_identifier, registered.place))
     }
 
     pub fn register_sink<D: SinkDefinition>(&mut self) -> Result<(), RegistryError> {
@@ -270,6 +274,22 @@ fn describe_as<D: DemandDefinition>(demand: &AnyDemand) -> String {
         Some(request) => D::describe(&request),
         None => D::kind().to_string(),
     }
+}
+
+/// Places `demand` with `P`'s `place`, once its request reads as `P`'s demand kind.
+fn place_erased<P: ProviderDefinition>(
+    demand: &AnyDemand,
+    path: &PathView<'_>,
+) -> Result<PathEdge, PlaceError> {
+    let request = demand.try_request::<P::Demand>().map_err(unreadable_request)?;
+
+    P::place(&request, path)
+}
+
+fn unreadable_request(error: RequestError) -> PlaceError {
+    let message = format!("its request cannot be read because {error}");
+
+    PlaceError::msg(message)
 }
 
 fn insert<D, P>(factories: &mut Factories<P>, definition: Definition<D>) -> Result<(), RegistryError>

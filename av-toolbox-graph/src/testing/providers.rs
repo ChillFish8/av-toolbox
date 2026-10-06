@@ -11,7 +11,9 @@ use av_toolbox_core::{
     Inputs,
     LayerDemand,
     Parallelism,
-    Placement,
+    PathEdge,
+    PathView,
+    PlaceError,
     Provider,
     ProviderDefinition,
     StageDefinition,
@@ -44,6 +46,9 @@ use super::shared::{first_bound, frames_template};
 pub(crate) struct BreaksRequest {
     pub(crate) every: u32,
     pub(crate) after: Option<String>,
+    /// Whether [Breaking] refuses to place this request.
+    #[serde(default)]
+    pub(crate) refuse: bool,
 }
 
 /// A demand kind with requests that can differ, served by [Breaking].
@@ -92,9 +97,10 @@ impl Provider<DeviceSide> for PassItems {
     }
 }
 
-/// Serves [FixtureBreaks] before the latest node every demanding path passes through.
+/// Serves [FixtureBreaks] after the stage a request names, or after the source.
 ///
-/// It refuses a request for a break every 0 frames once it sees its input.
+/// It refuses to place a request marked `refuse`, and refuses a request for a break every 0 frames
+/// once it sees its input.
 pub(super) struct Breaking;
 
 impl StageDefinition for Breaking {
@@ -119,8 +125,15 @@ impl ProviderDefinition for Breaking {
     type Side = DeviceSide;
     type Demand = FixtureBreaks;
 
-    fn placement() -> Placement {
-        Placement::Shared
+    fn place(request: &BreaksRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+        if request.refuse {
+            return Err(PlaceError::msg("the fixture refuses to place this request"));
+        }
+
+        match request.after.as_deref() {
+            Some(name) => path.after_named(name),
+            None => Ok(path.after_source()),
+        }
     }
 
     fn accepts_input(
@@ -163,6 +176,9 @@ pub(crate) struct DemandingArgs {
     /// Whether the demand is the stage's chunk request rather than a plain demand.
     #[serde(default)]
     chunks: bool,
+    /// Whether the request asks [Breaking] to refuse placing it.
+    #[serde(default)]
+    refuse: bool,
     /// Whether the stage demands [Unprovided] instead.
     #[serde(default)]
     unprovided: bool,
@@ -176,6 +192,7 @@ impl DemandingArgs {
         BreaksRequest {
             every: self.every,
             after: self.after.clone(),
+            refuse: self.refuse,
         }
     }
 
@@ -260,6 +277,96 @@ impl StageDefinition for Demanding {
 }
 
 impl FilterDefinition for Demanding {
+    type Side = DeviceSide;
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+
+        Ok(OutputFormats {
+            template: frames_template(format),
+            samples: FormatSet::of([format.sample()]),
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(DemandingStage))
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct DemandingPairArgs {
+    #[serde(default)]
+    every: u32,
+    /// Whether `other` is demanded on as well as `clip`.
+    #[serde(default)]
+    both: bool,
+}
+
+/// A filter with a `clip` and an `other` input, demanding breaks on `clip` and optionally `other`.
+pub(super) struct DemandingPair;
+
+impl StageDefinition for DemandingPair {
+    type Args = DemandingPairArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "demanding-pair"
+    }
+
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        let request = BreaksRequest {
+            every: args.every,
+            after: None,
+            refuse: false,
+        };
+        let demand = AnyDemand::new::<FixtureBreaks>(request);
+
+        let mut demands = vec![InputDemand {
+            input: "clip",
+            demand: demand.clone(),
+        }];
+        if args.both {
+            demands.push(InputDemand {
+                input: "other",
+                demand,
+            });
+        }
+
+        demands
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature = &InputSignature::new(&[
+            InputParam::required("clip").accepting(StreamType::Frames),
+            InputParam::required("other").accepting(StreamType::Frames),
+        ]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for DemandingPair {
     type Side = DeviceSide;
 
     fn accepts_input(

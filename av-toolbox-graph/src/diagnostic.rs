@@ -54,9 +54,7 @@ pub enum DiagnosticCode {
     HostMaskPlanes,
     HeldInFrameRegion,
     UnsatisfiedDemand,
-    ConflictingPlacement,
-    UnknownAfter,
-    AfterOffPath,
+    PlaceFailed,
     RemovedTransforms,
 }
 
@@ -93,9 +91,7 @@ impl DiagnosticCode {
             Self::HostMaskPlanes => "host-mask-planes",
             Self::HeldInFrameRegion => "held-in-frame-region",
             Self::UnsatisfiedDemand => "unsatisfied-demand",
-            Self::ConflictingPlacement => "conflicting-placement",
-            Self::UnknownAfter => "unknown-after",
-            Self::AfterOffPath => "after-off-path",
+            Self::PlaceFailed => "place-failed",
             Self::RemovedTransforms => "removed-transforms",
         }
     }

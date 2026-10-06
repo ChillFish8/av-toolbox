@@ -14,22 +14,24 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{AnyDemand, DemandDefinition, Inputs, StageDefinition, StageError, StageInstance, StageSide};
+use crate::{
+    AnyDemand,
+    DemandDefinition,
+    Inputs,
+    PathEdge,
+    PathView,
+    PlaceError,
+    StageDefinition,
+    StageError,
+    StageInstance,
+    StageSide,
+};
 
 /// The args every provider is built from, one entry per layer it serves.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct LayerDemand {
     pub layer: LayerId,
     pub demand: AnyDemand,
-}
-
-/// Where the graph places a provider.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum Placement {
-    /// Directly after the source the demands trace to.
-    AfterSource,
-    /// Directly before the latest node every demanding path from that source passes through.
-    Shared,
 }
 
 /// Supplies what demands of one kind ask for. The graph places it, so the TOML never names it.
@@ -44,7 +46,13 @@ pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
     /// A provider reads its requests with `demand.request::<Self::Demand>()`.
     type Demand: DemandDefinition;
 
-    fn placement() -> Placement;
+    /// Picks the edge on a demand's path to serve `request` from.
+    ///
+    /// Demands of one kind placed after the same stage share one provider.
+    fn place(
+        request: &<Self::Demand as DemandDefinition>::Request,
+        path: &PathView<'_>,
+    ) -> Result<PathEdge, PlaceError>;
 
     /// Which sample formats this provider will take, most preferred first.
     fn accepts_input(

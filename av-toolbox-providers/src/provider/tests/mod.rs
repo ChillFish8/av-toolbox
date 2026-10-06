@@ -1,4 +1,5 @@
 mod layers;
+mod place;
 mod provider;
 
 use av_toolbox_core::{AnyDemand, Inputs, LayerDemand, Provider};

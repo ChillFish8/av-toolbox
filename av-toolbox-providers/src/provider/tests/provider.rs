@@ -4,7 +4,6 @@ use av_toolbox_core::{
     DemandKind,
     InputArgument,
     PipelineRegistry,
-    Placement,
     StageHandle,
     StageKind,
     StreamType,
@@ -90,7 +89,8 @@ fn the_scene_provider_is_registered_for_scenes() {
     crate::register(&mut registry).expect("registers");
 
     let found = registry.provider_for(DemandKind::of::<Scenes>());
-    assert_eq!(found, Some(("provider/scenes", Placement::AfterSource)));
+    let identifier = found.map(|(identifier, _)| identifier);
+    assert_eq!(identifier, Some("provider/scenes"));
 
     let args = demands(&[SceneRequest::natural()]);
     let args = serde_json::to_value(args).expect("serialises");

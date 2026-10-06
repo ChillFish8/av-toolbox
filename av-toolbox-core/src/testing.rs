@@ -22,7 +22,9 @@ use crate::{
     InputSignature,
     Inputs,
     LayerDemand,
-    Placement,
+    PathEdge,
+    PathView,
+    PlaceError,
     Provider,
     ProviderDefinition,
     StageDefinition,
@@ -122,8 +124,8 @@ macro_rules! stamping_provider {
             type Side = $side;
             type Demand = $demand;
 
-            fn placement() -> Placement {
-                Placement::AfterSource
+            fn place(_request: &(), path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+                Ok(path.after_source())
             }
 
             fn accepts_input(

@@ -10,7 +10,9 @@ use av_toolbox_core::{
     InputSignature,
     Inputs,
     LayerDemand,
-    Placement,
+    PathEdge,
+    PathView,
+    PlaceError,
     Provider,
     ProviderDefinition,
     RequestError,
@@ -84,8 +86,8 @@ impl ProviderDefinition for SceneProvider {
     type Side = HostSide;
     type Demand = Scenes;
 
-    fn placement() -> Placement {
-        Placement::AfterSource
+    fn place(request: &SceneRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+        scene_place(request, path)
     }
 
     fn accepts_input(
@@ -198,6 +200,14 @@ impl Provider<HostSide> for ServeScenes {
 
         let items = emitted.into_iter().map(HostStreamItem::Frame).collect();
         Ok(items)
+    }
+}
+
+/// Places scene detection after the stage a request names, or directly after the source.
+pub(crate) fn scene_place(request: &SceneRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+    match request.after.as_deref() {
+        Some(name) => path.after_named(name),
+        None => Ok(path.after_source()),
     }
 }
 

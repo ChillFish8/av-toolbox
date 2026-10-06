@@ -23,8 +23,11 @@ use crate::{
     Inputs,
     LayerDemand,
     Parallelism,
+    PathEdge,
+    PathNode,
+    PathView,
     PipelineRegistry,
-    Placement,
+    PlaceError,
     Provider,
     ProviderDefinition,
     RegistryError,
@@ -86,8 +89,8 @@ macro_rules! cuts_provider {
             type Side = HostSide;
             type Demand = Cuts;
 
-            fn placement() -> Placement {
-                Placement::Shared
+            fn place(_request: &Breaks, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+                Ok(path.before_demander())
             }
 
             fn accepts_input(
@@ -137,6 +140,19 @@ fn provider_args() -> serde_json::Value {
     ])
 }
 
+fn path_of<'g>(names: &[&'g str], args: &'g serde_json::Value) -> PathView<'g> {
+    let nodes = names
+        .iter()
+        .map(|name| PathNode {
+            name,
+            identifier: "test/blur",
+            args,
+        })
+        .collect();
+
+    PathView::new(nodes)
+}
+
 fn input() -> Vec<InputArgument> {
     vec![InputArgument::named(
         "input",
@@ -150,8 +166,9 @@ fn a_provider_registers_under_its_demand_kind() {
     let registry = registry_with_cuts();
 
     let found = registry.provider_for(DemandKind::of::<Cuts>());
+    let identifier = found.map(|(identifier, _)| identifier);
 
-    assert_eq!(found, Some(("provider/cuts", Placement::Shared)));
+    assert_eq!(identifier, Some("provider/cuts"));
 
     let args = provider_args();
     let prepared = registry
@@ -235,4 +252,37 @@ fn a_provider_holds_what_its_definition_says() {
     let formats = ResolvedFormats::new(vec![], None);
 
     assert_eq!(prepared.held_frames(&formats), 1);
+}
+
+#[test]
+fn a_registered_provider_places_through_its_definition() {
+    let registry = registry_with_cuts();
+    let (_, place) = registry
+        .provider_for(DemandKind::of::<Cuts>())
+        .expect("cuts has a provider");
+    let args = json!({});
+    let path = path_of(&["input", "soften"], &args);
+    let demand = crate::AnyDemand::new::<Cuts>(Breaks { every: 4 });
+
+    let edge = place(&demand, &path).expect("should place");
+
+    assert_eq!(edge, path.before_demander());
+}
+
+#[test]
+fn a_registered_provider_refuses_a_request_it_cannot_read() {
+    let registry = registry_with_cuts();
+    let (_, place) = registry
+        .provider_for(DemandKind::of::<Cuts>())
+        .expect("cuts has a provider");
+    let args = json!({});
+    let path = path_of(&["input"], &args);
+    let value = json!({ "kind": "cuts", "request": { "every": "often" } });
+    let malformed: crate::AnyDemand = serde_json::from_value(value).expect("deserialises");
+
+    let Err(error) = place(&malformed, &path) else {
+        panic!("an unreadable request should be refused");
+    };
+
+    assert!(error.to_string().contains("cannot be read"), "{error}");
 }

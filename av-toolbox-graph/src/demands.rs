@@ -3,8 +3,9 @@ use av_toolbox_core::{
     DemandKind,
     InputDemand,
     LayerDemand,
+    PathNode,
+    PathView,
     PipelineRegistry,
-    Placement,
     PreparedStage,
     StageKind,
 };
@@ -17,6 +18,8 @@ use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderPlacement {
     pub kind: DemandKind,
+    /// The real node the provider sits behind.
+    pub node: NodeId,
     pub layers: Vec<ServedLayer>,
 }
 
@@ -49,34 +52,42 @@ struct Asked {
     chunks: bool,
 }
 
-/// One demand traced back to its source and given its layer.
-struct Traced {
+/// One demand its provider placed, with the instance serving it and its layer there.
+struct Placed {
     asked: Asked,
-    source: NodeId,
-    /// The edges from the source to the demanding node, source end first.
-    path: Vec<EdgeId>,
+    instance: usize,
     layer: LayerId,
 }
 
-/// Every traced demand of one kind reaching one source, which one provider serves.
-///
-/// Demands naming a stage to go after form a group of their own.
-struct Group {
-    source: NodeId,
+/// One provider, serving every demand of one kind placed behind one real node.
+struct Instance {
     kind: DemandKind,
-    after: Option<String>,
-    /// Indices into the traced demands, in the graph's order.
-    members: Vec<usize>,
+    /// The source the real node traces back to.
+    source: NodeId,
+    /// The real node the provider sits behind.
+    node: NodeId,
+    /// The edges leaving the real node on its demanders' paths, which the provider takes over.
+    edges: Vec<EdgeId>,
+    /// Each distinct request this instance serves, with its layer.
+    layers: Vec<(AnyDemand, LayerId)>,
 }
 
-/// Inserts a provider for every source some stage demands something of, and gives each demanding
-/// node its layer.
+/// Every demand placed so far, and the instances serving them.
+#[derive(Default)]
+struct Placements {
+    placed: Vec<Placed>,
+    instances: Vec<Instance>,
+    next_layer: u32,
+}
+
+/// Inserts a provider for every group of demands that place themselves behind the same node, and
+/// gives each demanding node its layer.
 ///
 /// Each demand is traced upstream to its source, following a node's chunk authority where it has
-/// several inputs. Demands are grouped by source, kind and the stage they ask to go after. Every
-/// distinct demand becomes one layer, and one provider per group is placed where its registration
-/// or `after` asks. A demanding node records its demands, and routes on the layer of its chunk
-/// request.
+/// several inputs. The demand's provider picks an edge on that path. Demands of one kind placed
+/// behind the same node share one provider, which takes only the edges its demanders read
+/// through. Every distinct request on a provider becomes one layer, numbered across the graph. A
+/// demanding node records its demands, and routes on the layer of its chunk request.
 pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Result<(), Diagnostics> {
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
@@ -89,19 +100,13 @@ pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -
         return Ok(());
     }
 
-    let traced = trace_demands(graph, registry, &prepared, asked, &mut diagnostics);
-    let groups = group_by_source(&traced);
-    check_placements(graph, &traced, &groups, &mut diagnostics);
-
+    let placements = place_demands(graph, registry, &prepared, asked, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
 
-    record_demands(graph, registry, &prepared, &traced);
-
-    for group in &groups {
-        place_provider(graph, registry, &prepared, &traced, &groups, group);
-    }
+    record_demands(graph, registry, &prepared, &placements.placed);
+    insert_instances(graph, registry, &placements);
 
     Ok(())
 }
@@ -170,18 +175,19 @@ fn collect_demands(graph: &CompiledGraph, prepared: &[Option<PreparedStage>]) ->
     asked
 }
 
-/// Traces every demand to its source and numbers a layer per distinct demand of each source.
+/// Traces every demand to its source, lets its provider place it, and files it under the instance
+/// behind the node it was placed after.
 ///
-/// A demand of a kind nothing serves, or one that reaches no source, is reported and dropped.
-fn trace_demands(
+/// A demand of a kind nothing serves, one that reaches no source, and one its provider refuses to
+/// place are reported and dropped.
+fn place_demands(
     graph: &CompiledGraph,
     registry: &PipelineRegistry,
     prepared: &[Option<PreparedStage>],
     asked: Vec<Asked>,
     diagnostics: &mut Diagnostics,
-) -> Vec<Traced> {
-    let mut layers: Vec<(NodeId, AnyDemand, LayerId)> = Vec::new();
-    let mut traced = Vec::new();
+) -> Placements {
+    let mut placements = Placements::default();
 
     for each in asked {
         let node = graph.node(each.node);
@@ -209,18 +215,97 @@ fn trace_demands(
             continue;
         };
 
-        let source = source_of(graph, path[0]);
-        let layer = layer_for(&mut layers, source, &each.demand.demand);
+        let (_, place) = registry.provider_for(kind).expect("a served kind has a provider");
+        let view = path_view(graph, &path);
 
-        traced.push(Traced {
-            asked: each,
-            source,
-            path,
+        let chosen = match place(&each.demand.demand, &view) {
+            Ok(chosen) => chosen,
+            Err(error) => {
+                let message = format!(
+                    "`{}` demands {} on `{}`, but {error}",
+                    node.name(),
+                    kind.name(),
+                    each.demand.input,
+                );
+                diagnostics.push(error_at(node, DiagnosticCode::PlaceFailed, message));
+                continue;
+            },
+        };
+
+        let edge = path[chosen.node()];
+        let source = source_of(graph, path[0]);
+        placements.file(each, source, edge, graph);
+    }
+
+    placements
+}
+
+impl Placements {
+    /// Files `asked`, placed on `edge`, under the instance of its kind behind that edge's node.
+    fn file(&mut self, asked: Asked, source: NodeId, edge: EdgeId, graph: &CompiledGraph) {
+        let kind = asked.demand.demand.kind();
+        let node = source_of(graph, edge);
+
+        let existing = self
+            .instances
+            .iter()
+            .position(|instance| instance.kind == kind && instance.node == node);
+        let index = existing.unwrap_or_else(|| {
+            self.instances.push(Instance {
+                kind,
+                source,
+                node,
+                edges: Vec::new(),
+                layers: Vec::new(),
+            });
+            self.instances.len() - 1
+        });
+
+        let instance = &mut self.instances[index];
+        if !instance.edges.contains(&edge) {
+            instance.edges.push(edge);
+        }
+
+        let layer = layer_for(instance, &mut self.next_layer, &asked.demand.demand);
+        self.placed.push(Placed {
+            asked,
+            instance: index,
             layer,
         });
     }
+}
 
-    traced
+/// The layer serving `demand` on `instance`, numbering a new one when it is the first of its kind.
+fn layer_for(instance: &mut Instance, next_layer: &mut u32, demand: &AnyDemand) -> LayerId {
+    let existing = instance.layers.iter().find(|(served, _)| served == demand);
+    if let Some((_, layer)) = existing {
+        return *layer;
+    }
+
+    let layer = LayerId(*next_layer);
+    *next_layer += 1;
+    instance.layers.push((demand.clone(), layer));
+
+    layer
+}
+
+/// The real nodes a demand travels through along `path`, as its provider sees them.
+fn path_view<'g>(graph: &'g CompiledGraph, path: &[EdgeId]) -> PathView<'g> {
+    let nodes = path
+        .iter()
+        .map(|edge| {
+            let producer = source_of(graph, *edge);
+            let node = graph.node(producer);
+
+            PathNode {
+                name: node.name(),
+                identifier: node.identifier(),
+                args: node.args(),
+            }
+        })
+        .collect();
+
+    PathView::new(nodes)
 }
 
 /// Why nothing can serve a demand of `kind`, or `None` when a provider can.
@@ -234,20 +319,6 @@ fn unserved(registry: &PipelineRegistry, kind: DemandKind) -> Option<&'static st
     }
 
     None
-}
-
-/// The layer serving `demand` at `source`, numbering a new one when it is the first of its kind.
-fn layer_for(layers: &mut Vec<(NodeId, AnyDemand, LayerId)>, source: NodeId, demand: &AnyDemand) -> LayerId {
-    let existing = layers
-        .iter()
-        .find(|(at, served, _)| *at == source && served == demand);
-    if let Some((_, _, layer)) = existing {
-        return *layer;
-    }
-
-    let layer = LayerId(layers.len() as u32);
-    layers.push((source, demand.clone(), layer));
-    layer
 }
 
 /// The edges a demand on `input` of `node` travels along from its source, source end first.
@@ -300,127 +371,9 @@ fn source_of(graph: &CompiledGraph, edge: EdgeId) -> NodeId {
     graph.node(edge.node()).inputs()[edge.index()].source()
 }
 
-/// Groups traced demands by the source they reach, their kind and their `after`, in the order
-/// first seen.
-fn group_by_source(traced: &[Traced]) -> Vec<Group> {
-    let mut groups: Vec<Group> = Vec::new();
-
-    for (index, each) in traced.iter().enumerate() {
-        let kind = each.asked.demand.demand.kind();
-        let after = after_of(each);
-        let existing = groups.iter_mut().find(|group| {
-            group.source == each.source && group.kind == kind && group.after.as_deref() == after
-        });
-
-        match existing {
-            Some(group) => group.members.push(index),
-            None => groups.push(Group {
-                source: each.source,
-                kind,
-                after: after.map(str::to_string),
-                members: vec![index],
-            }),
-        }
-    }
-
-    groups
-}
-
-/// Refuses an `after` naming no stage, one off its demand's path, and two demands on one
-/// source naming different stages.
-fn check_placements(
-    graph: &CompiledGraph,
-    traced: &[Traced],
-    groups: &[Group],
-    diagnostics: &mut Diagnostics,
-) {
-    for (index, group) in groups.iter().enumerate() {
-        let Some(after) = group.after.as_deref() else {
-            continue;
-        };
-
-        let earlier = groups[..index]
-            .iter()
-            .find(|other| other.after.is_some() && other.source == group.source && other.kind == group.kind);
-        if let Some(earlier) = earlier {
-            report_conflict(graph, traced, earlier, group, diagnostics);
-            continue;
-        }
-
-        let exists = graph.nodes().iter().any(|node| node.name() == after);
-        for member in &group.members {
-            let each = &traced[*member];
-            let node = graph.node(each.asked.node);
-
-            if !exists {
-                let message = format!(
-                    "`{}` asks for {} after `{after}`, but there is no stage named `{after}`",
-                    node.name(),
-                    group.kind.name(),
-                );
-                diagnostics.push(error_at(node, DiagnosticCode::UnknownAfter, message));
-                continue;
-            }
-
-            if passes_through(graph, each, after) {
-                continue;
-            }
-
-            let message = format!(
-                "`{}` needs {} from after `{after}`, which its `{}` input does not pass through",
-                node.name(),
-                group.kind.name(),
-                each.asked.demand.input,
-            );
-            diagnostics.push(error_at(node, DiagnosticCode::AfterOffPath, message));
-        }
-    }
-}
-
-/// Reports every demand of `group`, whose `after` differs from the one `earlier` named on the
-/// same source.
-fn report_conflict(
-    graph: &CompiledGraph,
-    traced: &[Traced],
-    earlier: &Group,
-    group: &Group,
-    diagnostics: &mut Diagnostics,
-) {
-    let first = graph.node(traced[earlier.members[0]].asked.node);
-    let first_after = earlier.after.as_deref().unwrap_or_default();
-    let after = group.after.as_deref().unwrap_or_default();
-    let kind = group.kind.name();
-
-    for member in &group.members {
-        let node = graph.node(traced[*member].asked.node);
-        let message = format!(
-            "`{}` asks for {kind} after `{after}`, but `{}` asks for them after `{first_after}`, \
-             and a source's {kind} can only be moved after one stage",
-            node.name(),
-            first.name(),
-        );
-        diagnostics.push(error_at(node, DiagnosticCode::ConflictingPlacement, message));
-    }
-}
-
-/// Whether a demand's path from its source leaves the stage named `after`.
-fn passes_through(graph: &CompiledGraph, traced: &Traced, after: &str) -> bool {
-    traced.path.iter().any(|edge| {
-        let source = source_of(graph, *edge);
-        graph.node(source).name() == after
-    })
-}
-
-/// The stage a demand asks its provider to go after, read from its request's `after` field.
-fn after_of(traced: &Traced) -> Option<&str> {
-    let request = traced.asked.demand.demand.raw();
-
-    request.get("after")?.as_str()
-}
-
 /// The route a node takes for its chunk request, reading the layer with the node's own chunk key.
-fn route_of(prepared: &[Option<PreparedStage>], traced: &Traced) -> ChunkRoute {
-    let stage = prepared[traced.asked.node.index()]
+fn route_of(prepared: &[Option<PreparedStage>], placed: &Placed) -> ChunkRoute {
+    let stage = prepared[placed.asked.node.index()]
         .as_ref()
         .expect("a stage that made a chunk request was prepared");
     let key = stage
@@ -429,7 +382,7 @@ fn route_of(prepared: &[Option<PreparedStage>], traced: &Traced) -> ChunkRoute {
         .expect("a stage with a chunk request chunks by a demand");
 
     ChunkRoute {
-        layer: traced.layer,
+        layer: placed.layer,
         key,
     }
 }
@@ -439,11 +392,11 @@ fn record_demands(
     graph: &mut CompiledGraph,
     registry: &PipelineRegistry,
     prepared: &[Option<PreparedStage>],
-    traced: &[Traced],
+    placed: &[Placed],
 ) {
     let mut settled: Vec<(NodeId, Vec<NodeDemand>)> = Vec::new();
 
-    for each in traced {
+    for each in placed {
         let demand = &each.asked.demand.demand;
         let node_demand = NodeDemand {
             input: each.asked.demand.input,
@@ -469,162 +422,115 @@ fn record_demands(
     }
 }
 
-/// Inserts the provider serving `group`, where its placement or an `after` puts it.
-///
-/// Its demands are traced again first, so a provider an earlier group placed is on their paths.
-fn place_provider(
-    graph: &mut CompiledGraph,
-    registry: &PipelineRegistry,
-    prepared: &[Option<PreparedStage>],
-    traced: &[Traced],
-    groups: &[Group],
-    group: &Group,
-) {
-    let (identifier, placement) = registry
-        .provider_for(group.kind)
-        .expect("every grouped kind has a provider");
+/// Inserts every instance behind its real node, taking only its demanders' edges.
+fn insert_instances(graph: &mut CompiledGraph, registry: &PipelineRegistry, placements: &Placements) {
+    for (index, instance) in placements.instances.iter().enumerate() {
+        let (identifier, _) = registry
+            .provider_for(instance.kind)
+            .expect("every placed kind has a provider");
 
-    let mut paths = Vec::with_capacity(group.members.len());
-    for member in &group.members {
-        let asked = &traced[*member].asked;
-        let path = trace_to_source(graph, prepared, asked.node, asked.demand.input)
-            .expect("a demand traced once still traces");
-        paths.push(path);
+        let layers = served_layers(graph, registry, placements, index);
+        let demands: Vec<LayerDemand> = layers
+            .iter()
+            .map(|served| LayerDemand {
+                layer: served.layer,
+                demand: served.demand.clone(),
+            })
+            .collect();
+        let args = serde_json::to_value(demands).expect("layer demands serialise");
+
+        let first_demander = placements
+            .placed
+            .iter()
+            .find(|placed| placed.instance == index)
+            .map(|placed| placed.asked.node)
+            .expect("an instance has a demand");
+        let span = graph.node(first_demander).span();
+
+        let provider = ProviderNode {
+            identifier: identifier.to_string(),
+            input: provider_input(registry, identifier),
+            name: instance_name(graph, &placements.instances, instance),
+            span,
+            args,
+            placement: ProviderPlacement {
+                kind: instance.kind,
+                node: instance.node,
+                layers,
+            },
+        };
+
+        let edges = reading_edges(graph, instance);
+        graph.push_provider(instance.node, provider, &edges);
     }
 
-    let (producer, moved) = match (group.after.as_deref(), placement) {
-        (Some(name), _) => after_named(graph, &paths, name),
-        (None, Placement::AfterSource) => after_source(graph, group.source),
-        (None, Placement::Shared) => before_common_node(graph, &paths, group.source),
-    };
-
-    let layers = served_layers(graph, registry, traced, group);
-    let demands: Vec<LayerDemand> = layers
-        .iter()
-        .map(|served| LayerDemand {
-            layer: served.layer,
-            demand: served.demand.clone(),
-        })
-        .collect();
-    let args = serde_json::to_value(demands).expect("layer demands serialise");
-
-    let first_demander = traced[group.members[0]].asked.node;
-    let span = graph.node(first_demander).span();
-
-    let provider = ProviderNode {
-        identifier: identifier.to_string(),
-        input: provider_input(registry, identifier),
-        name: provider_name(graph, groups, group),
-        span,
-        args,
-        placement: ProviderPlacement {
-            kind: group.kind,
-            layers,
-        },
-    };
-
-    graph.push_provider(producer, provider, &moved);
     graph.finish_edit();
+}
+
+/// The edges `instance` takes over, each one moved up to read its real node.
+///
+/// An instance of another kind behind the same node may already have taken one of the edges. This
+/// instance then takes that provider's input instead, so it sits between the node and that
+/// provider.
+fn reading_edges(graph: &CompiledGraph, instance: &Instance) -> Vec<EdgeId> {
+    let mut edges = Vec::with_capacity(instance.edges.len());
+
+    for edge in &instance.edges {
+        let mut current = *edge;
+        loop {
+            let source = source_of(graph, current);
+            if source == instance.node {
+                break;
+            }
+
+            current = EdgeId::new(source, 0);
+        }
+
+        if !edges.contains(&current) {
+            edges.push(current);
+        }
+    }
+
+    edges
 }
 
 /// The provider's name, such as `scenes(input)`.
 ///
-/// A provider placed by an `after` while another serves the same source and kind is named
+/// An instance behind a later node, while another of its kind shares the source, is named
 /// `scenes(input after denoise)`, so the two stay apart.
-fn provider_name(graph: &CompiledGraph, groups: &[Group], group: &Group) -> String {
-    let kind = group.kind.name();
-    let source = graph.node(group.source).name();
+fn instance_name(graph: &CompiledGraph, instances: &[Instance], instance: &Instance) -> String {
+    let kind = instance.kind.name();
+    let source = graph.node(instance.source).name();
 
-    let Some(after) = group.after.as_deref() else {
+    if instance.node == instance.source {
         return format!("{kind}({source})");
-    };
+    }
 
-    let shares_source = groups.iter().any(|other| {
-        other.source == group.source && other.kind == group.kind && other.after.as_deref() != Some(after)
+    let shares_source = instances.iter().any(|other| {
+        other.kind == instance.kind && other.source == instance.source && other.node != instance.node
     });
     if !shares_source {
         return format!("{kind}({source})");
     }
 
+    let after = graph.node(instance.node).name();
     format!("{kind}({source} after {after})")
 }
 
-/// After the stage named `name`, taking the edges leaving it on every demanding path.
-fn after_named(graph: &CompiledGraph, paths: &[Vec<EdgeId>], name: &str) -> (NodeId, Vec<EdgeId>) {
-    let mut producer = None;
-    let mut moved = Vec::new();
-
-    for edge in paths.iter().flatten() {
-        let source = source_of(graph, *edge);
-        if graph.node(source).name() != name {
-            continue;
-        }
-
-        producer = Some(source);
-        if !moved.contains(edge) {
-            moved.push(*edge);
-        }
-    }
-
-    let producer = producer.expect("an `after` stage was checked to be on every path");
-    (producer, moved)
-}
-
-/// After the source, taking every edge reading it.
-fn after_source(graph: &CompiledGraph, source: NodeId) -> (NodeId, Vec<EdgeId>) {
-    let mut moved = Vec::new();
-
-    for node in graph.nodes() {
-        for (index, edge) in node.inputs().iter().enumerate() {
-            if edge.source() == source {
-                moved.push(EdgeId::new(node.id(), index));
-            }
-        }
-    }
-
-    (source, moved)
-}
-
-/// Directly before the latest node every demanding path passes through.
-///
-/// That is the last edge every path shares. Paths that share none part at the source, so the
-/// provider goes after it and takes the first edge of each.
-fn before_common_node(graph: &CompiledGraph, paths: &[Vec<EdgeId>], source: NodeId) -> (NodeId, Vec<EdgeId>) {
-    let first = &paths[0];
-    let shared = first
-        .iter()
-        .enumerate()
-        .take_while(|(position, edge)| paths.iter().all(|path| path.get(*position) == Some(edge)))
-        .count();
-
-    if shared > 0 {
-        let edge = first[shared - 1];
-        let producer = source_of(graph, edge);
-
-        return (producer, vec![edge]);
-    }
-
-    let mut moved = Vec::new();
-    for path in paths {
-        if !moved.contains(&path[0]) {
-            moved.push(path[0]);
-        }
-    }
-
-    (source, moved)
-}
-
-/// The layers one group's provider serves, each with the stages that demanded it.
+/// The layers one instance serves, each with the stages that demanded it.
 fn served_layers(
     graph: &CompiledGraph,
     registry: &PipelineRegistry,
-    traced: &[Traced],
-    group: &Group,
+    placements: &Placements,
+    instance: usize,
 ) -> Vec<ServedLayer> {
     let mut layers: Vec<ServedLayer> = Vec::new();
 
-    for member in &group.members {
-        let each = &traced[*member];
+    let members = placements
+        .placed
+        .iter()
+        .filter(|placed| placed.instance == instance);
+    for each in members {
         let name = graph.node(each.asked.node).name().to_string();
 
         let existing = layers.iter().position(|served| served.layer == each.layer);
