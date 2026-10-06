@@ -267,6 +267,19 @@ fn explain_shows_the_prefixed_names_of_called_stages() {
 }
 
 #[test]
+fn explain_shows_the_provider_a_chunk_stage_implies() {
+    let path = example("denoise-nl4d.toml");
+    let path = path.to_str().expect("utf-8 path");
+
+    let output = toolbox(&["explain", path, "--structure-only"]);
+    let stderr = text(&output.stderr);
+    let stdout = text(&output.stdout);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stdout.contains("scenes · implied"), "{stdout}");
+}
+
+#[test]
 fn a_var_flag_sets_a_variable() {
     let file = written(SPEED_PIPELINE);
     let path = file.path().to_str().expect("utf-8 path");

@@ -18,6 +18,9 @@
     --transform-stroke: #5b21b6;
     --sink-fill: #fee2e2;
     --sink-stroke: #991b1b;
+    --provider-fill: #ccfbf1;
+    --provider-stroke: #0f766e;
+    --highlight: #ea580c;
     --exchange-fill: #f3f4f6;
     --exchange-stroke: #374151;
 }
@@ -42,6 +45,9 @@
         --transform-stroke: #c4b5fd;
         --sink-fill: #7f1d1d;
         --sink-stroke: #fca5a5;
+        --provider-fill: #134e4a;
+        --provider-stroke: #5eead4;
+        --highlight: #fb923c;
         --exchange-fill: #1f2937;
         --exchange-stroke: #d1d5db;
     }
@@ -80,6 +86,12 @@ header {
 .legend-crossing {
     fill: none;
     stroke: var(--muted);
+    stroke-dasharray: 3 2;
+}
+
+.legend-provider {
+    fill: var(--provider-fill);
+    stroke: var(--provider-stroke);
     stroke-dasharray: 3 2;
 }
 
@@ -146,8 +158,24 @@ header {
     stroke: var(--sink-stroke);
 }
 
-.box.crossing .shape {
+.box.provider .shape {
+    fill: var(--provider-fill);
+    stroke: var(--provider-stroke);
+}
+
+.box.crossing .shape,
+.box.provider .shape {
     stroke-dasharray: 5 3;
+}
+
+.box.highlight .shape:not(.shadow) {
+    stroke: var(--highlight);
+    stroke-width: 3;
+}
+
+#canvas .demand {
+    cursor: pointer;
+    text-decoration: underline dotted;
 }
 
 .box .shadow {
@@ -191,6 +219,11 @@ header {
 
 .link.local {
     stroke-width: 1;
+}
+
+.link.highlight {
+    stroke: var(--highlight);
+    stroke-width: 3;
 }
 
 .arrow-head {

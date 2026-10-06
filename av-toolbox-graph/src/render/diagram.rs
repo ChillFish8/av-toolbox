@@ -1,6 +1,8 @@
 use av_toolbox_core::{Crossing, Granularity, Residency, StageKind};
+use av_toolbox_gpu::LayerId;
 
 use super::RenderOptions;
+use crate::demands::{NodeDemand, ProviderPlacement};
 use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
 use crate::plan::{ExecutionPlan, Narrowed, Region, RegionId, Routing};
 
@@ -25,6 +27,8 @@ pub(crate) struct Block {
     pub(crate) granularity: Option<Granularity>,
     pub(crate) routing: Option<Routing>,
     pub(crate) reason: Option<&'static str>,
+    /// The layer the block routes its chunks on, named by its kind and description.
+    pub(crate) layer: Option<String>,
 }
 
 #[derive(Debug)]
@@ -38,6 +42,19 @@ pub(crate) struct DiagramBox {
     pub(crate) crossing: Option<Crossing>,
     pub(crate) width: usize,
     pub(crate) reason: Option<&'static str>,
+    pub(crate) provider: Option<ProviderPlacement>,
+    pub(crate) demands: Vec<ShownDemand>,
+}
+
+/// One demand a stage made, as a box shows it.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct ShownDemand {
+    pub(crate) input: String,
+    /// The demand's kind and description, such as `scenes: natural`.
+    pub(crate) description: String,
+    pub(crate) layer: Option<LayerId>,
+    /// Whether this demand is the stage's chunk request.
+    pub(crate) chunks: bool,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -110,6 +127,11 @@ impl Block {
             heading.push_str(&routing);
         }
 
+        if let Some(layer) = &self.layer {
+            let layer = format!(" · routes on {layer}");
+            heading.push_str(&layer);
+        }
+
         if let Some(reason) = self.reason {
             let reason = format!(" ({reason})");
             heading.push_str(&reason);
@@ -130,23 +152,33 @@ impl Block {
         }
     }
 
-    /// The routing and the reason, for the line just inside a text frame, when there is either.
+    /// The routing, the layer and the reason, for the line just inside a text frame, when there is any.
     pub(crate) fn detail(&self) -> Option<String> {
-        let routing = self.routing.map(routing_text);
+        let routing = self.routing.map(|routing| routing_text(routing).to_string());
+        let layer = self.layer.as_ref().map(|layer| format!("routes on {layer}"));
+        let parts: Vec<String> = routing.into_iter().chain(layer).collect();
+        let route = parts.join(" · ");
 
-        match (routing, self.reason) {
-            (Some(routing), Some(reason)) => Some(format!("{routing} ({reason})")),
-            (Some(routing), None) => Some(routing.to_string()),
-            (None, Some(reason)) => Some(format!("({reason})")),
-            (None, None) => None,
+        match (route.is_empty(), self.reason) {
+            (false, Some(reason)) => Some(format!("{route} ({reason})")),
+            (false, None) => Some(route),
+            (true, Some(reason)) => Some(format!("({reason})")),
+            (true, None) => None,
         }
     }
 }
 
 impl DiagramBox {
     /// The lines of text the box holds, in the order they are printed.
+    ///
+    /// A provider is titled with its kind rather than its name. A box's demands come last, one
+    /// line each and in order.
     pub(crate) fn lines(&self, options: &RenderOptions) -> Vec<String> {
-        let mut lines = vec![self.name.clone()];
+        let title = match &self.provider {
+            Some(placement) => format!("{} · implied", placement.kind.name()),
+            None => self.name.clone(),
+        };
+        let mut lines = vec![title];
 
         if options.show_identifier {
             lines.push(self.identifier.clone());
@@ -162,8 +194,20 @@ impl DiagramBox {
             lines.push(format!("{from}→{to}"));
         }
 
+        if let Some(placement) = &self.provider {
+            for served in &placement.layers {
+                let demanded_by = served.demanded_by.join(", ");
+                lines.push(format!("{} ← {demanded_by}", served.description));
+            }
+        }
+
         if let Some(reason) = self.reason {
             lines.push(format!("({reason})"));
+        }
+
+        for demand in &self.demands {
+            let line = demand.line();
+            lines.push(line);
         }
 
         lines
@@ -176,6 +220,25 @@ impl DiagramBox {
             (Some(residency), width) => Some(format!("{residency} ×{width}")),
             (None, 1) => None,
             (None, width) => Some(format!("×{width}")),
+        }
+    }
+}
+
+impl ShownDemand {
+    fn of(demand: &NodeDemand) -> Self {
+        Self {
+            input: demand.input.to_string(),
+            description: demand_text(demand),
+            layer: Some(demand.layer),
+            chunks: demand.chunks,
+        }
+    }
+
+    /// The line a box prints for this demand, such as `demands scenes: natural`.
+    pub(crate) fn line(&self) -> String {
+        match self.chunks {
+            true => format!("chunks on {}", self.description),
+            false => format!("demands {}", self.description),
         }
     }
 }
@@ -221,6 +284,21 @@ pub(crate) fn routing_text(routing: Routing) -> &'static str {
     }
 }
 
+fn demand_text(demand: &NodeDemand) -> String {
+    format!("{}: {}", demand.kind.name(), demand.description)
+}
+
+/// Names `layer` by the first demand in the graph it serves.
+fn layer_text(graph: &CompiledGraph, layer: LayerId) -> Option<String> {
+    let found = graph
+        .nodes()
+        .iter()
+        .flat_map(Node::demands)
+        .find(|demand| demand.layer == layer);
+
+    found.map(demand_text)
+}
+
 /// Names a narrowing reason worth printing.
 ///
 /// Nothing having asked for more is the state every node starts in, so it is left out.
@@ -249,6 +327,7 @@ fn unplanned(graph: &CompiledGraph) -> Diagram {
             granularity: None,
             routing: None,
             reason: None,
+            layer: None,
         });
         boxes.push(box_of(node, index, 1, None));
 
@@ -275,7 +354,7 @@ fn planned(graph: &CompiledGraph, plan: &ExecutionPlan) -> Diagram {
     let blocks = plan
         .regions()
         .iter()
-        .map(|region| block_of(plan, region))
+        .map(|region| block_of(graph, plan, region))
         .collect();
     let boxes = graph.nodes().iter().map(|node| planned_box(plan, node)).collect();
     let exchanges = plan.regions().iter().flat_map(exchanges_of).collect();
@@ -295,7 +374,7 @@ fn planned(graph: &CompiledGraph, plan: &ExecutionPlan) -> Diagram {
     }
 }
 
-fn block_of(plan: &ExecutionPlan, region: &Region) -> Block {
+fn block_of(graph: &CompiledGraph, plan: &ExecutionPlan, region: &Region) -> Block {
     let head_node = region.head();
     let head = plan.node(head_node);
     let shared = shared_reason(plan, region);
@@ -303,6 +382,7 @@ fn block_of(plan: &ExecutionPlan, region: &Region) -> Block {
         1 => None,
         _ => Some(region.routing()),
     };
+    let layer = region.layer().and_then(|layer| layer_text(graph, layer));
 
     Block {
         id: region.id().index(),
@@ -311,6 +391,7 @@ fn block_of(plan: &ExecutionPlan, region: &Region) -> Block {
         granularity: Some(head.granularity()),
         routing,
         reason: shared.and_then(reason_text),
+        layer,
     }
 }
 
@@ -332,10 +413,12 @@ fn planned_box(plan: &ExecutionPlan, node: &Node) -> DiagramBox {
 }
 
 fn box_of(node: &Node, block: usize, width: usize, reason: Option<&'static str>) -> DiagramBox {
-    let crossing = match node.role() {
-        NodeRole::Crossing(crossing) => Some(*crossing),
-        NodeRole::Stage | NodeRole::Provider(_) => None,
+    let (crossing, provider) = match node.role() {
+        NodeRole::Crossing(crossing) => (Some(*crossing), None),
+        NodeRole::Provider(placement) => (None, Some(placement.clone())),
+        NodeRole::Stage => (None, None),
     };
+    let demands = node.demands().iter().map(ShownDemand::of).collect();
 
     DiagramBox {
         node: node.id(),
@@ -347,6 +430,8 @@ fn box_of(node: &Node, block: usize, width: usize, reason: Option<&'static str>)
         crossing,
         width,
         reason,
+        provider,
+        demands,
     }
 }
 
@@ -809,6 +894,71 @@ mod tests {
             .collect();
 
         assert_eq!(ratios, vec!["◁ 1:4", "▷ 4:1"]);
+    }
+
+    #[test]
+    fn a_provider_box_lists_its_layers_and_who_asked() {
+        let specs = fixtures::demanding_pipeline();
+        let graph = fixtures::satisfied(&specs);
+        let diagram = Diagram::of(&graph);
+        let provider = box_named(&diagram, "fixture-breaks(input)");
+
+        let placement = provider.provider.as_ref().expect("the box is a provider");
+        let lines = provider.lines(&RenderOptions::default());
+
+        assert_eq!(placement.layers.len(), 2);
+        assert_eq!(
+            lines,
+            vec![
+                "fixture-breaks · implied",
+                "test/breaking",
+                "every 4 ← first",
+                "every 8 ← second",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stage_box_lists_its_demands() {
+        let specs = fixtures::demanding_pipeline();
+        let graph = fixtures::satisfied(&specs);
+        let diagram = Diagram::of(&graph);
+        let first = box_named(&diagram, "first");
+        let denoise = box_named(&diagram, "denoise");
+
+        let first_layer = graph.nodes()[first.node.index()].demands()[0].layer;
+        let expected = vec![ShownDemand {
+            input: String::from("input"),
+            description: String::from("fixture-breaks: every 4"),
+            layer: Some(first_layer),
+            chunks: false,
+        }];
+
+        assert_eq!(first.demands, expected);
+        assert_eq!(
+            first.lines(&RenderOptions::default()),
+            vec!["first", "test/demanding", "demands fixture-breaks: every 4"]
+        );
+        assert_eq!(
+            denoise.lines(&RenderOptions::default()),
+            vec!["denoise", "test/temporal", "chunks on fixture-cuts: fixture-cuts"]
+        );
+    }
+
+    #[test]
+    fn a_region_heading_names_the_layer_it_routes_on() {
+        let specs = fixtures::wide_pipeline(4);
+        let graph = fixtures::satisfied_planned(&specs);
+        let diagram = Diagram::of(&graph);
+        let denoise = box_named(&diagram, "denoise");
+        let block = &diagram.blocks[denoise.block];
+
+        let expected = format!(
+            "region {} ×4 · chunk · by chunk · routes on fixture-cuts: fixture-cuts",
+            denoise.block
+        );
+        assert_eq!(block.layer.as_deref(), Some("fixture-cuts: fixture-cuts"));
+        assert_eq!(block.heading(), expected);
     }
 
     #[test]

@@ -3,8 +3,10 @@ use super::grid::Grid;
 use super::tracks::Rect;
 
 /// The line printed under a planned diagram.
-pub(super) const LEGEND: &str =
-    "◁ disperse, unbounded   ▷ aggregate, bounded   ┄ host and gpu crossing   ×N workers";
+pub(super) const LEGEND: &str = concat!(
+    "◁ disperse, unbounded   ▷ aggregate, bounded   ┄ host and gpu crossing   ",
+    "┄ implied provider   ×N workers",
+);
 
 /// One piece of a frame's text, and the cell it starts in.
 #[derive(Debug, Clone, Eq, PartialEq)]

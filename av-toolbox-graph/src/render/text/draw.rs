@@ -21,7 +21,7 @@ pub(super) fn box_size(lines: &[String], stacked: bool, arrivals: usize) -> (usi
     (width, inside + 2 + shadow)
 }
 
-/// Draws a box and its lines, dashed for a crossing, with a shadow copy behind it when stacked.
+/// Draws a box and its lines, dashed for a crossing or a provider, with a shadow copy behind it when stacked.
 ///
 /// The shadow sits one cell right and one cell down. The box is drawn over it and its inside
 /// cleared, so only the shadow's right and bottom edges show.

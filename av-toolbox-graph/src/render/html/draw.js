@@ -40,6 +40,8 @@
     const exchangesById = new Map(diagram.exchanges.map(exchange => [exchange.id, exchange]));
     const blocksById = new Map(diagram.blocks.map(block => [block.id, block]));
     const blockOrigins = new Map();
+    const boxGroups = new Map();
+    const linkLines = new Map();
 
     function textWidth(content) {
         return measure.measureText(content).width;
@@ -186,6 +188,84 @@
         return lines;
     }
 
+    function providerOf(layer) {
+        return diagram.boxes.find(box => box.provider !== null && box.provider.layers.some(served => served.layer === layer));
+    }
+
+    function demandersOf(provider) {
+        const layers = new Set(provider.provider.layers.map(served => served.layer));
+        return diagram.boxes.filter(box => box.demands.some(demand => layers.has(demand.layer)));
+    }
+
+    // Walks the links back from the demanding box, keeping each one on a path that reaches the provider.
+    function linksBetween(provider, demander) {
+        const found = new Set();
+        const reaches = new Map();
+
+        function walk(endpoint) {
+            if (endpoint === provider.id) {
+                return true;
+            }
+
+            if (reaches.has(endpoint)) {
+                return reaches.get(endpoint);
+            }
+
+            reaches.set(endpoint, false);
+
+            let reached = false;
+            diagram.links.forEach((link, index) => {
+                if (link.to === endpoint && walk(link.from)) {
+                    found.add(index);
+                    reached = true;
+                }
+            });
+
+            reaches.set(endpoint, reached);
+            return reached;
+        }
+
+        walk(demander.id);
+        return found;
+    }
+
+    function highlighted(provider, demanders) {
+        const elements = [boxGroups.get(provider.id)];
+
+        for (const demander of demanders) {
+            elements.push(boxGroups.get(demander.id));
+
+            for (const index of linksBetween(provider, demander)) {
+                elements.push(...(linkLines.get(index) || []));
+            }
+        }
+
+        return elements.filter(node => node !== undefined);
+    }
+
+    function highlightOnHover(target, elementsOf) {
+        target.addEventListener("mouseenter", () => {
+            for (const node of elementsOf()) {
+                node.classList.add("highlight");
+            }
+        });
+
+        target.addEventListener("mouseleave", () => {
+            for (const node of elementsOf()) {
+                node.classList.remove("highlight");
+            }
+        });
+    }
+
+    function demandHighlight(box, demand) {
+        const provider = providerOf(demand.layer);
+        return () => (provider === undefined ? [] : highlighted(provider, [box]));
+    }
+
+    function providerHighlight(provider) {
+        return () => highlighted(provider, demandersOf(provider));
+    }
+
     function drawFrame(parent, block, x, y, width, height) {
         element("rect", { class: "frame", x, y, width, height, rx: 8 }, parent);
         label(parent, x + HEADING_INSET, y + 24, block.heading, "heading");
@@ -201,8 +281,13 @@
             classes.push("crossing");
         }
 
-        const group = element("g", { class: classes.join(" ") }, parent);
+        const group = element("g", { class: classes.join(" "), "data-box": box.id }, parent);
         tooltip(group, tooltipOf(box));
+        boxGroups.set(box.id, group);
+
+        if (box.provider !== null) {
+            highlightOnHover(group, providerHighlight(box));
+        }
 
         const copies = shadow > 0 ? [2, 1] : [];
         for (const copy of copies) {
@@ -212,10 +297,18 @@
 
         element("rect", { class: "shape", x, y, width: boxWidth, height: boxHeight, rx: 4 }, group);
 
+        // A box's demands are its last lines, one each and in order.
+        const firstDemand = box.lines.length - box.demands.length;
+
         box.lines.forEach((line, index) => {
             const baseline = y + PADDING_Y + LINE_HEIGHT * index + LINE_HEIGHT * 0.72;
-            const className = index === 0 ? "name" : "detail";
-            label(group, x + boxWidth / 2, baseline, line, className);
+            const demand = index >= firstDemand ? box.demands[index - firstDemand] : null;
+            const className = index === 0 ? "name" : demand !== null ? "detail demand" : "detail";
+            const text = label(group, x + boxWidth / 2, baseline, line, className);
+
+            if (demand !== null) {
+                highlightOnHover(text, demandHighlight(box, demand));
+            }
         });
 
         if (box.width > 1) {
@@ -258,17 +351,21 @@
     }
 
     function drawEdge(parent, edge) {
-        const link = diagram.links[Number(edge.id.slice(1))];
+        const index = Number(edge.id.slice(1));
+        const link = diagram.links[index];
         const kind = link.bounded === null ? "local" : link.bounded ? "bounded" : "unbounded";
 
         // ELK places an edge relative to the block that contains both of its ends.
         const origin = blockOrigins.get(edge.container) || { x: 0, y: 0 };
 
+        const lines = [];
+        linkLines.set(index, lines);
+
         for (const section of edge.sections || []) {
             const path = [section.startPoint, ...(section.bendPoints || []), section.endPoint];
             const points = path.map(point => (origin.x + point.x) + "," + (origin.y + point.y)).join(" ");
             const attributes = { class: "link " + kind, points, "marker-end": "url(#arrow)", "data-link": edge.id };
-            element("polyline", attributes, parent);
+            lines.push(element("polyline", attributes, parent));
         }
 
         for (const edgeLabel of edge.labels || []) {

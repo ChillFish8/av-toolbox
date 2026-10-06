@@ -1,10 +1,20 @@
-use av_toolbox_core::{Crossing, Granularity, Residency, StageKind};
+use av_toolbox_core::{AnyDemand, Crossing, DemandDefinition, DemandKind, Granularity, Residency, StageKind};
+use av_toolbox_gpu::LayerId;
 use serde_json::json;
 
 use crate::graph::{CompiledGraph, NodeId};
 use crate::plan::Routing;
-use crate::render::diagram::{Block, Diagram, DiagramBox, Endpoint, Exchange, ExchangeKind, Link};
-use crate::{Spanned, StageSpec, build, testing};
+use crate::render::diagram::{
+    Block,
+    Diagram,
+    DiagramBox,
+    Endpoint,
+    Exchange,
+    ExchangeKind,
+    Link,
+    ShownDemand,
+};
+use crate::{ProviderPlacement, ServedLayer, Spanned, StageSpec, build, testing};
 
 pub(crate) fn built(specs: &[StageSpec]) -> CompiledGraph {
     let registry = testing::registry();
@@ -16,6 +26,25 @@ pub(crate) fn built(specs: &[StageSpec]) -> CompiledGraph {
 pub(crate) fn planned(specs: &[StageSpec]) -> CompiledGraph {
     let registry = testing::registry();
     let mut graph = built(specs);
+    let made = crate::plan::plan(&graph, &registry).expect("should plan");
+
+    graph.set_execution_plan(made);
+    graph
+}
+
+/// Builds `specs` and places a provider for every demand its stages make.
+pub(crate) fn satisfied(specs: &[StageSpec]) -> CompiledGraph {
+    let registry = testing::registry();
+    let mut graph = built(specs);
+    crate::satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+
+    graph
+}
+
+/// The same as [satisfied], planned afterwards.
+pub(crate) fn satisfied_planned(specs: &[StageSpec]) -> CompiledGraph {
+    let registry = testing::registry();
+    let mut graph = satisfied(specs);
     let made = crate::plan::plan(&graph, &registry).expect("should plan");
 
     graph.set_execution_plan(made);
@@ -53,6 +82,13 @@ fn stdout(name: &str, input: &str) -> StageSpec {
     let mut sink = testing::spec(StageKind::Sink, name, "test/stdout");
     sink.inputs = vec![testing::positional(input)];
     sink
+}
+
+fn demanding(name: &str, input: &str, every: u32) -> StageSpec {
+    let mut filter = testing::spec(StageKind::Filter, name, "test/demanding");
+    filter.inputs = vec![testing::positional(input)];
+    filter.args = Spanned::unknown(json!({ "every": every }));
+    filter
 }
 
 pub(crate) fn source_to_sink() -> Vec<StageSpec> {
@@ -191,6 +227,31 @@ pub(crate) fn middle_exit_pipeline() -> Vec<StageSpec> {
     vec![first, second, blurred, out, merge, merged_out]
 }
 
+/// One source read by a stage chunking on its cuts, and by two stages each demanding breaks.
+pub(crate) fn demanding_pipeline() -> Vec<StageSpec> {
+    let input = source("input", "a.mkv");
+    let denoise = temporal("denoise", "input", None);
+    let first = demanding("first", "input", 4);
+    let second = demanding("second", "input", 8);
+    let denoise_out = stdout("denoise_out", "denoise");
+    let first_out = stdout("first_out", "first");
+    let second_out = stdout("second_out", "second");
+
+    vec![input, denoise, first, second, denoise_out, first_out, second_out]
+}
+
+/// Two sources, each read by its own stage demanding breaks.
+pub(crate) fn two_source_demanding_pipeline() -> Vec<StageSpec> {
+    let first = source("first", "a.mkv");
+    let second = source("second", "b.mkv");
+    let first_breaks = demanding("first_breaks", "first", 4);
+    let second_breaks = demanding("second_breaks", "second", 8);
+    let first_out = stdout("first_out", "first_breaks");
+    let second_out = stdout("second_out", "second_breaks");
+
+    vec![first, second, first_breaks, second_breaks, first_out, second_out]
+}
+
 /// A host source feeding a device blur feeding a host sink, with both crossings placed.
 pub(crate) fn placed_round_trip() -> CompiledGraph {
     let mut input = testing::spec(StageKind::Source, "input", "test/host-file");
@@ -218,6 +279,17 @@ pub(crate) fn planned_round_trip() -> CompiledGraph {
     graph
 }
 
+/// The demand kind the hand built example's provider serves.
+struct ExampleScenes;
+
+impl DemandDefinition for ExampleScenes {
+    type Request = ();
+
+    fn kind() -> &'static str {
+        "scenes"
+    }
+}
+
 /// One stage of the hand built example, before it becomes a box.
 struct ExampleStage {
     name: &'static str,
@@ -225,6 +297,8 @@ struct ExampleStage {
     kind: StageKind,
     residency: Residency,
     crossing: Option<Crossing>,
+    provider: Option<ProviderPlacement>,
+    demands: Vec<ShownDemand>,
     block: usize,
 }
 
@@ -241,7 +315,61 @@ fn example_stage(
         kind,
         residency,
         crossing: None,
+        provider: None,
+        demands: Vec::new(),
         block,
+    }
+}
+
+/// A stage chunking on the example's scene layer `layer`, described as `description`.
+fn example_chunking(
+    name: &'static str,
+    identifier: &'static str,
+    kind: StageKind,
+    residency: Residency,
+    block: usize,
+    layer: (u32, &str),
+) -> ExampleStage {
+    let (layer, description) = layer;
+    let demand = ShownDemand {
+        input: String::from("clip"),
+        description: format!("scenes: {description}"),
+        layer: Some(LayerId(layer)),
+        chunks: true,
+    };
+
+    ExampleStage {
+        demands: vec![demand],
+        ..example_stage(name, identifier, kind, residency, block)
+    }
+}
+
+/// The example's scene provider, serving each layer as `(description, demanded by)`.
+fn example_provider(name: &'static str, block: usize, layers: &[(&str, &str)]) -> ExampleStage {
+    let layers = layers
+        .iter()
+        .enumerate()
+        .map(|(index, (description, demanded_by))| ServedLayer {
+            layer: LayerId(index as u32),
+            demand: AnyDemand::new::<ExampleScenes>(()),
+            description: description.to_string(),
+            demanded_by: vec![demanded_by.to_string()],
+        })
+        .collect();
+    let placement = ProviderPlacement {
+        kind: DemandKind::of::<ExampleScenes>(),
+        layers,
+    };
+
+    ExampleStage {
+        provider: Some(placement),
+        ..example_stage(
+            name,
+            "provider/scenes",
+            StageKind::Provider,
+            Residency::Host,
+            block,
+        )
     }
 }
 
@@ -252,6 +380,8 @@ fn example_crossing(name: &'static str, crossing: Crossing, block: usize) -> Exa
         kind: StageKind::Transform,
         residency: crossing.to_side(),
         crossing: Some(crossing),
+        provider: None,
+        demands: Vec::new(),
         block,
     }
 }
@@ -262,6 +392,7 @@ fn example_block(
     width: usize,
     routing: Option<Routing>,
     reason: Option<&'static str>,
+    layer: Option<&str>,
 ) -> Block {
     let granularity = match width {
         1 => Granularity::Stream,
@@ -276,6 +407,7 @@ fn example_block(
         granularity: Some(granularity),
         routing,
         reason,
+        layer: layer.map(|layer| format!("scenes: {layer}")),
     }
 }
 
@@ -295,49 +427,62 @@ fn example_node(index: usize) -> Endpoint {
 
 /// A realistic planned pipeline, built by hand.
 ///
-/// Region 0 decodes, detects scenes and uploads. Region 1 runs eight workers on the gpu, where a
-/// denoise feeds a deband and an edge mask and a blend reads all three. Region 2 re-splits scenes,
-/// region 3 encodes on six workers, region 4 muxes, and region 5 scores the output against the
-/// source.
+/// Region 0 decodes, finds scenes for the denoise and the encode, and uploads. Region 1 runs eight
+/// workers on the gpu, where a denoise feeds a deband and an edge mask and a blend reads all three.
+/// Region 2 re-splits scenes, region 3 encodes on six workers, region 4 muxes, and region 5 scores
+/// the output against the source.
 pub(crate) fn example_diagram() -> Diagram {
     let stages = vec![
         example_stage("source", "ffms2/video", StageKind::Source, Residency::Host, 0),
-        example_stage("scenes", "scene/detect", StageKind::Transform, Residency::Host, 0),
+        example_provider(
+            "scenes(source)",
+            0,
+            &[("natural", "denoise"), ("limited ≤10 s", "encode")],
+        ),
         example_crossing("upload(scenes)", Crossing::Upload, 0),
-        example_stage(
+        example_chunking(
             "denoise",
             "nlmeans/temporal",
             StageKind::Filter,
             Residency::Device,
             1,
+            (0, "natural"),
         ),
         example_stage("deband", "f3kdb/deband", StageKind::Filter, Residency::Device, 1),
         example_stage("edges", "mask/sobel", StageKind::Mask, Residency::Device, 1),
         example_stage("merge", "mask/blend", StageKind::Mask, Residency::Device, 1),
         example_crossing("unload(merge)", Crossing::Unload, 1),
         example_stage("chunks", "scene/split", StageKind::Transform, Residency::Host, 2),
-        example_stage(
+        example_chunking(
             "encode",
             "svt-av1/encode",
             StageKind::Transform,
             Residency::Host,
             3,
+            (1, "limited ≤10 s"),
         ),
         example_stage("mux", "matroska/write", StageKind::Sink, Residency::Host, 4),
         example_stage("quality", "vmaf/report", StageKind::Sink, Residency::Host, 5),
     ];
 
     let blocks = vec![
-        example_block(0, &[0, 1, 2], 1, None, None),
-        example_block(1, &[3, 4, 5, 6, 7], 8, Some(Routing::ByChunk), None),
-        example_block(2, &[8], 1, None, Some("granularity")),
-        example_block(3, &[9], 6, Some(Routing::ByChunk), None),
-        example_block(4, &[10], 1, None, Some("granularity")),
-        example_block(5, &[11], 1, None, Some("granularity")),
+        example_block(0, &[0, 1, 2], 1, None, None, None),
+        example_block(
+            1,
+            &[3, 4, 5, 6, 7],
+            8,
+            Some(Routing::ByChunk),
+            None,
+            Some("natural"),
+        ),
+        example_block(2, &[8], 1, None, Some("granularity"), None),
+        example_block(3, &[9], 6, Some(Routing::ByChunk), None, Some("limited ≤10 s")),
+        example_block(4, &[10], 1, None, Some("granularity"), None),
+        example_block(5, &[11], 1, None, Some("granularity"), None),
     ];
 
     let boxes = stages
-        .iter()
+        .into_iter()
         .enumerate()
         .map(|(index, stage)| DiagramBox {
             node: NodeId::new(index),
@@ -349,6 +494,8 @@ pub(crate) fn example_diagram() -> Diagram {
             crossing: stage.crossing,
             width: blocks[stage.block].width,
             reason: None,
+            provider: stage.provider,
+            demands: stage.demands,
         })
         .collect();
 

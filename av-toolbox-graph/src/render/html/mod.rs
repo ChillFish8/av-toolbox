@@ -2,7 +2,18 @@ use av_toolbox_core::StageKind;
 use serde_json::{Value, json};
 
 use super::RenderOptions;
-use super::diagram::{Block, Diagram, DiagramBox, Endpoint, Exchange, ExchangeKind, Link, routing_text};
+use super::diagram::{
+    Block,
+    Diagram,
+    DiagramBox,
+    Endpoint,
+    Exchange,
+    ExchangeKind,
+    Link,
+    ShownDemand,
+    routing_text,
+};
+use crate::ProviderPlacement;
 use crate::graph::CompiledGraph;
 
 const PAGE: &str = include_str!("page.html");
@@ -79,6 +90,8 @@ fn block_json(block: &Block) -> Value {
 fn box_json(entry: &DiagramBox, options: &RenderOptions) -> Value {
     let residency = entry.residency.map(|residency| residency.to_string());
     let crossing = entry.crossing.map(|crossing| crossing.verb());
+    let provider = entry.provider.as_ref().map(provider_json);
+    let demands: Vec<Value> = entry.demands.iter().map(demand_json).collect();
 
     json!({
         "id": endpoint_id(Endpoint::Box(entry.node)),
@@ -91,6 +104,38 @@ fn box_json(entry: &DiagramBox, options: &RenderOptions) -> Value {
         "width": entry.width,
         "reason": entry.reason,
         "lines": entry.lines(options),
+        "provider": provider,
+        "demands": demands,
+    })
+}
+
+fn provider_json(placement: &ProviderPlacement) -> Value {
+    let layers: Vec<Value> = placement
+        .layers
+        .iter()
+        .map(|served| {
+            json!({
+                "layer": served.layer.0,
+                "description": served.description,
+                "demandedBy": served.demanded_by,
+            })
+        })
+        .collect();
+
+    json!({
+        "kind": placement.kind.name(),
+        "layers": layers,
+    })
+}
+
+fn demand_json(demand: &ShownDemand) -> Value {
+    let layer = demand.layer.map(|layer| layer.0);
+
+    json!({
+        "input": demand.input,
+        "description": demand.description,
+        "layer": layer,
+        "chunks": demand.chunks,
     })
 }
 
@@ -266,6 +311,44 @@ mod tests {
         assert_eq!(denoise["kind"], "filter");
         assert_eq!(denoise["width"], 4);
         assert!(denoise["block"].as_str().expect("a block id").starts_with('r'));
+    }
+
+    #[test]
+    fn every_demand_links_to_its_provider_and_layer() {
+        let specs = fixtures::demanding_pipeline();
+        let graph = fixtures::satisfied_planned(&specs);
+        let rendered = render_html(&graph, &RenderOptions::default());
+        let data = embedded(&rendered);
+
+        let boxes = data["boxes"].as_array().expect("boxes");
+        let providers: Vec<&Value> = boxes
+            .iter()
+            .filter(|entry| !entry["provider"].is_null())
+            .collect();
+        let demands: Vec<&Value> = boxes
+            .iter()
+            .flat_map(|entry| entry["demands"].as_array().expect("demands"))
+            .collect();
+
+        assert_eq!(providers.len(), 2);
+        assert_eq!(demands.len(), 3);
+
+        for demand in demands {
+            let serving: Vec<&Value> = providers
+                .iter()
+                .flat_map(|entry| entry["provider"]["layers"].as_array().expect("layers"))
+                .filter(|served| served["layer"] == demand["layer"])
+                .collect();
+
+            assert_eq!(serving.len(), 1, "{demand}");
+
+            let description = demand["description"].as_str().expect("a description");
+            let served = serving[0]["description"].as_str().expect("a description");
+            assert!(
+                description.ends_with(served),
+                "{description} is served as {served}"
+            );
+        }
     }
 
     #[test]
