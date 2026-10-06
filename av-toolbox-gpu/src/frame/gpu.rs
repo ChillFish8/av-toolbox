@@ -61,10 +61,26 @@ impl PlaneBuffer {
         }
     }
 
+    /// Memory that goes straight back to the device when its last holder drops it, crediting
+    /// `budget` back at the same time when there is one.
+    ///
+    /// An upload always writes into a fresh handle, so a buffer filled from the host could never be
+    /// handed out again. Recycling it would only park it where nothing ever reuses it.
+    pub(crate) fn charged(handle: Handle, bytes: usize, budget: Option<Weak<FrameBudget>>) -> Self {
+        Self {
+            handle: Some(handle),
+            bytes,
+            recycle: None,
+            budget,
+            owner: None,
+        }
+    }
+
     /// The device memory this plane occupies.
     ///
     /// Borrow it for a kernel launch. A clone must not outlive the plane. When the last holder
-    /// drops, the memory goes back to the pool and is handed to the next caller wanting that size.
+    /// drops, pooled memory goes back to the pool and is handed to the next caller wanting that
+    /// size, while uploaded memory goes back to the device.
     pub fn handle(&self) -> &Handle {
         self.handle
             .as_ref()

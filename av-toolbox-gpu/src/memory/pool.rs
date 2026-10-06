@@ -446,14 +446,27 @@ impl BufferPool {
         }
 
         let handle = self.inner.allocator.upload(bytes);
-        let budget = if counted { self.budget.clone() } else { None };
-        if let Some(budget) = &budget {
+        let budget = if counted { self.budget.as_ref() } else { None };
+        if let Some(budget) = budget {
             budget.charge(expected);
         }
 
-        let buffer = self.recycle_handle(handle, expected, budget);
+        let credited = budget.map(Arc::downgrade);
+        let buffer = PlaneBuffer::charged(handle, expected, credited);
 
         Ok(Plane::new(buffer, width, height))
+    }
+
+    /// How many buffers are held for reuse.
+    #[cfg(test)]
+    fn parked(&self) -> usize {
+        self.inner
+            .free
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .map(Vec::len)
+            .sum()
     }
 
     /// Releases every buffer being held for reuse.
@@ -882,6 +895,64 @@ mod tests {
             .expect_err("a short host plane should not load");
 
         assert!(error.to_string().contains("needs 4096 bytes"), "{error}");
+    }
+
+    #[test]
+    fn uploaded_planes_are_never_parked_for_reuse() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let pool = pool(allocator);
+        let format = frame_format();
+        let frame_planes = HostPlanes::zeroed(&StreamFormat::Frames(format));
+        let mask_format = chroma_mask_format();
+        let mask_planes = HostPlanes::zeroed(&StreamFormat::Mask(mask_format));
+
+        for index in 0..32 {
+            let frame = pool
+                .load_frame(0, &format, &frame_planes, FrameMeta::at(index))
+                .expect("the planes match the format");
+            let mask = pool
+                .load_mask(0, &mask_format, &mask_planes, FrameMeta::at(index))
+                .expect("the planes match the format");
+
+            drop(frame);
+            drop(mask);
+        }
+
+        assert_eq!(pool.parked(), 0, "uploads were parked on the free lists");
+    }
+
+    #[test]
+    fn an_uploaded_frame_credits_its_budget_back_on_drop() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let budget = FrameBudget::new(1 << 20);
+        let pool = pool(allocator).with_budget(budget.clone());
+        let format = frame_format();
+        let planes = HostPlanes::zeroed(&StreamFormat::Frames(format));
+
+        let frame = pool
+            .load_frame(0, &format, &planes, FrameMeta::at(0))
+            .expect("the planes match the format");
+        assert_eq!(budget.outstanding(), format.total_bytes());
+
+        drop(frame);
+        assert_eq!(budget.outstanding(), 0);
+    }
+
+    #[test]
+    fn an_uploaded_mask_charged_without_waiting_credits_its_budget_back_on_drop() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let budget = FrameBudget::new(1);
+        let pool = pool(allocator).with_charged_budget(budget.clone());
+        let format = chroma_mask_format();
+        let planes = HostPlanes::zeroed(&StreamFormat::Mask(format));
+
+        let mask = pool
+            .load_mask(0, &format, &planes, FrameMeta::at(0))
+            .expect("the planes match the format");
+        assert_eq!(budget.outstanding(), 35 + 12);
+
+        drop(mask);
+        assert_eq!(budget.outstanding(), 0);
     }
 
     #[test]
