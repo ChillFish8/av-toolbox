@@ -213,7 +213,6 @@ fn a_piped_y4m_stream_runs_through_the_engine_on_a_real_device() {
     assert_eq!(report.frames, FRAME_COUNT);
     assert!(!report.cancelled);
     assert_eq!(report.dropped, 0);
-    assert!(report.warnings.is_empty());
 
     let seen = SEEN_INDICES.lock().expect("not poisoned").clone();
     let expected: Vec<u64> = (0..FRAME_COUNT).collect();

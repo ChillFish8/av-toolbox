@@ -136,8 +136,10 @@ pub(crate) struct ProviderNode {
     pub(crate) identifier: String,
     /// The name of the provider's one input.
     pub(crate) input: &'static str,
-    /// The name of the source the provider serves.
-    pub(crate) source: String,
+    /// The node's name, such as `scenes(input)`.
+    pub(crate) name: String,
+    /// The table of the first stage whose demand placed the provider, which its diagnostics point at.
+    pub(crate) span: Span,
     pub(crate) args: Value,
     pub(crate) placement: ProviderPlacement,
 }
@@ -403,7 +405,8 @@ impl CompiledGraph {
 
     /// Appends a crossing reading `producer`'s output, and returns it.
     ///
-    /// The order is not recomputed until [CompiledGraph::finish_edit](crate::CompiledGraph::finish_edit) is called.
+    /// The order is not recomputed until [CompiledGraph::finish_edit](crate::CompiledGraph::finish_edit)
+    /// is called.
     pub(crate) fn push_crossing(&mut self, producer: NodeId, crossing: Crossing) -> NodeId {
         let source = &self.nodes[producer.index()];
         let id = NodeId::new(self.nodes.len());
@@ -435,9 +438,8 @@ impl CompiledGraph {
     /// Appends a provider reading `after`'s output, moves each edge in `moved` onto it, and
     /// returns it.
     ///
-    /// The provider is named after its demand kind and the source it serves, such as
-    /// `scenes(input)`. The order is not recomputed until
-    /// [CompiledGraph::finish_edit](crate::CompiledGraph::finish_edit) is called.
+    /// The order is not recomputed until [CompiledGraph::finish_edit](crate::CompiledGraph::finish_edit)
+    /// is called.
     pub(crate) fn push_provider(
         &mut self,
         after: NodeId,
@@ -446,8 +448,6 @@ impl CompiledGraph {
     ) -> NodeId {
         let id = NodeId::new(self.nodes.len());
         let producer = &self.nodes[after.index()];
-        let name = format!("{}({})", provider.placement.kind.name(), provider.source);
-
         let mut input = Edge::new(None, Some(provider.input), 0, after, producer.span());
         let reads = self.reads_of(after);
         if reads == moved.len() {
@@ -456,16 +456,16 @@ impl CompiledGraph {
 
         let node = Node {
             id,
-            name,
+            name: provider.name,
             kind: StageKind::Provider,
             identifier: provider.identifier,
             args: provider.args,
-            args_span: producer.span(),
+            args_span: provider.span,
             arg_spans: ArgSpans::default(),
             inputs: vec![input],
             consumers: Vec::new(),
             workers: None,
-            span: producer.span(),
+            span: provider.span,
             role: NodeRole::Provider(provider.placement),
             residency: None,
             stream: producer.output_stream(),

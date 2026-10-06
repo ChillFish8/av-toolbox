@@ -74,21 +74,6 @@ fn scene_requests_describe_themselves() {
 }
 
 #[test]
-fn a_request_limited_to_frames_and_seconds_keeps_both_and_no_minimum() {
-    let request = SceneRequest::limited_to(240, 10.0);
-
-    let expected = SceneBreaks::Limited {
-        min_frames: 0,
-        max_frames: Some(240),
-        max_seconds: Some(10.0),
-    };
-    assert_eq!(request.breaks, expected);
-    assert_eq!(request.speed, SceneSpeed::Standard);
-    assert_eq!(request.after, None);
-    assert_eq!(Scenes::describe(&request), "limited ≤240 frames ≤10 s");
-}
-
-#[test]
 fn a_scene_request_reads_from_toml_shaped_json() {
     let value = json!({ "breaks": { "mode": "limited", "max_seconds": 10.0 } });
 
@@ -135,4 +120,37 @@ fn a_demand_of_another_kind_is_refused() {
     let built = crate::provider::ServeScenes::new(&args, &grey8());
 
     assert!(built.is_err());
+}
+
+#[test]
+fn a_malformed_scene_request_is_refused_as_malformed() {
+    let value = json!({ "kind": "scenes", "request": { "breaks": { "mode": "sideways" } } });
+    let demand: AnyDemand = serde_json::from_value(value).expect("deserialises");
+    let args = vec![av_toolbox_core::LayerDemand {
+        layer: LayerId(0),
+        demand,
+    }];
+
+    let Err(error) = crate::provider::ServeScenes::new(&args, &grey8()) else {
+        panic!("a malformed scenes request should be refused");
+    };
+
+    let message = error.to_string();
+    assert!(message.contains("malformed"), "{message}");
+    assert!(message.contains("sideways"), "{message}");
+    assert!(!message.contains("asks for a"), "{message}");
+}
+
+#[test]
+fn a_seconds_limit_that_is_not_finite_is_refused() {
+    for seconds in [f64::INFINITY, f64::NAN] {
+        let request = SceneRequest::limited_to_seconds(seconds);
+
+        let error = request.validate().expect_err("refused").to_string();
+
+        assert!(error.contains("finite"), "{error}");
+    }
+
+    assert!(SceneRequest::limited_to_seconds(10.0).validate().is_ok());
+    assert!(SceneRequest::natural().validate().is_ok());
 }

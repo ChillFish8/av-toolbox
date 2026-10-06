@@ -88,11 +88,15 @@ impl StageDefinition for Ndjson {
 impl MetaSinkDefinition for Ndjson {
     fn accepts_input(
         _capabilities: &Capabilities,
-        _args: &Self::Args,
+        args: &Self::Args,
         _index: usize,
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
+        if let Some(scenes) = &args.scenes {
+            scenes.validate()?;
+        }
+
         accepts(offered)
     }
 
@@ -204,6 +208,7 @@ mod tests {
         MaskFormat,
         MetaValue,
         SampleFormat,
+        default_accelerators,
         testing_context,
     };
     use av_toolbox_providers::{SceneRequest, Scenes};
@@ -386,6 +391,30 @@ mod tests {
         assert_eq!(demands[0].input, "input");
         let request = demands[0].demand.request::<Scenes>();
         assert_eq!(request, Some(SceneRequest::natural()));
+    }
+
+    #[test]
+    fn a_scenes_seconds_limit_that_is_not_finite_is_refused() {
+        let args = NdjsonArgs {
+            fd: None,
+            path: Some(PathBuf::from("out.ndjson")),
+            include: None,
+            exclude: None,
+            scenes: Some(SceneRequest::limited_to_seconds(f64::INFINITY)),
+        };
+        let format = yuv420(4, 2, SampleFormat::U8, None);
+        let offered = StreamFormat::Frames(format);
+        let accelerator = default_accelerators()[0];
+        let capabilities = Capabilities::builder(accelerator)
+            .plane_size(16, 16)
+            .max_units_per_cube(1024)
+            .max_cube_count(65535, 65535, 65535)
+            .build();
+
+        let accepted = Ndjson::accepts_input(&capabilities, &args, 0, offered, &[]);
+
+        let error = accepted.expect_err("refused").to_string();
+        assert!(error.contains("finite"), "{error}");
     }
 
     #[test]

@@ -142,17 +142,52 @@ pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnost
 
         let last = graph.node(*last_id);
         let names: Vec<&str> = host_stages.iter().map(|id| graph.node(*id).name()).collect();
+        let mut message = format!(
+            "frames leave the gpu for {} and are uploaded again afterwards, which costs a transfer each way",
+            names.join(", "),
+        );
+
+        for id in &host_stages {
+            let stage = graph.node(*id);
+            if let Some(implied) = implied_provider(stage) {
+                message.push_str(". ");
+                message.push_str(&implied);
+            }
+        }
 
         diagnostics.push(Diagnostic::warning(
             DiagnosticCode::ResidencyRoundTrip,
             stage_path(last.kind(), last.name()),
             last.span(),
-            format!(
-                "frames leave the gpu for {} and are uploaded again afterwards, which costs a transfer each way",
-                names.join(", "),
-            ),
+            message,
         ));
     }
+}
+
+/// Why a provider runs on the host, naming the stages whose demands placed it.
+fn implied_provider(node: &Node) -> Option<String> {
+    let NodeRole::Provider(placement) = node.role() else {
+        return None;
+    };
+
+    let mut demanders: Vec<String> = Vec::new();
+    for served in &placement.layers {
+        for name in &served.demanded_by {
+            let quoted = format!("`{name}`");
+            if !demanders.contains(&quoted) {
+                demanders.push(quoted);
+            }
+        }
+    }
+
+    let kind = placement.kind.name();
+    let message = format!(
+        "{} was placed for the {kind} that {} demands, and the {kind} provider reads its frames on the host",
+        node.name(),
+        demanders.join(", "),
+    );
+
+    Some(message)
 }
 
 /// Whether each node's output came off the device through an unload, with no upload since.
@@ -463,6 +498,32 @@ pub(crate) mod tests {
 
         assert!(message.contains("first"));
         assert!(message.contains("second"));
+    }
+
+    #[test]
+    fn a_round_trip_through_an_implied_provider_names_the_stage_demanding_it() {
+        let mut wants = stage(StageKind::Filter, "wants", "test/demanding", &["input"]);
+        wants.args = Spanned::unknown(json!({ "host_cuts": true }));
+        let specs = [
+            stage(StageKind::Source, "input", "test/file", &[]),
+            wants,
+            stage(StageKind::Sink, "out", "test/stdout", &["wants"]),
+        ];
+        let registry = testing::registry();
+        let mut graph = build(&registry, &specs).expect("should build").into_graph();
+        crate::satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+        let mut formats = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+        let warnings = place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+
+        let round_trip = warnings
+            .iter()
+            .find(|diagnostic| diagnostic.code() == DiagnosticCode::ResidencyRoundTrip)
+            .expect("a round trip");
+        let message = round_trip.message();
+        assert_eq!(round_trip.severity(), Severity::Warning);
+        assert!(message.contains("`wants`"), "{message}");
+        assert!(message.contains("on the host"), "{message}");
     }
 
     #[test]

@@ -362,7 +362,6 @@ fn a_real_graph_runs_on_a_real_device() {
     assert_eq!(report.frames, FRAME_COUNT);
     assert!(!report.cancelled);
     assert_eq!(report.dropped, 0);
-    assert!(report.warnings.is_empty());
 }
 
 #[test]
@@ -402,7 +401,6 @@ fn a_widened_region_runs_on_a_real_device() {
     assert_eq!(report.frames, FRAME_COUNT);
     assert!(!report.cancelled);
     assert_eq!(report.dropped, 0);
-    assert!(report.warnings.is_empty());
 
     let mut seen = SEEN_INDICES.lock().expect("not poisoned").clone();
     seen.sort_unstable();

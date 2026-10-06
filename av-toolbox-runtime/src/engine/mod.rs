@@ -59,7 +59,7 @@ pub(crate) use self::worker::run_worker;
 use self::wrap::{SinkTally, wrap_head_source, wrap_sinks};
 use crate::profile::Profiler;
 use crate::worker::RegionRunner;
-use crate::{Aggregate, Cancel, Disperse, NodeTiming, Profiling, RunError, RunWarning};
+use crate::{Aggregate, Cancel, Disperse, NodeTiming, Profiling, RunError};
 
 /// What one run of an [Engine] is allowed to keep in flight.
 #[derive(Debug, Clone, Default)]
@@ -94,8 +94,6 @@ pub struct RunReport {
     /// two of them. A run that was not cancelled never reports any, since losing items without
     /// being asked to stop fails the run instead.
     pub dropped: usize,
-    /// Things the run noticed that did not stop it.
-    pub warnings: Vec<RunWarning>,
     /// How long the run took from start to finish.
     pub wall: Duration,
     /// How long the run took after [Settings::warmup] items had reached the sinks.
@@ -115,7 +113,6 @@ pub struct Engine {
     prepared: Vec<PreparedRegion>,
     tally: Arc<SinkTally>,
     dropped: Arc<AtomicUsize>,
-    warnings: Arc<Mutex<Vec<RunWarning>>>,
     cancel: Arc<Cancel>,
     profiler: Option<Arc<Profiler>>,
 }
@@ -190,7 +187,6 @@ impl Engine {
         let mut diagnostics = Diagnostics::new();
         let tally = Arc::new(SinkTally::new(settings.warmup));
         let dropped = Arc::new(AtomicUsize::new(0));
-        let warnings = Arc::new(Mutex::new(Vec::new()));
         let cancel = Arc::new(Cancel::new());
         let profiler = settings.profiling.clone().map(Profiler::new).map(Arc::new);
 
@@ -279,7 +275,9 @@ impl Engine {
                     let context = make_context().with_budget(budget.clone());
                     let exhausted = Arc::new(AtomicBool::new(false));
                     let nodes = wrap_head_source(nodes, exhausted.clone(), settings.frame_limit);
-                    let runner = RegionRunner::new(nodes, build_region_edges(graph, region))
+                    let edges = build_region_edges(graph, region);
+                    let runner = RegionRunner::new(nodes, edges)
+                        .routed_on(region.layer())
                         .profiled(profiler.clone());
 
                     prepared.push(PreparedRegion::Source(SourceRegion {
@@ -291,7 +289,9 @@ impl Engine {
                     }));
                 } else {
                     let context = make_context();
-                    let runner = RegionRunner::new(nodes, build_region_edges(graph, region))
+                    let edges = build_region_edges(graph, region);
+                    let runner = RegionRunner::new(nodes, edges)
+                        .routed_on(region.layer())
                         .profiled(profiler.clone());
                     let upstream = inbound
                         .remove(&region.id())
@@ -368,8 +368,10 @@ impl Engine {
                     "a region's stages must list its head first"
                 );
                 let nodes = wrap_sinks(nodes, tally.clone());
-                let runner =
-                    RegionRunner::new(nodes, build_region_edges(graph, region)).profiled(profiler.clone());
+                let edges = build_region_edges(graph, region);
+                let runner = RegionRunner::new(nodes, edges)
+                    .routed_on(region.layer())
+                    .profiled(profiler.clone());
                 let context = make_context();
                 let (result_sender, result_receiver) = mpsc::sync_channel(capacity);
 
@@ -408,7 +410,6 @@ impl Engine {
             prepared,
             tally,
             dropped,
-            warnings,
             cancel,
             profiler,
         })
@@ -440,7 +441,6 @@ impl Engine {
             prepared,
             tally,
             dropped,
-            warnings,
             cancel,
             profiler,
         } = self;
@@ -487,8 +487,6 @@ impl Engine {
             return Err(RunError::DroppedItems { dropped });
         }
 
-        let warnings = warnings.lock().expect("not poisoned").clone();
-
         let wall = ended.duration_since(started);
         let counted_wall = tally.counted_wall(started, ended);
 
@@ -501,7 +499,6 @@ impl Engine {
             frames: tally.frames(),
             cancelled,
             dropped,
-            warnings,
             wall,
             counted_wall,
             timings,

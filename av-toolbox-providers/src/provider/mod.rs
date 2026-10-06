@@ -13,6 +13,7 @@ use av_toolbox_core::{
     Placement,
     Provider,
     ProviderDefinition,
+    RequestError,
     StageDefinition,
     StageError,
     StageInstance,
@@ -108,6 +109,7 @@ impl ProviderDefinition for SceneProvider {
 
     fn check(args: &Self::Args, input: &FrameFormat) -> Result<(), StageError> {
         for (_, request) in requests(args)? {
+            request.validate()?;
             LayerBreaks::new(&request.breaks, input.frame_rate)?;
         }
 
@@ -203,8 +205,8 @@ impl Provider<HostSide> for ServeScenes {
 fn requests(args: &[LayerDemand]) -> Result<Vec<(LayerId, SceneRequest)>, StageError> {
     let mut requests = Vec::with_capacity(args.len());
     for served in args {
-        let request = served.demand.request::<Scenes>();
-        let request = request.ok_or_else(|| not_a_scene_demand(served))?;
+        let request = served.demand.try_request::<Scenes>();
+        let request = request.map_err(|error| unreadable_request(served, error))?;
         requests.push((served.layer, request));
     }
 
@@ -227,13 +229,17 @@ fn limit_for(request: &SceneRequest, frame_rate: Option<FrameRate>) -> Option<us
     limit_of(max_frames, max_seconds, frame_rate).ok().flatten()
 }
 
-fn not_a_scene_demand(served: &LayerDemand) -> StageError {
-    let kind = served.demand.kind();
-    let message = format!(
-        "the scene provider serves scenes demands, but layer {} asks for a {} demand",
-        served.layer.0,
-        kind.name(),
-    );
+fn unreadable_request(served: &LayerDemand, error: RequestError) -> StageError {
+    let message = match error {
+        RequestError::OtherKind { found, .. } => format!(
+            "the scene provider serves scenes demands, but layer {} asks for a {} demand",
+            served.layer.0,
+            found.name(),
+        ),
+        RequestError::Malformed { source, .. } => {
+            format!("layer {}'s scenes request is malformed: {source}", served.layer.0)
+        },
+    };
 
     StageError::msg(message)
 }

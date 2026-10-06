@@ -95,6 +95,7 @@ pub struct RegionRunner {
     positions: HashMap<NodeId, usize>,
     queues: Vec<Vec<VecDeque<AnyItem>>>,
     last_chunks: Vec<Option<u64>>,
+    layer: Option<LayerId>,
     profiler: Option<Arc<Profiler>>,
 }
 
@@ -119,14 +120,20 @@ impl RegionRunner {
             positions,
             queues,
             last_chunks,
+            layer: None,
             profiler: None,
         }
     }
 
-    /// The scene layer the region routes its chunks on, which is its head's.
+    /// The scene layer the region was planned to route its chunks on.
     pub(crate) fn layer(&self) -> Option<LayerId> {
-        let head = self.nodes[0].0;
-        self.edges.layers.get(&head).copied()
+        self.layer
+    }
+
+    /// The same runner, routing its chunks on `layer`.
+    pub(crate) fn routed_on(mut self, layer: Option<LayerId>) -> Self {
+        self.layer = layer;
+        self
     }
 
     /// The same runner, timing every stage call through `profiler` when there is one.
@@ -348,7 +355,8 @@ fn is_filter(stage: &StageBox) -> bool {
     matches!(stage, StageBox::Filter(_) | StageBox::HostFilter(_))
 }
 
-/// The chunk a bundle belongs to in `layer`, read from the slot `authority` names or else its lowest filled slot.
+/// The chunk a bundle belongs to in `layer`, read from the slot `authority` names or else its lowest
+/// filled slot.
 fn chunk_of(slots: &[Option<AnyItem>], authority: Option<usize>, layer: Option<LayerId>) -> Option<u64> {
     let authoritative = authority
         .and_then(|slot| slots.get(slot))

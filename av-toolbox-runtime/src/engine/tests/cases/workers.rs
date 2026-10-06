@@ -75,8 +75,10 @@ fn one_node_worker(
     let layers = HashMap::from([(head, LayerId(0))]);
     let edges = RegionEdges::new(vec![], vec![head]).with_layers(layers);
 
+    let runner = RegionRunner::new(nodes, edges).routed_on(Some(LayerId(0)));
+
     WorkerSlot {
-        runner: RegionRunner::new(nodes, edges),
+        runner,
         context: testing_context(),
         work_receiver,
         result_sender,

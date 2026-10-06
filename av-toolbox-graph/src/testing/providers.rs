@@ -1,3 +1,4 @@
+use av_toolbox_core::testing::HostFixtureCuts;
 use av_toolbox_core::{
     AnyDemand,
     BoundInputs,
@@ -163,12 +164,19 @@ pub(crate) struct DemandingArgs {
     /// Whether the stage demands [Unprovided] instead.
     #[serde(default)]
     unprovided: bool,
+    /// Whether the stage demands [HostFixtureCuts] instead, which a host provider serves.
+    #[serde(default)]
+    host_cuts: bool,
 }
 
 impl DemandingArgs {
     fn demand(&self) -> AnyDemand {
         if self.unprovided {
             return AnyDemand::new::<Unprovided>(());
+        }
+
+        if self.host_cuts {
+            return AnyDemand::new::<HostFixtureCuts>(());
         }
 
         let request = BreaksRequest {

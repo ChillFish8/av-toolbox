@@ -201,7 +201,10 @@ impl ExecutionPlan {
 /// Once every width is settled, nodes are grouped into regions in the same topological order. A
 /// node joins its producer's region when every input comes from that one region and the width
 /// matches, and heads a region of its own otherwise. A node with a scene layer also needs the
-/// region to route on that layer, or on none yet. A crossing only joins when it is its producer's only consumer.
+/// region to route on that layer, or on none yet. A crossing only joins when it is its producer's
+/// only consumer.
+///
+/// A provider always runs alone in a region of its own, so its detection runs on its own thread.
 ///
 /// A region may have at most one exit. When one has more, a node at its branch is sealed, so
 /// nothing reading it may join its region, and the regions are placed again.
@@ -209,12 +212,18 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
 
+    let sealed = graph
+        .nodes()
+        .iter()
+        .map(|node| matches!(node.role(), NodeRole::Provider(_)))
+        .collect();
+
     let mut planner = Planner {
         graph,
         prepared,
         nodes: (0..graph.len()).map(|_| None).collect(),
         regions: Vec::new(),
-        sealed: vec![false; graph.len()],
+        sealed,
         diagnostics,
     };
 
@@ -353,6 +362,11 @@ impl Planner<'_> {
         let width = self.width_of(id);
         let node = self.graph.node(id);
         let sources: Vec<NodeId> = node.inputs().iter().map(|edge| edge.source()).collect();
+
+        if matches!(node.role(), NodeRole::Provider(_)) {
+            self.open_region(id, width);
+            return;
+        }
 
         if matches!(node.role(), NodeRole::Crossing(_)) && !self.is_only_consumer(id, &sources) {
             self.open_region(id, width);

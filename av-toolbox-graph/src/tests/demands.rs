@@ -12,6 +12,7 @@ use crate::{
     NodeDemand,
     ProviderPlacement,
     ServedLayer,
+    Span,
     Spanned,
     StageSpec,
     build,
@@ -316,22 +317,14 @@ fn two_sources_each_get_a_provider() {
 
 #[test]
 fn a_demand_follows_the_chunk_authority_through_a_join() {
-    let mut edges = testing::spec(StageKind::Mask, "edges", "test/merge");
-    edges.inputs = vec![testing::positional("clip"), testing::positional("other")];
-
-    let mut blend = testing::spec(StageKind::Filter, "blend", "test/blend");
-    blend.inputs = vec![
-        testing::named("base", "clip"),
-        testing::named("overlay", "other"),
-        testing::named("mask", "edges"),
-    ];
+    let mut join = testing::spec(StageKind::Filter, "join", "test/host-join");
+    join.inputs = vec![testing::named("input", "other"), testing::named("guide", "clip")];
 
     let specs = [
         source("clip"),
         source("other"),
-        edges,
-        blend,
-        chunked("denoise", "blend"),
+        join,
+        chunked("denoise", "join"),
         sink("out", "denoise"),
     ];
 
@@ -341,10 +334,8 @@ fn a_demand_follows_the_chunk_authority_through_a_join() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].name(), "fixture-cuts(clip)");
     assert_eq!(reads(&graph, "fixture-cuts(clip)", 0), "clip");
-    assert_eq!(reads(&graph, "blend", 0), "fixture-cuts(clip)");
-    assert_eq!(reads(&graph, "blend", 1), "other");
-    assert_eq!(reads(&graph, "edges", 0), "fixture-cuts(clip)");
-    assert_eq!(reads(&graph, "edges", 1), "other");
+    assert_eq!(reads(&graph, "join", 0), "other");
+    assert_eq!(reads(&graph, "join", 1), "fixture-cuts(clip)");
     assert_eq!(named(&graph, "denoise").layer(), Some(LayerId(0)));
 }
 
@@ -440,11 +431,30 @@ fn an_after_off_the_demands_path_is_refused() {
 
     let diagnostics = refused(&specs);
 
-    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::UnknownAfter]);
+    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::AfterOffPath]);
     assert_eq!(diagnostics[0].path(), "filter.wants");
     assert!(diagnostics[0].message().contains("`wants`"), "{diagnostics:?}");
     assert!(
         diagnostics[0].message().contains("`elsewhere`"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn an_after_naming_no_stage_is_reported_as_unknown() {
+    let specs = [
+        source("input"),
+        chunked("denoise", "input"),
+        demanding("wants", "denoise", json!({ "every": 4, "after": "missing" })),
+        sink("out", "wants"),
+    ];
+
+    let diagnostics = refused(&specs);
+
+    assert_eq!(codes(&diagnostics), vec![DiagnosticCode::UnknownAfter]);
+    assert_eq!(diagnostics[0].path(), "filter.wants");
+    assert!(
+        diagnostics[0].message().contains("no stage named `missing`"),
         "{diagnostics:?}"
     );
 }
@@ -498,4 +508,35 @@ fn a_provider_refusal_names_the_stage_that_demanded_it() {
         .unwrap_or_else(|| panic!("no diagnostic names the provider: {diagnostics:?}"));
     let notes: Vec<&str> = refusal.notes().iter().map(|note| note.message.as_str()).collect();
     assert!(notes.iter().any(|note| note.contains("`eager`")), "{notes:?}");
+}
+
+#[test]
+fn a_provider_refusal_points_at_the_demanding_stage_and_notes_its_source() {
+    let mut input = source("input");
+    input.span = Span::new(0, 10);
+    let mut eager = demanding("eager", "input", json!({ "every": 0 }));
+    eager.span = Span::new(20, 30);
+
+    let specs = [input, eager, sink("out", "eager")];
+    let registry = testing::registry();
+    let capabilities = residency::tests::capabilities();
+    let graph = satisfied(&specs);
+
+    let Err(diagnostics) = solve(&graph, &registry, &capabilities) else {
+        panic!("a break every 0 frames should be refused");
+    };
+    let diagnostics: Vec<Diagnostic> = Diagnostics::into_inner(diagnostics);
+
+    let refusal = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.path() == "provider.fixture-breaks(input)")
+        .unwrap_or_else(|| panic!("no diagnostic names the provider: {diagnostics:?}"));
+    assert_eq!(refusal.span(), Span::new(20, 30));
+
+    let source_note = refusal
+        .notes()
+        .iter()
+        .find(|note| note.span == Span::new(0, 10))
+        .unwrap_or_else(|| panic!("no note points at the source: {refusal:?}"));
+    assert!(source_note.message.contains("`input`"), "{refusal:?}");
 }

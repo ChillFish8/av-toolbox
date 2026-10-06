@@ -13,6 +13,7 @@ use crate::{
     build,
     place_transfers,
     residency,
+    satisfy_demands,
     solve,
     testing,
 };
@@ -263,6 +264,30 @@ fn a_layered_node_joins_a_region_with_no_layer_and_routes_it() {
     let region = plan.node(denoise_id).region();
     assert_eq!(plan.node(input_id).region(), region);
     assert_eq!(plan.region(region).layer(), Some(LayerId(0)));
+}
+
+#[test]
+fn a_provider_runs_in_its_own_region() {
+    let specs = [
+        source("input"),
+        temporal("denoise", "input", 1),
+        temporal("sharpen", "denoise", 0),
+        sink("out", "sharpen"),
+    ];
+    let registry = testing::registry();
+    let mut graph = build(&registry, &specs).expect("should build").into_graph();
+    satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+
+    let plan = plan(&graph, &registry).expect("should plan");
+
+    let input_id = node_named(&graph, "input");
+    let provider_id = node_named(&graph, "fixture-cuts(input)");
+    let denoise_id = node_named(&graph, "denoise");
+    let provider_region = plan.node(provider_id).region();
+    assert_ne!(plan.node(input_id).region(), provider_region);
+    assert_ne!(plan.node(denoise_id).region(), provider_region);
+    assert_eq!(plan.region(provider_region).nodes(), &[provider_id]);
+    assert_eq!(plan.region(provider_region).head(), provider_id);
 }
 
 #[test]

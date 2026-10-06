@@ -181,7 +181,8 @@ pub(crate) fn limit_of(
 
 fn no_frame_rate(seconds: f64) -> StageError {
     let message = format!(
-        "a stage asks for scenes of at most {seconds} seconds, but the stream has no frame rate. Give `max_frames` too."
+        "a stage asks for scenes of at most {seconds} seconds, but the stream has no frame rate. \
+         Give `max_frames` too."
     );
 
     StageError::msg(message)

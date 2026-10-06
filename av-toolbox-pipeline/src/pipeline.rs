@@ -213,7 +213,7 @@ fn live_sources<'a>(graph: &'a CompiledGraph, registry: &PipelineRegistry) -> Ve
 mod tests {
     use std::path::Path;
 
-    use av_toolbox_graph::{DiagnosticCode, NodeId};
+    use av_toolbox_graph::{DiagnosticCode, Node, NodeId};
 
     use super::*;
     use crate::testing::MemoryFiles;
@@ -315,6 +315,77 @@ inputs = ["deinterlace"]
         assert_eq!(deinterlace.inputs()[0].source(), provider.id());
         assert!(deinterlace.layer().is_some());
         assert!(pipeline.stage_of(provider.id()).is_none());
+    }
+
+    #[test]
+    fn an_after_moves_only_the_demands_naming_it() {
+        let registry = crate::registry().expect("the built-in stages register");
+        let text = r#"
+[source.input]
+type = "y4m/stdin"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["denoise"]
+
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["denoise"]
+args.path = "scenes.ndjson"
+args.scenes = { breaks = { mode = "natural" }, after = "denoise" }
+"#;
+        let specs = specs(text);
+
+        let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+        let graph = pipeline.graph();
+        let name_of = |id: NodeId| graph.node(id).name().to_string();
+        let node_named = |name: &str| {
+            graph
+                .nodes()
+                .iter()
+                .find(|node| node.name() == name)
+                .unwrap_or_else(|| panic!("the graph has no node named {name}"))
+        };
+
+        let providers: Vec<&Node> = graph
+            .nodes()
+            .iter()
+            .filter(|node| matches!(node.role(), NodeRole::Provider(_)))
+            .collect();
+        assert_eq!(providers.len(), 2);
+
+        let denoise = node_named("denoise");
+        let log = node_named("log");
+        let output = node_named("output");
+        let before = graph.node(denoise.inputs()[0].source());
+        let after = graph.node(log.inputs()[0].source());
+
+        assert_eq!(name_of(before.inputs()[0].source()), "input");
+        assert_eq!(name_of(after.inputs()[0].source()), "denoise");
+        assert_eq!(name_of(output.inputs()[0].source()), "denoise");
+
+        let NodeRole::Provider(before_placement) = before.role() else {
+            panic!("{} is not a provider", before.name());
+        };
+        let NodeRole::Provider(after_placement) = after.role() else {
+            panic!("{} is not a provider", after.name());
+        };
+        let before_demanders: Vec<&[String]> = before_placement
+            .layers
+            .iter()
+            .map(|served| served.demanded_by.as_slice())
+            .collect();
+        let after_demanders: Vec<&[String]> = after_placement
+            .layers
+            .iter()
+            .map(|served| served.demanded_by.as_slice())
+            .collect();
+        assert_eq!(before_demanders, [["denoise".to_string()]]);
+        assert_eq!(after_demanders, [["log".to_string()]]);
     }
 
     #[test]

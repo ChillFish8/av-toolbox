@@ -27,7 +27,7 @@ pub(crate) struct Block {
     pub(crate) granularity: Option<Granularity>,
     pub(crate) routing: Option<Routing>,
     pub(crate) reason: Option<&'static str>,
-    /// The layer the block routes its chunks on, named by its kind and description.
+    /// The layer the block routes its chunks on, named by its kind and description, when it routes.
     pub(crate) layer: Option<String>,
 }
 
@@ -382,7 +382,12 @@ fn block_of(graph: &CompiledGraph, plan: &ExecutionPlan, region: &Region) -> Blo
         1 => None,
         _ => Some(region.routing()),
     };
-    let layer = region.layer().and_then(|layer| layer_text(graph, layer));
+    // A region one worker wide with no disperse never routes, so its layer goes unnamed.
+    let routes = region.width() > 1 || region.has_disperse();
+    let layer = region
+        .layer()
+        .filter(|_| routes)
+        .and_then(|layer| layer_text(graph, layer));
 
     Block {
         id: region.id().index(),
@@ -959,6 +964,19 @@ mod tests {
         );
         assert_eq!(block.layer.as_deref(), Some("fixture-cuts: fixture-cuts"));
         assert_eq!(block.heading(), expected);
+    }
+
+    #[test]
+    fn a_one_worker_region_with_no_disperse_names_no_layer() {
+        let specs = fixtures::wide_pipeline(1);
+        let graph = fixtures::satisfied_planned(&specs);
+        let diagram = Diagram::of(&graph);
+        let denoise = box_named(&diagram, "denoise");
+        let block = &diagram.blocks[denoise.block];
+
+        assert_eq!(block.layer, None);
+        assert_eq!(block.heading(), format!("region {} · chunk", denoise.block));
+        assert_eq!(block.detail(), None);
     }
 
     #[test]

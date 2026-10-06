@@ -208,7 +208,11 @@ fn unknown_table(key: &TomlSpanned<Cow<'_, str>>, file: FileId) -> Diagnostic {
 
     if name == "transform" {
         let message = "transforms were removed, stages now request scene breaks themselves";
-        return Diagnostic::error(DiagnosticCode::RemovedTransforms, "transform", span, message);
+        let note = "scene breaks are now requested by stages, and scenes can be logged with \
+                    `metadata/ndjson` `args.scenes`";
+        let diagnostic = Diagnostic::error(DiagnosticCode::RemovedTransforms, "transform", span, message);
+
+        return diagnostic.with_note(note, span);
     }
 
     let allowed = "use source, filter, mask, sink, variable, call, input or output";

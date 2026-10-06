@@ -15,7 +15,14 @@ use crate::engine::tests::harness::{
     run_result_with_watchdog,
     run_with_watchdog,
 };
-use crate::engine::tests::specs::{allocating_spec, filter_spec, masking_spec, sink_spec, source_spec};
+use crate::engine::tests::specs::{
+    allocating_spec,
+    delay_spec,
+    filter_spec,
+    masking_spec,
+    sink_spec,
+    source_spec,
+};
 use crate::engine::tests::support::{format, mask_format};
 use crate::{RunError, Settings};
 
@@ -142,6 +149,27 @@ fn a_source_share_makes_room_for_held_frames() {
     let with = default_source_share(&graph, &solved, regions, &some_held);
 
     assert_eq!(with - without, 20 * format().total_bytes());
+}
+
+#[test]
+fn a_source_share_counts_a_providers_held_frames() {
+    let specs = vec![
+        source_spec("input", &[0, 0], 0),
+        delay_spec("delay", "input", &[0], 1, false),
+        sink_spec("out", "delay"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+    let plan = graph.execution_plan().expect("a planned graph");
+    let regions = plan.regions();
+    let none_held = vec![0; graph.len()];
+    let mut some_held = none_held.clone();
+    let provider = node_id(&graph, "fixture-cuts(input)");
+    some_held[provider.index()] = 12;
+
+    let without = default_source_share(&graph, &solved, regions, &none_held);
+    let with = default_source_share(&graph, &solved, regions, &some_held);
+
+    assert_eq!(with - without, 12 * format().total_bytes());
 }
 
 #[test]

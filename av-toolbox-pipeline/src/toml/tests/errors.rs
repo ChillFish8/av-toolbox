@@ -32,6 +32,23 @@ fn an_unknown_top_level_table_is_refused() {
 }
 
 #[test]
+fn a_removed_transform_notes_how_to_log_scenes() {
+    let text = "[transform.x]\ntype = \"scene/detect\"\n";
+
+    let diagnostics = reported(text);
+
+    let notes: Vec<&str> = diagnostics[0]
+        .notes()
+        .iter()
+        .map(|note| note.message.as_str())
+        .collect();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("requested by stages"), "{notes:?}");
+    assert!(notes[0].contains("`metadata/ndjson`"), "{notes:?}");
+    assert!(notes[0].contains("`args.scenes`"), "{notes:?}");
+}
+
+#[test]
 fn a_transform_table_is_refused_as_removed() {
     let text = "[transform.x]\ntype = \"scene/detect\"\n";
 

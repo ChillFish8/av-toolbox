@@ -14,7 +14,7 @@ use av_toolbox_gpu::{
     Subsampling,
     default_accelerators,
 };
-use av_toolbox_providers::{SceneBreaks, SceneRequest, Scenes};
+use av_toolbox_providers::{SceneRequest, Scenes};
 use serde_json::json;
 
 use crate::deinterlace::spatial::Spatial;
@@ -331,19 +331,6 @@ fn it_holds_two_frames_and_runs_by_chunk() {
     let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
 
     assert_eq!(Match::held_frames(&parsed, &formats), 2);
-    let scenes = AnyDemand::new::<Scenes>(ten_seconds_or_240_frames());
+    let scenes = AnyDemand::new::<Scenes>(SceneRequest::natural());
     assert_eq!(Match::parallelism(&parsed), Parallelism::Chunk(scenes));
-}
-
-fn ten_seconds_or_240_frames() -> SceneRequest {
-    let breaks = SceneBreaks::Limited {
-        min_frames: 0,
-        max_frames: Some(240),
-        max_seconds: Some(10.0),
-    };
-
-    SceneRequest {
-        breaks,
-        ..SceneRequest::natural()
-    }
 }

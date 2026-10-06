@@ -59,19 +59,24 @@ struct Traced {
 }
 
 /// Every traced demand of one kind reaching one source, which one provider serves.
+///
+/// Demands naming a stage to go after form a group of their own.
 struct Group {
     source: NodeId,
     kind: DemandKind,
+    after: Option<String>,
     /// Indices into the traced demands, in the graph's order.
     members: Vec<usize>,
 }
 
-/// Inserts a provider for every source some stage demands something of, and gives each demanding node its layer.
+/// Inserts a provider for every source some stage demands something of, and gives each demanding
+/// node its layer.
 ///
 /// Each demand is traced upstream to its source, following a node's chunk authority where it has
-/// several inputs. Demands are grouped by source and kind, every distinct demand becomes one
-/// layer, and one provider per group is placed where its registration asks. A demanding node
-/// records its demands, and routes on the layer of its chunk request.
+/// several inputs. Demands are grouped by source, kind and the stage they ask to go after. Every
+/// distinct demand becomes one layer, and one provider per group is placed where its registration
+/// or `after` asks. A demanding node records its demands, and routes on the layer of its chunk
+/// request.
 pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Result<(), Diagnostics> {
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
@@ -95,19 +100,24 @@ pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -
     record_demands(graph, registry, &traced);
 
     for group in &groups {
-        place_provider(graph, registry, &prepared, &traced, group);
+        place_provider(graph, registry, &prepared, &traced, &groups, group);
     }
 
     Ok(())
 }
 
-/// Adds a note to `diagnostic` naming every stage whose demand placed `node`, when it is a provider.
+/// Adds notes to `diagnostic` naming what `node` reads and every stage whose demand placed it, when
+/// it is a provider.
 pub(crate) fn note_demanders(graph: &CompiledGraph, node: &Node, diagnostic: Diagnostic) -> Diagnostic {
     let NodeRole::Provider(placement) = node.role() else {
         return diagnostic;
     };
 
-    let mut noted = diagnostic;
+    let producer_id = node.inputs()[0].source();
+    let producer = graph.node(producer_id);
+    let message = format!("`{}` reads the frames of `{}`", node.name(), producer.name());
+    let mut noted = diagnostic.with_note(message, producer.span());
+
     for served in &placement.layers {
         for name in &served.demanded_by {
             let span = graph
@@ -290,21 +300,24 @@ fn source_of(graph: &CompiledGraph, edge: EdgeId) -> NodeId {
     graph.node(edge.node()).inputs()[edge.index()].source()
 }
 
-/// Groups traced demands by the source they reach and their kind, in the order first seen.
+/// Groups traced demands by the source they reach, their kind and their `after`, in the order
+/// first seen.
 fn group_by_source(traced: &[Traced]) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
 
     for (index, each) in traced.iter().enumerate() {
         let kind = each.asked.demand.demand.kind();
-        let existing = groups
-            .iter_mut()
-            .find(|group| group.source == each.source && group.kind == kind);
+        let after = after_of(each);
+        let existing = groups.iter_mut().find(|group| {
+            group.source == each.source && group.kind == kind && group.after.as_deref() == after
+        });
 
         match existing {
             Some(group) => group.members.push(index),
             None => groups.push(Group {
                 source: each.source,
                 kind,
+                after: after.map(str::to_string),
                 members: vec![index],
             }),
         }
@@ -313,59 +326,89 @@ fn group_by_source(traced: &[Traced]) -> Vec<Group> {
     groups
 }
 
-/// Refuses groups whose demands name different stages to go after, or one off a demand's path.
+/// Refuses an `after` naming no stage, one off its demand's path, and two demands on one
+/// source naming different stages.
 fn check_placements(
     graph: &CompiledGraph,
     traced: &[Traced],
     groups: &[Group],
     diagnostics: &mut Diagnostics,
 ) {
-    for group in groups {
-        let Some(first) = group
-            .members
-            .iter()
-            .find(|member| after_of(&traced[**member]).is_some())
-        else {
+    for (index, group) in groups.iter().enumerate() {
+        let Some(after) = group.after.as_deref() else {
             continue;
         };
 
-        let first = &traced[*first];
-        let after = after_of(first).expect("the first member names a stage");
-        let first_name = graph.node(first.asked.node).name();
+        let earlier = groups[..index]
+            .iter()
+            .find(|other| other.after.is_some() && other.source == group.source && other.kind == group.kind);
+        if let Some(earlier) = earlier {
+            report_conflict(graph, traced, earlier, group, diagnostics);
+            continue;
+        }
 
+        let exists = graph.nodes().iter().any(|node| node.name() == after);
         for member in &group.members {
             let each = &traced[*member];
             let node = graph.node(each.asked.node);
-            let kind = group.kind.name();
 
-            if let Some(other) = after_of(each)
-                && other != after
-            {
+            if !exists {
                 let message = format!(
-                    "`{}` asks for {kind} after `{other}`, but `{first_name}` asks for them after \
-                     `{after}`, and one provider serves both",
+                    "`{}` asks for {} after `{after}`, but there is no stage named `{after}`",
                     node.name(),
+                    group.kind.name(),
                 );
-                diagnostics.push(error_at(node, DiagnosticCode::ConflictingPlacement, message));
+                diagnostics.push(error_at(node, DiagnosticCode::UnknownAfter, message));
                 continue;
             }
 
-            let passes = each
-                .path
-                .iter()
-                .any(|edge| graph.node(source_of(graph, *edge)).name() == after);
-            if passes {
+            if passes_through(graph, each, after) {
                 continue;
             }
 
             let message = format!(
-                "`{}` needs {kind} from after `{after}`, which its `{}` input does not pass through",
+                "`{}` needs {} from after `{after}`, which its `{}` input does not pass through",
                 node.name(),
+                group.kind.name(),
                 each.asked.demand.input,
             );
-            diagnostics.push(error_at(node, DiagnosticCode::UnknownAfter, message));
+            diagnostics.push(error_at(node, DiagnosticCode::AfterOffPath, message));
         }
     }
+}
+
+/// Reports every demand of `group`, whose `after` differs from the one `earlier` named on the
+/// same source.
+fn report_conflict(
+    graph: &CompiledGraph,
+    traced: &[Traced],
+    earlier: &Group,
+    group: &Group,
+    diagnostics: &mut Diagnostics,
+) {
+    let first = graph.node(traced[earlier.members[0]].asked.node);
+    let first_after = earlier.after.as_deref().unwrap_or_default();
+    let after = group.after.as_deref().unwrap_or_default();
+    let kind = group.kind.name();
+
+    for member in &group.members {
+        let node = graph.node(traced[*member].asked.node);
+        let message = format!(
+            "`{}` asks for {kind} after `{after}`, but `{}` asks for them after `{first_after}`, \
+             and a source's {kind} can only be moved after one stage",
+            node.name(),
+            first.name(),
+        );
+        diagnostics.push(error_at(node, DiagnosticCode::ConflictingPlacement, message));
+    }
+}
+
+/// Whether a demand's path from its source leaves the stage named `after`.
+fn passes_through(graph: &CompiledGraph, traced: &Traced, after: &str) -> bool {
+    traced.path.iter().any(|edge| {
+        let source = source_of(graph, *edge);
+        graph.node(source).name() == after
+    })
 }
 
 /// The stage a demand asks its provider to go after, read from its request's `after` field.
@@ -412,6 +455,7 @@ fn place_provider(
     registry: &PipelineRegistry,
     prepared: &[Option<PreparedStage>],
     traced: &[Traced],
+    groups: &[Group],
     group: &Group,
 ) {
     let (identifier, placement) = registry
@@ -426,8 +470,7 @@ fn place_provider(
         paths.push(path);
     }
 
-    let after = group.members.iter().find_map(|member| after_of(&traced[*member]));
-    let (producer, moved) = match (after, placement) {
+    let (producer, moved) = match (group.after.as_deref(), placement) {
         (Some(name), _) => after_named(graph, &paths, name),
         (None, Placement::AfterSource) => after_source(graph, group.source),
         (None, Placement::Shared) => before_common_node(graph, &paths, group.source),
@@ -443,10 +486,14 @@ fn place_provider(
         .collect();
     let args = serde_json::to_value(demands).expect("layer demands serialise");
 
+    let first_demander = traced[group.members[0]].asked.node;
+    let span = graph.node(first_demander).span();
+
     let provider = ProviderNode {
         identifier: identifier.to_string(),
         input: provider_input(registry, identifier),
-        source: graph.node(group.source).name().to_string(),
+        name: provider_name(graph, groups, group),
+        span,
         args,
         placement: ProviderPlacement {
             kind: group.kind,
@@ -456,6 +503,28 @@ fn place_provider(
 
     graph.push_provider(producer, provider, &moved);
     graph.finish_edit();
+}
+
+/// The provider's name, such as `scenes(input)`.
+///
+/// A provider placed by an `after` while another serves the same source and kind is named
+/// `scenes(input after denoise)`, so the two stay apart.
+fn provider_name(graph: &CompiledGraph, groups: &[Group], group: &Group) -> String {
+    let kind = group.kind.name();
+    let source = graph.node(group.source).name();
+
+    let Some(after) = group.after.as_deref() else {
+        return format!("{kind}({source})");
+    };
+
+    let shares_source = groups.iter().any(|other| {
+        other.source == group.source && other.kind == group.kind && other.after.as_deref() != Some(after)
+    });
+    if !shares_source {
+        return format!("{kind}({source})");
+    }
+
+    format!("{kind}({source} after {after})")
 }
 
 /// After the stage named `name`, taking the edges leaving it on every demanding path.

@@ -17,6 +17,7 @@ use av_toolbox_core::{
 };
 use av_toolbox_gpu::{Backend, HostSide, LayerId, ResolvedFormats};
 
+use crate::demands::note_demanders;
 use crate::diagnostic::{args_path, stage_path};
 use crate::graph::{CompiledGraph, Edge, Node, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics, Region, SolvedFormats};
@@ -90,7 +91,7 @@ impl CompiledGraph {
                 node.open_slot(),
             ) {
                 Ok(stage) => prepared[id.index()] = Some(stage),
-                Err(error) => report(node, error, diagnostics),
+                Err(error) => report(self, node, error, diagnostics),
             }
         }
 
@@ -126,7 +127,7 @@ impl CompiledGraph {
 
             match build_stage(stage, backend, node_formats) {
                 Ok(stage_box) => built[id.index()] = Some(stage_box),
-                Err(error) => report(node, error, &mut diagnostics),
+                Err(error) => report(self, node, error, &mut diagnostics),
             }
         }
 
@@ -205,7 +206,7 @@ impl CompiledGraph {
                 node.open_slot(),
             ) {
                 Ok(stage) => prepared[slot] = Some(stage),
-                Err(error) => report(node, error, &mut diagnostics),
+                Err(error) => report(self, node, error, &mut diagnostics),
             }
         }
 
@@ -221,7 +222,7 @@ impl CompiledGraph {
 
             match build_stage(stage, backend, node_formats) {
                 Ok(stage_box) => stages.push((*id, stage_box)),
-                Err(error) => report(node, error, &mut diagnostics),
+                Err(error) => report(self, node, error, &mut diagnostics),
             }
         }
 
@@ -307,15 +308,18 @@ fn build_stage(
 /// Puts a build failure where the definition can be corrected.
 ///
 /// A schema violation lands on the deepest recorded value it sits under, falling back to the
-/// arguments table, and anything else lands on the stage.
-fn report(node: &Node, error: BuildStageError, diagnostics: &mut Diagnostics) {
+/// arguments table, and anything else lands on the stage. A provider's failure also notes what it
+/// reads and the stages that demanded it.
+fn report(graph: &CompiledGraph, node: &Node, error: BuildStageError, diagnostics: &mut Diagnostics) {
     let BuildStageError::InvalidArgs { source, .. } = &error else {
-        diagnostics.push(Diagnostic::error(
+        let diagnostic = Diagnostic::error(
             DiagnosticCode::StageBuildFailed,
             stage_path(node.kind(), node.name()),
             node.span(),
             describe(&error),
-        ));
+        );
+        let noted = note_demanders(graph, node, diagnostic);
+        diagnostics.push(noted);
 
         return;
     };

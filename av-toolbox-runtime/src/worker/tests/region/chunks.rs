@@ -283,3 +283,15 @@ fn a_node_restarts_on_its_own_layer() {
     assert_eq!(*seen.lock().expect("not poisoned"), expected);
     assert_eq!(head_starts.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn a_runner_routes_on_the_layer_its_region_was_planned_on() {
+    let head = NodeId::new(0);
+    let nodes = vec![(head, StageBox::Filter(Box::new(PassThrough)))];
+    let layers = HashMap::from([(head, LayerId(0))]);
+    let edges = RegionEdges::new(Vec::new(), vec![head]).with_layers(layers);
+
+    let runner = RegionRunner::new(nodes, edges).routed_on(Some(LayerId(1)));
+
+    assert_eq!(runner.layer(), Some(LayerId(1)));
+}

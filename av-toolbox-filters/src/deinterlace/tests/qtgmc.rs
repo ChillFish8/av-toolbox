@@ -13,7 +13,7 @@ use av_toolbox_gpu::{
     Subsampling,
     default_accelerators,
 };
-use av_toolbox_providers::{SceneBreaks, SceneRequest, Scenes};
+use av_toolbox_providers::{SceneRequest, Scenes};
 use serde_json::json;
 
 use crate::deinterlace::Qtgmc;
@@ -333,7 +333,7 @@ fn it_holds_frames_by_the_lag_and_runs_by_chunk() {
     let input = StreamFormat::Frames(interlaced());
     let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
 
-    let scenes = AnyDemand::new::<Scenes>(ten_seconds_or_240_frames());
+    let scenes = AnyDemand::new::<Scenes>(SceneRequest::natural());
 
     let defaults = args(json!({}));
     assert_eq!(defaults.lag(), 5);
@@ -457,17 +457,4 @@ fn repair_refuses_an_odd_plane_height() {
 
     assert!(message.contains("deinterlace/qtgmc"), "{message}");
     assert!(message.contains("35"), "{message}");
-}
-
-fn ten_seconds_or_240_frames() -> SceneRequest {
-    let breaks = SceneBreaks::Limited {
-        min_frames: 0,
-        max_frames: Some(240),
-        max_seconds: Some(10.0),
-    };
-
-    SceneRequest {
-        breaks,
-        ..SceneRequest::natural()
-    }
 }

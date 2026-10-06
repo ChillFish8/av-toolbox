@@ -48,7 +48,7 @@ pub use av_toolbox_gpu::{AnyItem, DeviceSide, HostSide, Side};
 
 pub use self::claims::{ClaimError, Claims, DescriptorClaim};
 pub use self::crossing::Crossing;
-pub use self::demand::{AnyDemand, DemandDefinition, DemandKind, InputDemand};
+pub use self::demand::{AnyDemand, DemandDefinition, DemandKind, InputDemand, RequestError};
 pub use self::error::{
     ArgsError,
     BindInputsError,

@@ -39,7 +39,9 @@ pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
     /// The side this provider runs on.
     type Side: StageSide;
 
-    /// The demand kind this provider serves. A provider reads its requests with `demand.request::<Self::Demand>()`.
+    /// The demand kind this provider serves.
+    ///
+    /// A provider reads its requests with `demand.request::<Self::Demand>()`.
     type Demand: DemandDefinition;
 
     fn placement() -> Placement;

@@ -59,11 +59,11 @@ fn unwrapped(error: RunError) -> RunError {
     }
 }
 
-/// The source's own region holds the source, the delay and the sink, so the delay is restarted inside the
-/// region rather than by a worker.
+/// The provider seals the source's region, so the delay heads a width one region with the sink and is
+/// restarted inside it rather than by a worker.
 #[test]
-fn a_delay_in_a_source_region_flushes_every_chunk() {
-    let property = "a_delay_in_a_source_region_flushes_every_chunk";
+fn a_delay_behind_a_provider_flushes_every_chunk() {
+    let property = "a_delay_behind_a_provider_flushes_every_chunk";
     clear_recorded();
 
     let specs = vec![
@@ -73,7 +73,9 @@ fn a_delay_in_a_source_region_flushes_every_chunk() {
     ];
     let (graph, _solved) = planned_graph(&specs);
 
-    assert!(share_a_region(&graph, "input", "delay"));
+    assert!(!share_a_region(&graph, "input", "delay"));
+    assert!(share_a_region(&graph, "delay", "out"));
+    assert_eq!(planned_width(&graph, "delay"), 1);
 
     assert_whole_stream(property, &specs, 9);
 }
@@ -118,7 +120,7 @@ fn a_delay_in_a_chunk_routed_region_flushes_every_chunk() {
 }
 
 /// Every stage is width one, so the join is fused with the delay and pairs its lagging feed with the direct
-/// one by index.
+/// one by index. Both branches read `front`, so the provider before it leaves them one region.
 #[test]
 fn a_lagging_branch_and_a_direct_one_join_on_one_worker() {
     let property = "a_lagging_branch_and_a_direct_one_join_on_one_worker";
@@ -126,8 +128,9 @@ fn a_lagging_branch_and_a_direct_one_join_on_one_worker() {
 
     let specs = vec![
         source_spec("input", &NINE_FRAMES, 0),
-        delay_spec("delay", "input", &[2], 1, false),
-        filter_spec("pass", "input", None),
+        filter_spec("front", "input", None),
+        delay_spec("delay", "front", &[2], 1, false),
+        filter_spec("pass", "front", None),
         join_spec("join", "delay", "pass"),
         sink_spec("out", "join"),
     ];
@@ -352,6 +355,7 @@ fn a_doubled_stream_joined_with_the_original_is_refused_by_the_solver() {
 }
 
 /// From index zero the first eight pairs agree, so the doubled stream's other eight frames are left over.
+/// Both sides read `front`, so the provider before it leaves the double and the join one region.
 #[test]
 fn a_doubled_stream_joined_with_the_original_leaves_feeds_unpaired() {
     let property = "a_doubled_stream_joined_with_the_original_leaves_feeds_unpaired";
@@ -359,8 +363,9 @@ fn a_doubled_stream_joined_with_the_original_leaves_feeds_unpaired() {
 
     let specs = vec![
         source_spec("input", &[0; 8], 0),
-        double_spec("double", "input", None),
-        join_spec("join", "double", "input"),
+        filter_spec("front", "input", None),
+        double_spec("double", "front", None),
+        join_spec("join", "double", "front"),
         sink_spec("out", "join"),
     ];
     let (graph, solved) = planned_graph(&specs);

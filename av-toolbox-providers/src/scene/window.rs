@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -182,6 +183,8 @@ pub(crate) struct Window<T: Pixel> {
     first_timestamp: Option<Duration>,
     /// Luma from the frame before the next one to analyse onward.
     frames: VecDeque<Arc<Frame<T>>>,
+    /// The luma of a frame that left the window, kept to hold the next frame's luma.
+    spare: Option<Frame<T>>,
     received: usize,
     next: usize,
     last_cut: usize,
@@ -194,6 +197,7 @@ impl<T: Pixel> Window<T> {
             detector: None,
             first_timestamp: None,
             frames: VecDeque::new(),
+            spare: None,
             received: 0,
             next: 0,
             last_cut: 0,
@@ -249,7 +253,11 @@ impl<T: Pixel> Window<T> {
             self.last_cut = self.next;
         }
 
-        self.frames.pop_front();
+        let analysed = self.frames.pop_front();
+        if let Some(analysed) = analysed {
+            self.spare = Arc::into_inner(analysed);
+        }
+
         self.next += 1;
 
         let score = result.as_ref().and_then(score_of);
@@ -257,11 +265,23 @@ impl<T: Pixel> Window<T> {
         Decision { starts_scene, score }
     }
 
-    fn luma_of(&self, frame: &HostFrame) -> Result<Arc<Frame<T>>, StageError> {
-        let plane = frame
-            .plane(Channel::Y)
-            .ok_or_else(|| StageError::msg("scene detection needs a luma plane"))?;
+    /// Copies a frame's luma into the spare frame, or into a new one when there is none.
+    fn luma_of(&mut self, frame: &HostFrame) -> Result<Arc<Frame<T>>, StageError> {
+        let plane = frame.plane(Channel::Y).ok_or_else(no_luma_plane)?;
 
+        let mut luma = match self.spare.take() {
+            Some(spare) => spare,
+            None => self.new_luma()?,
+        };
+
+        let samples = luma_samples(frame, plane.bytes());
+        let copied = luma.y_plane.copy_from_u8_slice(&samples);
+        copied.map_err(mismatched_luma)?;
+
+        Ok(Arc::new(luma))
+    }
+
+    fn new_luma(&self) -> Result<Frame<T>, StageError> {
         let builder = FrameBuilder::new(
             self.settings.width,
             self.settings.height,
@@ -272,18 +292,24 @@ impl<T: Pixel> Window<T> {
         .luma_padding_right(LUMA_PADDING)
         .luma_padding_top(LUMA_PADDING)
         .luma_padding_bottom(LUMA_PADDING);
+
         let built = builder.build::<T>();
-        let mut luma =
-            built.map_err(|error| StageError::msg(format!("could not hold a frame's luma: {error:?}")))?;
-
-        let samples = luma_samples(frame, plane.bytes());
-        let copied = luma.y_plane.copy_from_u8_slice(&samples);
-        copied.map_err(|error| {
-            StageError::msg(format!("a frame's luma does not match its format: {error:?}"))
-        })?;
-
-        Ok(Arc::new(luma))
+        built.map_err(unheld_luma)
     }
+}
+
+fn no_luma_plane() -> StageError {
+    StageError::msg("scene detection needs a luma plane")
+}
+
+fn unheld_luma(error: impl Debug) -> StageError {
+    let message = format!("could not hold a frame's luma: {error:?}");
+    StageError::msg(message)
+}
+
+fn mismatched_luma(error: impl Debug) -> StageError {
+    let message = format!("a frame's luma does not match its format: {error:?}");
+    StageError::msg(message)
 }
 
 /// The luma samples the detector reads, with float luma quantised to [FLOAT_BITS] bits.

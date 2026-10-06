@@ -506,7 +506,6 @@ fn the_scene_provider_runs_through_the_engine_on_a_real_device() {
 
     assert!(!report.cancelled);
     assert_eq!(report.dropped, 0);
-    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 
     let expected_whole: Vec<(u64, u64)> = (0..60).map(|index| (index, index / 30)).collect();
 

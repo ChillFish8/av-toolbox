@@ -246,7 +246,6 @@ fn settings_and_reports_carry_the_derives_a_caller_needs() {
         frames: 2,
         cancelled: false,
         dropped: 0,
-        warnings: Vec::new(),
         wall: Duration::ZERO,
         counted_wall: Duration::ZERO,
         timings: Vec::new(),

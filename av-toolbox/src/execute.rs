@@ -77,10 +77,6 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs) -> ExitCode {
 }
 
 fn finish(run: &RunReport) -> ExitCode {
-    for warning in &run.warnings {
-        tracing::warn!("{warning}");
-    }
-
     if run.cancelled {
         tracing::warn!(frames = run.frames, "the run was cancelled");
         return ExitCode::from(CANCELLED);

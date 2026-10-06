@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{AnyDemand, DemandDefinition, DemandKind, Granularity, Parallelism};
+use crate::{AnyDemand, DemandDefinition, DemandKind, Granularity, Parallelism, RequestError};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct Breaks {
@@ -41,6 +41,34 @@ fn a_demand_of_another_kind_reads_as_none() {
     let demand = AnyDemand::new::<Cuts>(Breaks { every: 4 });
 
     assert_eq!(demand.request::<Other>(), None);
+}
+
+#[test]
+fn trying_a_malformed_request_says_why_it_failed() {
+    let value = serde_json::json!({ "kind": "cuts", "request": { "every": "four" } });
+    let demand: AnyDemand = serde_json::from_value(value).expect("deserialises");
+
+    let Err(error) = demand.try_request::<Cuts>() else {
+        panic!("a request with a string count should not read");
+    };
+
+    assert!(matches!(error, RequestError::Malformed { .. }), "{error:?}");
+    assert!(error.to_string().contains("malformed"), "{error}");
+    assert!(error.to_string().contains("invalid type"), "{error}");
+    assert_eq!(demand.request::<Cuts>(), None);
+}
+
+#[test]
+fn trying_a_request_of_another_kind_names_both_kinds() {
+    let demand = AnyDemand::new::<Cuts>(Breaks { every: 4 });
+
+    let Err(error) = demand.try_request::<Other>() else {
+        panic!("a cuts demand should not read as another kind");
+    };
+
+    assert!(matches!(error, RequestError::OtherKind { .. }), "{error:?}");
+    assert!(error.to_string().contains("`cuts`"), "{error}");
+    assert!(error.to_string().contains("`other`"), "{error}");
 }
 
 #[test]

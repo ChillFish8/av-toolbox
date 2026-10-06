@@ -258,10 +258,6 @@ fn finished(end: PassEnd, interrupt: &Interrupt) -> Result<Pass, ExitCode> {
         PassEnd::Interrupted => return Err(ExitCode::from(CANCELLED)),
     };
 
-    for warning in &pass.report.warnings {
-        tracing::warn!("{warning}");
-    }
-
     Ok(pass)
 }
 

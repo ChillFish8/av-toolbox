@@ -11,7 +11,7 @@ mod rated;
 mod shared;
 mod specs;
 
-use av_toolbox_core::testing::{FixtureCuts, Stamping};
+use av_toolbox_core::testing::{FixtureCuts, HostStamping, Stamping};
 use av_toolbox_core::{AnyDemand, Parallelism, PipelineRegistry};
 
 pub(crate) use self::counted::COUNTED_OPENS;
@@ -86,6 +86,9 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_filter::<PlainBlend>().expect("should register");
     registry.register_filter::<Demanding>().expect("should register");
     registry.register_provider::<Stamping>().expect("should register");
+    registry
+        .register_provider::<HostStamping>()
+        .expect("should register");
     registry.register_provider::<Breaking>().expect("should register");
 
     registry
@@ -103,7 +106,8 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 39);
+        assert_eq!(identifiers.len(), 40);
+        assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
         assert!(identifiers.contains(&"test/blur"));

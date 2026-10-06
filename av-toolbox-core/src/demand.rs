@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 
 /// One kind of thing a stage can ask of its input, such as scene breaks.
 pub trait DemandDefinition: 'static {
@@ -60,18 +61,45 @@ impl AnyDemand {
 
     /// The request, when this demand is of kind `D`.
     pub fn request<D: DemandDefinition>(&self) -> Option<D::Request> {
-        if self.kind != DemandKind::of::<D>() {
-            return None;
+        self.try_request::<D>().ok()
+    }
+
+    /// The request as kind `D`, or why it cannot be read as one.
+    pub fn try_request<D: DemandDefinition>(&self) -> Result<D::Request, RequestError> {
+        let expected = DemandKind::of::<D>();
+        if self.kind != expected {
+            return Err(RequestError::OtherKind {
+                expected,
+                found: self.kind,
+            });
         }
 
         let request = self.request.clone();
-        serde_json::from_value(request).ok()
+        match serde_json::from_value(request) {
+            Ok(parsed) => Ok(parsed),
+            Err(source) => Err(RequestError::Malformed {
+                kind: expected,
+                source,
+            }),
+        }
     }
 
     /// The request as it was serialised, for rendering and for provider args.
     pub fn raw(&self) -> &Value {
         &self.request
     }
+}
+
+/// Why a demand's request could not be read as a given kind.
+#[derive(Debug, Error)]
+pub enum RequestError {
+    #[error("the demand is a `{}` demand, not `{}`", found.name(), expected.name())]
+    OtherKind { expected: DemandKind, found: DemandKind },
+    #[error("the `{}` request is malformed: {source}", kind.name())]
+    Malformed {
+        kind: DemandKind,
+        source: serde_json::Error,
+    },
 }
 
 /// One demand on a named input.

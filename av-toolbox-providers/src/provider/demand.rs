@@ -1,5 +1,5 @@
 use av_scenechange::SceneDetectionSpeed;
-use av_toolbox_core::DemandDefinition;
+use av_toolbox_core::{DemandDefinition, StageError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -62,20 +62,22 @@ impl SceneRequest {
         }
     }
 
-    /// Scenes split to whichever of `max_frames` and `max_seconds` is shorter, with no shortest scene.
-    ///
-    /// A stream with no frame rate is still split, to `max_frames`.
-    pub fn limited_to(max_frames: u32, max_seconds: f64) -> Self {
-        let breaks = SceneBreaks::Limited {
-            min_frames: 0,
-            max_frames: Some(max_frames),
-            max_seconds: Some(max_seconds),
+    /// Refuses a seconds limit that is not a finite number, which would otherwise read as no limit.
+    pub fn validate(&self) -> Result<(), StageError> {
+        let SceneBreaks::Limited {
+            max_seconds: Some(seconds),
+            ..
+        } = self.breaks
+        else {
+            return Ok(());
         };
 
-        Self {
-            breaks,
-            ..Self::natural()
+        if seconds.is_finite() {
+            return Ok(());
         }
+
+        let message = format!("a scenes limit of {seconds} seconds is not a finite number of seconds");
+        Err(StageError::msg(message))
     }
 
     /// Scenes split to `max_seconds`, with no shortest scene.
