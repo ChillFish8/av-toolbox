@@ -1,4 +1,4 @@
-use av_toolbox_core::{Parallelism, PipelineRegistry, PreparedStage, Residency};
+use av_toolbox_core::{AnyDemand, Granularity, PipelineRegistry, PreparedStage, Residency};
 
 use crate::diagnostic::stage_path;
 use crate::graph::{CompiledGraph, NodeId, NodeRole};
@@ -25,6 +25,8 @@ pub enum Narrowed {
     Granularity,
     /// The pipeline asked for one.
     Declared,
+    /// Its stage suggested one.
+    Suggested,
     /// Its inputs come from regions of differing widths.
     MixedInputs,
     /// Nothing asked for more.
@@ -41,9 +43,10 @@ pub enum Routing {
 }
 
 /// How one node will be run.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodePlan {
-    parallelism: Parallelism,
+    granularity: Granularity,
+    demand: Option<AnyDemand>,
     width: usize,
     region: RegionId,
     narrowed: Option<Narrowed>,
@@ -55,7 +58,8 @@ impl NodePlan {
     /// A node whose stage never prepared, since `prepare_stages` already reported why.
     fn fallback() -> Self {
         Self {
-            parallelism: Parallelism::Stream,
+            granularity: Granularity::Stream,
+            demand: None,
             width: 1,
             region: RegionId::new(0),
             narrowed: Some(Narrowed::NotAsked),
@@ -64,8 +68,13 @@ impl NodePlan {
         }
     }
 
-    pub fn parallelism(&self) -> Parallelism {
-        self.parallelism
+    pub fn granularity(&self) -> Granularity {
+        self.granularity
+    }
+
+    /// The demand a chunk node is chunked by.
+    pub fn demand(&self) -> Option<&AnyDemand> {
+        self.demand.as_ref()
     }
 
     pub fn width(&self) -> usize {
@@ -251,18 +260,25 @@ impl Planner<'_> {
         }
 
         let parallelism = stage.parallelism();
+        let granularity = parallelism.granularity();
 
-        if parallelism == Parallelism::Stream && node.workers().is_some_and(|workers| workers > 1) {
+        if granularity == Granularity::Stream && node.workers().is_some_and(|workers| workers > 1) {
             self.report_whole_stream(id);
             self.nodes[id.index()] = Some(NodePlan::fallback());
             return;
         }
 
-        let (candidate, reason) = self.candidate_width(id, node.workers());
-        let (width, narrowed) = clamp_to_granularity(parallelism, candidate, reason);
+        let suggested = stage.suggested_workers().filter(|workers| *workers > 0);
+        let (candidate, reason) = match (node.workers(), suggested) {
+            (Some(workers), _) => asked_width(workers, Narrowed::Declared),
+            (None, Some(workers)) => asked_width(workers, Narrowed::Suggested),
+            (None, None) => self.candidate_width(id),
+        };
+        let (width, narrowed) = clamp_to_granularity(granularity, candidate, reason);
 
         self.nodes[id.index()] = Some(NodePlan {
-            parallelism,
+            granularity,
+            demand: parallelism.demand().cloned(),
             width,
             region: RegionId::new(0),
             narrowed,
@@ -273,18 +289,9 @@ impl Planner<'_> {
 
     /// The width a node would run at before its own granularity can narrow it back down.
     ///
-    /// A declared width wins outright. Otherwise every input's already-decided width is compared,
-    /// and the node takes that width when they all agree, or one when they do not.
-    fn candidate_width(&self, id: NodeId, requested: Option<usize>) -> (usize, Option<Narrowed>) {
-        if let Some(workers) = requested {
-            let reason = if workers == 1 {
-                Some(Narrowed::Declared)
-            } else {
-                None
-            };
-            return (workers, reason);
-        }
-
+    /// Every input's already-decided width is compared, and the node takes that width when they
+    /// all agree, or one when they do not.
+    fn candidate_width(&self, id: NodeId) -> (usize, Option<Narrowed>) {
         let sources: Vec<NodeId> = self
             .graph
             .node(id)
@@ -507,11 +514,11 @@ impl Planner<'_> {
                 .nodes
                 .iter()
                 .filter_map(|id| self.nodes[id.index()].as_ref())
-                .map(NodePlan::parallelism)
+                .map(NodePlan::granularity)
                 .max();
 
             let mode = match greatest {
-                Some(Parallelism::Frame) => Routing::ByFrame,
+                Some(Granularity::Frame) => Routing::ByFrame,
                 _ => Routing::ByChunk,
             };
 
@@ -601,6 +608,15 @@ impl Planner<'_> {
     }
 }
 
+/// A width the pipeline or the stage asked for, labelled with `reason` when it is one.
+fn asked_width(workers: usize, reason: Narrowed) -> (usize, Option<Narrowed>) {
+    if workers == 1 {
+        return (workers, Some(reason));
+    }
+
+    (workers, None)
+}
+
 /// Applies a node's granularity to the width it would otherwise run at.
 ///
 /// A node whose granularity is the whole stream always ends up one wide, and the reason recorded
@@ -609,11 +625,11 @@ impl Planner<'_> {
 /// The one exception is a candidate that was never asked to widen at all, since a source really
 /// is one wide because nothing asked.
 fn clamp_to_granularity(
-    parallelism: Parallelism,
+    granularity: Granularity,
     candidate: usize,
     reason: Option<Narrowed>,
 ) -> (usize, Option<Narrowed>) {
-    if parallelism != Parallelism::Stream {
+    if granularity != Granularity::Stream {
         let narrowed = if candidate == 1 { reason } else { None };
         return (candidate, narrowed);
     }

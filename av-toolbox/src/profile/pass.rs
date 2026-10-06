@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use av_toolbox_core::{Crossing, Parallelism, PipelineRegistry, StageKind};
+use av_toolbox_core::{Crossing, Granularity, PipelineRegistry, StageKind};
 use av_toolbox_gpu::Backend;
 use av_toolbox_graph::{CompiledGraph, NodeId, NodeRole, StageSpec};
 use av_toolbox_runtime::{Cancel, RunReport, Settings};
@@ -78,8 +78,8 @@ pub(super) struct NodeInfo {
     /// `<kind>.<name>`, empty for a transfer.
     pub(super) key: String,
     pub(super) label: String,
-    /// The plan's parallelism for a written stage, `None` for a transfer.
-    pub(super) parallelism: Option<Parallelism>,
+    /// The plan's granularity for a written stage, `None` for a transfer.
+    pub(super) granularity: Option<Granularity>,
     /// How many workers the plan runs it with, inherited widths included.
     pub(super) planned: usize,
     /// Whether the model may give it a width of its own.
@@ -173,7 +173,7 @@ fn node_infos(graph: &CompiledGraph) -> Vec<NodeInfo> {
         let planned = plan.node(*id).width();
         let info = match node.role() {
             NodeRole::Stage => {
-                let parallelism = plan.node(*id).parallelism();
+                let granularity = plan.node(*id).granularity();
                 let sized_kind = matches!(
                     node.kind(),
                     StageKind::Filter | StageKind::Mask | StageKind::Transform
@@ -183,16 +183,16 @@ fn node_infos(graph: &CompiledGraph) -> Vec<NodeInfo> {
                     id: *id,
                     key: node.path(),
                     label: node.path(),
-                    parallelism: Some(parallelism),
+                    granularity: Some(granularity),
                     planned,
-                    widenable: sized_kind && parallelism != Parallelism::Stream,
+                    widenable: sized_kind && granularity != Granularity::Stream,
                 }
             },
             NodeRole::Crossing(crossing) => NodeInfo {
                 id: *id,
                 key: String::new(),
                 label: transfer_label(graph, *id, crossing),
-                parallelism: None,
+                granularity: None,
                 planned,
                 widenable: false,
             },

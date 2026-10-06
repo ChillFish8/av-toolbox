@@ -51,6 +51,10 @@ pub enum RegistryError {
         param: &'static str,
         reason: &'static str,
     },
+    #[error("stage {identifier} demands something of `{input}`, which is no input of it")]
+    InvalidDemand { identifier: String, input: &'static str },
+    #[error("a demand kind named {kind} is already registered")]
+    DuplicateDemand { kind: &'static str },
 }
 
 /// A failure raised while binding a pipeline's inputs to a stage's signature.
@@ -116,6 +120,8 @@ pub enum ArgsError {
     SchemaViolations(Vec<SchemaViolation>),
     #[error("the arguments could not be deserialized")]
     Deserialize(#[source] serde_json::Error),
+    #[error(transparent)]
+    InvalidDemand(RegistryError),
 }
 
 fn render_violations(violations: &[SchemaViolation]) -> String {

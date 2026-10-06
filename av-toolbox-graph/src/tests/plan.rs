@@ -1,4 +1,4 @@
-use av_toolbox_core::{Parallelism, StageKind};
+use av_toolbox_core::{Granularity, StageKind};
 use serde_json::json;
 
 use crate::graph::{CompiledGraph, Node, NodeId};
@@ -94,9 +94,31 @@ fn a_frame_stage_widens_to_what_it_asked_for() {
 
     let plan = plan_of(&[source("input"), spatial, sink("out", "spatial")]);
 
-    assert_eq!(plan.node(NodeId::new(1)).parallelism(), Parallelism::Frame);
+    assert_eq!(plan.node(NodeId::new(1)).granularity(), Granularity::Frame);
     assert_eq!(plan.node(NodeId::new(1)).width(), 4);
     assert_eq!(plan.node(NodeId::new(1)).narrowed(), None);
+}
+
+#[test]
+fn a_stage_suggestion_widens_it_when_nothing_else_does() {
+    let mut suggesting = temporal("suggesting", "input", 0);
+    suggesting.args = Spanned::unknown(json!({ "radius": 0, "workers": 2 }));
+
+    let plan = plan_of(&[source("input"), suggesting, sink("out", "suggesting")]);
+
+    assert_eq!(plan.node(NodeId::new(1)).width(), 2);
+    assert_eq!(plan.node(NodeId::new(1)).narrowed(), None);
+}
+
+#[test]
+fn a_suggested_width_of_one_is_labelled_as_suggested() {
+    let mut suggesting = temporal("suggesting", "input", 0);
+    suggesting.args = Spanned::unknown(json!({ "radius": 0, "workers": 1 }));
+
+    let plan = plan_of(&[source("input"), suggesting, sink("out", "suggesting")]);
+
+    assert_eq!(plan.node(NodeId::new(1)).width(), 1);
+    assert_eq!(plan.node(NodeId::new(1)).narrowed(), Some(Narrowed::Suggested));
 }
 
 #[test]

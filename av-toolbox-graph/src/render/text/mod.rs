@@ -392,7 +392,7 @@ fn frame_cells(diagram: &Diagram, regions: &[Vec<usize>], cells: &Cells) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_core::{Parallelism, StageKind};
+    use av_toolbox_core::{Granularity, StageKind};
 
     use super::draw::route_cells;
     use super::frame::frame_text;
@@ -417,7 +417,7 @@ mod tests {
 
     /// A diagram of one box, framed as a one wide stream region when `planned`.
     fn lone_box(name: &str, planned: bool) -> Diagram {
-        let granularity = planned.then_some(Parallelism::Stream);
+        let granularity = planned.then_some(Granularity::Stream);
         let block = Block {
             id: 0,
             boxes: vec![NodeId::new(0)],
@@ -490,7 +490,7 @@ mod tests {
 
         for (id, (names, width)) in regions.iter().enumerate() {
             let first = boxes.len();
-            let granularity = planned.then_some(Parallelism::Stream);
+            let granularity = planned.then_some(Granularity::Stream);
 
             for (offset, name) in names.iter().enumerate() {
                 boxes.push(DiagramBox {

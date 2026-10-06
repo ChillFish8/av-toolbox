@@ -123,7 +123,7 @@ impl StageDefinition for Slow {
     // Per chunk, so a held worker is holding a whole chunk. Every test that gates one of these
     // is written about a chunk taking far longer than the rest.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 
     fn inputs() -> &'static InputSignature {
@@ -235,7 +235,7 @@ impl StageDefinition for HostSlow {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 
     fn inputs() -> &'static InputSignature {
@@ -347,7 +347,7 @@ impl StageDefinition for Tracked {
 
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
-            true => Parallelism::Chunk,
+            true => Parallelism::Chunk(None),
             false => Parallelism::Frame,
         }
     }

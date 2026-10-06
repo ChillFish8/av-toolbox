@@ -431,8 +431,12 @@ impl StageDefinition for Temporal {
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.radius {
             0 => Parallelism::Frame,
-            _ => Parallelism::Chunk,
+            _ => Parallelism::Chunk(None),
         }
+    }
+
+    fn workers(args: &Self::Args) -> Option<usize> {
+        args.workers
     }
 
     fn inputs() -> &'static InputSignature {

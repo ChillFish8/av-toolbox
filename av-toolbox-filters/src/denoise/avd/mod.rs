@@ -72,7 +72,7 @@ impl<A: AvdArgs> StageDefinition for Denoise<A> {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 
     fn held_frames(args: &Self::Args, _formats: &ResolvedFormats) -> usize {

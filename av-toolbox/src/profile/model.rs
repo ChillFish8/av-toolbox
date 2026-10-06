@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use av_toolbox_core::Parallelism;
+use av_toolbox_core::Granularity;
 
 /// How much faster than the floor a widened stage aims to keep up.
 const HEADROOM: f64 = 1.25;
@@ -13,7 +13,7 @@ const KEEP_WITHIN: f64 = 0.98;
 pub(crate) struct NodeCost {
     pub(crate) key: String,
     /// `None` for a node that takes no width of its own.
-    pub(crate) parallelism: Option<Parallelism>,
+    pub(crate) granularity: Option<Granularity>,
     pub(crate) host: Duration,
     pub(crate) busy: Duration,
 }
@@ -24,7 +24,7 @@ impl NodeCost {
     }
 
     fn widenable(&self) -> bool {
-        matches!(self.parallelism, Some(Parallelism::Frame | Parallelism::Chunk))
+        matches!(self.granularity, Some(Granularity::Frame | Granularity::Chunk))
     }
 }
 
@@ -47,7 +47,7 @@ pub(crate) fn floor(costs: &[NodeCost]) -> Duration {
 
     let streamed = costs
         .iter()
-        .filter(|cost| cost.parallelism == Some(Parallelism::Stream))
+        .filter(|cost| cost.granularity == Some(Granularity::Stream))
         .map(|cost| cost.host)
         .max()
         .unwrap_or_default();
@@ -115,17 +115,17 @@ mod tests {
         Duration::from_millis(value)
     }
 
-    fn cost(key: &str, parallelism: Option<Parallelism>, host: u64, busy: u64) -> NodeCost {
+    fn cost(key: &str, granularity: Option<Granularity>, host: u64, busy: u64) -> NodeCost {
         NodeCost {
             key: key.to_string(),
-            parallelism,
+            granularity,
             host: milliseconds(host),
             busy: milliseconds(busy),
         }
     }
 
     fn widenable(key: &str, host: u64, busy: u64) -> NodeCost {
-        cost(key, Some(Parallelism::Frame), host, busy)
+        cost(key, Some(Granularity::Frame), host, busy)
     }
 
     fn workers_of(widths: &[Width], key: &str) -> usize {
@@ -146,7 +146,7 @@ mod tests {
     fn the_floor_is_the_device_time_when_that_is_largest() {
         let costs = vec![
             widenable("filter.a", 1, 11),
-            cost("source.clip", Some(Parallelism::Stream), 4, 4),
+            cost("source.clip", Some(Granularity::Stream), 4, 4),
         ];
 
         assert_eq!(floor(&costs), milliseconds(10));
@@ -156,7 +156,7 @@ mod tests {
     fn the_floor_is_a_slow_stream_stage_when_that_is_largest() {
         let costs = vec![
             widenable("filter.a", 1, 11),
-            cost("source.clip", Some(Parallelism::Stream), 30, 30),
+            cost("source.clip", Some(Granularity::Stream), 30, 30),
         ];
 
         assert_eq!(floor(&costs), milliseconds(30));
@@ -195,7 +195,7 @@ mod tests {
     fn stream_stages_and_transfers_are_not_sized() {
         let costs = vec![
             widenable("filter.a", 1, 11),
-            cost("filter.ordered", Some(Parallelism::Stream), 1, 1),
+            cost("filter.ordered", Some(Granularity::Stream), 1, 1),
             cost("download -> sink.out", None, 1, 2),
         ];
 

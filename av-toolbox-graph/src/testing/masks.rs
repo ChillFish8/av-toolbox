@@ -291,7 +291,7 @@ impl StageDefinition for TemporalMerge {
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.radius {
             0 => Parallelism::Frame,
-            _ => Parallelism::Chunk,
+            _ => Parallelism::Chunk(None),
         }
     }
 

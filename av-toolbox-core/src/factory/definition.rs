@@ -1,0 +1,230 @@
+use std::marker::PhantomData;
+
+use av_toolbox_gpu::{BuildContext, ResolvedFormats, Runtime};
+use jsonschema::Validator;
+use serde::Deserialize;
+use serde_json::Value;
+
+use super::StageInfo;
+use crate::demand::intern;
+use crate::{
+    ArgsError,
+    BindInputsError,
+    BoundInputs,
+    BuildStageError,
+    InputDemand,
+    InputSignature,
+    OpenSlot,
+    Parallelism,
+    RegistryError,
+    SchemaViolation,
+    StageDefinition,
+    StageError,
+    StageKind,
+    StreamType,
+};
+
+/// The adapter that erases a concrete [StageDefinition](crate::StageDefinition).
+pub(crate) struct Definition<D: StageDefinition> {
+    pub(super) kind: StageKind,
+    pub(super) full_identifier: String,
+    pub(super) schema: Value,
+    pub(super) validator: Validator,
+    pub(super) marker: PhantomData<fn() -> D>,
+}
+
+impl<D: StageDefinition> Definition<D> {
+    /// Generates and compiles the stage's schema, failing if anything about it is malformed.
+    pub(crate) fn new(kind: StageKind) -> Result<Self, RegistryError> {
+        Self::check_segment(D::package(), "package")?;
+        Self::check_segment(D::identifier(), "identifier")?;
+
+        let full_identifier = format!("{}/{}", D::package(), D::identifier());
+
+        Self::check_planes_of(&full_identifier)?;
+
+        let generator = schemars::SchemaGenerator::default();
+        let generated = generator.into_root_schema_for::<D::Args>();
+        let schema = serde_json::to_value(&generated).map_err(|error| RegistryError::InvalidSchema {
+            identifier: full_identifier.clone(),
+            reason: error.to_string(),
+        })?;
+
+        let validator = jsonschema::validator_for(&schema).map_err(|error| RegistryError::InvalidSchema {
+            identifier: full_identifier.clone(),
+            reason: error.to_string(),
+        })?;
+
+        Ok(Self {
+            kind,
+            full_identifier,
+            schema,
+            validator,
+            marker: PhantomData,
+        })
+    }
+
+    pub(crate) fn full_identifier(&self) -> &str {
+        &self.full_identifier
+    }
+
+    pub(crate) fn kind(&self) -> StageKind {
+        self.kind
+    }
+
+    pub(super) fn stage_info(&self) -> StageInfo<'_> {
+        StageInfo {
+            kind: self.kind,
+            package: D::package(),
+            identifier: D::identifier(),
+            full_identifier: &self.full_identifier,
+            tags: D::tags(),
+            schema: &self.schema,
+            inputs: D::inputs(),
+        }
+    }
+
+    pub(super) fn deserialize_args(&self, args: &Value) -> Result<D::Args, BuildStageError> {
+        let violations: Vec<SchemaViolation> = self
+            .validator
+            .iter_errors(args)
+            .map(|error| SchemaViolation::new(error.instance_path().to_string(), error.to_string()))
+            .collect();
+        if !violations.is_empty() {
+            return Err(self.invalid_args(ArgsError::SchemaViolations(violations)));
+        }
+
+        let deserialized = D::Args::deserialize(args);
+        deserialized.map_err(|error| self.invalid_args(ArgsError::Deserialize(error)))
+    }
+
+    fn invalid_args(&self, source: ArgsError) -> BuildStageError {
+        BuildStageError::InvalidArgs {
+            identifier: self.full_identifier.clone(),
+            source,
+        }
+    }
+
+    pub(super) fn invalid_inputs(&self, source: BindInputsError) -> BuildStageError {
+        BuildStageError::InvalidInputs {
+            identifier: self.full_identifier.clone(),
+            source,
+        }
+    }
+
+    /// Rejects a `planes_of` that names no input of the signature, or that is set on an input
+    /// that does not take masks.
+    fn check_planes_of(full_identifier: &str) -> Result<(), RegistryError> {
+        let params = D::inputs().params();
+
+        for param in params {
+            let Some(named) = param.planes_of_input() else {
+                continue;
+            };
+
+            let names_an_input = params.iter().any(|other| other.name() == named);
+            if !names_an_input {
+                return Err(RegistryError::InvalidPlanesOf {
+                    identifier: full_identifier.to_string(),
+                    param: param.name(),
+                    reason: "it names no input of this stage",
+                });
+            }
+
+            if param.accepts() != Some(StreamType::Mask) {
+                return Err(RegistryError::InvalidPlanesOf {
+                    identifier: full_identifier.to_string(),
+                    param: param.name(),
+                    reason: "it is only allowed on an input that takes masks",
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Rejects a demand naming an input the stage's signature does not have.
+    pub(super) fn check_demand_inputs(&self, args: &D::Args) -> Result<(), BuildStageError> {
+        let params = D::inputs().params();
+
+        for demanded in D::demands(args) {
+            let names_an_input = params.iter().any(|param| param.name() == demanded.input);
+            if names_an_input {
+                continue;
+            }
+
+            let error = RegistryError::InvalidDemand {
+                identifier: self.full_identifier.clone(),
+                input: demanded.input,
+            };
+            return Err(self.invalid_args(ArgsError::InvalidDemand(error)));
+        }
+
+        Ok(())
+    }
+
+    /// Rejects a segment that would produce a malformed `package/stage` identifier.
+    fn check_segment(segment: &str, label: &'static str) -> Result<(), RegistryError> {
+        if !segment.is_empty() && !segment.contains('/') {
+            return Ok(());
+        }
+
+        Err(RegistryError::InvalidIdentifier {
+            package: D::package().to_string(),
+            identifier: D::identifier().to_string(),
+            segment: label,
+        })
+    }
+}
+
+/// A stage with its arguments deserialized and its inputs bound, ready to negotiate and build.
+pub(crate) struct Prepared<D: StageDefinition> {
+    pub(super) identifier: String,
+    pub(super) args: D::Args,
+    pub(super) inputs: BoundInputs,
+    pub(super) slot: OpenSlot,
+}
+
+impl<D: StageDefinition> Prepared<D> {
+    /// The definition's demands, plus a chunk stage's own demand on its chunk authority.
+    pub(super) fn stage_demands(&self) -> Vec<InputDemand> {
+        let mut demands = D::demands(&self.args);
+
+        let Parallelism::Chunk(Some(demand)) = D::parallelism(&self.args) else {
+            return demands;
+        };
+
+        let Some(input) = chunk_authority_name(D::inputs(), &self.inputs) else {
+            return demands;
+        };
+
+        demands.push(InputDemand { input, demand });
+        demands
+    }
+}
+
+/// The name of the input a stage lines its chunks up by.
+///
+/// A variadic input is named by the name it was bound under, so an unnamed one has none.
+fn chunk_authority_name(signature: &InputSignature, inputs: &BoundInputs) -> Option<&'static str> {
+    let index = inputs.chunk_authority()?;
+    let params = signature.params();
+
+    if let Some(param) = params.get(index) {
+        return Some(param.name());
+    }
+
+    let variadic = inputs.variadic().get(index - params.len())?;
+    let name = variadic.name()?;
+
+    Some(intern(name))
+}
+
+/// Hands back a built stage as it is, for the kinds with nothing to add after building.
+pub(super) fn keep<R: Runtime, T>(
+    _context: &BuildContext<R>,
+    _formats: &ResolvedFormats,
+    built: T,
+) -> Result<T, StageError> {
+    Ok(built)
+}

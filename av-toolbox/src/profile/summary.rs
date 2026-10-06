@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use av_toolbox_core::Parallelism;
+use av_toolbox_core::Granularity;
 use av_toolbox_graph::{NodeId, StageSpec};
 use av_toolbox_runtime::{NodeTiming, RunReport};
 
@@ -19,13 +19,13 @@ pub(super) fn costs(pass: &Pass) -> Vec<NodeCost> {
             continue;
         };
 
-        let parallelism = model_parallelism(info);
+        let granularity = model_granularity(info);
         let host = per_frame(timing.host, timing.frames);
         let busy = per_frame(timing.busy, timing.frames);
 
         costs.push(NodeCost {
             key: info.key.clone(),
-            parallelism,
+            granularity,
             host,
             busy,
         });
@@ -96,13 +96,13 @@ pub(super) fn overhead(report: &RunReport, counted: u64) -> Duration {
     wall.saturating_sub(busy)
 }
 
-/// The parallelism the model sees.
+/// The granularity the model sees.
 ///
 /// A widenable stage keeps the plan's and a `Stream` node keeps `Stream` so it can set the floor. Every other
 /// node, such as a sink or a transfer, gets `None`.
-fn model_parallelism(info: &NodeInfo) -> Option<Parallelism> {
-    if info.widenable || info.parallelism == Some(Parallelism::Stream) {
-        return info.parallelism;
+fn model_granularity(info: &NodeInfo) -> Option<Granularity> {
+    if info.widenable || info.granularity == Some(Granularity::Stream) {
+        return info.granularity;
     }
 
     None
@@ -160,7 +160,7 @@ mod tests {
             id: NodeId::new(index),
             key: key.to_string(),
             label: key.to_string(),
-            parallelism: Some(Parallelism::Frame),
+            granularity: Some(Granularity::Frame),
             planned,
             widenable,
         }

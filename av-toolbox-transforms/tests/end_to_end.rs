@@ -108,7 +108,7 @@ impl StageDefinition for Chunked {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 }
 

@@ -80,7 +80,7 @@ impl StageDefinition for Join {
     // and `RunWarning::NothingChunked` are only ever noticed on that path, and this is the
     // fixture every test of them is written around.
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 
     fn inputs() -> &'static InputSignature {
@@ -177,7 +177,7 @@ impl StageDefinition for Referring {
 
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
-            true => Parallelism::Chunk,
+            true => Parallelism::Chunk(None),
             false => Parallelism::Frame,
         }
     }

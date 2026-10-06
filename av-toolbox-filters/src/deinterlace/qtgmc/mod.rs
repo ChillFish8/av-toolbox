@@ -232,7 +232,7 @@ impl StageDefinition for Qtgmc {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 
     // The entries the output trails the input by, and the frames they and the current frame come from.

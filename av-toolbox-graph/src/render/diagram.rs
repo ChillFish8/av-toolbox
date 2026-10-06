@@ -1,4 +1,4 @@
-use av_toolbox_core::{Crossing, Parallelism, Residency, StageKind};
+use av_toolbox_core::{Crossing, Granularity, Residency, StageKind};
 
 use super::RenderOptions;
 use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
@@ -22,7 +22,7 @@ pub(crate) struct Block {
     pub(crate) id: usize,
     pub(crate) boxes: Vec<NodeId>,
     pub(crate) width: usize,
-    pub(crate) granularity: Option<Parallelism>,
+    pub(crate) granularity: Option<Granularity>,
     pub(crate) routing: Option<Routing>,
     pub(crate) reason: Option<&'static str>,
 }
@@ -228,6 +228,7 @@ fn reason_text(reason: Narrowed) -> Option<&'static str> {
     match reason {
         Narrowed::Granularity => Some("granularity"),
         Narrowed::Declared => Some("declared"),
+        Narrowed::Suggested => Some("suggested"),
         Narrowed::MixedInputs => Some("mixed inputs"),
         Narrowed::NotAsked => None,
     }
@@ -307,7 +308,7 @@ fn block_of(plan: &ExecutionPlan, region: &Region) -> Block {
         id: region.id().index(),
         boxes: region.nodes().to_vec(),
         width: region.width(),
-        granularity: Some(head.parallelism()),
+        granularity: Some(head.granularity()),
         routing,
         reason: shared.and_then(reason_text),
     }

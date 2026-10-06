@@ -371,7 +371,7 @@ impl StageDefinition for Match {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 
     // The current frame, whose output waits on the next, and the previous frame it reads.

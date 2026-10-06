@@ -130,7 +130,7 @@ impl StageDefinition for Delay {
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_frame {
             true => Parallelism::Frame,
-            false => Parallelism::Chunk,
+            false => Parallelism::Chunk(None),
         }
     }
 

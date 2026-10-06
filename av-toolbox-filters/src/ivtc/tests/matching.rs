@@ -330,5 +330,5 @@ fn it_holds_two_frames_and_runs_by_chunk() {
     let formats = ResolvedFormats::new(vec![Some(input)], Some(input));
 
     assert_eq!(Match::held_frames(&parsed, &formats), 2);
-    assert_eq!(Match::parallelism(&parsed), Parallelism::Chunk);
+    assert_eq!(Match::parallelism(&parsed), Parallelism::Chunk(None));
 }

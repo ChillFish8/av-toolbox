@@ -240,7 +240,7 @@ impl StageDefinition for Bwdif {
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
-        Parallelism::Chunk
+        Parallelism::Chunk(None)
     }
 
     // The current frame, whose outputs wait on the next, and the previous frame they read.

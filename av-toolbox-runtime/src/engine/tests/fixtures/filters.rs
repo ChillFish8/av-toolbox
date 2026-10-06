@@ -298,7 +298,7 @@ impl StageDefinition for Flushing {
 
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
-            true => Parallelism::Chunk,
+            true => Parallelism::Chunk(None),
             false => Parallelism::Frame,
         }
     }

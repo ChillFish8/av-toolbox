@@ -1,4 +1,4 @@
-use av_toolbox_core::{Crossing, Parallelism, Residency, StageKind};
+use av_toolbox_core::{Crossing, Granularity, Residency, StageKind};
 use serde_json::json;
 
 use crate::graph::{CompiledGraph, NodeId};
@@ -264,8 +264,8 @@ fn example_block(
     reason: Option<&'static str>,
 ) -> Block {
     let granularity = match width {
-        1 => Parallelism::Stream,
-        _ => Parallelism::Chunk,
+        1 => Granularity::Stream,
+        _ => Granularity::Chunk,
     };
     let boxes = boxes.iter().map(|index| NodeId::new(*index)).collect();
 

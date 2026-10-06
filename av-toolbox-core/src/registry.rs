@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
+use schemars::Schema;
 use serde_json::Value;
 
 use crate::factory::Definition;
 use crate::{
+    AnyDemand,
     BuildStageError,
     Crossing,
+    DemandDefinition,
+    DemandKind,
     FilterDefinition,
     InputArgument,
     MaskDefinition,
@@ -32,6 +36,13 @@ use crate::{
 
 type Factories<P> = HashMap<String, Box<dyn StageFactory<P>>>;
 
+/// A registered demand kind's request schema and how to describe one of its requests.
+struct RegisteredDemand {
+    kind: DemandKind,
+    schema: Schema,
+    describe: fn(&AnyDemand) -> String,
+}
+
 /// The registry tracks all stages available for use within the pipeline.
 ///
 /// Stages are keyed by their fully qualified `package/stage` identifier. `builtin/upload` and
@@ -45,6 +56,7 @@ pub struct PipelineRegistry {
     meta_transforms: Factories<dyn PreparedMetaTransform>,
     sinks: Factories<dyn PreparedSink>,
     meta_sinks: Factories<dyn PreparedMetaSink>,
+    demands: HashMap<&'static str, RegisteredDemand>,
 }
 
 impl PipelineRegistry {
@@ -185,6 +197,43 @@ impl PipelineRegistry {
         factory.reads_stream(args)
     }
 
+    /// Registers a demand kind, rejecting a second kind of the same name.
+    pub fn register_demand<D: DemandDefinition>(&mut self) -> Result<(), RegistryError> {
+        let kind = DemandKind::of::<D>();
+        if self.demands.contains_key(kind.name()) {
+            return Err(RegistryError::DuplicateDemand { kind: kind.name() });
+        }
+
+        let registered = RegisteredDemand {
+            kind,
+            schema: schemars::schema_for!(D::Request),
+            describe: describe_as::<D>,
+        };
+        self.demands.insert(kind.name(), registered);
+
+        Ok(())
+    }
+
+    /// The registered demand kind named `name`.
+    pub fn demand_kind(&self, name: &str) -> Option<DemandKind> {
+        self.demands.get(name).map(|registered| registered.kind)
+    }
+
+    /// The schema of a registered demand kind's requests.
+    pub fn demand_schema(&self, kind: DemandKind) -> Option<&Schema> {
+        self.demands.get(kind.name()).map(|registered| &registered.schema)
+    }
+
+    /// A short description of `demand`, or its kind's name when the kind is not registered.
+    pub fn describe(&self, demand: &AnyDemand) -> String {
+        let kind = demand.kind();
+
+        match self.demands.get(kind.name()) {
+            Some(registered) => (registered.describe)(demand),
+            None => kind.name().to_string(),
+        }
+    }
+
     /// Describes every registered stage.
     pub fn stages(&self) -> impl Iterator<Item = StageInfo<'_>> {
         let sources = self.sources.values().map(|factory| factory.info());
@@ -202,6 +251,14 @@ impl PipelineRegistry {
             .chain(meta_transforms)
             .chain(sinks)
             .chain(meta_sinks)
+    }
+}
+
+/// Describes `demand` as kind `D` would, or by the kind's name when its request does not read as `D`'s.
+fn describe_as<D: DemandDefinition>(demand: &AnyDemand) -> String {
+    match demand.request::<D>() {
+        Some(request) => D::describe(&request),
+        None => D::kind().to_string(),
     }
 }
 
@@ -281,8 +338,11 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+    use crate::tests::demand::{Breaks, Cuts};
     use crate::{
+        AnyDemand,
         BoundInputs,
+        DemandKind,
         Filter,
         InputParam,
         InputSignature,
@@ -962,6 +1022,30 @@ mod tests {
         ) -> Result<Box<dyn Source>, StageError> {
             Ok(Box::new(FileSource))
         }
+    }
+
+    #[test]
+    fn a_demand_kind_registers_once() {
+        let mut registry = PipelineRegistry::new();
+
+        registry.register_demand::<Cuts>().expect("should register");
+        let error = registry
+            .register_demand::<Cuts>()
+            .expect_err("a second registration is refused");
+
+        assert!(matches!(error, RegistryError::DuplicateDemand { kind: "cuts" }));
+    }
+
+    #[test]
+    fn a_registered_demand_kind_is_found_and_described_by_name() {
+        let mut registry = PipelineRegistry::new();
+        registry.register_demand::<Cuts>().expect("should register");
+
+        let demand = AnyDemand::new::<Cuts>(Breaks { every: 4 });
+
+        assert_eq!(registry.demand_kind("cuts"), Some(DemandKind::of::<Cuts>()));
+        assert_eq!(registry.demand_kind("other"), None);
+        assert_eq!(registry.describe(&demand), "cuts");
     }
 
     #[test]

@@ -17,6 +17,7 @@ use serde::de::DeserializeOwned;
 use crate::{
     BoundInputs,
     Filter,
+    InputDemand,
     InputSignature,
     Mask,
     MetaSink,
@@ -227,6 +228,18 @@ pub trait StageDefinition: 'static {
     /// point, and holding more only risks the source waiting on its budget.
     fn held_frames(_args: &Self::Args, _formats: &ResolvedFormats) -> usize {
         0
+    }
+
+    /// What this stage asks of the frames reaching its inputs.
+    ///
+    /// A chunk stage's own demand is added on its chunk authority without being listed here.
+    fn demands(_args: &Self::Args) -> Vec<InputDemand> {
+        Vec::new()
+    }
+
+    /// How many workers this stage would like when the pipeline does not say.
+    fn workers(_args: &Self::Args) -> Option<usize> {
+        None
     }
 
     fn inputs() -> &'static InputSignature;

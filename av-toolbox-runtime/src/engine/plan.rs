@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use av_toolbox_core::{Parallelism, StageKind};
+use av_toolbox_core::{Granularity, StageKind};
 use av_toolbox_gpu::FrameBudget;
 use av_toolbox_graph::{
     CompiledGraph,
@@ -54,7 +54,7 @@ pub(super) fn build_region_edges(graph: &CompiledGraph, region: &Region) -> Regi
     let chunked = nodes
         .iter()
         .copied()
-        .filter(|node_id| plan.node(*node_id).parallelism() == Parallelism::Chunk)
+        .filter(|node_id| plan.node(*node_id).granularity() == Granularity::Chunk)
         .collect();
 
     let authorities = nodes

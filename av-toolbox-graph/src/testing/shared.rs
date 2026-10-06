@@ -99,4 +99,6 @@ pub(crate) struct NoArgs {}
 pub(crate) struct TemporalArgs {
     #[serde(default)]
     pub(crate) radius: u32,
+    #[serde(default)]
+    pub(crate) workers: Option<usize>,
 }
