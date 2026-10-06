@@ -2,7 +2,7 @@ use av_toolbox_core::{AnyDemand, Granularity, PipelineRegistry, PreparedStage, R
 use av_toolbox_gpu::ChunkRoute;
 
 use crate::diagnostic::stage_path;
-use crate::graph::{CompiledGraph, NodeId, NodeRole};
+use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 
 /// A region's position in the plan.
@@ -204,7 +204,8 @@ impl ExecutionPlan {
 /// region to route on that layer, or on none yet. A crossing only joins when it is its producer's
 /// only consumer.
 ///
-/// A provider always runs alone in a region of its own, so its detection runs on its own thread.
+/// A provider on the host or the device always runs alone in a region of its own, so its detection
+/// runs on its own thread. A provider running on metadata alone is placed like any other node.
 ///
 /// A region may have at most one exit. When one has more, a node at its branch is sealed, so
 /// nothing reading it may join its region, and the regions are placed again.
@@ -215,7 +216,7 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
     let sealed = graph
         .nodes()
         .iter()
-        .map(|node| matches!(node.role(), NodeRole::Provider(_)))
+        .map(|node| runs_alone(node, &prepared))
         .collect();
 
     let mut planner = Planner {
@@ -251,6 +252,17 @@ pub fn plan(graph: &CompiledGraph, registry: &PipelineRegistry) -> Result<Execut
     planner.compute_routing();
 
     planner.finish()
+}
+
+/// Whether `node` is a provider on the host or the device, which runs alone in a region of its own.
+fn runs_alone(node: &Node, prepared: &[Option<PreparedStage>]) -> bool {
+    if !matches!(node.role(), NodeRole::Provider(_)) {
+        return false;
+    }
+
+    let stage = prepared[node.id().index()].as_ref();
+
+    stage.is_none_or(|stage| stage.residency() != Residency::Either)
 }
 
 /// The state one planning pass carries from node to node.
@@ -363,7 +375,7 @@ impl Planner<'_> {
         let node = self.graph.node(id);
         let sources: Vec<NodeId> = node.inputs().iter().map(|edge| edge.source()).collect();
 
-        if matches!(node.role(), NodeRole::Provider(_)) {
+        if runs_alone(node, &self.prepared) {
             self.open_region(id, width);
             return;
         }

@@ -3,10 +3,12 @@ use std::fmt;
 use av_toolbox_core::{
     ArgsError,
     BuildStageError,
+    BuiltProvider,
     Crossing,
     Filter,
     InputArgument,
     Mask,
+    MetaProvider,
     MetaSink,
     PipelineRegistry,
     PreparedStage,
@@ -29,6 +31,7 @@ pub enum StageBox {
     Mask(Box<dyn Mask>),
     Provider(Box<dyn Provider>),
     Sink(Box<dyn Sink>),
+    MetaProvider(Box<dyn MetaProvider>),
     MetaSink(Box<dyn MetaSink>),
     HostSource(Box<dyn Source<HostSide>>),
     HostFilter(Box<dyn Filter<HostSide>>),
@@ -47,6 +50,7 @@ impl fmt::Debug for StageBox {
             Self::Mask(_) => "Mask",
             Self::Provider(_) => "Provider",
             Self::Sink(_) => "Sink",
+            Self::MetaProvider(_) => "MetaProvider",
             Self::MetaSink(_) => "MetaSink",
             Self::HostSource(_) => "HostSource",
             Self::HostFilter(_) => "HostFilter",
@@ -289,8 +293,9 @@ fn build_stage(
             Sided::Host(stage) => StageBox::HostMask(stage),
         },
         PreparedStage::Provider(prepared) => match prepared.build(backend, formats)? {
-            Sided::Device(stage) => StageBox::Provider(stage),
-            Sided::Host(stage) => StageBox::HostProvider(stage),
+            BuiltProvider::Device(stage) => StageBox::Provider(stage),
+            BuiltProvider::Host(stage) => StageBox::HostProvider(stage),
+            BuiltProvider::Meta(stage) => StageBox::MetaProvider(stage),
         },
         PreparedStage::Sink(prepared) => match prepared.build(backend, formats)? {
             Sided::Device(stage) => StageBox::Sink(stage),
@@ -511,12 +516,15 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use av_toolbox_core::testing::{FixtureChunk, fixture_chunk};
-    use av_toolbox_core::{Inputs, StageKind};
+    use av_toolbox_core::{Inputs, Residency, StageKind, run_meta_provider, run_meta_sink};
     use av_toolbox_gpu::{
+        AnyItem,
         ColourInfo,
+        FrameContext,
         FrameFormat,
         FrameLayout,
         FrameMeta,
+        HostStreamItem,
         SampleFormat,
         StreamFormat,
         StreamItem,
@@ -824,6 +832,78 @@ mod tests {
         let provided = &marked.meta().provided;
         assert_eq!(provided.get::<FixtureChunk>(breaks_layer), Some(&FixtureChunk(7)));
         assert_eq!(provided.get::<FixtureChunk>(marks_layer), Some(&FixtureChunk(7)));
+    }
+
+    fn device_item(context: &FrameContext, index: u64) -> AnyItem {
+        let format = frames(64).as_frames().copied().expect("frames");
+        let frame = context.alloc_frame(&format, FrameMeta::at(index));
+
+        AnyItem::from(StreamItem::Frame(frame))
+    }
+
+    fn host_item(context: &FrameContext, index: u64) -> AnyItem {
+        let format = frames(64).as_frames().copied().expect("frames");
+        let frame = context.alloc_host_frame(&format, FrameMeta::at(index)).freeze();
+
+        AnyItem::Host(HostStreamItem::from(frame))
+    }
+
+    /// Runs three frames from `item_of` through the tags provider placed behind `source` and
+    /// into a sink that fails on any frame not tagged `Tag(true)`.
+    fn tags_every_frame(source: StageSpec, side: Residency, item_of: fn(&FrameContext, u64) -> AnyItem) {
+        let mut reader = testing::spec(StageKind::Sink, "read", "test/tag-reading");
+        reader.inputs = vec![testing::positional("input")];
+
+        let registry = testing::registry();
+        let mut graph = build(&registry, &[source, reader])
+            .expect("should build")
+            .into_graph();
+        crate::satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+        let backend = backend();
+        let mut solved = formats(&graph, &registry, &backend);
+        crate::place_transfers(&mut graph, &registry, &mut solved).expect("should place");
+
+        let mut stages = graph
+            .instantiate(&registry, &backend, &solved)
+            .expect("should instantiate");
+
+        let tagging = graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == "tags(input)")
+            .expect("a tags provider");
+        let reading = graph
+            .nodes()
+            .iter()
+            .find(|node| node.name() == "read")
+            .expect("the reading sink");
+        assert_eq!(tagging.residency(), Some(side));
+
+        let context = testing_context();
+        let mut run_context = testing_context();
+        for index in 0..3 {
+            let item = item_of(&context, index);
+            let StageBox::MetaProvider(provider) = &mut stages[tagging.id().index()] else {
+                panic!("tags(input) is not a metadata provider");
+            };
+            let tagged = run_meta_provider(provider.as_mut(), &mut run_context, item).expect("should tag");
+
+            let StageBox::MetaSink(sink) = &mut stages[reading.id().index()] else {
+                panic!("read is not a metadata sink");
+            };
+            let slots = tagged.into_iter().map(Some).collect();
+            run_meta_sink(sink.as_mut(), &mut run_context, slots).expect("every frame reads Tag(true)");
+        }
+    }
+
+    #[test]
+    fn a_meta_provider_tags_frames_on_either_side() {
+        let host_source = testing::spec(StageKind::Source, "input", "test/host-file");
+        tags_every_frame(host_source, Residency::Host, host_item);
+
+        let mut device_source = testing::spec(StageKind::Source, "input", "test/file");
+        device_source.args = Spanned::unknown(json!({ "path": "example.mkv" }));
+        tags_every_frame(device_source, Residency::Device, device_item);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use av_toolbox_gpu::{
+    AnyItem,
     BuildContext,
     Capabilities,
     DeviceSide,
@@ -20,13 +21,14 @@ use crate::{
     DemandDefinition,
     InputDemand,
     Inputs,
+    MetaItem,
     PathEdge,
     PathView,
     PlaceError,
+    ProviderSide,
     StageDefinition,
     StageError,
     StageInstance,
-    StageSide,
 };
 
 /// Reads a provider's args from JSON and reports what it demands of its own input.
@@ -45,8 +47,8 @@ pub struct LayerDemand {
 /// What it demands of that input is declared through
 /// [StageDefinition::demands](crate::StageDefinition::demands).
 pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
-    /// The side this provider runs on.
-    type Side: StageSide;
+    /// The side this provider runs on, or [MetaSide](crate::MetaSide) to run on metadata alone.
+    type Side: ProviderSide;
 
     /// The demand kind this provider serves.
     ///
@@ -77,7 +79,7 @@ pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
         args: Self::Args,
         inputs: &BoundInputs,
         formats: &ResolvedFormats,
-    ) -> Result<Box<dyn Provider<Self::Side>>, StageError>;
+    ) -> Result<Box<<Self::Side as ProviderSide>::Instance>, StageError>;
 }
 
 /// A built provider. It passes every item through and writes what it supplies into their metadata.
@@ -89,4 +91,39 @@ pub trait Provider<S: Side = DeviceSide>: StageInstance {
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<S::Item>, StageError> {
         Ok(Vec::new())
     }
+}
+
+/// A provider that passes items through, touching only their metadata.
+///
+/// Having no way to reach a plane is what lets it run on whichever side its input already sits on.
+pub trait MetaProvider: StageInstance {
+    /// What this emits for one item, which may be nothing while it holds items back.
+    fn process(&mut self, context: &mut FrameContext, item: MetaItem) -> Result<Vec<MetaItem>, StageError>;
+
+    /// What this emits once the stream has ended, which may be nothing.
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<MetaItem>, StageError> {
+        Ok(Vec::new())
+    }
+}
+
+/// Hands `item` to `provider`, giving back what it emits on the side `item` came from.
+pub fn run_meta_provider(
+    provider: &mut dyn MetaProvider,
+    context: &mut FrameContext,
+    item: AnyItem,
+) -> Result<Vec<AnyItem>, StageError> {
+    let item = MetaItem::new(item);
+    let emitted = provider.process(context, item)?;
+
+    Ok(emitted.into_iter().map(MetaItem::into_any).collect())
+}
+
+/// Ends `provider`'s stream, giving back what it flushes.
+pub fn end_meta_provider(
+    provider: &mut dyn MetaProvider,
+    context: &mut FrameContext,
+) -> Result<Vec<AnyItem>, StageError> {
+    let flushed = provider.end_of_stream(context)?;
+
+    Ok(flushed.into_iter().map(MetaItem::into_any).collect())
 }

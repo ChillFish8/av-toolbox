@@ -79,6 +79,7 @@ use crate::engine::tests::fixtures::sources::{
     ListedArgs,
     ListedInstance,
 };
+use crate::engine::tests::fixtures::tags::{TagRecording, TagRecordingInstance, Tagging, TaggingInstance};
 use crate::engine::tests::support::{ASSIGNED, STAGES_BUILT, STAGES_DROPPED, testing_capabilities};
 use crate::{Cancel, Engine, RunError, RunReport, Settings};
 
@@ -117,6 +118,10 @@ fn registry() -> PipelineRegistry {
     registry.register_provider::<Stamping>().expect("should register");
     registry
         .register_provider::<HostStamping>()
+        .expect("should register");
+    registry.register_provider::<Tagging>().expect("should register");
+    registry
+        .register_meta_sink::<TagRecording>()
         .expect("should register");
     registry
 }
@@ -188,6 +193,15 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
                 serde_json::from_value(node.args().clone()).expect("valid stamping args");
             let instance = StampingInstance::new(&args);
             StageBox::HostProvider(Box::new(instance))
+        },
+        "test/tagging" => {
+            let args: Vec<LayerDemand> =
+                serde_json::from_value(node.args().clone()).expect("valid tagging args");
+            StageBox::MetaProvider(Box::new(TaggingInstance::new(&args)))
+        },
+        "test/tag-recording" => {
+            let layer = node.demands()[0].layer;
+            StageBox::MetaSink(Box::new(TagRecordingInstance::new(layer)))
         },
         other => panic!("no test fixture knows how to build {other}"),
     };

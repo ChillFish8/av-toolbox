@@ -66,6 +66,27 @@ fn placed_graph_and_plan_of(specs: &[StageSpec]) -> (CompiledGraph, ExecutionPla
     (graph, made)
 }
 
+/// Satisfies every demand in `specs` and places its crossings before planning it.
+fn provided_graph_and_plan_of(specs: &[StageSpec]) -> (CompiledGraph, ExecutionPlan) {
+    let registry = testing::registry();
+    let capabilities = residency::tests::capabilities();
+    let mut graph = build(&registry, specs).expect("should build").into_graph();
+    satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+    let mut formats = solve(&graph, &registry, &capabilities).expect("should solve");
+    place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+    let made = plan(&graph, &registry).expect("should plan");
+
+    (graph, made)
+}
+
+fn demanding(name: &str, input: &str, args: serde_json::Value) -> StageSpec {
+    let mut spec = testing::spec(StageKind::Filter, name, "test/demanding");
+    spec.inputs = vec![testing::positional(input)];
+    spec.args = Spanned::unknown(args);
+
+    spec
+}
+
 fn node_named(graph: &CompiledGraph, name: &str) -> NodeId {
     graph
         .nodes()
@@ -300,6 +321,41 @@ fn a_provider_runs_in_its_own_region() {
     assert_ne!(plan.node(denoise_id).region(), provider_region);
     assert_eq!(plan.region(provider_region).nodes(), &[provider_id]);
     assert_eq!(plan.region(provider_region).head(), provider_id);
+}
+
+#[test]
+fn a_meta_provider_joins_its_producers_region() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "tags": true })),
+        sink("out", "wants"),
+    ];
+
+    let (graph, plan) = provided_graph_and_plan_of(&specs);
+
+    let input_id = node_named(&graph, "input");
+    let provider_id = node_named(&graph, "tags(input)");
+    let wants_id = node_named(&graph, "wants");
+    let region = plan.node(input_id).region();
+    assert_eq!(plan.node(provider_id).region(), region);
+    assert_eq!(plan.node(wants_id).region(), region);
+}
+
+#[test]
+fn a_host_provider_stays_in_a_region_of_its_own() {
+    let specs = [
+        testing::spec(StageKind::Source, "input", "test/host-file"),
+        demanding("wants", "input", json!({ "host_cuts": true })),
+        sink("out", "wants"),
+    ];
+
+    let (graph, plan) = provided_graph_and_plan_of(&specs);
+
+    let input_id = node_named(&graph, "input");
+    let provider_id = node_named(&graph, "host-fixture-cuts(input)");
+    let provider_region = plan.node(provider_id).region();
+    assert_ne!(plan.node(input_id).region(), provider_region);
+    assert_eq!(plan.region(provider_region).nodes(), &[provider_id]);
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::fmt;
 
 use av_toolbox_gpu::{DeviceSide, HostSide, Side};
 
-use crate::{Filter, Mask, Provider, Sink, Source};
+use crate::{Filter, Mask, MetaProvider, Provider, Sink, Source, StageInstance};
 
 /// Where a stage runs.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -56,7 +56,6 @@ impl<D: ?Sized, H: ?Sized> Sided<D, H> {
 pub type BuiltSource = Sided<dyn Source<DeviceSide>, dyn Source<HostSide>>;
 pub type BuiltFilter = Sided<dyn Filter<DeviceSide>, dyn Filter<HostSide>>;
 pub type BuiltMask = Sided<dyn Mask<DeviceSide>, dyn Mask<HostSide>>;
-pub type BuiltProvider = Sided<dyn Provider<DeviceSide>, dyn Provider<HostSide>>;
 pub type BuiltSink = Sided<dyn Sink<DeviceSide>, dyn Sink<HostSide>>;
 
 /// A side a stage can be built for, which knows how to file what was built for it.
@@ -68,8 +67,6 @@ pub trait StageSide: Side {
     fn filter(stage: Box<dyn Filter<Self>>) -> BuiltFilter;
 
     fn mask(stage: Box<dyn Mask<Self>>) -> BuiltMask;
-
-    fn provider(stage: Box<dyn Provider<Self>>) -> BuiltProvider;
 
     fn sink(stage: Box<dyn Sink<Self>>) -> BuiltSink;
 }
@@ -86,10 +83,6 @@ impl StageSide for DeviceSide {
     }
 
     fn mask(stage: Box<dyn Mask<Self>>) -> BuiltMask {
-        Sided::Device(stage)
-    }
-
-    fn provider(stage: Box<dyn Provider<Self>>) -> BuiltProvider {
         Sided::Device(stage)
     }
 
@@ -113,11 +106,58 @@ impl StageSide for HostSide {
         Sided::Host(stage)
     }
 
-    fn provider(stage: Box<dyn Provider<Self>>) -> BuiltProvider {
-        Sided::Host(stage)
-    }
-
     fn sink(stage: Box<dyn Sink<Self>>) -> BuiltSink {
         Sided::Host(stage)
+    }
+}
+
+/// A built provider, on whichever side its definition named.
+pub enum BuiltProvider {
+    Device(Box<dyn Provider<DeviceSide>>),
+    Host(Box<dyn Provider<HostSide>>),
+    Meta(Box<dyn MetaProvider>),
+}
+
+/// Where a provider runs, on the host, on the device, or on metadata alone.
+pub trait ProviderSide: 'static {
+    const RESIDENCY: Residency;
+
+    /// What a provider on this side is built as.
+    type Instance: ?Sized + StageInstance;
+
+    fn provider(stage: Box<Self::Instance>) -> BuiltProvider;
+}
+
+impl ProviderSide for DeviceSide {
+    const RESIDENCY: Residency = Residency::Device;
+
+    type Instance = dyn Provider<DeviceSide>;
+
+    fn provider(stage: Box<Self::Instance>) -> BuiltProvider {
+        BuiltProvider::Device(stage)
+    }
+}
+
+impl ProviderSide for HostSide {
+    const RESIDENCY: Residency = Residency::Host;
+
+    type Instance = dyn Provider<HostSide>;
+
+    fn provider(stage: Box<Self::Instance>) -> BuiltProvider {
+        BuiltProvider::Host(stage)
+    }
+}
+
+/// A provider that only reads and writes metadata, so it runs on whichever side its input is on.
+#[derive(Debug, Copy, Clone)]
+pub struct MetaSide;
+
+impl ProviderSide for MetaSide {
+    const RESIDENCY: Residency = Residency::Either;
+
+    type Instance = dyn MetaProvider;
+
+    fn provider(stage: Box<Self::Instance>) -> BuiltProvider {
+        BuiltProvider::Meta(stage)
     }
 }

@@ -33,7 +33,7 @@ pub fn place_transfers(
     insert_crossings(graph, &sides, formats);
     graph.finish_edit();
 
-    warn_round_trips(graph, &mut diagnostics);
+    warn_round_trips(graph, &prepared, &mut diagnostics);
 
     Ok(diagnostics)
 }
@@ -112,7 +112,11 @@ fn insert_crossings(graph: &mut CompiledGraph, sides: &[Residency], formats: &mu
 }
 
 /// Warns about every stream that leaves the device only to be uploaded again.
-pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnostics) {
+pub(crate) fn warn_round_trips(
+    graph: &CompiledGraph,
+    prepared: &[Option<PreparedStage>],
+    diagnostics: &mut Diagnostics,
+) {
     let off_the_device = streams_off_the_device(graph);
 
     for node in graph.nodes() {
@@ -150,6 +154,13 @@ pub(crate) fn warn_round_trips(graph: &CompiledGraph, diagnostics: &mut Diagnost
 
         for id in &host_stages {
             let stage = graph.node(*id);
+            let reads_frames_on_the_host = prepared[id.index()]
+                .as_ref()
+                .is_some_and(|prepared| prepared.residency() == Residency::Host);
+            if !reads_frames_on_the_host {
+                continue;
+            }
+
             if let Some(implied) = implied_provider(graph, stage) {
                 message.push_str(". ");
                 message.push_str(&implied);
@@ -525,6 +536,35 @@ pub(crate) mod tests {
         assert_eq!(round_trip.severity(), Severity::Warning);
         assert!(message.contains("`wants`"), "{message}");
         assert!(message.contains("on the host"), "{message}");
+    }
+
+    #[test]
+    fn a_round_trip_through_a_meta_provider_blames_only_the_host_provider() {
+        let mut wants = stage(StageKind::Filter, "wants", "test/demanding", &["input"]);
+        wants.args = Spanned::unknown(json!({ "tags": true, "host_cuts": true }));
+        let specs = [
+            stage(StageKind::Source, "input", "test/file", &[]),
+            wants,
+            stage(StageKind::Sink, "out", "test/stdout", &["wants"]),
+        ];
+        let registry = testing::registry();
+        let mut graph = build(&registry, &specs).expect("should build").into_graph();
+        crate::satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
+        let mut formats = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+        let warnings = place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+
+        let message = warnings
+            .iter()
+            .find(|diagnostic| diagnostic.code() == DiagnosticCode::ResidencyRoundTrip)
+            .expect("a round trip")
+            .message()
+            .to_string();
+        assert!(
+            message.contains("the host-fixture-cuts provider reads its frames on the host"),
+            "{message}"
+        );
+        assert!(!message.contains("the tags provider"), "{message}");
     }
 
     #[test]

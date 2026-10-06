@@ -29,7 +29,7 @@ pub(crate) use self::filters::{
 use self::host::{HostBlur, HostFile, HostJoin, HostStdout, Log};
 use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
 use self::planes::{Blend, Combine, HostMasker, LayoutFile, PlainBlend};
-use self::providers::{Breaking, Demanding, DemandingPair, Marking, Relaying};
+use self::providers::{Breaking, Demanding, DemandingPair, Marking, Relaying, TagReading, Tagging};
 pub(crate) use self::providers::{BreaksRequest, FixtureBreaks, FixtureMarks, MarksRequest};
 use self::rated::{Rated, Retime};
 pub(crate) use self::specs::{named, positional, spec};
@@ -93,6 +93,10 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry.register_provider::<Breaking>().expect("should register");
     registry.register_provider::<Marking>().expect("should register");
     registry.register_provider::<Relaying>().expect("should register");
+    registry.register_provider::<Tagging>().expect("should register");
+    registry
+        .register_meta_sink::<TagReading>()
+        .expect("should register");
 
     registry
 }
@@ -109,7 +113,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 43);
+        assert_eq!(identifiers.len(), 45);
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
@@ -131,6 +135,8 @@ mod tests {
         assert!(identifiers.contains(&"test/breaking"));
         assert!(identifiers.contains(&"test/marking"));
         assert!(identifiers.contains(&"test/relaying"));
+        assert!(identifiers.contains(&"test/tagging"));
+        assert!(identifiers.contains(&"test/tag-reading"));
     }
 
     #[test]

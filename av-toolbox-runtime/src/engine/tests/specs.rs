@@ -261,3 +261,10 @@ pub(crate) fn meta_sink_spec(name: &str, input: &str) -> StageSpec {
     sink.inputs = vec![positional(input)];
     sink
 }
+
+/// A metadata-only sink demanding tags, which the graph serves with a metadata provider.
+pub(crate) fn tag_recording_spec(name: &str, input: &str) -> StageSpec {
+    let mut sink = spec(StageKind::Sink, name, "test/tag-recording");
+    sink.inputs = vec![positional(input)];
+    sink
+}

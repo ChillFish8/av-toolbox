@@ -1,5 +1,5 @@
 use av_toolbox_core::testing::FixtureCuts;
-use av_toolbox_core::{AnyDemand, DemandKind, LayerDemand, StageKind};
+use av_toolbox_core::{AnyDemand, Crossing, DemandKind, LayerDemand, Residency, StageKind};
 use av_toolbox_gpu::LayerId;
 use serde_json::{Value, json};
 
@@ -16,6 +16,7 @@ use crate::{
     Spanned,
     StageSpec,
     build,
+    place_transfers,
     residency,
     satisfy_demands,
     solve,
@@ -27,6 +28,10 @@ fn source(name: &str) -> StageSpec {
     spec.args = Spanned::unknown(json!({ "path": "a.mkv" }));
 
     spec
+}
+
+fn host_source(name: &str) -> StageSpec {
+    testing::spec(StageKind::Source, name, "test/host-file")
 }
 
 fn sink(name: &str, input: &str) -> StageSpec {
@@ -81,6 +86,26 @@ fn satisfied(specs: &[StageSpec]) -> CompiledGraph {
 
     satisfy_demands(&mut graph, &registry).expect("should satisfy every demand");
     graph
+}
+
+/// Satisfies every demand in `specs`, then settles sides and places crossings.
+fn placed(specs: &[StageSpec]) -> CompiledGraph {
+    let registry = testing::registry();
+    let capabilities = residency::tests::capabilities();
+    let mut graph = satisfied(specs);
+    let mut formats = solve(&graph, &registry, &capabilities).expect("should solve");
+
+    place_transfers(&mut graph, &registry, &mut formats).expect("should place");
+    graph
+}
+
+fn crossing_names(graph: &CompiledGraph, crossing: Crossing) -> Vec<&str> {
+    graph
+        .nodes()
+        .iter()
+        .filter(|node| *node.role() == NodeRole::Crossing(crossing))
+        .map(|node| node.name())
+        .collect()
 }
 
 fn refused(specs: &[StageSpec]) -> Vec<Diagnostic> {
@@ -978,4 +1003,61 @@ fn a_failed_provider_demand_is_reported_once_when_asked_again() {
     let diagnostics = refused(&specs);
 
     assert_eq!(codes(&diagnostics), vec![DiagnosticCode::ProviderCycle]);
+}
+
+#[test]
+fn a_host_provider_after_a_host_source_sits_before_the_upload() {
+    let specs = [
+        host_source("input"),
+        demanding("wants", "input", json!({ "host_cuts": true })),
+        sink("out", "wants"),
+    ];
+
+    let graph = placed(&specs);
+
+    assert_eq!(reads(&graph, "host-fixture-cuts(input)", 0), "input");
+    assert_eq!(
+        reads(&graph, "upload(host-fixture-cuts(input))", 0),
+        "host-fixture-cuts(input)"
+    );
+    assert_eq!(reads(&graph, "wants", 0), "upload(host-fixture-cuts(input))");
+    assert!(crossing_names(&graph, Crossing::Unload).is_empty());
+}
+
+#[test]
+fn a_meta_provider_adds_no_crossing() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "tags": true })),
+        sink("out", "wants"),
+    ];
+
+    let graph = placed(&specs);
+
+    assert_eq!(reads(&graph, "tags(input)", 0), "input");
+    assert_eq!(reads(&graph, "wants", 0), "tags(input)");
+    assert_eq!(named(&graph, "tags(input)").residency(), Some(Residency::Device));
+    assert!(crossing_names(&graph, Crossing::Upload).is_empty());
+    assert!(crossing_names(&graph, Crossing::Unload).is_empty());
+}
+
+#[test]
+fn a_meta_provider_after_a_host_provider_adds_no_crossing() {
+    let specs = [
+        source("input"),
+        demanding("wants", "input", json!({ "tags": true, "host_cuts": true })),
+        sink("out", "wants"),
+    ];
+
+    let graph = placed(&specs);
+
+    assert_eq!(crossing_names(&graph, Crossing::Unload), vec!["unload(input)"]);
+    assert_eq!(
+        crossing_names(&graph, Crossing::Upload),
+        vec!["upload(tags(input))"]
+    );
+    assert_eq!(reads(&graph, "host-fixture-cuts(input)", 0), "unload(input)");
+    assert_eq!(reads(&graph, "tags(input)", 0), "host-fixture-cuts(input)");
+    assert_eq!(reads(&graph, "wants", 0), "upload(tags(input))");
+    assert_eq!(named(&graph, "tags(input)").residency(), Some(Residency::Host));
 }

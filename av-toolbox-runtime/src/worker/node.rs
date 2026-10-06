@@ -1,4 +1,17 @@
-use av_toolbox_core::{Crossing, Filter, Inputs, Mask, Provider, Sink, Source, end_meta_sink, run_meta_sink};
+use av_toolbox_core::{
+    Crossing,
+    Filter,
+    Inputs,
+    Mask,
+    Provider,
+    Sink,
+    Source,
+    StageError,
+    end_meta_provider,
+    end_meta_sink,
+    run_meta_provider,
+    run_meta_sink,
+};
 use av_toolbox_gpu::{AnyItem, FrameContext, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
@@ -31,6 +44,11 @@ pub fn run_node(
         StageBox::Sink(sink) => {
             let inputs = narrow(node, slots);
             run_sink(node, sink.as_mut(), context, inputs)
+        },
+        StageBox::MetaProvider(provider) => {
+            let item = only_item(node, slots)?;
+            run_meta_provider(provider.as_mut(), context, item)
+                .map_err(|source| RunError::Stage { node, source })
         },
         StageBox::MetaSink(sink) => {
             run_meta_sink(sink.as_mut(), context, slots)
@@ -80,6 +98,16 @@ fn narrow<S: Side>(node: NodeId, slots: Vec<Option<AnyItem>>) -> Inputs<S> {
     Inputs::from_slots(slots)
 }
 
+/// The item in slot 0, which is the only input a metadata provider reads.
+fn only_item(node: NodeId, slots: Vec<Option<AnyItem>>) -> Result<AnyItem, RunError> {
+    let item = slots.into_iter().next().flatten();
+
+    item.ok_or_else(|| RunError::Stage {
+        node,
+        source: StageError::msg("expected an item in slot 0"),
+    })
+}
+
 /// Signals the start of a chunk to whichever kind `stage` is.
 pub fn start_node(node: NodeId, stage: &mut StageBox, context: &mut FrameContext) -> Result<(), RunError> {
     match stage {
@@ -88,6 +116,7 @@ pub fn start_node(node: NodeId, stage: &mut StageBox, context: &mut FrameContext
         StageBox::Mask(mask) => mask.start_of_stream(context),
         StageBox::Provider(provider) => provider.start_of_stream(context),
         StageBox::Sink(sink) => sink.start_of_stream(context),
+        StageBox::MetaProvider(provider) => provider.start_of_stream(context),
         StageBox::MetaSink(sink) => sink.start_of_stream(context),
         StageBox::HostSource(source) => source.start_of_stream(context),
         StageBox::HostFilter(filter) => filter.start_of_stream(context),
@@ -117,6 +146,9 @@ pub fn end_node(
         StageBox::Filter(filter) => end_filter(node, filter.as_mut(), context),
         StageBox::Provider(provider) => end_provider(node, provider.as_mut(), context),
         StageBox::Sink(sink) => end_sink(node, sink.as_mut(), context),
+        StageBox::MetaProvider(provider) => {
+            end_meta_provider(provider.as_mut(), context).map_err(|source| RunError::Stage { node, source })
+        },
         StageBox::MetaSink(sink) => {
             end_meta_sink(sink.as_mut(), context).map_err(|source| RunError::Stage { node, source })?;
 
@@ -274,7 +306,15 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use av_toolbox_core::{Crossing, MetaInputs, MetaSink, StageError, StageInstance};
+    use av_toolbox_core::{
+        Crossing,
+        MetaInputs,
+        MetaItem,
+        MetaProvider,
+        MetaSink,
+        StageError,
+        StageInstance,
+    };
     use av_toolbox_gpu::{
         AnyItem,
         ColourInfo,
@@ -443,6 +483,30 @@ mod tests {
         }
 
         fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<HostStreamItem>, StageError> {
+            Ok(self.held.take().into_iter().collect())
+        }
+    }
+
+    /// Holds each item back until the next one arrives, handing the last on at the end, on either side.
+    #[derive(Default)]
+    struct HoldOneMeta {
+        held: Option<MetaItem>,
+    }
+
+    impl StageInstance for HoldOneMeta {}
+
+    impl MetaProvider for HoldOneMeta {
+        fn process(
+            &mut self,
+            _context: &mut FrameContext,
+            item: MetaItem,
+        ) -> Result<Vec<MetaItem>, StageError> {
+            let previous = self.held.replace(item);
+
+            Ok(previous.into_iter().collect())
+        }
+
+        fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<Vec<MetaItem>, StageError> {
             Ok(self.held.take().into_iter().collect())
         }
     }
@@ -857,6 +921,27 @@ mod tests {
         assert!(passed[0].is_host());
         assert_eq!(passed[0].meta().index, 1);
         assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].meta().index, 2);
+    }
+
+    #[test]
+    fn a_meta_provider_runs_on_either_side_and_flushes_at_the_end() {
+        let context = testing_context();
+        let mut stage = StageBox::MetaProvider(Box::<HoldOneMeta>::default());
+        let mut run_context = context_of(&context);
+
+        let first = vec![Some(item(&context, 1, 0))];
+        let held = run_node(NodeId::new(0), &mut stage, &mut run_context, first).expect("runs");
+        let second = vec![Some(host_item(&context, 2))];
+        let passed = run_node(NodeId::new(0), &mut stage, &mut run_context, second).expect("runs");
+        let flushed = end_node(NodeId::new(0), &mut stage, &mut run_context).expect("ends");
+
+        assert!(held.is_empty());
+        assert_eq!(passed.len(), 1);
+        assert!(!passed[0].is_host());
+        assert_eq!(passed[0].meta().index, 1);
+        assert_eq!(flushed.len(), 1);
+        assert!(flushed[0].is_host());
         assert_eq!(flushed[0].meta().index, 2);
     }
 }

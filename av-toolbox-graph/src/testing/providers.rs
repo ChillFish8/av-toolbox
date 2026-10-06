@@ -10,6 +10,12 @@ use av_toolbox_core::{
     InputSignature,
     Inputs,
     LayerDemand,
+    MetaInputs,
+    MetaItem,
+    MetaProvider,
+    MetaSide,
+    MetaSink,
+    MetaSinkDefinition,
     Parallelism,
     PathEdge,
     PathView,
@@ -384,6 +390,199 @@ impl ProviderDefinition for Relaying {
     }
 }
 
+/// What [Tagging] writes onto each frame.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct Tag(pub(crate) bool);
+
+/// Asks [Tagging] for tags.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct TagsRequest {
+    /// Whether [Tagging] demands [HostFixtureCuts] of its own input.
+    #[serde(default)]
+    pub(crate) host_cuts: bool,
+}
+
+/// A demand kind served by [Tagging], which runs on metadata alone.
+pub(crate) struct FixtureTags;
+
+impl DemandDefinition for FixtureTags {
+    type Request = TagsRequest;
+    type Output = Tag;
+
+    fn kind() -> &'static str {
+        "tags"
+    }
+}
+
+/// Serves [FixtureTags] after the source by writing `Tag(true)` onto every frame.
+pub(super) struct Tagging;
+
+impl StageDefinition for Tagging {
+    type Args = Vec<LayerDemand>;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "tagging"
+    }
+
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        let reads_host_cuts = args
+            .iter()
+            .filter_map(|served| served.demand.request::<FixtureTags>())
+            .any(|request| request.host_cuts);
+        if !reads_host_cuts {
+            return Vec::new();
+        }
+
+        vec![InputDemand {
+            input: "input",
+            demand: AnyDemand::new::<HostFixtureCuts>(()),
+        }]
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl ProviderDefinition for Tagging {
+    type Side = MetaSide;
+    type Demand = FixtureTags;
+
+    fn place(_request: &TagsRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+        Ok(path.after_source())
+    }
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        offered: StreamFormat,
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn check(_args: &Self::Args, _input: &FrameFormat) -> Result<(), StageError> {
+        Ok(())
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        args: Self::Args,
+        _inputs: &BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaProvider>, StageError> {
+        let layers = args.iter().map(|served| served.layer).collect();
+
+        Ok(Box::new(TaggingInstance { layers }))
+    }
+}
+
+/// The instance [Tagging] builds.
+struct TaggingInstance {
+    layers: Vec<LayerId>,
+}
+
+impl StageInstance for TaggingInstance {}
+
+impl MetaProvider for TaggingInstance {
+    fn process(
+        &mut self,
+        _context: &mut FrameContext,
+        mut item: MetaItem,
+    ) -> Result<Vec<MetaItem>, StageError> {
+        let meta = item.meta_mut();
+        for layer in &self.layers {
+            meta.provided.set(*layer, Tag(true));
+        }
+
+        Ok(vec![item])
+    }
+}
+
+/// A metadata-only sink demanding [FixtureTags], which fails on any frame not tagged `Tag(true)`.
+pub(super) struct TagReading;
+
+impl StageDefinition for TagReading {
+    type Args = TagsRequest;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "tag-reading"
+    }
+
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        vec![InputDemand {
+            input: "input",
+            demand: AnyDemand::new::<FixtureTags>(args.clone()),
+        }]
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl MetaSinkDefinition for TagReading {
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn MetaSink>, StageError> {
+        let tags = inputs
+            .provision::<FixtureTags>("input")
+            .map_err(unprovided_tags)?;
+
+        Ok(Box::new(TagReadingInstance { tags }))
+    }
+}
+
+fn unprovided_tags(error: ProvisionError) -> StageError {
+    StageError::with_source("the tag reading fixture was given no tags", error)
+}
+
+/// The instance [TagReading] builds.
+struct TagReadingInstance {
+    tags: Provision<FixtureTags>,
+}
+
+impl StageInstance for TagReadingInstance {}
+
+impl MetaSink for TagReadingInstance {
+    fn consume(&mut self, _context: &mut FrameContext, mut inputs: MetaInputs) -> Result<(), StageError> {
+        let item = inputs
+            .take(0)
+            .ok_or_else(|| StageError::msg("expected an item in slot 0"))?;
+
+        let tag = self.tags.get(item.meta());
+        if tag != Some(&Tag(true)) {
+            return Err(StageError::msg("a frame arrived without Tag(true)"));
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct DemandingArgs {
     #[serde(default)]
@@ -414,6 +613,9 @@ pub(crate) struct DemandingArgs {
     /// Whether the stage demands [FixtureRelays] instead.
     #[serde(default)]
     relays: bool,
+    /// Whether the stage demands [FixtureTags] instead, which reads host cuts when `host_cuts` is set.
+    #[serde(default)]
+    tags: bool,
 }
 
 impl DemandingArgs {
@@ -426,6 +628,14 @@ impl DemandingArgs {
     }
 
     fn demand(&self) -> AnyDemand {
+        if self.tags {
+            let request = TagsRequest {
+                host_cuts: self.host_cuts,
+            };
+
+            return AnyDemand::new::<FixtureTags>(request);
+        }
+
         if self.unprovided {
             return AnyDemand::new::<Unprovided>(());
         }

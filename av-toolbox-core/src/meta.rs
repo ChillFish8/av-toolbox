@@ -4,13 +4,21 @@ use av_toolbox_gpu::{AnyItem, FrameContext, FrameMeta, StreamFormat};
 
 use crate::{StageError, StageInstance};
 
-/// An item a metadata-only sink is handed, with its place in the stream reachable and its samples
+/// An item a metadata-only stage is handed, with its place in the stream reachable and its samples
 /// not.
 pub struct MetaItem {
     item: AnyItem,
 }
 
 impl MetaItem {
+    pub(crate) fn new(item: AnyItem) -> Self {
+        Self { item }
+    }
+
+    pub(crate) fn into_any(self) -> AnyItem {
+        self.item
+    }
+
     pub const fn meta(&self) -> &FrameMeta {
         self.item.meta()
     }
@@ -88,10 +96,7 @@ pub fn run_meta_sink(
     context: &mut FrameContext,
     slots: Vec<Option<AnyItem>>,
 ) -> Result<(), StageError> {
-    let slots = slots
-        .into_iter()
-        .map(|slot| slot.map(|item| MetaItem { item }))
-        .collect();
+    let slots = slots.into_iter().map(|slot| slot.map(MetaItem::new)).collect();
 
     sink.consume(context, MetaInputs { slots })
 }

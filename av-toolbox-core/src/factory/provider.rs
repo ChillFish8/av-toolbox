@@ -26,9 +26,9 @@ use crate::{
     LayerDemand,
     OpenSlot,
     ProviderDefinition,
+    ProviderSide,
     Residency,
     StageError,
-    StageSide,
 };
 
 /// Carries a provider's demands into whichever runtime the backend opened.
@@ -45,7 +45,7 @@ impl<'a, D: ProviderDefinition> BuildTask for BuildProvider<'a, D> {
     fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
         let stage = D::build::<R>(context, self.args, &self.inputs, self.formats)?;
 
-        Ok(<D::Side as StageSide>::provider(stage))
+        Ok(<D::Side as ProviderSide>::provider(stage))
     }
 }
 
@@ -84,7 +84,7 @@ impl<D: ProviderDefinition> PreparedProvider for Prepared<D> {
     }
 
     fn residency(&self) -> Residency {
-        <D::Side as StageSide>::RESIDENCY
+        <D::Side as ProviderSide>::RESIDENCY
     }
 
     fn build(

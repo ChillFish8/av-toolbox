@@ -7,6 +7,7 @@ pub(crate) mod joins;
 pub(crate) mod shaping;
 pub(crate) mod sinks;
 pub(crate) mod sources;
+pub(crate) mod tags;
 
 use av_toolbox_core::Parallelism;
 use av_toolbox_core::testing::{FixtureCuts, HostFixtureCuts};

@@ -1,10 +1,21 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use av_toolbox_graph::StageSpec;
+
 use crate::engine::tests::fixtures::filters::{PASS_BUILD_CALLS, PASS_HAD_BUDGET};
 use crate::engine::tests::fixtures::sinks::PAIRING_STEPS;
 use crate::engine::tests::fixtures::sources::SOURCE_BUDGETS;
-use crate::engine::tests::harness::{build_engine, clear_recorded, recorded, run_with_watchdog};
+use crate::engine::tests::fixtures::tags::{TAGGED, Tag};
+use crate::engine::tests::harness::{
+    build_engine,
+    clear_recorded,
+    engine_from,
+    planned_graph,
+    recorded,
+    run_with_watchdog,
+    share_a_region,
+};
 use crate::engine::tests::specs::{
     filter_spec,
     host_pass_spec,
@@ -14,6 +25,7 @@ use crate::engine::tests::specs::{
     pairing_spec,
     sink_spec,
     source_spec,
+    tag_recording_spec,
 };
 use crate::{RunReport, Settings};
 
@@ -65,6 +77,43 @@ fn a_meta_sinks_frames_are_counted_in_the_report() {
 
     assert_eq!(recorded(), vec![0, 1, 2]);
     assert_eq!(report.frames, 3);
+}
+
+/// Runs five frames from `source` through `pass` into a sink demanding tags, with the tags provider
+/// sharing the source's region.
+fn tags_every_frame_in_order(source: StageSpec, pass: StageSpec, property: &str) {
+    TAGGED.lock().expect("not poisoned").clear();
+
+    let specs = vec![source, pass, tag_recording_spec("out", "pass")];
+    let (graph, solved) = planned_graph(&specs);
+    assert!(share_a_region(&graph, "input", "tags(input)"));
+    assert!(share_a_region(&graph, "tags(input)", "pass"));
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+
+    let tagged = TAGGED.lock().expect("not poisoned").clone();
+    let expected: Vec<(u64, Option<Tag>)> = (0..5).map(|timestamp| (timestamp, Some(Tag(true)))).collect();
+    assert_eq!(tagged, expected);
+    assert_eq!(report.frames, 5);
+}
+
+#[test]
+fn a_meta_provider_in_its_producers_region_tags_every_device_frame_in_order() {
+    tags_every_frame_in_order(
+        source_spec("input", &[0, 0, 0, 0, 0], 0),
+        filter_spec("pass", "input", None),
+        "a_meta_provider_in_its_producers_region_tags_every_device_frame_in_order",
+    );
+}
+
+#[test]
+fn a_meta_provider_in_its_producers_region_tags_every_host_frame_in_order() {
+    tags_every_frame_in_order(
+        host_source_spec("input", &[0, 0, 0, 0, 0], 0),
+        host_pass_spec("pass", "input", None),
+        "a_meta_provider_in_its_producers_region_tags_every_host_frame_in_order",
+    );
 }
 
 #[test]
