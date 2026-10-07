@@ -284,6 +284,12 @@ pub(crate) const HEADROOM_ITEMS_PER_WORKER: usize = 4;
 /// what the budget was sized for rather than something it never counted.
 pub(crate) const FRAME_UNITS_IN_FLIGHT: usize = HEADROOM_ITEMS_PER_WORKER;
 
+/// How many results a chunk routed worker may hold that its aggregate has not drained.
+///
+/// The aggregate drains chunks in order, so a worker on a later chunk keeps what it produces
+/// until every chunk before it has drained. This is how far it may get before it has to wait.
+pub(crate) const CHUNK_RESULTS_IN_FLIGHT: usize = 64;
+
 /// How many nodes the longest source region runs.
 ///
 /// Each node's output from one step is held until the step returns, so the source's share of the

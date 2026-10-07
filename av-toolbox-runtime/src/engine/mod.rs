@@ -42,6 +42,7 @@ pub(crate) use self::plan::FRAME_UNITS_IN_FLIGHT;
 #[cfg(test)]
 pub(crate) use self::plan::HEADROOM_ITEMS_PER_WORKER;
 use self::plan::{
+    CHUNK_RESULTS_IN_FLIGHT,
     bound_slots,
     build_region_edges,
     default_source_share,
@@ -348,15 +349,21 @@ impl Engine {
                 .filter(|&(_, &is_bound)| is_bound)
                 .map(|(slot, _)| slot)
                 .collect();
-            // One local sizes both how many units the dispatch policy hands a worker and how deep
-            // that worker's results channel is. They are one number because both describe the
-            // same thing, how far a worker may run ahead of its aggregate before it has to wait.
-            let capacity = match routing {
+            // How many units the dispatch policy hands a worker before its aggregate drains one.
+            let units_in_flight = match routing {
                 Routing::ByChunk => 1,
                 Routing::ByFrame => FRAME_UNITS_IN_FLIGHT,
             };
 
-            let freedom = Arc::new(WorkerFreedom::new(width, capacity));
+            // How many results a worker may produce ahead of its aggregate before it has to wait.
+            // A chunk routed worker holds one chunk, but a later chunk only drains once every one
+            // before it has, so it needs room for many of its frames rather than one.
+            let results_in_flight = match routing {
+                Routing::ByChunk => CHUNK_RESULTS_IN_FLIGHT,
+                Routing::ByFrame => FRAME_UNITS_IN_FLIGHT,
+            };
+
+            let freedom = Arc::new(WorkerFreedom::new(width, units_in_flight));
             let woken = freedom.clone();
             cancel.on_stop(move || woken.wake_everyone());
 
@@ -395,7 +402,7 @@ impl Engine {
                     .routed_on(region.route())
                     .profiled(profiler.clone());
                 let context = make_context();
-                let (result_sender, result_receiver) = mpsc::sync_channel(capacity);
+                let (result_sender, result_receiver) = mpsc::sync_channel(results_in_flight);
 
                 result_receivers.push(result_receiver);
                 worker_slots.push(WorkerSlot {

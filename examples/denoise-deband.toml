@@ -1,0 +1,32 @@
+# Reads a video, denoises it with av-denoise's NL4D, then debands it, and throws the result away.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.mkv"
+
+[variable.preset]
+type = "string"
+description = "How much quality to trade for speed"
+default = "base"
+choices = ["veryfast", "fast", "base", "slow", "veryslow"]
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+args.preset = "{{ preset }}"
+
+[filter.deband]
+type = "deband/placebo"
+inputs = ["denoise"]
+args.iterations = 2
+args.threshold = [4.0, 3.0, 3.0]
+args.grain = [6.0, 0.0, 0.0]
+
+[sink.output]
+type = "null/discard"
+inputs = ["deband"]

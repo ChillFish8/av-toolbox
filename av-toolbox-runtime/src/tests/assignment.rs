@@ -260,6 +260,57 @@ fn a_held_frame_mode_worker_does_not_hold_up_the_others() {
     assert_every_thread_exited(property);
 }
 
+/// One frame of chunk zero and eight of chunk one through a chunk mode stage two workers wide, with
+/// the worker on chunk zero held inside its own `process` call.
+///
+/// The aggregate drains chunks in order, so nothing of chunk one can leave the region until chunk
+/// zero has. The worker on chunk one still has to get through its whole chunk in the meantime,
+/// rather than stalling behind the held one.
+#[test]
+fn a_chunk_routed_worker_runs_ahead_of_an_earlier_held_chunk() {
+    let property = "a_chunk_routed_worker_runs_ahead_of_an_earlier_held_chunk";
+    clear_recorded();
+    clear_assigned();
+
+    let held = hold_workers(1);
+    let later_frames = 8;
+    let mut chunks = vec![0];
+    chunks.extend(vec![1; later_frames]);
+    let specs = vec![
+        source_spec("input", &chunks, 0),
+        tracked_spec("tracked", "input", 2, true),
+        sink_spec("out", "tracked"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(routing_of(&graph, "tracked"), Routing::ByChunk);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let mut processed = 0;
+    let result = run_driven_with_watchdog(engine, property, |_cancel| {
+        held.arrivals
+            .recv_timeout(WATCHDOG)
+            .expect("the worker on chunk zero should reach its gate");
+
+        while processed < later_frames && held.processed.recv_timeout(WATCHDOG).is_ok() {
+            processed += 1;
+        }
+
+        held.release();
+    });
+
+    let report = result.expect("the run should finish once the held worker is released");
+
+    assert_eq!(
+        processed, later_frames,
+        "{property}: the worker on chunk one processed {processed} of its {later_frames} frames \
+         while chunk zero was held",
+    );
+    assert_eq!(recorded(), (0..9).collect::<Vec<u64>>());
+    assert_eq!(report.frames, 9);
+    assert_every_thread_exited(property);
+}
+
 /// Two sources into a frame mode stage of two inputs, four workers wide.
 ///
 /// Every bundle has to carry the two frames that belong together, whichever worker it lands on. A
