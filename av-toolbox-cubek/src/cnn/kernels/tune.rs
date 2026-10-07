@@ -81,6 +81,8 @@ pub enum Epilogue {
     Residual,
     /// The first layer's maps added, on the last body convolution.
     Join,
+    /// ReLU, on the first convolution of a ResBlock.
+    Relu,
 }
 
 /// What a body convolution's tuning is kept under.

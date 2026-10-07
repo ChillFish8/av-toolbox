@@ -70,7 +70,7 @@ pub(super) fn supports(path: BodyPath, precision: Precision) -> bool {
     backend().build(task)
 }
 
-pub(super) fn supported_runs() -> Vec<(BodyPath, Precision)> {
+pub(crate) fn supported_runs() -> Vec<(BodyPath, Precision)> {
     let mut runs = Vec::new();
 
     for path in PATHS {
@@ -715,7 +715,7 @@ impl BuildTask for BiasPlacement {
 }
 
 /// The spacing of f16 values at `magnitude`.
-pub(super) fn f16_step(magnitude: f32) -> f32 {
+pub(crate) fn f16_step(magnitude: f32) -> f32 {
     let bits = f16::from_f32(magnitude.abs()).to_bits();
     let exponent = i32::from(bits >> 10);
 

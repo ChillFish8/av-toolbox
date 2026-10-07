@@ -21,10 +21,11 @@ use crate::cnn::{ConvLayer, Precision, Region};
 /// How the body's `F -> F` convolutions run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyPath {
-    /// `cubek-convolution` on cooperative-matrix tiles, applying each layer's SiLU and residual as it writes.
+    /// `cubek-convolution` on cooperative-matrix tiles, applying each layer's activation and residual as it
+    /// writes.
     Convolution,
-    /// `cubek-convolution` on cooperative-matrix tiles, with each layer's SiLU and residual in a separate
-    /// pass.
+    /// `cubek-convolution` on cooperative-matrix tiles, with each layer's activation and residual in a
+    /// separate pass.
     UnfusedConvolution,
     /// An im2col copy of the maps, then a `cubek-matmul` unit matmul.
     Im2col,
@@ -53,10 +54,11 @@ impl From<ServerError> for CnnError {
 }
 
 /// What the epilogue applies after adding the bias.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Activation {
     None,
     Silu,
+    Relu,
 }
 
 #[cube(launch_unchecked)]
@@ -67,6 +69,7 @@ fn epilogue_kernel<F: Float>(
     features: u32,
     add_bias: u32,
     silu: u32,
+    relu: u32,
     add_residual: u32,
 ) {
     if ABSOLUTE_POS >= values.len() {
@@ -82,6 +85,10 @@ fn epilogue_kernel<F: Float>(
 
     if silu == 1 {
         value = value / (1.0 + f32::exp(-value));
+    }
+
+    if relu == 1 {
+        value = f32::max(value, 0.0);
     }
 
     if add_residual == 1 {
@@ -154,6 +161,7 @@ pub(crate) fn run_epilogue<R: Runtime>(
 
     let bias_flag = u32::from(adds_bias);
     let silu = u32::from(activation == Activation::Silu);
+    let relu = u32::from(activation == Activation::Relu);
     let add_residual = u32::from(residual.is_some());
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
@@ -177,6 +185,7 @@ pub(crate) fn run_epilogue<R: Runtime>(
                 features,
                 bias_flag,
                 silu,
+                relu,
                 add_residual,
             ),
             Precision::F32 => epilogue_kernel::launch_unchecked::<f32, R>(
@@ -189,6 +198,7 @@ pub(crate) fn run_epilogue<R: Runtime>(
                 features,
                 bias_flag,
                 silu,
+                relu,
                 add_residual,
             ),
         }
@@ -369,7 +379,7 @@ fn convolve_fused<R: Runtime>(
 pub struct LayerRun {
     /// Whether the convolution took the forced blueprint.
     pub forced: bool,
-    /// Whether the layer's SiLU and residual were applied as the convolution wrote, rather than in a
+    /// Whether the layer's activation and residual were applied as the convolution wrote, rather than in a
     /// separate pass.
     pub fused: bool,
     /// The candidate that ran the convolution, if one was chosen for it.

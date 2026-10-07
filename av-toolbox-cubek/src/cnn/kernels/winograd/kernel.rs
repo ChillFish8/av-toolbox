@@ -200,8 +200,8 @@ pub(super) fn input_transform_kernel(
     }
 }
 
-/// Computes a block of 2x2 output tiles of a body layer as Winograd F(2x2, 3x3), with the bias, SiLU and the
-/// residual applied as it writes.
+/// Computes a block of 2x2 output tiles of a body layer as Winograd F(2x2, 3x3), with the bias, the
+/// activation and the residual applied as it writes.
 ///
 /// For each of the 16 positions in turn, the transformed input and transformed weights are multiplied on
 /// cooperative matrices accumulating in f32, and each unit folds the products into its output tiles through
@@ -410,8 +410,8 @@ fn fold_products(
     }
 }
 
-/// Adds the bias to the unit's output sums, applies SiLU and the residual, and writes them to `output` in
-/// f16.
+/// Adds the bias, if the layer has one, to the unit's output sums, applies the activation and the residual,
+/// and writes them to `output` in f16.
 ///
 /// Samples outside the frame are not written.
 #[cube]
@@ -450,7 +450,10 @@ fn write_out(
                 let tile_row = block_row + block_tile / tile_columns;
                 let tile_column = block_column + block_tile % tile_columns;
                 let channel_quad = (channel + (index % row_quads) * WRITE_WIDTH) / WRITE_WIDTH;
-                let bias_sums = Sums::cast_from(bias[channel_quad as usize]);
+                let mut bias_sums = Sums::new(0.0);
+                if comptime!(shape.bias) {
+                    bias_sums = Sums::cast_from(bias[channel_quad as usize]);
+                }
 
                 #[unroll]
                 for output_row in 0..2usize {
@@ -467,7 +470,8 @@ fn write_out(
                         if row < height && column < width {
                             let position = (row * width + column) * sample_quads + channel_quad;
                             let sum = sums[slot] + bias_sums;
-                            let finished = finish_sums(sum, residual, position, shape.silu, shape.residual);
+                            let finished =
+                                finish_sums(sum, residual, position, shape.activation, shape.residual);
 
                             output[position as usize] = Quad::cast_from(finished);
                         }

@@ -182,8 +182,9 @@ impl DirectVariant {
             planes_n: self.planes_n,
             weights: self.weights,
             plane_width: self.plane_width,
-            silu: activation == Activation::Silu,
+            activation,
             residual,
+            bias: true,
         })
     }
 }
@@ -199,11 +200,17 @@ pub(crate) struct DirectShape {
     planes_n: u32,
     weights: WeightStaging,
     plane_width: u32,
-    silu: bool,
+    activation: Activation,
     residual: bool,
+    bias: bool,
 }
 
 impl DirectShape {
+    /// The same shape for a layer without a bias, whose accumulators start at zero.
+    pub(crate) fn without_bias(self) -> Self {
+        Self { bias: false, ..self }
+    }
+
     fn planes(&self) -> u32 {
         self.planes_m * self.planes_n
     }
@@ -376,9 +383,10 @@ pub(super) fn fragment<E: Scalar>(
     unsafe { cmma::Matrix::<E>::uninitialized(ident, TILE as usize, TILE as usize, TILE as usize, layout) }
 }
 
-/// Fills the plane's accumulators with the bias of their channels, through its scratch tile.
+/// Fills the plane's accumulators with the bias of their channels through its scratch tile, or with zero when
+/// the layer has no bias.
 #[cube]
-fn bias_accumulators(
+fn start_accumulators(
     bias: &Array<Quad>,
     scratch: &mut SharedMemory<Sums>,
     spot: PlaneSpot,
@@ -399,37 +407,45 @@ fn bias_accumulators(
 
     #[unroll]
     for channel_tile in 0..channel_tiles {
-        let tile_channel = first_channel + (spot.first_channel_tile + channel_tile as u32) * TILE;
+        if comptime!(shape.bias) {
+            let tile_channel = first_channel + (spot.first_channel_tile + channel_tile as u32) * TILE;
 
-        // Every plane runs the same steps, so the whole workgroup reaches each barrier.
-        sync_cube();
+            // Every plane runs the same steps, so the whole workgroup reaches each barrier.
+            sync_cube();
 
-        let mut index = UNIT_POS_X;
-        while index < tile_quads {
-            let quad = index % row_quads;
-            let value = bias[((tile_channel + quad * WRITE_WIDTH) / WRITE_WIDTH) as usize];
+            let mut index = UNIT_POS_X;
+            while index < tile_quads {
+                let quad = index % row_quads;
+                let value = bias[((tile_channel + quad * WRITE_WIDTH) / WRITE_WIDTH) as usize];
 
-            scratch[(spot.scratch + index) as usize] = Sums::cast_from(value);
-            index += CUBE_DIM_X;
-        }
+                scratch[(spot.scratch + index) as usize] = Sums::cast_from(value);
+                index += CUBE_DIM_X;
+            }
 
-        sync_cube();
+            sync_cube();
 
-        let start = spot.scratch as usize;
-        let tile = scratch.slice(start, start + tile_quads as usize);
+            let start = spot.scratch as usize;
+            let tile = scratch.slice(start, start + tile_quads as usize);
 
-        #[unroll]
-        for pixel_tile in 0..pixel_tiles {
-            let accumulator = accumulators.index(comptime!(pixel_tile * channel_tiles + channel_tile));
-            cmma::load_with_layout(accumulator, &tile, TILE, cmma::MatrixLayout::RowMajor);
+            #[unroll]
+            for pixel_tile in 0..pixel_tiles {
+                let accumulator = accumulators.index(comptime!(pixel_tile * channel_tiles + channel_tile));
+                cmma::load_with_layout(accumulator, &tile, TILE, cmma::MatrixLayout::RowMajor);
+            }
+        } else {
+            #[unroll]
+            for pixel_tile in 0..pixel_tiles {
+                let accumulator = accumulators.index(comptime!(pixel_tile * channel_tiles + channel_tile));
+                cmma::fill(accumulator, 0.0);
+            }
         }
     }
 
     accumulators
 }
 
-/// Convolves one block of a body layer on cooperative matrices, with the bias, SiLU and the residual applied
-/// as it writes.
+/// Convolves one block of a body layer on cooperative matrices, with the bias, the activation and the
+/// residual applied as it writes.
 ///
 /// Each workgroup reads its block with the one-sample border into shared memory once, and reuses it for all
 /// nine taps. Each plane keeps its accumulators in f32 from the bias to the write.
@@ -458,7 +474,7 @@ fn direct_kernel(
     // Every plane reads samples another plane loaded.
     sync_cube();
 
-    let accumulators = bias_accumulators(bias, &mut scratch, spot, first_channel, shape);
+    let accumulators = start_accumulators(bias, &mut scratch, spot, first_channel, shape);
 
     multiply_taps(
         weights,
@@ -572,7 +588,7 @@ fn multiply_taps(
     }
 }
 
-/// Applies SiLU and the residual to the plane's accumulators, and writes them to `output` in f16.
+/// Applies the activation and the residual to the plane's accumulators, and writes them to `output` in f16.
 ///
 /// Each accumulator passes through the plane's scratch tile. Samples outside the frame are not written.
 #[cube]
@@ -627,7 +643,7 @@ fn write_out(
                 if row < height && column < width {
                     let position = (row * width + column) * sample_quads + tile_channel / WRITE_WIDTH + quad;
                     let sum = scratch[(spot.scratch + index) as usize];
-                    let finished = finish_sums(sum, residual, position, shape.silu, shape.residual);
+                    let finished = finish_sums(sum, residual, position, shape.activation, shape.residual);
 
                     output[position as usize] = Quad::cast_from(finished);
                 }
@@ -638,20 +654,26 @@ fn write_out(
     }
 }
 
-/// `sum` through SiLU when `silu` is set, plus the residual quad at `position` when `residual_added` is set.
+/// `sum` through `activation`, plus the residual quad at `position` when `residual_added` is set.
 #[cube]
 pub(super) fn finish_sums(
     sum: Sums,
     residual: &Array<Quad>,
     position: u32,
-    #[comptime] silu: bool,
+    #[comptime] activation: Activation,
     #[comptime] residual_added: bool,
 ) -> Sums {
     let one = Sums::new(1.0);
     let mut finished = sum;
 
-    if comptime!(silu) {
+    if comptime!(activation == Activation::Silu) {
         finished = finished / (one + Sums::exp(-finished));
+    }
+
+    if comptime!(activation == Activation::Relu) {
+        // Half of `x + |x|` is `x` above zero and exactly zero below it.
+        let half = Sums::new(0.5);
+        finished = (finished + Sums::abs(finished)) * half;
     }
 
     if comptime!(residual_added) {
@@ -759,10 +781,6 @@ pub fn direct_variants(properties: &DeviceProperties, features: u32) -> Vec<Dire
     offered
 }
 
-fn missing_bias() -> CnnError {
-    CnnError::Convolution("the kernel runs only layers with a bias".to_string())
-}
-
 /// Runs `convolution` as `variant` describes.
 pub(crate) fn run_direct<R: Runtime>(
     client: &ComputeClient<R>,
@@ -771,12 +789,16 @@ pub(crate) fn run_direct<R: Runtime>(
 ) -> Result<(), CnnError> {
     convolution.check();
 
-    let bias = convolution.bias.ok_or_else(missing_bias)?;
     let features = convolution.features;
     let residual = convolution.residual.is_some();
     let properties = client.properties();
+    let has_bias = convolution.bias.is_some();
     let shape = variant.shape(features, convolution.activation, residual);
     let shape = shape.map_err(CnnError::Convolution)?;
+    let shape = match has_bias {
+        true => shape,
+        false => shape.without_bias(),
+    };
     let fits = check_device(properties, &variant, &shape);
     fits.map_err(CnnError::Convolution)?;
 
@@ -796,9 +818,12 @@ pub(crate) fn run_direct<R: Runtime>(
     let unit = CubeDim::new_2d(variant.plane_width, variant.planes());
     // Without a residual the input stands in for it, and is never read through it.
     let residual = convolution.residual.unwrap_or(convolution.input);
+    // Without a bias the input stands in for it, and is never read through it.
+    let bias = convolution.bias.unwrap_or(convolution.input);
 
     // Safety: `check` asserts the input, output and residual hold `width * height * F` halves, the weights
-    // `F * 9 * F` and the bias `F`, and the assert above keeps every map index inside a u32.
+    // `F * 9 * F` and the bias `F`, and the assert above keeps every map index inside a u32. Without a bias
+    // the kernel never reads the bias argument.
     // - Input reads are clamped to samples inside the frame, which holds at least one sample whenever a
     //   workgroup runs, since the grid is empty when `width` or `height` is 0. Output writes and residual
     //   reads are guarded to samples inside the frame, at a channel below `F`.

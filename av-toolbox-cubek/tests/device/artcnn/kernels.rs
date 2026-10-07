@@ -195,7 +195,7 @@ impl BuildTask for CandidateLayer {
 }
 
 /// Maps of `region` between -2 and 2, varying from each value to the next, raised by 1.5 on the frame's edge.
-pub(super) fn edged_maps(region: Region, features: u32) -> Vec<f32> {
+pub(crate) fn edged_maps(region: Region, features: u32) -> Vec<f32> {
     let values = (region.samples() * features) as usize;
     let mut maps = wavy_maps(values);
 
@@ -213,7 +213,7 @@ pub(super) fn edged_maps(region: Region, features: u32) -> Vec<f32> {
     maps
 }
 
-pub(super) fn region(width: u32, height: u32) -> Region {
+pub(crate) fn region(width: u32, height: u32) -> Region {
     Region {
         x: 0,
         y: 0,

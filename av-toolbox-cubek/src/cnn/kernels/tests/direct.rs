@@ -239,3 +239,28 @@ fn a_device_without_the_cooperative_matrix_is_offered_no_variant() {
 
     assert!(offered.is_empty(), "{offered:?}");
 }
+
+#[test]
+fn a_shape_without_a_bias_declares_the_same_shared_memory() {
+    let variant = DirectVariant::default();
+
+    let with_bias = variant
+        .shape(64, Activation::Relu, false)
+        .expect("the default splits 64");
+    let without_bias = with_bias.without_bias();
+
+    assert_ne!(with_bias, without_bias);
+    assert_eq!(with_bias.shared_bytes(), without_bias.shared_bytes());
+}
+
+#[test]
+fn the_r9700_offers_the_default_variant_at_128_features_and_none_at_512() {
+    let properties = R9700.properties();
+    let default_variant = DirectVariant::default();
+
+    let at_128 = direct_variants(&properties, 128);
+    let at_512 = direct_variants(&properties, 512);
+
+    assert!(at_128.contains(&default_variant), "{at_128:?}");
+    assert!(at_512.is_empty(), "{at_512:?}");
+}

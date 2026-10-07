@@ -2,6 +2,7 @@ mod artcnn;
 mod based;
 mod bilateral;
 mod bwdif;
+mod cnn;
 mod degrain;
 mod dehalo;
 mod dering;
@@ -54,6 +55,7 @@ pub use self::based::{
 };
 pub use self::bilateral::{reference_bilateral, reference_range_weight};
 pub use self::bwdif::{BWDIF_FIXTURES, BwdifFixture, BwdifReferencePlanes, reference_bwdif};
+pub use self::cnn::{SyntheticLayer, reference_layer, reference_relu, synthetic_layer};
 pub use self::degrain::{ReferenceNeighbour, reference_degrain, reference_scene_changed};
 pub use self::dehalo::{
     reference_dehalo_alpha,

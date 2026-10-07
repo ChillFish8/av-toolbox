@@ -63,36 +63,49 @@ type LaunchedOutput = TensorOutput<Vector<Acc, AccSize>>;
 
 /// The elementwise step a fused write-out applies after the bias.
 trait Epilogue: Send + Sync + 'static + Clone {
-    const SILU: bool;
+    const ACTIVATION: Activation;
 }
 
 #[derive(Clone)]
 struct WithSilu;
 
 impl Epilogue for WithSilu {
-    const SILU: bool = true;
+    const ACTIVATION: Activation = Activation::Silu;
 }
 
 #[derive(Clone)]
-struct WithoutSilu;
+struct WithRelu;
 
-impl Epilogue for WithoutSilu {
-    const SILU: bool = false;
+impl Epilogue for WithRelu {
+    const ACTIVATION: Activation = Activation::Relu;
 }
 
-/// Applies SiLU to `value` when `silu` is set, then adds the residual at `position` if there is one, in f32.
+#[derive(Clone)]
+struct WithoutActivation;
+
+impl Epilogue for WithoutActivation {
+    const ACTIVATION: Activation = Activation::None;
+}
+
+/// Applies `activation` to `value`, then adds the residual at `position` if there is one, in f32.
 #[cube]
 fn fuse<T: CubePrimitive>(
     value: T,
     residual: ComptimeOption<View<T, BatchedCoords>>,
     position: BatchedCoords,
-    #[comptime] silu: bool,
+    #[comptime] activation: Activation,
 ) -> T {
     let mut sum = Vector::<f32, AccSize>::cast_from(value);
 
-    if silu {
+    if comptime!(activation == Activation::Silu) {
         let one = Vector::<f32, AccSize>::new(1.0);
         sum = sum / (one + Vector::exp(-sum));
+    }
+
+    if comptime!(activation == Activation::Relu) {
+        // Half of `x + |x|` is `x` above zero and exactly zero below it.
+        let half = Vector::<f32, AccSize>::new(0.5);
+        sum = (sum + Vector::abs(sum)) * half;
     }
 
     #[comptime]
@@ -120,7 +133,7 @@ struct FusedView<T: CubePrimitive> {
 struct FusedViewExpand<T: CubePrimitive> {
     out: ViewExpand<T, BatchedCoords, ReadWrite>,
     residual: ComptimeOptionExpand<View<T, BatchedCoords>>,
-    silu: bool,
+    activation: Activation,
 }
 
 impl<T: CubePrimitive> CubeType for FusedView<T> {
@@ -223,7 +236,7 @@ impl<T: CubePrimitive> ViewOperationsMutExpand<T, BatchedCoords> for FusedViewEx
         value: <T as CubeType>::ExpandType,
     ) {
         let residual = self.residual.clone();
-        let fused = fuse::expand::<T>(scope, value, residual, position.clone(), self.silu);
+        let fused = fuse::expand::<T>(scope, value, residual, position.clone(), self.activation);
 
         self.out.clone().__expand_write_method(scope, position, fused);
     }
@@ -235,7 +248,7 @@ impl<T: CubePrimitive> ViewOperationsMutExpand<T, BatchedCoords> for FusedViewEx
         value: <T as CubeType>::ExpandType,
     ) {
         let residual = self.residual.clone();
-        let fused = fuse::expand::<T>(scope, value, residual, position.clone(), self.silu);
+        let fused = fuse::expand::<T>(scope, value, residual, position.clone(), self.activation);
 
         self.out
             .clone()
@@ -282,7 +295,7 @@ mod fused_view {
         let fused = FusedViewExpand {
             out,
             residual,
-            silu: E::SILU,
+            activation: E::ACTIVATION,
         };
 
         ViewExpand::new_mut(fused)
@@ -405,7 +418,8 @@ pub(crate) fn launch_fused<R: Runtime>(
 ) -> Result<(), CnnError> {
     match activation {
         Activation::Silu => launch_with::<R, WithSilu>(client, bound, residual),
-        Activation::None => launch_with::<R, WithoutSilu>(client, bound, residual),
+        Activation::Relu => launch_with::<R, WithRelu>(client, bound, residual),
+        Activation::None => launch_with::<R, WithoutActivation>(client, bound, residual),
     }
 }
 

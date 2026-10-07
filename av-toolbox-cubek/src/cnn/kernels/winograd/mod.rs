@@ -201,8 +201,9 @@ impl WinogradVariant {
             planes_m: self.planes_m,
             planes_n: self.planes_n,
             plane_width: self.plane_width,
-            silu: activation == Activation::Silu,
+            activation,
             residual,
+            bias: true,
         })
     }
 }
@@ -219,11 +220,17 @@ pub(crate) struct WinogradShape {
     planes_m: u32,
     planes_n: u32,
     plane_width: u32,
-    silu: bool,
+    activation: Activation,
     residual: bool,
+    bias: bool,
 }
 
 impl WinogradShape {
+    /// The same shape for a layer without a bias, whose sums start at zero.
+    pub(crate) fn without_bias(self) -> Self {
+        Self { bias: false, ..self }
+    }
+
     fn planes(&self) -> u32 {
         self.planes_m * self.planes_n
     }
@@ -331,10 +338,6 @@ pub fn winograd_variants(properties: &DeviceProperties, features: u32) -> Vec<Wi
     offered
 }
 
-fn missing_bias() -> CnnError {
-    CnnError::Convolution("the kernel runs only layers with a bias".to_string())
-}
-
 fn no_transformed_weights() -> CnnError {
     let message = "the layer holds no Winograd weights, which only allow-listed models upload".to_string();
 
@@ -352,12 +355,16 @@ pub(crate) fn run_winograd<R: Runtime>(
     convolution.check();
 
     let transformed = convolution.transformed.ok_or_else(no_transformed_weights)?;
-    let bias = convolution.bias.ok_or_else(missing_bias)?;
     let features = convolution.features;
     let residual = convolution.residual.is_some();
     let properties = client.properties();
+    let has_bias = convolution.bias.is_some();
     let shape = variant.shape(features, convolution.activation, residual);
     let shape = shape.map_err(CnnError::Convolution)?;
+    let shape = match has_bias {
+        true => shape,
+        false => shape.without_bias(),
+    };
     let fits = check_device(properties, &variant, &shape);
     fits.map_err(CnnError::Convolution)?;
 
@@ -376,12 +383,14 @@ pub(crate) fn run_winograd<R: Runtime>(
     let unit = CubeDim::new_2d(variant.plane_width, variant.planes());
     // Without a residual the input stands in for it, and is never read through it.
     let residual = convolution.residual.unwrap_or(convolution.input);
+    // Without a bias the input stands in for it, and is never read through it.
+    let bias = convolution.bias.unwrap_or(convolution.input);
     let quad = WRITE_WIDTH as usize;
     let load = LOAD_WIDTH as usize;
 
     // Safety: `check` asserts the input, output and residual hold `width * height * F` halves, the
     // transformed weights `16 * F * F` and the bias `F`, and the assert above keeps every map index inside a
-    // u32.
+    // u32. Without a bias the kernel never reads the bias argument.
     // - Input reads are guarded to samples inside the frame. Output writes and residual reads are guarded to
     //   samples inside the frame, at a channel below `F`.
     // - A weight fragment's last value is at `position * F * F + (channel + 15) * F + chunk * 16 + 15`, below
