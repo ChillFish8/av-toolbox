@@ -17,6 +17,7 @@ mod hysteresis;
 mod ivtc;
 mod labels;
 mod lineart;
+mod matrix;
 mod motion;
 mod neighbourhood;
 mod padding;

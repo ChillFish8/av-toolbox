@@ -1,4 +1,5 @@
 mod based;
+mod matrix;
 
 use super::{reference_narrow, within_ulps};
 

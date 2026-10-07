@@ -13,6 +13,7 @@ mod eedi3;
 mod hysteresis;
 mod ivtc;
 mod lineart;
+mod matrix;
 mod motion;
 mod neighbourhood;
 mod normalise;
@@ -143,6 +144,15 @@ pub use self::lineart::{
     reference_toon,
     reference_vertical_121,
     reference_vinverse,
+};
+pub use self::matrix::{
+    MATRIX_FIXTURES,
+    MATRIX_HEIGHT,
+    MATRIX_WIDTH,
+    MatrixFixture,
+    decode_samples,
+    encode_samples,
+    reference_matrix,
 };
 pub use self::motion::{
     Interlace,
