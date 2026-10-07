@@ -39,6 +39,7 @@ fn every_example_explains_without_a_device() {
         "image.toml",
         "recolour-lines.toml",
         "artcnn.toml",
+        "deblock-dpir.toml",
     ];
 
     for name in names {

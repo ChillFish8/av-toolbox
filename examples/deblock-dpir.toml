@@ -1,0 +1,75 @@
+# Deblocks a video with DPIR's colour model.
+#
+# The colour model works on RGB, so the chroma is first resampled to 4:4:4 and the frame converted to RGB, then
+# converted back. Choosing the chroma kernel here is the point of doing it by hand. Working at 16 bits keeps the
+# round trip from adding banding.
+#
+# For luma only, drop the six resample stages around the deblock and set args.model = "gray" with
+# args.planes = ["y"].
+#
+# Raise args.strength for heavier blocking. It is on an 8-bit scale, 10 by default.
+# Run `av-toolbox pull dpir` first.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the deblocked clip"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.full_chroma]
+type = "resample/chroma"
+inputs = ["input"]
+args.subsampling = "4:4:4"
+args.kernel = "bicubic"
+args.b = 0.0
+args.c = 0.5
+
+[filter.sixteen_bit]
+type = "resample/depth"
+inputs = ["full_chroma"]
+args.depth = 16
+
+[filter.rgb]
+type = "resample/matrix"
+inputs = ["sixteen_bit"]
+args.to = "rgb"
+args.matrix = "bt709"
+args.range = "limited"
+
+[filter.deblocked]
+type = "deblock/dpir"
+inputs = ["rgb"]
+args.strength = 10
+
+[filter.yuv]
+type = "resample/matrix"
+inputs = ["deblocked"]
+args.to = "yuv"
+args.matrix = "bt709"
+args.range = "limited"
+
+[filter.half_chroma]
+type = "resample/chroma"
+inputs = ["yuv"]
+args.subsampling = "4:2:0"
+args.kernel = "bicubic"
+args.b = 0.0
+args.c = 0.5
+
+[filter.eight_bit]
+type = "resample/depth"
+inputs = ["half_chroma"]
+args.depth = 8
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["eight_bit"]
+args.path = "{{ output }}"
