@@ -43,6 +43,7 @@ mod artcnn;
 mod bits;
 mod blend;
 mod checks;
+mod cnn;
 mod deband;
 mod dehalo;
 mod deinterlace;

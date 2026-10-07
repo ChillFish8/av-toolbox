@@ -21,7 +21,8 @@ use serde_json::json;
 use crate::aa::Based;
 use crate::aa::based::{BasedArgs, Eedi3Tuning, checked_frame_mask, planned};
 use crate::aa::direction::Direction;
-use crate::artcnn::{ModelName, PrecisionName};
+use crate::artcnn::ModelName;
+use crate::cnn::PrecisionName;
 
 const STAGE: &str = "aa/based";
 

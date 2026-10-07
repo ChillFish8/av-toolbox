@@ -72,9 +72,10 @@ use crate::aa::eedi3::{
     indexable,
     thresholds_for,
 };
-use crate::artcnn::{ModelName, PrecisionName, Supersampler, checked_precision, locate};
+use crate::artcnn::{ModelName, Supersampler, locate};
 use crate::bits::bits_of;
 use crate::checks::{between_f32, between_u32};
+use crate::cnn::{PrecisionName, checked_precision};
 use crate::masked::{
     INPUT,
     MASK,

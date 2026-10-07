@@ -41,19 +41,15 @@ use av_toolbox_models::{Located, Store};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+pub(crate) use crate::artcnn::ModelName;
+use crate::artcnn::Supersampler;
 #[cfg(test)]
-pub(crate) use crate::artcnn::{
-    KERNEL_ENV,
-    allocation_cap,
-    body_path,
-    fallbacks,
-    frame_tile,
-    kernels_from_value,
-    warmed_path,
-};
-pub(crate) use crate::artcnn::{ModelName, PrecisionName};
-use crate::artcnn::{Supersampler, checked_precision};
+pub(crate) use crate::artcnn::{KERNEL_ENV, frame_tile, kernels_from_value};
 use crate::bits::bits_of;
+pub(crate) use crate::cnn::PrecisionName;
+use crate::cnn::checked_precision;
+#[cfg(test)]
+pub(crate) use crate::cnn::{allocation_cap, body_path, fallbacks, warmed_path};
 use crate::resize::{Tables, Window, geometry, resize_plane, samples_for};
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
@@ -129,7 +125,7 @@ pub(crate) fn locate(store: &Store, name: ModelName) -> Result<Located, StageErr
 pub(crate) fn failed_convolution_and_im2col(convolution: CnnError, im2col: CnnError) -> StageError {
     let failures = vec![(BodyPath::Convolution, convolution), (BodyPath::Im2col, im2col)];
 
-    crate::artcnn::failed_every_path(STAGE, failures)
+    crate::cnn::failed_every_path(STAGE, failures)
 }
 
 /// The input format, once it is known to be U8 or U16 frames in a grey or YUV layout.
