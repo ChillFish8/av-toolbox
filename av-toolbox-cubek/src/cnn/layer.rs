@@ -153,10 +153,6 @@ impl PaddedLastLayer {
             precision,
         }
     }
-
-    pub fn out_channels(&self) -> u32 {
-        self.out_channels
-    }
 }
 
 fn upload_encoded<R: Runtime>(client: &ComputeClient<R>, values: &[f32], precision: Precision) -> Handle {

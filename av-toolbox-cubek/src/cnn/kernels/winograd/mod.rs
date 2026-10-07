@@ -339,7 +339,7 @@ pub fn winograd_variants(properties: &DeviceProperties, features: u32) -> Vec<Wi
 }
 
 fn no_transformed_weights() -> CnnError {
-    let message = "the layer holds no Winograd weights, which only allow-listed models upload".to_string();
+    let message = "the layer holds no Winograd weights".to_string();
 
     CnnError::Convolution(message)
 }

@@ -22,7 +22,7 @@ use half::f16;
 use crate::artcnn::{edged_maps, f16_step, read_maps, region, supported_runs, synced, upload_maps};
 use crate::support::{Sizing, backend, empty};
 
-/// The features DRUNet's levels run at, beside ArtCNN's.
+/// The widths of feature maps the layers run at.
 const FEATURES: [u32; 4] = [64, 128, 256, 512];
 
 /// What a layer applies after its convolution and bias.
@@ -35,13 +35,6 @@ enum Ending {
 }
 
 const ENDINGS: [Ending; 2] = [Ending::Relu, Ending::Residual];
-
-/// How far a Winograd candidate may sit from the reference, in f16 steps of the layer's largest bare
-/// convolution.
-///
-/// Rounding the transformed weights to f16 moves every value by about the same amount, however small the
-/// value is. Measured just over half a step at 64 features, so the bound leaves 2x headroom.
-const WINOGRAD_STEPS: f32 = 2.0;
 
 impl Ending {
     fn activation(self) -> Activation {
@@ -232,7 +225,7 @@ fn assert_matches_reference(
     println!("{name}: largest error {largest:e}");
 }
 
-/// The region sizes each width runs at: an odd size, and one smaller than any direct block.
+/// The region sizes each width runs at: an odd size (an even one at 512), and one smaller than any direct block.
 fn sizes_for(features: u32) -> [(u32, u32); 2] {
     match features {
         512 => [(12, 10), (5, 3)],
@@ -294,6 +287,13 @@ impl BuildTask for Offered {
         Some(offered)
     }
 }
+
+/// How far a Winograd candidate may sit from the reference, in f16 steps of the layer's largest bare
+/// convolution.
+///
+/// Rounding the transformed weights to f16 moves every value by about the same amount, however small the
+/// value is, so the bound is about three times the error seen at 64 features.
+const WINOGRAD_STEPS: f32 = 2.0;
 
 /// Runs every candidate offered at `features` against the reference at each of its sizes, with and without a
 /// bias.

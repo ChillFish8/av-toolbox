@@ -136,7 +136,7 @@ pub(crate) fn run_epilogue<R: Runtime>(
     add_bias: bool,
 ) {
     let features = layer.features;
-    let units = (samples * features) as usize;
+    let units = samples as usize * features as usize;
     let bytes = (units * layer.precision.bytes()) as u64;
     let residual_handle = residual.unwrap_or(values);
     // Without a bias the values stand in for it, and are never read through it.
@@ -451,7 +451,7 @@ pub(crate) fn body_layer<R: Runtime>(
 ///
 /// `columns` holds nine times as many values as a map, and is needed on
 /// [BodyPath::Im2col](crate::cnn::BodyPath::Im2col) only.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct LayerMaps<'a> {
     pub input: &'a Handle,
     pub output: &'a Handle,

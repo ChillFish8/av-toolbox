@@ -36,6 +36,9 @@ const FORCED_SAMPLES: usize = 8192;
 /// The one plane width the forced blueprint is known to give correct results on.
 const FORCED_PLANE_SIZE: u32 = 64;
 
+/// The most channels the forced blueprint was measured at.
+const FORCED_MAX_CHANNELS: usize = 96;
+
 /// The side of the cooperative-matrix tiles the forced blueprint multiplies.
 const FORCED_TILE: u32 = 16;
 
@@ -114,7 +117,7 @@ pub(crate) fn convolution_problem(
 /// Each workgroup computes a block of 256 samples by `n` channels in four planes. The blueprint
 /// is only given where it is faster and known to be exact. That needs f16 operands, a device offering a
 /// 16x16x16 f16 cooperative matrix accumulating in f32 (`offers_cmma_16`), 64 lanes per plane, `n` a
-/// multiple of 16 and at least 8192 samples.
+/// multiple of 16 up to 96 and at least 8192 samples.
 pub(crate) fn forced_blueprint(
     problem: &ConvolutionProblem,
     plane_size_max: u32,
@@ -122,7 +125,7 @@ pub(crate) fn forced_blueprint(
 ) -> Option<ConvBlueprint> {
     let half_type = storage_type(Precision::F16);
     let operands_are_half = problem.global_dtypes.lhs == half_type && problem.global_dtypes.rhs == half_type;
-    let tiled_channels = problem.n.is_multiple_of(FORCED_TILE as usize);
+    let tiled_channels = problem.n.is_multiple_of(FORCED_TILE as usize) && problem.n <= FORCED_MAX_CHANNELS;
     let large = problem.m >= FORCED_SAMPLES;
 
     if !operands_are_half || !offers_cmma_16 || plane_size_max != FORCED_PLANE_SIZE {

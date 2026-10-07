@@ -145,3 +145,18 @@ fn an_f32_accumulator_offers_the_forced_matrix() {
 
     assert!(offers_cmma_16_in(&configs));
 }
+
+#[test]
+fn the_forced_blueprint_is_only_given_up_to_the_measured_widths() {
+    for (out_channels, forced) in [(64, true), (96, true), (128, false), (256, false), (512, false)] {
+        let problem = half_problem(128, 64, out_channels);
+
+        let blueprint = forced_blueprint(&problem, 64, true);
+
+        assert_eq!(
+            blueprint.is_some(),
+            forced,
+            "forced blueprint at {out_channels} channels"
+        );
+    }
+}

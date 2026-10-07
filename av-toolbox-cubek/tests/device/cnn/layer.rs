@@ -193,7 +193,7 @@ impl BuildTask for Padded {
         let layer = PaddedLastLayer::upload(client, &weights, Some(&bias), 16, out_channels, Precision::F32);
         synced(client);
 
-        assert_eq!(layer.out_channels(), self.out_channels);
+        assert_eq!(layer.out_channels, self.out_channels);
 
         let read_weights = read_maps(client, &layer.weights, Precision::F32);
         let read_bias = read_maps(client, &layer.bias, Precision::F32);

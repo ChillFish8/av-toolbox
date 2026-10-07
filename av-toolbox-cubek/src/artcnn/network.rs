@@ -187,7 +187,7 @@ fn upload_network<R: Runtime>(
         &last_weights,
         Some(&last_bias),
         weights.features,
-        4,
+        last_layer.out_channels,
         precision,
     );
 

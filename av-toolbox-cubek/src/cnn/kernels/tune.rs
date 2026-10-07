@@ -75,13 +75,13 @@ impl SizeBucket {
 /// What a body convolution applies as it writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Epilogue {
-    /// SiLU, on the first two convolutions of a block.
+    /// SiLU applied to the result.
     Silu,
-    /// The block's input added, on the last convolution of a block.
+    /// A residual map added to the result.
     Residual,
-    /// The first layer's maps added, on the last body convolution.
+    /// The maps of the first layer added to the result.
     Join,
-    /// ReLU, on the first convolution of a ResBlock.
+    /// ReLU applied to the result.
     Relu,
 }
 
