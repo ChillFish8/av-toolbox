@@ -33,6 +33,7 @@ use crate::cnn::{
     launch_candidate,
     run_layer,
 };
+use crate::plane::are_distinct;
 use crate::{DevicePlane, Dispatch};
 
 /// The bytes one sample of the padded last layer's f32 output takes.
@@ -532,16 +533,4 @@ fn two_others<'a>(spare: &[&'a Handle; 3], state: &Handle) -> [&'a Handle; 2] {
         .collect();
 
     [others[0], others[1]]
-}
-
-fn are_distinct(handles: &[&Handle]) -> bool {
-    for (index, handle) in handles.iter().enumerate() {
-        let later = &handles[index + 1..];
-
-        if later.iter().any(|other| std::ptr::eq(*other, *handle)) {
-            return false;
-        }
-    }
-
-    true
 }

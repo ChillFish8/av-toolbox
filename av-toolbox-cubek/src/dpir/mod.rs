@@ -1,4 +1,5 @@
 mod layers;
+mod network;
 mod weights;
 
 #[cfg(test)]
@@ -15,4 +16,5 @@ pub use self::layers::{
     tail,
     write_out,
 };
+pub use self::network::{Dpir, DpirMaps, DpirPlanes, column_bytes, level_bytes, run_region};
 pub use self::weights::{LayerKind, PACK, Variant, WIDTHS, WeightLayer, Weights, WeightsError, layer_plan};

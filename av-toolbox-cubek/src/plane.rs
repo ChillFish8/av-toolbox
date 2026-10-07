@@ -58,6 +58,19 @@ pub(crate) fn assert_holds(handle: &Handle, bytes: usize, name: &str) {
     );
 }
 
+/// Whether no handle in `handles` is passed twice.
+pub(crate) fn are_distinct(handles: &[&Handle]) -> bool {
+    for (index, handle) in handles.iter().enumerate() {
+        let later = &handles[index + 1..];
+
+        if later.iter().any(|other| std::ptr::eq(*other, *handle)) {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Asserts that `plane` is `width` by `height` and its buffer holds it as f32, naming it `name`.
 pub fn assert_plane(plane: &DevicePlane<'_>, width: u32, height: u32, name: &str) {
     assert!(

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::slice::Iter;
 use std::sync::{Mutex, OnceLock};
 
 use super::artcnn::{LCG_INCREMENT, LCG_MULTIPLIER, conv3x3_values, next_unit};
@@ -15,6 +16,15 @@ const STRENGTH_SCALE: f64 = 255.0;
 
 /// The largest magnitude of a 3x3 body weight.
 const BODY_SCALE: f64 = 0.01;
+
+/// The multiple of 8 the network pads each side to.
+const ALIGNMENT: u32 = 8;
+
+/// How many levels the network halves the frame through.
+const HALVINGS: usize = 3;
+
+/// How many ResBlocks run in a row at each level.
+const BLOCKS: usize = 4;
 
 /// Deterministic weights for the `variant` network.
 ///
@@ -254,6 +264,115 @@ fn onnx_up_weights(layer: &WeightLayer) -> Vec<f64> {
     }
 
     weights
+}
+
+/// Mirrors the whole DRUNet network on the CPU in f64 over `planes`, each `width` by `height`.
+///
+/// Each side is padded to a multiple of 8 by mirroring, with half the padding (rounded down) before the
+/// plane. The output is cropped back to the planes, clamped to `0..=1` and scaled by `peak`, one plane a
+/// channel.
+pub fn reference_dpir(
+    weights: &Weights,
+    planes: &[Vec<f64>],
+    width: u32,
+    height: u32,
+    peak: f64,
+    strength: f64,
+) -> Vec<Vec<f64>> {
+    let (padded_width, left) = reference_padding(width);
+    let (padded_height, top) = reference_padding(height);
+    let placement = (0, 0, padded_width, padded_height, left, top);
+    let mut layers = weights.layers().iter();
+    let head_layer = next_layer(&mut layers);
+
+    let mut state = reference_head(planes, width, height, peak, strength, head_layer, placement);
+    let mut skips = Vec::with_capacity(HALVINGS + 1);
+    let mut level_width = padded_width;
+    let mut level_height = padded_height;
+
+    for _ in 0..HALVINGS {
+        skips.push(state.clone());
+
+        let blocked = reference_blocks(&mut layers, &state, level_width, level_height);
+        let down_layer = next_layer(&mut layers);
+        state = reference_down(&blocked, level_width, level_height, down_layer);
+        level_width /= 2;
+        level_height /= 2;
+    }
+
+    skips.push(state.clone());
+    state = reference_blocks(&mut layers, &state, level_width, level_height);
+
+    for _ in 0..HALVINGS {
+        let skip = skips.pop().expect("each level keeps its skip");
+        add_values(&mut state, &skip);
+
+        let up_layer = next_layer(&mut layers);
+        let doubled = reference_up(&state, level_width, level_height, up_layer);
+        level_width *= 2;
+        level_height *= 2;
+        state = reference_blocks(&mut layers, &doubled, level_width, level_height);
+    }
+
+    let first_skip = skips.pop().expect("the first level keeps its skip");
+    add_values(&mut state, &first_skip);
+
+    let tail_layer = next_layer(&mut layers);
+    let output = reference_conv3x3(&state, padded_width, padded_height, tail_layer);
+    let channels = tail_layer.out_channels as usize;
+    let mut cropped = vec![Vec::with_capacity((width * height) as usize); channels];
+
+    for row in 0..height {
+        for column in 0..width {
+            let padded_sample = (row + top) * padded_width + column + left;
+            let start = padded_sample as usize * channels;
+
+            for (channel, plane) in cropped.iter_mut().enumerate() {
+                let value = output[start + channel];
+                plane.push(value.clamp(0.0, 1.0) * peak);
+            }
+        }
+    }
+
+    cropped
+}
+
+/// The padded length of a side `length` long, and the padding before it.
+fn reference_padding(length: u32) -> (u32, u32) {
+    let padding = (ALIGNMENT - length % ALIGNMENT) % ALIGNMENT;
+
+    (length + padding, padding / 2)
+}
+
+fn next_layer<'a>(layers: &mut Iter<'a, WeightLayer>) -> &'a WeightLayer {
+    layers.next().expect("the weights hold every layer")
+}
+
+fn add_values(values: &mut [f64], addend: &[f64]) {
+    for (value, added) in values.iter_mut().zip(addend) {
+        *value += added;
+    }
+}
+
+/// Runs a level's four ResBlocks from `input`, the next eight layers.
+fn reference_blocks(layers: &mut Iter<'_, WeightLayer>, input: &[f64], width: u32, height: u32) -> Vec<f64> {
+    let mut state = input.to_vec();
+
+    for _ in 0..BLOCKS {
+        let first_layer = next_layer(layers);
+        let second_layer = next_layer(layers);
+        let mut activated = reference_conv3x3(&state, width, height, first_layer);
+
+        for value in &mut activated {
+            *value = value.max(0.0);
+        }
+
+        let mut output = reference_conv3x3(&activated, width, height, second_layer);
+        add_values(&mut output, &state);
+        state = output;
+    }
+
+    state
 }
 
 #[cfg(test)]
