@@ -19,7 +19,6 @@ use super::direct::{
     check_limits,
     offered_plane_width,
 };
-use crate::artcnn::{Layer, Model};
 use crate::cnn::{Activation, CnnError};
 
 /// Lavin and Gray's F(2x2, 3x3) input transform, `Bᵀ`.
@@ -49,16 +48,6 @@ const TILE_OUTPUTS: u32 = 4;
 #[cfg(any(test, feature = "test-support"))]
 const TRANSFORM_UNITS: u32 = 256;
 
-/// Whether `model` may run its body convolutions as Winograd F(2x2, 3x3).
-///
-/// A model is allowed when its output against an f64 reference stays within the `"f16"` bounds with its body
-/// convolutions run as Winograd.
-pub fn winograd_allowed(model: Model) -> bool {
-    match model {
-        Model::R8F64 | Model::R16F96 => true,
-    }
-}
-
 /// `G g Gᵀ` of one 3x3 kernel, in f64.
 pub(crate) fn transform_kernel(kernel: &[[f64; 3]; 3]) -> [[f64; 4]; 4] {
     let mut transformed = [[0.0; 4]; 4];
@@ -82,11 +71,13 @@ pub(crate) fn transform_kernel(kernel: &[[f64; 3]; 3]) -> [[f64; 4]; 4] {
     transformed
 }
 
-/// The transformed weights of `layer`, by position, output channel and input channel, each computed in f64
-/// and rounded to f16 once.
-pub(crate) fn transform_weights(layer: &Layer) -> Vec<f16> {
-    let out_channels = layer.out_channels as usize;
-    let in_channels = layer.in_channels as usize;
+/// The transformed weights of a 3x3 layer from `in_channels` to `out_channels`, by position, output channel
+/// and input channel, each computed in f64 and rounded to f16 once.
+///
+/// `weights` is laid out by output channel, row, column and input channel.
+pub(crate) fn transform_values(weights: &[f32], out_channels: u32, in_channels: u32) -> Vec<f16> {
+    let out_channels = out_channels as usize;
+    let in_channels = in_channels as usize;
     let positions = POSITIONS as usize;
     let mut transformed = vec![f16::ZERO; positions * out_channels * in_channels];
 
@@ -97,7 +88,7 @@ pub(crate) fn transform_weights(layer: &Layer) -> Vec<f16> {
             for (tap_row, kernel_row) in kernel.iter_mut().enumerate() {
                 for (tap_column, weight) in kernel_row.iter_mut().enumerate() {
                     let tap = (out_channel * 3 + tap_row) * 3 + tap_column;
-                    *weight = layer.weights[tap * in_channels + in_channel].to_f64();
+                    *weight = f64::from(weights[tap * in_channels + in_channel]);
                 }
             }
 
@@ -340,6 +331,10 @@ pub fn winograd_variants(properties: &DeviceProperties, features: u32) -> Vec<Wi
     offered
 }
 
+fn missing_bias() -> CnnError {
+    CnnError::Convolution("the kernel runs only layers with a bias".to_string())
+}
+
 fn no_transformed_weights() -> CnnError {
     let message = "the layer holds no Winograd weights, which only allow-listed models upload".to_string();
 
@@ -357,6 +352,7 @@ pub(crate) fn run_winograd<R: Runtime>(
     convolution.check();
 
     let transformed = convolution.transformed.ok_or_else(no_transformed_weights)?;
+    let bias = convolution.bias.ok_or_else(missing_bias)?;
     let features = convolution.features;
     let residual = convolution.residual.is_some();
     let properties = client.properties();
@@ -395,7 +391,7 @@ pub(crate) fn run_winograd<R: Runtime>(
     unsafe {
         let input = ArrayArg::from_raw_parts(convolution.input.clone(), map_values / quad);
         let weights = ArrayArg::from_raw_parts(transformed.clone(), weight_values / load);
-        let bias = ArrayArg::from_raw_parts(convolution.bias.clone(), features as usize / quad);
+        let bias = ArrayArg::from_raw_parts(bias.clone(), features as usize / quad);
         let residual = ArrayArg::from_raw_parts(residual.clone(), map_values / quad);
         let output = ArrayArg::from_raw_parts(convolution.output.clone(), map_values / quad);
 

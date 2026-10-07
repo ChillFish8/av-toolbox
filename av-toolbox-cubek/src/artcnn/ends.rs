@@ -1,12 +1,9 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than by name.
 use cubecl::prelude::*;
 use cubecl::server::Handle;
-use cubek_matmul::definition::MatmulGlobalElems;
 
-use super::network::PADDED_CHANNELS;
 use crate::artcnn::Network;
-use crate::cnn::convolution::{Operands, convolve_on_tiles, storage_type};
-use crate::cnn::{CnnError, Precision, Region};
+use crate::cnn::{CnnError, PADDED_CHANNELS, Precision, Region, run_padded_layer};
 use crate::{DevicePlane, Dispatch};
 
 #[cube(launch_unchecked)]
@@ -188,7 +185,7 @@ pub fn first_layer<R: Runtime>(
         "the region runs past the plane's bottom edge"
     );
 
-    let layer = network.layer(0);
+    let layer = network.first_layer();
     let features = network.features();
     assert!(
         layer.in_channels == 1 && layer.out_channels == features,
@@ -376,9 +373,11 @@ pub fn padded_last_layer<R: Runtime>(
     region: Region,
     scratch: &Handle,
 ) -> Result<bool, CnnError> {
-    let operands = padded_operands(network);
+    check_last_layer(network);
 
-    convolve_on_tiles(client, &operands, input, scratch, region, true)
+    let padded = network.padded_last_layer();
+
+    run_padded_layer(client, padded, input, region, scratch, true)
 }
 
 /// The same as [padded_last_layer](crate::artcnn::padded_last_layer), keeping the inferred blueprint unless
@@ -396,32 +395,11 @@ pub fn padded_last_layer_with_blueprint<R: Runtime>(
         return padded_last_layer(client, network, input, region, scratch);
     }
 
-    let operands = padded_operands(network);
-
-    convolve_on_tiles(client, &operands, input, scratch, region, false)
-}
-
-/// The operands of the last layer padded to 16 output channels, writing f32.
-fn padded_operands(network: &Network) -> Operands<'_> {
     check_last_layer(network);
 
-    let features = network.features();
     let padded = network.padded_last_layer();
-    let dtype = storage_type(network.precision());
-    let float_type = storage_type(Precision::F32);
-    let globals = MatmulGlobalElems {
-        lhs: dtype,
-        rhs: dtype,
-        out: float_type,
-    };
 
-    Operands {
-        weights: &padded.weights,
-        bias: Some(&padded.bias),
-        in_channels: features as usize,
-        out_channels: PADDED_CHANNELS,
-        globals,
-    }
+    run_padded_layer(client, padded, input, region, scratch, false)
 }
 
 /// Writes `core` of the padded last layer's maps of `region` in `scratch` into the doubled `output`.

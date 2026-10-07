@@ -11,53 +11,39 @@ use crate::artcnn::{
     last_layer,
     padded_last_layer,
     shuffle,
-};
-use crate::cnn::body::{Finish, body_layer};
-use crate::cnn::kernels::{
-    BodyConvolution,
-    launch_candidate,
-    run_tuned_layer,
-    takes_tuner,
-    transform_weights,
+    winograd_allowed,
 };
 use crate::cnn::{
     Activation,
+    BodyConvolution,
     BodyPath,
     Candidate,
     CnnError,
+    ConvLayer,
+    Epilogue,
+    Finish,
     Kernels,
+    LayerMaps,
     LayerRun,
+    PADDED_CHANNELS,
+    PaddedLastLayer,
     Precision,
     Region,
-    winograd_allowed,
+    encode,
+    launch_candidate,
+    run_layer,
 };
 use crate::{DevicePlane, Dispatch};
-
-/// How many output channels the last layer is padded to on the convolution path.
-pub(crate) const PADDED_CHANNELS: usize = 16;
 
 /// The bytes one sample of the padded last layer's f32 output takes.
 const PADDED_SAMPLE_BYTES: usize = PADDED_CHANNELS * size_of::<f32>();
 
 /// One layer's weights and bias on the device, in the feature maps' type.
-///
-/// A body layer of an allow-listed model on f16 maps also holds its Winograd weights, by position, output
-/// channel and input channel.
 pub(crate) struct LayerBuffers {
     pub(crate) weights: Handle,
     pub(crate) bias: Handle,
-    pub(crate) transformed: Option<Handle>,
     pub(crate) out_channels: u32,
     pub(crate) in_channels: u32,
-}
-
-/// The last layer padded to 16 output channels, for the convolution path.
-///
-/// The weights are in the feature maps' type with output channels 4 to 15 zero. The bias is 16 f32 values,
-/// since the padded layer writes f32, with the last 12 zero.
-pub(crate) struct PaddedLastLayer {
-    pub(crate) weights: Handle,
-    pub(crate) bias: Handle,
 }
 
 /// An ArtCNN network's weights on the device, in the feature maps' type, and how its body convolutions
@@ -67,7 +53,9 @@ pub struct Network {
     features: u32,
     blocks: u32,
     precision: Precision,
-    layers: Vec<LayerBuffers>,
+    first: LayerBuffers,
+    body: Vec<ConvLayer>,
+    last: LayerBuffers,
     padded_last: PaddedLastLayer,
     kernels: Kernels,
 }
@@ -130,17 +118,29 @@ impl Network {
 
     /// How many samples past a tile's edge the network reads, one per layer.
     pub fn halo(&self) -> u32 {
-        self.layers.len() as u32
+        self.body.len() as u32 + 2
     }
 
-    pub(crate) fn layer(&self, index: usize) -> &LayerBuffers {
-        &self.layers[index]
+    pub(crate) fn first_layer(&self) -> &LayerBuffers {
+        &self.first
+    }
+
+    /// Body layer `index` of the forward pass, counting the first layer as 0.
+    ///
+    /// Panics if `index` is the first or last layer, which do not map the features to themselves.
+    pub(crate) fn body_layer(&self, index: usize) -> &ConvLayer {
+        let position = index
+            .checked_sub(1)
+            .filter(|position| *position < self.body.len());
+
+        match position {
+            Some(position) => &self.body[position],
+            None => panic!("layer {index} does not map the features to themselves"),
+        }
     }
 
     pub(crate) fn last_layer(&self) -> &LayerBuffers {
-        let last_index = self.layers.len() - 1;
-
-        &self.layers[last_index]
+        &self.last
     }
 
     pub(crate) fn padded_last_layer(&self) -> &PaddedLastLayer {
@@ -158,87 +158,74 @@ fn upload_network<R: Runtime>(
 ) -> Result<Network, WeightsError> {
     weights.validate()?;
 
-    let winograd = model.is_some_and(winograd_allowed) && precision == Precision::F16;
-    let body_layers = 1..=3 * weights.blocks as usize + 1;
-    let mut layers = Vec::new();
+    let winograd = model.is_some_and(winograd_allowed);
+    let last_index = weights.layers.len() - 1;
+    let mut body = Vec::new();
 
-    for (index, layer) in weights.layers.iter().enumerate() {
-        let weight_bytes = encode(&layer.weights, precision);
-        let bias_bytes = encode(&layer.bias, precision);
-        let weights_handle = client.create_from_slice(&weight_bytes);
-        let bias_handle = client.create_from_slice(&bias_bytes);
-        let takes_transform = winograd && body_layers.contains(&index);
-        let transformed = takes_transform.then(|| upload_transformed(client, layer));
+    for layer in &weights.layers[1..last_index] {
+        let widened_weights = widen(&layer.weights);
+        let widened_bias = widen(&layer.bias);
+        let uploaded = ConvLayer::upload(
+            client,
+            &widened_weights,
+            Some(&widened_bias),
+            weights.features,
+            precision,
+            winograd,
+        );
 
-        layers.push(LayerBuffers {
-            weights: weights_handle,
-            bias: bias_handle,
-            transformed,
-            out_channels: layer.out_channels,
-            in_channels: layer.in_channels,
-        });
+        body.push(uploaded);
     }
 
-    let last = weights
-        .layers
-        .last()
-        .expect("validated weights have a last layer");
-    let padded_weights = padded_weights(last);
-    let padded_bias = padded_bias(last);
-    let weight_bytes = encode(&padded_weights, precision);
-    let bias_bytes = f32::as_bytes(&padded_bias);
-    let padded_weights_handle = client.create_from_slice(&weight_bytes);
-    let padded_bias_handle = client.create_from_slice(bias_bytes);
-    let padded_last = PaddedLastLayer {
-        weights: padded_weights_handle,
-        bias: padded_bias_handle,
-    };
+    let first = upload_buffers(client, &weights.layers[0], precision);
+    let last_layer = &weights.layers[last_index];
+    let last = upload_buffers(client, last_layer, precision);
+    let last_weights = widen(&last_layer.weights);
+    let last_bias = widen(&last_layer.bias);
+    let padded_last = PaddedLastLayer::upload(
+        client,
+        &last_weights,
+        Some(&last_bias),
+        weights.features,
+        4,
+        precision,
+    );
 
     Ok(Network {
         model,
         features: weights.features,
         blocks: weights.blocks,
         precision,
-        layers,
+        first,
+        body,
+        last,
         padded_last,
         kernels: Kernels::default(),
     })
 }
 
-/// The f16 Winograd weights of `layer` on the device.
-fn upload_transformed<R: Runtime>(client: &ComputeClient<R>, layer: &Layer) -> Handle {
-    let transformed = transform_weights(layer);
-    let bytes = encode(&transformed, Precision::F16);
+fn upload_buffers<R: Runtime>(
+    client: &ComputeClient<R>,
+    layer: &Layer,
+    precision: Precision,
+) -> LayerBuffers {
+    let widened_weights = widen(&layer.weights);
+    let widened_bias = widen(&layer.bias);
+    let weight_bytes = encode(&widened_weights, precision);
+    let bias_bytes = encode(&widened_bias, precision);
+    let weights_handle = client.create_from_slice(&weight_bytes);
+    let bias_handle = client.create_from_slice(&bias_bytes);
 
-    client.create_from_slice(&bytes)
-}
-
-/// The weights of `layer`, followed by zeros up to 16 output channels.
-fn padded_weights(layer: &Layer) -> Vec<f16> {
-    let in_channels = layer.in_channels as usize;
-    let mut padded = layer.weights.clone();
-    padded.resize(PADDED_CHANNELS * 9 * in_channels, f16::ZERO);
-
-    padded
-}
-
-/// The bias of `layer` in f32, followed by zeros up to 16 output channels.
-fn padded_bias(layer: &Layer) -> Vec<f32> {
-    let mut padded: Vec<f32> = layer.bias.iter().map(|value| value.to_f32()).collect();
-    padded.resize(PADDED_CHANNELS, 0.0);
-
-    padded
-}
-
-/// Little-endian bytes of `values` in `precision`'s type.
-fn encode(values: &[f16], precision: Precision) -> Vec<u8> {
-    match precision {
-        Precision::F16 => values.iter().flat_map(|value| value.to_le_bytes()).collect(),
-        Precision::F32 => values
-            .iter()
-            .flat_map(|value| value.to_f32().to_le_bytes())
-            .collect(),
+    LayerBuffers {
+        weights: weights_handle,
+        bias: bias_handle,
+        out_channels: layer.out_channels,
+        in_channels: layer.in_channels,
     }
+}
+
+fn widen(values: &[f16]) -> Vec<f32> {
+    values.iter().map(|value| value.to_f32()).collect()
 }
 
 /// The device buffers one region's forward pass works in.
@@ -486,17 +473,29 @@ fn run_body_layer<R: Runtime>(
         return Ok(run);
     }
 
-    if takes_tuner(network, body.path) {
-        return run_tuned_layer(client, network, layer, input, output, region, finish);
-    }
+    let conv = network.body_layer(layer);
+    let epilogue = Epilogue::of_layer(network, layer, finish);
+    let maps = LayerMaps {
+        input,
+        output,
+        columns,
+    };
 
-    body_layer(
-        client, dispatch, network, body.path, layer, input, output, columns, region, finish,
+    run_layer(
+        client,
+        dispatch,
+        network.kernels(),
+        body.path,
+        conv,
+        maps,
+        region,
+        finish,
+        epilogue,
     )
 }
 
 /// The bytes one feature map of `region` takes in the network's precision.
-pub(crate) fn map_bytes(network: &Network, region: Region) -> u64 {
+fn map_bytes(network: &Network, region: Region) -> u64 {
     let map_count = u64::from(region.samples()) * u64::from(network.features());
 
     map_count * network.precision().bytes() as u64

@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use super::{R9700, TestDevice};
-use crate::artcnn::Model;
-use crate::cnn::kernels::tune::{Choice, SizeBucket, choose, offered_candidates};
+use crate::artcnn::{Model, offered_candidates};
+use crate::cnn::kernels::tune::{Choice, SizeBucket, choose};
 use crate::cnn::{Candidate, Kernels, direct_variants};
 
 #[test]

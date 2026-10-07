@@ -5,9 +5,8 @@ use cubek_matmul::definition::MatmulElems;
 use cubek_matmul::launch::Strategy as MatmulStrategy;
 use cubek_std::InputBinding;
 
-use super::kernels::Candidate;
+use super::kernels::{BodyConvolution, Candidate, Epilogue, Kernels, run_tuned, takes_tuner};
 use crate::Dispatch;
-use crate::artcnn::{Network, map_bytes};
 use crate::cnn::convolution::{
     Operands,
     contiguous,
@@ -17,7 +16,7 @@ use crate::cnn::convolution::{
     tensor,
     uniform_globals,
 };
-use crate::cnn::{Precision, Region};
+use crate::cnn::{ConvLayer, Precision, Region};
 
 /// How the body's `F -> F` convolutions run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,33 +94,26 @@ fn epilogue_kernel<F: Float>(
 /// Adds `layer`'s bias to the NHWC maps in `values`, then applies `activation`, then adds `residual` if
 /// given.
 ///
-/// The maps hold `samples` samples of the network's features, and are updated in place. The layer must map
-/// the features to themselves.
+/// The maps hold `samples` samples of the layer's features, and are updated in place.
 #[cfg(any(test, feature = "test-support"))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a distinct input of the launch"
-)]
 pub fn epilogue<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
+    layer: &ConvLayer,
     values: &Handle,
-    layer: usize,
     samples: u32,
     activation: Activation,
     residual: Option<&Handle>,
 ) {
     run_epilogue(
-        client, dispatch, network, values, layer, samples, activation, residual, true,
+        client, dispatch, layer, values, samples, activation, residual, true,
     );
 }
 
 /// Adds `layer`'s bias to the NHWC maps in `values` if `add_bias` is set, then applies `activation`, then
 /// adds `residual` if given.
 ///
-/// The maps hold `samples` samples of the network's features, and are updated in place. The layer must map
-/// the features to themselves.
+/// The maps hold `samples` samples of the layer's features, and are updated in place.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
@@ -129,24 +121,20 @@ pub fn epilogue<R: Runtime>(
 pub(crate) fn run_epilogue<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
+    layer: &ConvLayer,
     values: &Handle,
-    layer: usize,
     samples: u32,
     activation: Activation,
     residual: Option<&Handle>,
     add_bias: bool,
 ) {
-    let buffers = network.layer(layer);
-    let features = network.features();
-    assert!(
-        buffers.in_channels == features && buffers.out_channels == features,
-        "layer {layer} does not map the features to themselves"
-    );
-
+    let features = layer.features;
     let units = (samples * features) as usize;
-    let bytes = (units * network.precision().bytes()) as u64;
+    let bytes = (units * layer.precision.bytes()) as u64;
     let residual_handle = residual.unwrap_or(values);
+    // Without a bias the values stand in for it, and are never read through it.
+    let bias_handle = layer.bias.as_ref().unwrap_or(values);
+    let adds_bias = add_bias && layer.bias.is_some();
     assert!(
         values.size_in_used() >= bytes,
         "the values are smaller than the samples' maps"
@@ -156,20 +144,29 @@ pub(crate) fn run_epilogue<R: Runtime>(
         "the residual is smaller than the values"
     );
 
-    let bias_flag = u32::from(add_bias);
+    if let Some(bias) = layer.bias.as_ref() {
+        let bias_bytes = u64::from(features) * layer.precision.bytes() as u64;
+        assert!(
+            bias.size_in_used() >= bias_bytes,
+            "the bias is smaller than the features"
+        );
+    }
+
+    let bias_flag = u32::from(adds_bias);
     let silu = u32::from(activation == Activation::Silu);
     let add_residual = u32::from(residual.is_some());
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
-    // Safety: the values and the residual hold `samples * F` values and the bias `F`. Without a residual, the
-    // values are bound in its place and never read through it.
+    // Safety: the asserts above show the values and the residual hold `samples * F` values and the bias, when
+    // there is one, `F`. Without a residual or a bias, the values are bound in its place and never read
+    // through it.
     unsafe {
         let values_array = ArrayArg::from_raw_parts(values.clone(), units);
-        let bias = ArrayArg::from_raw_parts(buffers.bias.clone(), features as usize);
+        let bias = ArrayArg::from_raw_parts(bias_handle.clone(), features as usize);
         let residual_array = ArrayArg::from_raw_parts(residual_handle.clone(), units);
 
-        match network.precision() {
+        match layer.precision {
             Precision::F16 => epilogue_kernel::launch_unchecked::<half::f16, R>(
                 client,
                 cubes,
@@ -224,8 +221,8 @@ fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32
     columns[ABSOLUTE_POS] = value;
 }
 
-/// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights, into `output`. Gives
-/// whether the forced blueprint ran.
+/// Convolves the NHWC maps of `region` in `input` with `layer`'s weights, into `output`. Gives whether the
+/// forced blueprint ran.
 ///
 /// The convolution paths add the bias inside the convolution. The
 /// [BodyPath::Im2col](crate::cnn::BodyPath::Im2col) path leaves the bias out, and stages the maps in
@@ -237,37 +234,36 @@ fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32
 pub(crate) fn convolve<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
     path: BodyPath,
-    layer: usize,
+    layer: &ConvLayer,
     input: &Handle,
     output: &Handle,
     columns: Option<&Handle>,
     region: Region,
 ) -> Result<bool, CnnError> {
-    check_layer_maps(network, layer, input, output, region);
+    check_layer_maps(layer, input, output, region);
 
     match path {
         BodyPath::Convolution | BodyPath::UnfusedConvolution => {
-            let operands = body_operands(network, layer, true);
+            let operands = body_operands(layer, true);
 
             convolve_on_tiles(client, &operands, input, output, region, true)
         },
         BodyPath::Im2col => {
             let columns = columns.ok_or(CnnError::MissingColumns)?;
-            let bytes = map_bytes(network, region);
+            let bytes = layer.map_bytes(region);
             assert!(
                 columns.size_in_used() >= bytes * 9,
                 "the columns are smaller than nine of the region's maps"
             );
 
-            match network.precision() {
+            match layer.precision {
                 Precision::F16 => convolve_by_columns::<R, half::f16>(
-                    client, dispatch, network, layer, input, output, columns, region,
+                    client, dispatch, layer, input, output, columns, region,
                 )?,
-                Precision::F32 => convolve_by_columns::<R, f32>(
-                    client, dispatch, network, layer, input, output, columns, region,
-                )?,
+                Precision::F32 => {
+                    convolve_by_columns::<R, f32>(client, dispatch, layer, input, output, columns, region)?
+                },
             }
 
             Ok(false)
@@ -281,15 +277,10 @@ pub(crate) fn convolve<R: Runtime>(
 /// With `allow_forced` the convolution picks its blueprint as a forward pass does, and otherwise it keeps
 /// the inferred blueprint.
 #[cfg(any(test, feature = "test-support"))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a distinct input of the launch"
-)]
 pub fn convolve_with_blueprint<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
-    layer: usize,
+    layer: &ConvLayer,
     input: &Handle,
     output: &Handle,
     region: Region,
@@ -298,14 +289,12 @@ pub fn convolve_with_blueprint<R: Runtime>(
     if allow_forced {
         let path = BodyPath::Convolution;
 
-        return convolve(
-            client, dispatch, network, path, layer, input, output, None, region,
-        );
+        return convolve(client, dispatch, path, layer, input, output, None, region);
     }
 
-    check_layer_maps(network, layer, input, output, region);
+    check_layer_maps(layer, input, output, region);
 
-    let operands = body_operands(network, layer, true);
+    let operands = body_operands(layer, true);
 
     convolve_on_tiles(client, &operands, input, output, region, false)
 }
@@ -315,30 +304,21 @@ pub fn convolve_with_blueprint<R: Runtime>(
 #[cfg(any(test, feature = "test-support"))]
 pub fn convolve_without_bias<R: Runtime>(
     client: &ComputeClient<R>,
-    network: &Network,
-    layer: usize,
+    layer: &ConvLayer,
     input: &Handle,
     output: &Handle,
     region: Region,
 ) -> Result<bool, CnnError> {
-    check_layer_maps(network, layer, input, output, region);
+    check_layer_maps(layer, input, output, region);
 
-    let operands = body_operands(network, layer, false);
+    let operands = body_operands(layer, false);
 
     convolve_on_tiles(client, &operands, input, output, region, true)
 }
 
-/// Asserts that `layer` maps the features to themselves, and that `input` and `output` each hold the
-/// region's maps.
-fn check_layer_maps(network: &Network, layer: usize, input: &Handle, output: &Handle, region: Region) {
-    let buffers = network.layer(layer);
-    let features = network.features();
-    assert!(
-        buffers.in_channels == features && buffers.out_channels == features,
-        "layer {layer} does not map the features to themselves"
-    );
-
-    let bytes = map_bytes(network, region);
+/// Asserts that `input` and `output` each hold the region's maps of `layer`.
+fn check_layer_maps(layer: &ConvLayer, input: &Handle, output: &Handle, region: Region) {
+    let bytes = layer.map_bytes(region);
     assert!(
         input.size_in_used() >= bytes,
         "the input is smaller than the region's maps"
@@ -349,18 +329,12 @@ fn check_layer_maps(network: &Network, layer: usize, input: &Handle, output: &Ha
     );
 }
 
-/// The operands of `layer`, a body convolution, with its bias if `with_bias` is set.
-pub(crate) fn body_operands(network: &Network, layer: usize, with_bias: bool) -> Operands<'_> {
-    let buffers = network.layer(layer);
-    let features = network.features() as usize;
-    let precision = network.precision();
-    let mut operands = Operands::body(&buffers.weights, &buffers.bias, features, precision);
+/// The operands of `layer`, with its bias if `with_bias` is set and the layer has one.
+pub(crate) fn body_operands(layer: &ConvLayer, with_bias: bool) -> Operands<'_> {
+    let bias = layer.bias.as_ref().filter(|_| with_bias);
+    let features = layer.features as usize;
 
-    if !with_bias {
-        operands.bias = None;
-    }
-
-    operands
+    Operands::body(&layer.weights, bias, features, layer.precision)
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights and bias on
@@ -368,23 +342,18 @@ pub(crate) fn body_operands(network: &Network, layer: usize, with_bias: bool) ->
 ///
 /// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
 /// `cubek-convolution` infers one.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a distinct input of the launch"
-)]
 fn convolve_fused<R: Runtime>(
     client: &ComputeClient<R>,
-    network: &Network,
-    layer: usize,
+    layer: &ConvLayer,
     input: &Handle,
     output: &Handle,
     region: Region,
     finish: Finish<'_>,
     allow_forced: bool,
 ) -> Result<LayerRun, CnnError> {
-    check_layer_maps(network, layer, input, output, region);
+    check_layer_maps(layer, input, output, region);
 
-    let operands = body_operands(network, layer, true);
+    let operands = body_operands(layer, true);
     let forced = launch_fused_convolution(client, &operands, input, output, region, finish, allow_forced)?;
 
     Ok(LayerRun {
@@ -430,11 +399,11 @@ pub struct Finish<'a> {
     pub residual: Option<&'a Handle>,
 }
 
-/// Runs body layer `layer` over the NHWC maps of `region` in `input` on `path`, into `output`. That is its
-/// convolution and bias, then `finish`.
+/// Runs `layer` over the NHWC maps of `region` in `input` on `path`, into `output`. That is its convolution
+/// and bias, then `finish`.
 ///
-/// [BodyPath::Im2col](crate::cnn::BodyPath::Im2col) stages the maps in `columns`, which holds nine times
-/// as many values as a map.
+/// [BodyPath::Im2col](crate::cnn::BodyPath::Im2col) stages the maps in `columns`, which holds nine times as
+/// many values as a map.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
@@ -442,9 +411,8 @@ pub struct Finish<'a> {
 pub(crate) fn body_layer<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
+    layer: &ConvLayer,
     path: BodyPath,
-    layer: usize,
     input: &Handle,
     output: &Handle,
     columns: Option<&Handle>,
@@ -452,16 +420,14 @@ pub(crate) fn body_layer<R: Runtime>(
     finish: Finish<'_>,
 ) -> Result<LayerRun, CnnError> {
     if path == BodyPath::Convolution {
-        return convolve_fused(client, network, layer, input, output, region, finish, true);
+        return convolve_fused(client, layer, input, output, region, finish, true);
     }
 
-    let forced = convolve(
-        client, dispatch, network, path, layer, input, output, columns, region,
-    )?;
+    let forced = convolve(client, dispatch, path, layer, input, output, columns, region)?;
 
     // The unfused convolution adds the bias inside the convolution, and im2col adds it here.
     let add_bias = path == BodyPath::Im2col;
-    finish_separately(client, dispatch, network, layer, output, region, finish, add_bias);
+    finish_separately(client, dispatch, layer, output, region, finish, add_bias);
 
     Ok(LayerRun {
         forced,
@@ -471,8 +437,59 @@ pub(crate) fn body_layer<R: Runtime>(
     })
 }
 
-/// Runs body layer `layer` on `path` as a forward pass does, keeping the inferred blueprint unless
-/// `allow_forced` is set.
+/// The maps one layer reads and writes.
+///
+/// `columns` holds nine times as many values as a map, and is needed on
+/// [BodyPath::Im2col](crate::cnn::BodyPath::Im2col) only.
+#[derive(Clone, Copy)]
+pub struct LayerMaps<'a> {
+    pub input: &'a Handle,
+    pub output: &'a Handle,
+    pub columns: Option<&'a Handle>,
+}
+
+/// Runs `layer` over the NHWC maps of `region` on `path`, that is its convolution and bias, then `finish`.
+/// Gives how it ran.
+///
+/// On the convolution path with f16 maps whose features are a multiple of 16, the layer runs with the
+/// candidate `kernels` chooses, tuned under `epilogue`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the layer"
+)]
+pub fn run_layer<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    kernels: &Kernels,
+    path: BodyPath,
+    layer: &ConvLayer,
+    maps: LayerMaps<'_>,
+    region: Region,
+    finish: Finish<'_>,
+    epilogue: Epilogue,
+) -> Result<LayerRun, CnnError> {
+    if takes_tuner(layer, path) {
+        let convolution = BodyConvolution::of_conv(layer, maps.input, maps.output, region, finish);
+        let tuned = run_tuned(client, kernels, &convolution, epilogue)?;
+
+        return Ok(tuned.run);
+    }
+
+    body_layer(
+        client,
+        dispatch,
+        layer,
+        path,
+        maps.input,
+        maps.output,
+        maps.columns,
+        region,
+        finish,
+    )
+}
+
+/// Runs `layer` on `path` as a forward pass does, keeping the inferred blueprint unless `allow_forced` is
+/// set.
 #[cfg(any(test, feature = "test-support"))]
 #[expect(
     clippy::too_many_arguments,
@@ -481,9 +498,8 @@ pub(crate) fn body_layer<R: Runtime>(
 pub fn body_layer_with_blueprint<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
+    layer: &ConvLayer,
     path: BodyPath,
-    layer: usize,
     input: &Handle,
     output: &Handle,
     region: Region,
@@ -496,17 +512,15 @@ pub fn body_layer_with_blueprint<R: Runtime>(
     );
 
     if allow_forced {
-        return body_layer(
-            client, dispatch, network, path, layer, input, output, None, region, finish,
-        );
+        return body_layer(client, dispatch, layer, path, input, output, None, region, finish);
     }
 
     if path == BodyPath::Convolution {
-        return convolve_fused(client, network, layer, input, output, region, finish, false);
+        return convolve_fused(client, layer, input, output, region, finish, false);
     }
 
-    convolve_with_blueprint(client, dispatch, network, layer, input, output, region, false)?;
-    finish_separately(client, dispatch, network, layer, output, region, finish, false);
+    convolve_with_blueprint(client, dispatch, layer, input, output, region, false)?;
+    finish_separately(client, dispatch, layer, output, region, finish, false);
 
     Ok(LayerRun {
         forced: false,
@@ -518,15 +532,10 @@ pub fn body_layer_with_blueprint<R: Runtime>(
 
 /// Applies `finish` to `layer`'s maps of `region` in `output` in a separate pass, adding the bias first if
 /// `add_bias` is set.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a distinct input of the pass"
-)]
 fn finish_separately<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
-    layer: usize,
+    layer: &ConvLayer,
     output: &Handle,
     region: Region,
     finish: Finish<'_>,
@@ -537,9 +546,8 @@ fn finish_separately<R: Runtime>(
     run_epilogue(
         client,
         dispatch,
-        network,
-        output,
         layer,
+        output,
         samples,
         finish.activation,
         finish.residual,
@@ -547,29 +555,29 @@ fn finish_separately<R: Runtime>(
     );
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a distinct input of the launch"
-)]
 fn convolve_by_columns<R: Runtime, F: Float>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
-    network: &Network,
-    layer: usize,
+    layer: &ConvLayer,
     input: &Handle,
     output: &Handle,
     columns: &Handle,
     region: Region,
 ) -> Result<(), CnnError> {
-    let buffers = network.layer(layer);
-    let features = network.features() as usize;
+    let channels = layer.features;
+    let features = channels as usize;
     let samples = region.samples() as usize;
     let depth = 9 * features;
-    let channels = network.features();
     let column_values = samples * depth;
     assert!(
         u32::try_from(column_values).is_ok(),
         "the columns hold more values than the kernel can index"
+    );
+
+    let weight_bytes = (features * depth * layer.precision.bytes()) as u64;
+    assert!(
+        layer.weights.size_in_used() >= weight_bytes,
+        "the weights are smaller than the layer's"
     );
 
     let dtype = F::as_type_native_unchecked().storage_type();
@@ -600,8 +608,9 @@ fn convolve_by_columns<R: Runtime, F: Float>(
     let out_strides = contiguous(&out_shape);
     // Safety: the columns hold `samples x 9F` values contiguously, as `convolve` checks.
     let lhs_tensor = unsafe { tensor::<R>(columns, &lhs_shape, &lhs_strides) };
-    // Safety: the layer maps `F -> F`, so its `F x 9F` weights read at strides `1, 9F` stay inside them.
-    let rhs_tensor = unsafe { tensor::<R>(&buffers.weights, &rhs_shape, &rhs_strides) };
+    // Safety: the weights hold `F x 9F` values, as just asserted, so reads at strides `1, 9F` stay inside
+    // them.
+    let rhs_tensor = unsafe { tensor::<R>(&layer.weights, &rhs_shape, &rhs_strides) };
     // Safety: the output holds `samples x F` values contiguously, as `convolve` checks.
     let out_tensor = unsafe { tensor::<R>(output, &out_shape, &out_strides) };
     let lhs = InputBinding::new(lhs_tensor, dtype);

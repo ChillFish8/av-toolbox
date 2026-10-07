@@ -1,10 +1,9 @@
 use half::f16;
 
 use super::R9700;
-use crate::artcnn::{Layer, Model};
-use crate::cnn::kernels::tune::offered_candidates;
-use crate::cnn::kernels::winograd::{check_variant, transform_kernel, transform_weights};
-use crate::cnn::{Activation, Candidate, WinogradVariant, winograd_allowed, winograd_variants};
+use crate::artcnn::{Layer, Model, offered_candidates, transform_weights, winograd_allowed};
+use crate::cnn::kernels::winograd::{check_variant, transform_kernel};
+use crate::cnn::{Activation, Candidate, WinogradVariant, winograd_variants};
 
 /// A 3x3 kernel whose transform is exact in f16.
 const KERNEL: [[f64; 3]; 3] = [[0.25, -1.5, 2.0], [0.75, 3.0, -0.5], [-2.25, 1.25, 0.125]];

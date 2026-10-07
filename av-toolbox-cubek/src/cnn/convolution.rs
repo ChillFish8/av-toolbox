@@ -27,10 +27,8 @@ use cubek_std::cube_count::{CubeCountStrategy, GlobalOrder, HypercubeBlueprint};
 use cubek_std::{InputBinding, MatrixLayout};
 
 use super::fused::launch_fused;
-#[cfg(any(test, feature = "test-support"))]
-use crate::artcnn::Network;
 use crate::cnn::body::Finish;
-use crate::cnn::{CnnError, Precision, Region};
+use crate::cnn::{CnnError, PADDED_CHANNELS, PaddedLastLayer, Precision, Region};
 
 /// The fewest samples a region needs for the forced blueprint to beat the inferred one.
 const FORCED_SAMPLES: usize = 8192;
@@ -195,15 +193,17 @@ fn chosen_blueprint<R: Runtime>(
     forced_blueprint(problem, plane_size_max, offers_cmma)
 }
 
-/// Whether a body convolution of `region` takes the forced blueprint on the client's device.
+/// Whether a body convolution of `region` on maps of `features` channels in `precision`'s type takes the
+/// forced blueprint on the client's device.
 #[cfg(any(test, feature = "test-support"))]
 pub fn takes_forced_blueprint<R: Runtime>(
     client: &ComputeClient<R>,
-    network: &Network,
+    features: u32,
+    precision: Precision,
     region: Region,
 ) -> bool {
-    let features = network.features() as usize;
-    let dtype = storage_type(network.precision());
+    let features = features as usize;
+    let dtype = storage_type(precision);
     let globals = uniform_globals(dtype);
     let map_values = region.samples() as usize * features;
     let address_type = AddressType::from_len(map_values);
@@ -277,14 +277,20 @@ pub(crate) struct Operands<'a> {
 }
 
 impl<'a> Operands<'a> {
-    /// The operands of an `F -> F` body convolution with `weights` and `bias` in `precision`'s type.
-    pub(crate) fn body(weights: &'a Handle, bias: &'a Handle, features: usize, precision: Precision) -> Self {
+    /// The operands of an `F -> F` body convolution with `weights` and its `bias`, if any, in `precision`'s
+    /// type.
+    pub(crate) fn body(
+        weights: &'a Handle,
+        bias: Option<&'a Handle>,
+        features: usize,
+        precision: Precision,
+    ) -> Self {
         let dtype = storage_type(precision);
         let globals = uniform_globals(dtype);
 
         Operands {
             weights,
-            bias: Some(bias),
+            bias,
             in_channels: features,
             out_channels: features,
             globals,
@@ -426,6 +432,37 @@ pub(crate) fn convolve_on_tiles<R: Runtime>(
     launched.map_err(convolution_failed)?;
 
     Ok(forced)
+}
+
+/// Runs `layer` over the NHWC maps of `region` in `input` on cooperative-matrix tiles, into `scratch` as NHWC
+/// maps of 16 f32 channels. Gives whether the forced blueprint ran.
+///
+/// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
+/// `cubek-convolution` infers one.
+pub fn run_padded_layer<R: Runtime>(
+    client: &ComputeClient<R>,
+    layer: &PaddedLastLayer,
+    input: &Handle,
+    region: Region,
+    scratch: &Handle,
+    allow_forced: bool,
+) -> Result<bool, CnnError> {
+    let dtype = storage_type(layer.precision);
+    let float_type = storage_type(Precision::F32);
+    let globals = MatmulGlobalElems {
+        lhs: dtype,
+        rhs: dtype,
+        out: float_type,
+    };
+    let operands = Operands {
+        weights: &layer.weights,
+        bias: Some(&layer.bias),
+        in_channels: layer.in_channels as usize,
+        out_channels: PADDED_CHANNELS,
+        globals,
+    };
+
+    convolve_on_tiles(client, &operands, input, scratch, region, allow_forced)
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles into `output`,

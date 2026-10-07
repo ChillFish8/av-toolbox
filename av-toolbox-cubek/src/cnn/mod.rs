@@ -13,38 +13,36 @@ mod region;
 #[cfg(test)]
 mod tests;
 
-pub use self::body::{Activation, BodyPath, CnnError, LayerRun};
+pub use self::body::{Activation, BodyPath, CnnError, Finish, LayerMaps, LayerRun, run_layer};
 #[cfg(any(test, feature = "test-support"))]
-pub use self::body::{
-    Finish,
-    body_layer_with_blueprint,
-    convolve_with_blueprint,
-    convolve_without_bias,
-    epilogue,
-};
+pub use self::body::{body_layer_with_blueprint, convolve_with_blueprint, convolve_without_bias, epilogue};
+pub use self::convolution::run_padded_layer;
 #[cfg(any(test, feature = "test-support"))]
 pub use self::convolution::{offers_cmma_16, takes_forced_blueprint};
-#[cfg(any(test, feature = "test-support"))]
+pub(crate) use self::kernels::launch_candidate;
+#[cfg(test)]
+pub(crate) use self::kernels::transform_values;
 pub use self::kernels::{
     BodyConvolution,
+    Candidate,
+    DirectVariant,
     Epilogue,
+    Kernels,
+    WeightStaging,
+    WinogradVariant,
+    offered_candidates,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::kernels::{
     TunedRun,
     direct_variants,
     fixed_candidate,
-    offered_candidates,
     offered_plane_width,
     run_candidate,
     run_tuned,
     transform_input,
     winograd_variants,
 };
-pub use self::kernels::{
-    Candidate,
-    DirectVariant,
-    Kernels,
-    WeightStaging,
-    WinogradVariant,
-    winograd_allowed,
-};
-pub use self::layer::Precision;
+pub(crate) use self::layer::encode;
+pub use self::layer::{ConvLayer, PADDED_CHANNELS, PaddedLastLayer, Precision};
 pub use self::region::{Region, tiles};

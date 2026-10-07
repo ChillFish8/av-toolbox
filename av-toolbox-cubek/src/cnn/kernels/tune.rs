@@ -7,7 +7,6 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use cubecl::ir::DeviceProperties;
 use cubecl::prelude::{ComputeClient, Runtime};
-use cubecl::server::Handle;
 use cubecl::tune::{
     AutotuneKey,
     AutotuneOutput,
@@ -20,12 +19,11 @@ use cubecl::tune::{
 use serde::{Deserialize, Serialize};
 
 use super::direct::direct_variants;
-use super::winograd::{winograd_allowed, winograd_variants};
+use super::winograd::winograd_variants;
 use super::{BodyConvolution, Candidate, DirectVariant, launch_candidate};
-use crate::artcnn::{Model, Network};
-use crate::cnn::body::{Finish, LayerRun};
+use crate::cnn::body::LayerRun;
 use crate::cnn::convolution::offers_cmma_16;
-use crate::cnn::{Activation, BodyPath, CnnError, Precision, Region};
+use crate::cnn::{BodyPath, CnnError, ConvLayer, Precision};
 
 /// The samples at which a region leaves the smallest bucket, 64k.
 const MEDIUM_SAMPLES: u64 = 1 << 16;
@@ -36,14 +34,14 @@ const LARGE_SAMPLES: u64 = 1 << 20;
 /// The label that keeps the tunings of the candidates a device offers apart from any other list.
 const OFFERED_LABEL: &str = "offered";
 
-/// The label that keeps the tunings of the candidates a device offers an allow-listed model apart from any
-/// other list.
+/// The label that keeps the tunings of the candidates a device offers a Winograd layer apart from any other
+/// list.
 const OFFERED_WINOGRAD_LABEL: &str = "offered-winograd";
 
 /// Chooses each body convolution's candidate, per device and tune key.
-static TUNER: LocalTuner<TuneKey, String> = LocalTuner::new("av-toolbox-artcnn-body-convolution");
+static TUNER: LocalTuner<TuneKey, String> = LocalTuner::new("av-toolbox-cnn-body-convolution");
 
-/// The plan each kernel choice runs by, per runtime, device limits, model and model width.
+/// The plan each kernel choice runs by, per runtime, device limits, Winograd offer and width.
 static PLANS: LazyLock<Mutex<HashMap<PlanKey, SharedPlan>>> = LazyLock::new(Mutex::default);
 
 /// A [Plan] for any runtime.
@@ -85,27 +83,10 @@ pub enum Epilogue {
     Join,
 }
 
-impl Epilogue {
-    /// The epilogue body layer `layer` of `network` applies with `finish`.
-    pub(crate) fn of_layer(network: &Network, layer: usize, finish: Finish<'_>) -> Self {
-        let last_body_layer = 3 * network.blocks() as usize + 1;
-
-        if finish.activation == Activation::Silu {
-            return Self::Silu;
-        }
-
-        if layer == last_body_layer {
-            return Self::Join;
-        }
-
-        Self::Residual
-    }
-}
-
 /// What a body convolution's tuning is kept under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TuneKey {
-    /// The model width.
+    /// The width of the maps.
     pub features: u32,
     pub size: SizeBucket,
     /// The device's widest subgroup.
@@ -306,25 +287,15 @@ fn tuner_id<R: Runtime>(client: &ComputeClient<R>, label: &str) -> String {
     )
 }
 
-/// Whether the candidates offered for `model` hold Winograd variants.
-fn offers_winograd(model: Option<Model>) -> bool {
-    model.is_some_and(winograd_allowed)
-}
-
-/// The candidates a device with `properties` offers `model` for maps of `features` channels: the direct
-/// variants first, then the Winograd variants for an allow-listed model, and the fused cubek convolution
-/// last.
-pub fn offered_candidates(
-    properties: &DeviceProperties,
-    features: u32,
-    model: Option<Model>,
-) -> Vec<Candidate> {
+/// The candidates a device with `properties` offers maps of `features` channels: the direct variants first,
+/// then the Winograd variants if `winograd` is set, and the fused cubek convolution last.
+pub fn offered_candidates(properties: &DeviceProperties, features: u32, winograd: bool) -> Vec<Candidate> {
     let variants = direct_variants(properties, features);
     let mut candidates: Vec<Candidate> = variants.into_iter().map(Candidate::Direct).collect();
 
-    if offers_winograd(model) {
-        let winograd = winograd_variants(properties, features);
-        candidates.extend(winograd.into_iter().map(Candidate::Winograd));
+    if winograd {
+        let variants = winograd_variants(properties, features);
+        candidates.extend(variants.into_iter().map(Candidate::Winograd));
     }
 
     candidates.push(Candidate::FusedCubek);
@@ -352,8 +323,8 @@ pub fn fixed_candidate(properties: &DeviceProperties, features: u32) -> Candidat
     Candidate::FusedCubek
 }
 
-/// What a plan is kept under: the runtime and device facts it was worked out from, the model, its width and
-/// the kernel choice.
+/// What a plan is kept under: the runtime and device facts it was worked out from, whether Winograd is
+/// offered, the width and the kernel choice.
 #[derive(PartialEq, Eq, Hash)]
 struct PlanKey {
     runtime: TypeId,
@@ -363,18 +334,13 @@ struct PlanKey {
     shared_bytes: usize,
     units: u32,
     offers_matrix: bool,
-    model: Option<Model>,
+    winograd: bool,
     features: u32,
     kernels: Kernels,
 }
 
 impl PlanKey {
-    fn of<R: Runtime>(
-        client: &ComputeClient<R>,
-        kernels: &Kernels,
-        model: Option<Model>,
-        features: u32,
-    ) -> Self {
+    fn of<R: Runtime>(client: &ComputeClient<R>, kernels: &Kernels, winograd: bool, features: u32) -> Self {
         let hardware = &client.properties().hardware;
 
         Self {
@@ -385,14 +351,14 @@ impl PlanKey {
             shared_bytes: hardware.max_shared_memory_size,
             units: hardware.max_units_per_cube,
             offers_matrix: offers_cmma_16(client),
-            model,
+            winograd,
             features,
             kernels: kernels.clone(),
         }
     }
 }
 
-/// How a kernel choice runs on one device and model width.
+/// How a kernel choice runs on one device and map width.
 enum Plan<R: Runtime> {
     /// No candidate can run, for the reasons given.
     Refused(String),
@@ -494,15 +460,15 @@ fn plan_among<R: Runtime>(
 fn make_plan<R: Runtime>(
     client: &ComputeClient<R>,
     kernels: &Kernels,
-    model: Option<Model>,
+    winograd: bool,
     features: u32,
 ) -> Plan<R> {
     let properties = client.properties();
 
     match kernels {
         Kernels::Tuned => {
-            let candidates = offered_candidates(properties, features, model);
-            let label = match offers_winograd(model) {
+            let candidates = offered_candidates(properties, features, winograd);
+            let label = match winograd {
                 true => OFFERED_WINOGRAD_LABEL,
                 false => OFFERED_LABEL,
             };
@@ -522,15 +488,15 @@ fn make_plan<R: Runtime>(
     }
 }
 
-/// The plan `kernels` runs by on the client's device for `model`'s maps of `features` channels, worked out
-/// on its first use.
+/// The plan `kernels` runs by on the client's device for maps of `features` channels, worked out on its first
+/// use. `winograd` is whether the Winograd candidates are offered.
 fn plan_for<R: Runtime>(
     client: &ComputeClient<R>,
     kernels: &Kernels,
-    model: Option<Model>,
+    winograd: bool,
     features: u32,
 ) -> Arc<Plan<R>> {
-    let key = PlanKey::of(client, kernels, model, features);
+    let key = PlanKey::of(client, kernels, winograd, features);
     let mut plans = PLANS.lock().unwrap_or_else(PoisonError::into_inner);
 
     let known = plans.get(&key).cloned();
@@ -538,7 +504,7 @@ fn plan_for<R: Runtime>(
         return plan;
     }
 
-    let made = make_plan(client, kernels, model, features);
+    let made = make_plan(client, kernels, winograd, features);
     let plan = Arc::new(made);
     plans.insert(key, plan.clone());
 
@@ -613,7 +579,7 @@ pub fn run_tuned<R: Runtime>(
 ) -> Result<TunedRun, CnnError> {
     convolution.check();
 
-    let plan = plan_for(client, kernels, convolution.model, convolution.features);
+    let plan = plan_for(client, kernels, convolution.winograd, convolution.features);
 
     match plan.as_ref() {
         Plan::Refused(reasons) => Err(CnnError::Convolution(reasons.clone())),
@@ -630,31 +596,11 @@ pub fn run_tuned<R: Runtime>(
     }
 }
 
-/// Whether `network`'s body layers on `path` run with the candidate its kernels choose.
+/// Whether `layer` on `path` runs with the candidate its kernels choose.
 ///
 /// That is the convolution path on f16 maps whose features are a multiple of 16.
-pub(crate) fn takes_tuner(network: &Network, path: BodyPath) -> bool {
-    let tiled = network.features().is_multiple_of(16);
+pub(crate) fn takes_tuner(layer: &ConvLayer, path: BodyPath) -> bool {
+    let tiled = layer.features.is_multiple_of(16);
 
-    path == BodyPath::Convolution && network.precision() == Precision::F16 && tiled
-}
-
-/// Runs body layer `layer` of `network` over the maps of `region` in `input` into `output`, applying
-/// `finish`, with the candidate the network's kernels choose.
-pub(crate) fn run_tuned_layer<R: Runtime>(
-    client: &ComputeClient<R>,
-    network: &Network,
-    layer: usize,
-    input: &Handle,
-    output: &Handle,
-    region: Region,
-    finish: Finish<'_>,
-) -> Result<LayerRun, CnnError> {
-    let convolution = BodyConvolution::of_layer(network, layer, input, output, region, finish);
-    let epilogue = Epilogue::of_layer(network, layer, finish);
-    let kernels = network.kernels();
-
-    let tuned = run_tuned(client, kernels, &convolution, epilogue)?;
-
-    Ok(tuned.run)
+    path == BodyPath::Convolution && layer.precision == Precision::F16 && tiled
 }

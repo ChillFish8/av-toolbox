@@ -759,6 +759,10 @@ pub fn direct_variants(properties: &DeviceProperties, features: u32) -> Vec<Dire
     offered
 }
 
+fn missing_bias() -> CnnError {
+    CnnError::Convolution("the kernel runs only layers with a bias".to_string())
+}
+
 /// Runs `convolution` as `variant` describes.
 pub(crate) fn run_direct<R: Runtime>(
     client: &ComputeClient<R>,
@@ -767,6 +771,7 @@ pub(crate) fn run_direct<R: Runtime>(
 ) -> Result<(), CnnError> {
     convolution.check();
 
+    let bias = convolution.bias.ok_or_else(missing_bias)?;
     let features = convolution.features;
     let residual = convolution.residual.is_some();
     let properties = client.properties();
@@ -806,7 +811,7 @@ pub(crate) fn run_direct<R: Runtime>(
         let input = ArrayArg::from_raw_parts(convolution.input.clone(), map_values / LOAD_WIDTH as usize);
         let weights =
             ArrayArg::from_raw_parts(convolution.weights.clone(), weight_values / LOAD_WIDTH as usize);
-        let bias = ArrayArg::from_raw_parts(convolution.bias.clone(), (features / WRITE_WIDTH) as usize);
+        let bias = ArrayArg::from_raw_parts(bias.clone(), (features / WRITE_WIDTH) as usize);
         let residual = ArrayArg::from_raw_parts(residual.clone(), map_values / WRITE_WIDTH as usize);
         let output = ArrayArg::from_raw_parts(convolution.output.clone(), map_values / WRITE_WIDTH as usize);
 

@@ -4,6 +4,7 @@ mod aa;
 mod artcnn;
 mod bilateral;
 mod blur;
+mod cnn;
 mod deband;
 mod degrain;
 mod dehalo;

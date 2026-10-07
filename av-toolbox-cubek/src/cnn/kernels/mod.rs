@@ -13,34 +13,32 @@ pub use self::direct::{DirectVariant, WeightStaging};
 use self::direct::{check_variant, run_direct};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::direct::{direct_variants, offered_plane_width};
-pub use self::tune::Kernels;
 #[cfg(any(test, feature = "test-support"))]
-pub use self::tune::{Epilogue, TunedRun, fixed_candidate, offered_candidates, run_tuned};
-pub(crate) use self::tune::{run_tuned_layer, takes_tuner};
-pub(crate) use self::winograd::transform_weights;
+pub use self::tune::fixed_candidate;
+pub(crate) use self::tune::takes_tuner;
+pub use self::tune::{Epilogue, Kernels, TunedRun, offered_candidates, run_tuned};
+pub use self::winograd::WinogradVariant;
+pub(crate) use self::winograd::transform_values;
 use self::winograd::{POSITIONS, run_winograd};
-pub use self::winograd::{WinogradVariant, winograd_allowed};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::winograd::{transform_input, winograd_variants};
-use crate::artcnn::{Model, Network};
-use crate::cnn::body::{Finish, body_operands};
 use crate::cnn::convolution::{Operands, launch_fused_convolution};
-use crate::cnn::{Activation, CnnError, Precision, Region};
+use crate::cnn::{Activation, CnnError, ConvLayer, Finish, Precision, Region};
 
 /// One body convolution of f16 NHWC maps, with its bias and what it applies as it writes.
 ///
-/// The weights are laid out by output channel, row, column and input channel, and the bias is in f16. The
-/// output is the convolution plus the bias, through `activation`, plus `residual` if given.
+/// The weights are laid out by output channel, row, column and input channel, and the bias, if any, is in
+/// f16. The output is the convolution plus the bias, through `activation`, plus `residual` if given.
 ///
-/// `transformed` holds the layer's Winograd weights, by position, output channel and input channel, when its
-/// model is allow-listed. `model` is the network's model, when it was uploaded as one.
+/// `transformed` holds the layer's Winograd weights, by position, output channel and input channel.
+/// `winograd` is whether the layer is offered the Winograd candidates.
 #[derive(Clone, Copy)]
 pub struct BodyConvolution<'a> {
     pub input: &'a Handle,
     pub weights: &'a Handle,
     pub transformed: Option<&'a Handle>,
-    pub model: Option<Model>,
-    pub bias: &'a Handle,
+    pub winograd: bool,
+    pub bias: Option<&'a Handle>,
     pub residual: Option<&'a Handle>,
     pub activation: Activation,
     pub output: &'a Handle,
@@ -50,38 +48,33 @@ pub struct BodyConvolution<'a> {
 }
 
 impl<'a> BodyConvolution<'a> {
-    /// Body layer `layer` of `network` over the maps of `region`, applying `finish`.
+    /// `layer` over the maps of `region`, applying `finish`.
     ///
-    /// Panics if the network's maps are not f16 or the layer does not map the features to themselves.
-    pub fn of_layer(
-        network: &'a Network,
-        layer: usize,
+    /// Panics if the layer's maps are not f16.
+    pub fn of_conv(
+        layer: &'a ConvLayer,
         input: &'a Handle,
         output: &'a Handle,
         region: Region,
         finish: Finish<'a>,
     ) -> Self {
         assert!(
-            network.precision() == Precision::F16,
+            layer.precision == Precision::F16,
             "the body convolutions run on f16 maps"
         );
 
-        let operands = body_operands(network, layer, true);
-        let bias = operands.bias.expect("the operands carry the bias");
-        let transformed = network.layer(layer).transformed.as_ref();
-
         Self {
             input,
-            weights: operands.weights,
-            transformed,
-            model: network.model(),
-            bias,
+            weights: &layer.weights,
+            transformed: layer.transformed.as_ref(),
+            winograd: layer.winograd,
+            bias: layer.bias.as_ref(),
             residual: finish.residual,
             activation: finish.activation,
             output,
             width: region.width,
             height: region.height,
-            features: network.features(),
+            features: layer.features,
         }
     }
 
@@ -126,10 +119,14 @@ impl<'a> BodyConvolution<'a> {
             self.weights.size_in_used() >= weight_bytes,
             "the weights are smaller than the layer's"
         );
-        assert!(
-            self.bias.size_in_used() >= bias_bytes,
-            "the bias is smaller than the features"
-        );
+
+        if let Some(bias) = self.bias {
+            assert!(
+                bias.size_in_used() >= bias_bytes,
+                "the bias is smaller than the features"
+            );
+        }
+
         assert!(!same_buffer(self.input, self.output), "the output is the input");
 
         if let Some(transformed) = self.transformed {
@@ -159,7 +156,7 @@ fn same_buffer(first: &Handle, second: &Handle) -> bool {
 pub enum Candidate {
     /// The direct implicit-GEMM convolution on cooperative matrices.
     Direct(DirectVariant),
-    /// Winograd F(2x2, 3x3) on cooperative matrices, for allow-listed models.
+    /// Winograd F(2x2, 3x3) on cooperative matrices, for layers offered Winograd.
     Winograd(WinogradVariant),
     /// `cubek-convolution` with the epilogue applied as it writes.
     FusedCubek,

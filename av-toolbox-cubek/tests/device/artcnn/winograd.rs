@@ -390,15 +390,15 @@ fn the_tuner_may_choose_winograd_for_r8f64_and_reports_the_winner() {
     }
 }
 
-/// Whether body layer 1 of a network holds Winograd weights, and the model it reports, uploaded as `model`
-/// if given.
+/// Whether body layer 1 of a network holds Winograd weights, and whether it is offered Winograd, uploaded as
+/// `model` if given.
 struct HoldsTransformed {
     weights: Weights,
     model: Option<Model>,
 }
 
 impl BuildTask for HoldsTransformed {
-    type Output = Result<(bool, Option<Model>), WeightsError>;
+    type Output = Result<(bool, bool), WeightsError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
@@ -413,11 +413,11 @@ impl BuildTask for HoldsTransformed {
         let finish = Epilogue::Silu.finish(&maps);
         let convolution = BodyConvolution::of_layer(&network, 1, &maps, &output, frame, finish);
 
-        Ok((convolution.transformed.is_some(), convolution.model))
+        Ok((convolution.transformed.is_some(), convolution.winograd))
     }
 }
 
-fn holds_transformed(weights: Weights, model: Option<Model>) -> Result<(bool, Option<Model>), WeightsError> {
+fn holds_transformed(weights: Weights, model: Option<Model>) -> Result<(bool, bool), WeightsError> {
     let task = HoldsTransformed { weights, model };
 
     backend().build(task)
@@ -429,9 +429,9 @@ fn only_a_network_uploaded_as_an_allow_listed_model_holds_winograd_weights() {
     let as_weights = holds_transformed(r8f64(), None);
     let synthetic = holds_transformed(synthetic_weights(96, 16, 4), Some(Model::R16F96));
 
-    assert_eq!(as_model, Ok((true, Some(Model::R8F64))));
-    assert_eq!(as_weights, Ok((false, None)));
-    assert_eq!(synthetic, Ok((true, Some(Model::R16F96))));
+    assert_eq!(as_model, Ok((true, true)));
+    assert_eq!(as_weights, Ok((false, false)));
+    assert_eq!(synthetic, Ok((true, true)));
 }
 
 #[test]

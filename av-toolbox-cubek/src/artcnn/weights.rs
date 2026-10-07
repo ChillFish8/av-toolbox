@@ -33,6 +33,16 @@ impl Model {
     }
 }
 
+/// Whether `model` may run its body convolutions as Winograd F(2x2, 3x3).
+///
+/// A model is allowed when its output against an f64 reference stays within the `"f16"` bounds with its body
+/// convolutions run as Winograd.
+pub fn winograd_allowed(model: Model) -> bool {
+    match model {
+        Model::R8F64 | Model::R16F96 => true,
+    }
+}
+
 /// One 3x3 convolution, with its weights laid out by output channel, row, column and input channel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layer {
