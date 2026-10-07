@@ -77,6 +77,11 @@ impl<A: AvdArgs> StageDefinition for Denoise<A> {
         Parallelism::chunk::<Scenes>(SceneRequest::natural())
     }
 
+    // A second scene in flight hides the time one engine spends waiting on the host.
+    fn workers(_args: &Self::Args) -> Option<usize> {
+        Some(2)
+    }
+
     fn held_frames(args: &Self::Args, _formats: &ResolvedFormats) -> usize {
         args.held_frames()
     }

@@ -222,3 +222,14 @@ fn every_engine_chunks_on_natural_scenes() {
     assert_eq!(Denoise::<NlmeansHqArgs>::parallelism(&nlmeans_hq), chunked);
     assert_eq!(Denoise::<Nl4dArgs>::parallelism(&nl4d), chunked);
 }
+
+#[test]
+fn every_engine_asks_for_two_workers() {
+    let nlmeans: NlmeansArgs = parsed(json!({}));
+    let nlmeans_hq: NlmeansHqArgs = parsed(json!({}));
+    let nl4d: Nl4dArgs = parsed(json!({}));
+
+    assert_eq!(Denoise::<NlmeansArgs>::workers(&nlmeans), Some(2));
+    assert_eq!(Denoise::<NlmeansHqArgs>::workers(&nlmeans_hq), Some(2));
+    assert_eq!(Denoise::<Nl4dArgs>::workers(&nl4d), Some(2));
+}
