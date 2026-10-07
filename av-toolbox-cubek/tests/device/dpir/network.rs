@@ -37,7 +37,7 @@ const RESBLOCK_CONVOLUTIONS: usize = 56;
 const UNCLAMPED_SHARE: f64 = 0.9;
 
 /// The path the device runs `precision` on, as a stage would choose it.
-fn body_path(precision: Precision) -> BodyPath {
+pub(super) fn body_path(precision: Precision) -> BodyPath {
     let offered = supports(BodyPath::Convolution, precision);
 
     if offered {
@@ -148,7 +148,7 @@ impl BuildTask for Forward<'_> {
 }
 
 /// `planes` widened to f64.
-fn widened(planes: &[Vec<f32>]) -> Vec<Vec<f64>> {
+pub(super) fn widened(planes: &[Vec<f32>]) -> Vec<Vec<f64>> {
     planes
         .iter()
         .map(|values| values.iter().map(|value| f64::from(*value)).collect())

@@ -252,7 +252,7 @@ fn run_forward_as<R: Runtime>(
     Ok((values, runs))
 }
 
-pub(super) fn largest_error(actual: &[f32], expected: &[f64]) -> f64 {
+pub(crate) fn largest_error(actual: &[f32], expected: &[f64]) -> f64 {
     assert_eq!(actual.len(), expected.len());
 
     actual

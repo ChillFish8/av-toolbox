@@ -3,6 +3,7 @@ use std::slice::Iter;
 use std::sync::{Mutex, OnceLock};
 
 use super::artcnn::{LCG_INCREMENT, LCG_MULTIPLIER, conv3x3_values, next_unit};
+use super::bwdif::decode_values;
 use crate::dpir::{LayerKind, Variant, WeightLayer, Weights, layer_plan};
 
 type Cache = Mutex<HashMap<(u32, u32), Weights>>;
@@ -375,6 +376,105 @@ fn reference_blocks(layers: &mut Iter<'_, WeightLayer>, input: &[f64], width: u3
     state
 }
 
+/// One run of a DPIR model through ONNX Runtime. The input planes and the clamped output are raw little
+/// endian f32 planes, one after another.
+#[derive(Debug, Clone, Copy)]
+pub struct GoldenRun {
+    pub name: &'static str,
+    pub variant: Variant,
+    pub width: u32,
+    pub height: u32,
+    pub strength: f32,
+    pub input: &'static [u8],
+    pub expected: &'static [u8],
+}
+
+const GRAY_48X40: &[u8] = include_bytes!("fixtures/dpir/gray_48x40.input.f32");
+const COLOUR_40X48: &[u8] = include_bytes!("fixtures/dpir/colour_40x48.input.f32");
+const GRAY_50X38: &[u8] = include_bytes!("fixtures/dpir/gray_50x38.input.f32");
+
+/// Every ONNX Runtime golden, at a peak of 1.0.
+pub const GOLDEN_RUNS: [GoldenRun; 7] = [
+    GoldenRun {
+        name: "gray_48x40_s5",
+        variant: Variant::Gray,
+        width: 48,
+        height: 40,
+        strength: 5.0,
+        input: GRAY_48X40,
+        expected: include_bytes!("fixtures/dpir/gray_48x40_s5.f32"),
+    },
+    GoldenRun {
+        name: "gray_48x40_s10",
+        variant: Variant::Gray,
+        width: 48,
+        height: 40,
+        strength: 10.0,
+        input: GRAY_48X40,
+        expected: include_bytes!("fixtures/dpir/gray_48x40_s10.f32"),
+    },
+    GoldenRun {
+        name: "gray_48x40_s50",
+        variant: Variant::Gray,
+        width: 48,
+        height: 40,
+        strength: 50.0,
+        input: GRAY_48X40,
+        expected: include_bytes!("fixtures/dpir/gray_48x40_s50.f32"),
+    },
+    GoldenRun {
+        name: "colour_40x48_s5",
+        variant: Variant::Colour,
+        width: 40,
+        height: 48,
+        strength: 5.0,
+        input: COLOUR_40X48,
+        expected: include_bytes!("fixtures/dpir/colour_40x48_s5.f32"),
+    },
+    GoldenRun {
+        name: "colour_40x48_s10",
+        variant: Variant::Colour,
+        width: 40,
+        height: 48,
+        strength: 10.0,
+        input: COLOUR_40X48,
+        expected: include_bytes!("fixtures/dpir/colour_40x48_s10.f32"),
+    },
+    GoldenRun {
+        name: "colour_40x48_s50",
+        variant: Variant::Colour,
+        width: 40,
+        height: 48,
+        strength: 50.0,
+        input: COLOUR_40X48,
+        expected: include_bytes!("fixtures/dpir/colour_40x48_s50.f32"),
+    },
+    GoldenRun {
+        name: "gray_50x38_s10",
+        variant: Variant::Gray,
+        width: 50,
+        height: 38,
+        strength: 10.0,
+        input: GRAY_50X38,
+        expected: include_bytes!("fixtures/dpir/gray_50x38_s10.f32"),
+    },
+];
+
+/// Splits raw little endian f32 `bytes` into `count` planes of `width` by `height`.
+///
+/// Panics if `bytes` does not hold exactly that many values.
+pub fn planes_of(bytes: &[u8], width: u32, height: u32, count: usize) -> Vec<Vec<f32>> {
+    let samples = width as usize * height as usize;
+    let plane_bytes = samples * size_of::<f32>();
+    assert_eq!(
+        bytes.len(),
+        count * plane_bytes,
+        "the bytes do not hold {count} planes of {width}x{height}"
+    );
+
+    bytes.chunks_exact(plane_bytes).map(decode_values).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,5 +486,17 @@ mod tests {
         assert_eq!(reference_mirror(5, 5), 4);
         assert_eq!(reference_mirror(-4, 3), 2);
         assert_eq!(reference_mirror(7, 1), 0);
+    }
+
+    #[test]
+    fn every_golden_holds_its_planes() {
+        for run in &GOLDEN_RUNS {
+            let channels = run.variant.image_channels() as usize;
+            let inputs = planes_of(run.input, run.width, run.height, channels);
+            let expected = planes_of(run.expected, run.width, run.height, channels);
+
+            assert_eq!(inputs.len(), channels, "{}", run.name);
+            assert_eq!(expected.len(), channels, "{}", run.name);
+        }
     }
 }

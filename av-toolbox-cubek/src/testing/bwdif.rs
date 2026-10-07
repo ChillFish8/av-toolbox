@@ -72,7 +72,7 @@ fn decode_samples(bytes: &[u8]) -> Vec<f32> {
     pairs.iter().map(sample_of).collect()
 }
 
-fn decode_values(bytes: &[u8]) -> Vec<f32> {
+pub(crate) fn decode_values(bytes: &[u8]) -> Vec<f32> {
     let (words, remainder) = bytes.as_chunks::<4>();
     assert!(
         remainder.is_empty(),

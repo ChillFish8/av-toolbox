@@ -42,7 +42,7 @@ const BLOCKS: usize = 4;
 const DEEPEST: usize = 3;
 
 /// The multiple of 8 a region's sides must be, so each of the three halvings is exact.
-const ALIGNMENT: u32 = 8;
+pub(super) const ALIGNMENT: u32 = 8;
 
 /// A DRUNet deblocking network's weights on the device, in the feature maps' type, and how its f16
 /// convolutions choose their kernel.
