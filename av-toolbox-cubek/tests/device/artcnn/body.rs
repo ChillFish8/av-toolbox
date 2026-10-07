@@ -64,7 +64,7 @@ impl BuildTask for Supported {
     }
 }
 
-pub(super) fn supports(path: BodyPath, precision: Precision) -> bool {
+pub(crate) fn supports(path: BodyPath, precision: Precision) -> bool {
     let task = Supported { path, precision };
 
     backend().build(task)

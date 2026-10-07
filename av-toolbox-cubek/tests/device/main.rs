@@ -10,6 +10,7 @@ mod degrain;
 mod dehalo;
 mod deinterlace;
 mod depth;
+mod dpir;
 mod edges;
 mod histogram;
 mod hysteresis;

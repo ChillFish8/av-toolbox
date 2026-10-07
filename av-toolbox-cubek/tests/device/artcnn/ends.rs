@@ -35,7 +35,7 @@ const F16_EPSILON: f64 = 1.0 / 1024.0;
 const UNTOUCHED: f32 = -1.0;
 
 /// `values` as the device holds them in `precision`, widened to f64.
-fn as_stored(values: &[f32], precision: Precision) -> Vec<f64> {
+pub(crate) fn as_stored(values: &[f32], precision: Precision) -> Vec<f64> {
     match precision {
         Precision::F16 => values
             .iter()
@@ -46,7 +46,7 @@ fn as_stored(values: &[f32], precision: Precision) -> Vec<f64> {
 }
 
 /// `count` values between -`scale` and `scale` from a small LCG.
-fn signed_values(count: usize, seed: u32, scale: f32) -> Vec<f32> {
+pub(crate) fn signed_values(count: usize, seed: u32, scale: f32) -> Vec<f32> {
     let mut state = seed;
     let mut values = Vec::with_capacity(count);
 

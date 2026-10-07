@@ -28,6 +28,26 @@ pub fn reflect(index: i32, length: i32) -> i32 {
     reflected
 }
 
+/// Folds `index` back into a row of `length` samples, repeating the edge sample.
+///
+/// So `-1` reads `0` and `length` reads `length - 1`. An index any distance out folds back and
+/// forth until it lands inside.
+#[cube]
+pub fn mirror(index: i32, length: i32) -> i32 {
+    let period = 2 * length;
+    let mut folded = index;
+    if folded < 0 {
+        folded = -folded - 1;
+    }
+
+    folded %= period;
+    if folded >= length {
+        folded = period - 1 - folded;
+    }
+
+    folded
+}
+
 /// What a pass reads past the edge of a plane.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Edge {

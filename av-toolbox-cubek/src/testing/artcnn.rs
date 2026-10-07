@@ -31,8 +31,35 @@ pub fn reference_silu(value: f64) -> f64 {
 
 /// Mirrors a 3x3 convolution with zero padding on the CPU in f64, NHWC in and out.
 pub fn reference_conv3x3(input: &[f64], width: u32, height: u32, layer: &Layer) -> Vec<f64> {
-    let in_channels = i64::from(layer.in_channels);
-    let out_channels = i64::from(layer.out_channels);
+    let bias: Vec<f64> = layer.bias.iter().map(|value| value.to_f64()).collect();
+    let weight = |index: usize| layer.weights[index].to_f64();
+
+    conv3x3_values(
+        input,
+        width,
+        height,
+        layer.in_channels,
+        layer.out_channels,
+        weight,
+        Some(&bias),
+    )
+}
+
+/// A 3x3 convolution with zero padding on the CPU in f64, NHWC in and out.
+///
+/// `weight` gives the weight at an index of an array laid out by output channel, row, column and input
+/// channel. A missing bias is zero.
+pub(super) fn conv3x3_values(
+    input: &[f64],
+    width: u32,
+    height: u32,
+    in_channels: u32,
+    out_channels: u32,
+    weight: impl Fn(usize) -> f64,
+    bias: Option<&[f64]>,
+) -> Vec<f64> {
+    let in_channels = i64::from(in_channels);
+    let out_channels = i64::from(out_channels);
     let columns = i64::from(width);
     let rows = i64::from(height);
     let mut output = Vec::with_capacity((rows * columns * out_channels) as usize);
@@ -40,7 +67,7 @@ pub fn reference_conv3x3(input: &[f64], width: u32, height: u32, layer: &Layer) 
     for row in 0..rows {
         for column in 0..columns {
             for out_channel in 0..out_channels {
-                let mut sum = f64::from(layer.bias[out_channel as usize]);
+                let mut sum = bias.map_or(0.0, |values| values[out_channel as usize]);
 
                 for tap_row in 0..3i64 {
                     for tap_column in 0..3i64 {
@@ -59,8 +86,8 @@ pub fn reference_conv3x3(input: &[f64], width: u32, height: u32, layer: &Layer) 
                         let tap = ((out_channel * 3 + tap_row) * 3 + tap_column) * in_channels;
 
                         for in_channel in 0..in_channels {
-                            let weight = f64::from(layer.weights[(tap + in_channel) as usize]);
-                            sum += weight * input[(source + in_channel) as usize];
+                            let value = weight((tap + in_channel) as usize);
+                            sum += value * input[(source + in_channel) as usize];
                         }
                     }
                 }

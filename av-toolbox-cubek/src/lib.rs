@@ -64,6 +64,6 @@ pub mod values;
 pub mod warp;
 pub mod words;
 
-pub use self::border::{Edge, reflect};
+pub use self::border::{Edge, mirror, reflect};
 pub use self::dispatch::Dispatch;
 pub use self::plane::{DevicePlane, assert_plane};
