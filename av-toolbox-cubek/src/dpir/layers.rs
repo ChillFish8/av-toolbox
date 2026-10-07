@@ -13,6 +13,7 @@ use crate::cnn::{
     PaddedLastLayer,
     Precision,
     Region,
+    add_taps,
     encode,
     run_padded_layer,
 };
@@ -238,27 +239,18 @@ fn direct_tail_kernel<F: Float>(
     let mut sum = 0.0f32;
 
     if channel < out_channels {
-        sum = bias[channel as usize];
-
-        for tap in 0..9u32 {
-            let source_column = column + (tap % 3) as i32 - 1;
-            let source_row = row + (tap / 3) as i32 - 1;
-            let inside = source_column >= 0
-                && source_row >= 0
-                && source_column < region_width as i32
-                && source_row < region_height as i32;
-
-            if inside {
-                let source = (source_row as u32 * region_width + source_column as u32) * in_channels;
-                let tap_start = (channel * 9 + tap) * in_channels;
-
-                for feature in 0..in_channels {
-                    let weight = f32::cast_from(weights[(tap_start + feature) as usize]);
-                    let value = f32::cast_from(input[(source + feature) as usize]);
-                    sum += weight * value;
-                }
-            }
-        }
+        let bias_value = bias[channel as usize];
+        sum = add_taps::<F>(
+            bias_value,
+            input,
+            weights,
+            column,
+            row,
+            region_width,
+            region_height,
+            channel,
+            in_channels,
+        );
     }
 
     scratch[ABSOLUTE_POS] = sum;

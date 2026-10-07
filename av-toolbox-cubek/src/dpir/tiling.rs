@@ -3,7 +3,7 @@ use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
 use super::network::ALIGNMENT;
 use crate::cnn::{BodyPath, CnnError, LayerRun, Precision, tiles};
 use crate::dpir::{Dpir, DpirMaps, DpirPlanes, Placement, column_bytes, level_bytes, run_region};
-use crate::plane::assert_plane;
+use crate::plane::{are_distinct, assert_plane};
 use crate::{DevicePlane, Dispatch};
 
 /// How many bytes of scratch one region's pass may use.
@@ -140,9 +140,10 @@ pub fn tile_sizes(precision: Precision, path: BodyPath, width: u32, height: u32,
 /// of each tile ran, in order.
 ///
 /// The frame is padded to multiples of 8 by mirroring and split into tiles of `tile`, a multiple of 8. The
-/// inputs are divided by `peak`, and `strength` is on the 8-bit scale, between 0 and 255. Each output sample
-/// is clamped to `0..=1` and scaled by `peak`. The maps must hold [tile_sizes](crate::dpir::tile_sizes) for
-/// the same frame and `tile`, as [scratch_sizes](crate::dpir::scratch_sizes) gives them.
+/// inputs are divided by `peak`, a finite value above 0, and `strength` is on the 8-bit scale, between 0 and
+/// 255. Each output sample is clamped to `0..=1` and scaled by `peak`. No output may share a buffer with an
+/// input. The maps must hold [tile_sizes](crate::dpir::tile_sizes) for the same frame and `tile`, as
+/// [scratch_sizes](crate::dpir::scratch_sizes) gives them.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
@@ -159,10 +160,18 @@ pub fn deblock<R: Runtime>(
     maps: DpirMaps<'_>,
 ) -> Result<Vec<LayerRun>, CnnError> {
     let (width, height) = check_planes(dpir, &planes);
+    debug_assert!(
+        outputs_are_apart(&planes),
+        "an output plane shares a buffer with an input plane, which later tiles read past their core"
+    );
 
     assert!(
         (0.0..=255.0).contains(&strength),
         "the strength {strength} is not between 0 and 255"
+    );
+    assert!(
+        peak.is_finite() && peak > 0.0,
+        "the peak {peak} is not a finite value above 0"
     );
     assert!(
         tile >= ALIGNMENT && tile.is_multiple_of(ALIGNMENT),
@@ -210,6 +219,21 @@ fn check_planes(dpir: &Dpir, planes: &DpirPlanes<'_>) -> (u32, u32) {
     }
 
     (width, height)
+}
+
+/// Whether no output plane shares a buffer with an input plane.
+fn outputs_are_apart(planes: &DpirPlanes<'_>) -> bool {
+    for output in planes.outputs {
+        for input in planes.inputs {
+            let pair = [output.handle(), input.handle()];
+
+            if !are_distinct(&pair) {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 /// Deblocks one frame of zeros at the stage's size and waits for the device, so every kernel a frame uses is

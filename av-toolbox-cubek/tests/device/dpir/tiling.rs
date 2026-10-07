@@ -278,7 +278,7 @@ fn code_values_scale_by_the_peak() {
 }
 
 #[test]
-fn tiled_runs_write_every_sample_once() {
+fn tiled_runs_write_every_sample() {
     let weights = synthetic_weights(Variant::Gray, 1);
     let planes = vec![textured(70, 46)];
     let padded = Padded::of(70, 46);
@@ -327,6 +327,30 @@ fn deblock_refuses_mismatched_planes() {
     let ran = backend().build(task);
 
     println!("wider output: {ran:?}");
+}
+
+#[test]
+#[should_panic(expected = "the peak 0 is not")]
+fn deblock_refuses_a_peak_of_zero() {
+    let weights = synthetic_weights(Variant::Gray, 1);
+    let planes = vec![textured(24, 16)];
+    let precision = Precision::F32;
+    let task = Deblocked {
+        weights: &weights,
+        planes: &planes,
+        width: 24,
+        height: 16,
+        output_width: 24,
+        strength: STRENGTH,
+        peak: 0.0,
+        path: body_path(precision),
+        precision,
+        tile: None,
+    };
+
+    let ran = backend().build(task);
+
+    println!("peak of zero: {ran:?}");
 }
 
 #[test]

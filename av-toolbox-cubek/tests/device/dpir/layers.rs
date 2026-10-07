@@ -34,6 +34,7 @@ use cubecl::server::Handle;
 use crate::artcnn::{
     BlueprintRuns,
     as_stored,
+    finite_error,
     forced_eligible,
     read_maps,
     signed_values,
@@ -171,7 +172,7 @@ fn assert_matches(name: &str, precision: Precision, allowed: f64, actual: &[f32]
     let mut largest_error = 0.0f64;
     let mut largest_relative = 0.0f64;
     for (got, want) in actual.iter().zip(expected) {
-        let error = (f64::from(*got) - want).abs();
+        let error = finite_error(*got, *want);
         let relative = error / want.abs().max(FLOOR);
         largest_error = largest_error.max(error);
         largest_relative = largest_relative.max(relative);

@@ -258,8 +258,18 @@ pub(crate) fn largest_error(actual: &[f32], expected: &[f64]) -> f64 {
     actual
         .iter()
         .zip(expected)
-        .map(|(got, want)| (f64::from(*got) - want).abs())
+        .map(|(got, want)| finite_error(*got, *want))
         .fold(0.0, f64::max)
+}
+
+/// The absolute difference of `got` from `want`, panicking if either is not finite.
+pub(crate) fn finite_error(got: f32, want: f64) -> f64 {
+    assert!(
+        got.is_finite() && want.is_finite(),
+        "the value {got} or its expected value {want} is not finite"
+    );
+
+    (f64::from(got) - want).abs()
 }
 
 /// Runs `path` at `precision` and gives the output and its largest difference from `expected`.

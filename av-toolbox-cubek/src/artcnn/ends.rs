@@ -3,7 +3,7 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 
 use crate::artcnn::Network;
-use crate::cnn::{CnnError, PADDED_CHANNELS, Precision, Region, run_padded_layer};
+use crate::cnn::{CnnError, PADDED_CHANNELS, Precision, Region, add_taps, run_padded_layer};
 use crate::{DevicePlane, Dispatch};
 
 #[cube(launch_unchecked)]
@@ -110,27 +110,18 @@ fn last_layer_kernel<F: Float>(
     let channel = unit.channel;
     let column = (unit.plane_column - region_x) as i32;
     let row = (unit.plane_row - region_y) as i32;
-    let mut sum = f32::cast_from(bias[channel as usize]);
-
-    for tap in 0..9u32 {
-        let source_column = column + (tap % 3) as i32 - 1;
-        let source_row = row + (tap / 3) as i32 - 1;
-        let inside = source_column >= 0
-            && source_row >= 0
-            && source_column < region_width as i32
-            && source_row < region_height as i32;
-
-        if inside {
-            let source = (source_row as u32 * region_width + source_column as u32) * features;
-            let tap_start = (channel * 9 + tap) * features;
-
-            for feature in 0..features {
-                let weight = f32::cast_from(weights[(tap_start + feature) as usize]);
-                let value = f32::cast_from(input[(source + feature) as usize]);
-                sum += weight * value;
-            }
-        }
-    }
+    let bias_value = f32::cast_from(bias[channel as usize]);
+    let sum = add_taps::<F>(
+        bias_value,
+        input,
+        weights,
+        column,
+        row,
+        region_width,
+        region_height,
+        channel,
+        features,
+    );
 
     write_doubled(output, output_width, &unit, sum, peak);
 }

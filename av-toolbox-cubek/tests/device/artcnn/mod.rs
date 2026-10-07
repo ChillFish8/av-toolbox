@@ -10,7 +10,7 @@ use av_toolbox_cubek::artcnn::{Precision, offers_cmma_16};
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-pub(crate) use self::body::{f16_step, largest_error, supported_runs, supports};
+pub(crate) use self::body::{f16_step, finite_error, largest_error, supported_runs, supports};
 pub(crate) use self::ends::{as_stored, signed_values};
 pub(crate) use self::kernels::{edged_maps, region};
 use crate::support::{read_f16, read_f32, upload_f16, upload_f32};

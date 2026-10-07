@@ -14,7 +14,7 @@ use av_toolbox_cubek::testing::dpir::{reference_dpir, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::artcnn::{supports, synced, textured};
+use crate::artcnn::{finite_error, supports, synced, textured};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
 /// The largest absolute error allowed on f32 maps.
@@ -203,7 +203,7 @@ fn check_against_reference(
         );
 
         for (got, want) in actual_plane.iter().zip(expected_plane) {
-            let error = (f64::from(*got) - want).abs();
+            let error = finite_error(*got, *want);
             largest_error = largest_error.max(error);
         }
     }

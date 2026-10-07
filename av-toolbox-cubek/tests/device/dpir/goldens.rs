@@ -7,8 +7,8 @@ use super::network::{body_path, widened};
 use super::tiling::{Deblocked, largest_plane_error};
 use crate::support::backend;
 
-/// The largest absolute error allowed against ONNX Runtime in f32.
-const F32_BOUND: f64 = 1e-4;
+/// The largest absolute error allowed against ONNX Runtime in f32, rounded up from the 1.43e-6 measured.
+const F32_BOUND: f64 = 1e-5;
 
 /// The largest absolute error allowed against ONNX Runtime in f16, rounded up from twice the 6.64e-4 measured
 /// on Im2col. The convolution path measured 4.47e-4.

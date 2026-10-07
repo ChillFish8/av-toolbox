@@ -9,6 +9,7 @@ mod fused;
 pub(crate) mod kernels;
 mod layer;
 mod region;
+mod taps;
 
 #[cfg(test)]
 mod tests;
@@ -46,3 +47,4 @@ pub use self::kernels::{
 pub(crate) use self::layer::encode;
 pub use self::layer::{ConvLayer, PADDED_CHANNELS, PaddedLastLayer, Precision};
 pub use self::region::{Region, tiles};
+pub(crate) use self::taps::add_taps;
