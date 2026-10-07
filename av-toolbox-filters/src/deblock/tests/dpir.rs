@@ -1,9 +1,20 @@
+use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition};
+use av_toolbox_cubek::cnn::{Candidate, LayerRun};
 use av_toolbox_cubek::dpir::Variant;
-use av_toolbox_gpu::{ColourInfo, FrameFormat, FrameLayout, SampleFormat, Subsampling};
+use av_toolbox_gpu::{
+    ColourInfo,
+    ElementType,
+    FrameFormat,
+    FrameLayout,
+    SampleFormat,
+    StreamFormat,
+    Subsampling,
+};
 use av_toolbox_models::Store;
 use serde_json::json;
 
 use crate::cnn::PrecisionName;
+use crate::deblock::Dpir;
 use crate::deblock::dpir::{
     DpirArgs,
     ModelChoice,
@@ -11,9 +22,10 @@ use crate::deblock::dpir::{
     StrengthArg,
     accepted_samples,
     checked_runs,
+    level_summary,
     locate,
 };
-use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
+use crate::sample_checks::{assert_integers_and_floats_accepted_and_mask_refused, capabilities_computing};
 
 const STAGE: &str = "deblock/dpir";
 
@@ -253,4 +265,50 @@ fn a_missing_pack_names_the_pull_command() {
     assert!(message.contains("colour"), "{message}");
     assert!(message.contains("drunet_deblock_color.bin"), "{message}");
     assert!(message.contains("av-toolbox pull dpir"), "{message}");
+}
+
+#[test]
+fn the_stage_runs_as_a_single_instance() {
+    let arguments = args(json!({}));
+
+    let parallelism = Dpir::parallelism(&arguments);
+
+    assert_eq!(parallelism, Parallelism::Stream);
+}
+
+#[test]
+fn f16_without_f16_arithmetic_is_refused_suggesting_f32() {
+    let capabilities = capabilities_computing(&[ElementType::F32]);
+    let arguments = args(json!({ "precision": "f16" }));
+    let input = yuv420();
+    let chosen = [Some(StreamFormat::Frames(input))];
+
+    let error = Dpir::produces(&capabilities, &arguments, &chosen).expect_err("no f16 arithmetic");
+    let message = error.to_string();
+
+    assert!(message.contains(STAGE), "{message}");
+    assert!(message.contains("\"f32\""), "{message}");
+}
+
+#[test]
+fn the_level_summary_names_each_level_by_its_features() {
+    let layer = LayerRun {
+        forced: false,
+        fused: true,
+        candidate: Some(Candidate::FusedCubek),
+        winograd_offered: false,
+    };
+    let deepest = LayerRun {
+        candidate: None,
+        ..layer
+    };
+    let mut layers = vec![layer; 56];
+    layers[24..32].fill(deepest);
+
+    let summary = level_summary(&layers);
+
+    assert_eq!(
+        summary,
+        "64: fused-cubek x16, 128: fused-cubek x16, 256: fused-cubek x16, 512: cubek x8"
+    );
 }

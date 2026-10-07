@@ -13,7 +13,6 @@ use av_toolbox_gpu::{
     SampleFormat,
     StreamFormat,
     Subsampling,
-    default_accelerators,
 };
 use av_toolbox_models::Store;
 use serde_json::json;
@@ -23,6 +22,7 @@ use crate::aa::based::{BasedArgs, Eedi3Tuning, checked_frame_mask, planned};
 use crate::aa::direction::Direction;
 use crate::artcnn::ModelName;
 use crate::cnn::PrecisionName;
+use crate::sample_checks::capabilities_computing;
 
 const STAGE: &str = "aa/based";
 
@@ -61,18 +61,6 @@ fn yuv420(width: u32, height: u32) -> FrameFormat {
     };
 
     format(width, height, layout, SampleFormat::U8)
-}
-
-fn capabilities_computing(elements: &[ElementType]) -> Capabilities {
-    let accelerator = default_accelerators()[0];
-    let elements = elements.iter().copied();
-
-    Capabilities::builder(accelerator)
-        .plane_size(32, 32)
-        .max_units_per_cube(1024)
-        .max_cube_count(65535, 65535, 65535)
-        .computable(elements)
-        .build()
 }
 
 fn capabilities() -> Capabilities {

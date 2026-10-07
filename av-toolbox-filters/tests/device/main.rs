@@ -3,6 +3,7 @@
 mod aa;
 mod blend;
 mod deband;
+mod deblock;
 mod dehalo;
 mod deinterlace;
 mod denoise;

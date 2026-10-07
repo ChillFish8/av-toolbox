@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
 use av_toolbox_models::{Located, Store};
 use serde_json::json;
 
+use crate::sample_checks::capabilities_computing;
 use crate::upscale::Artcnn;
 use crate::upscale::artcnn::{
     ArtcnnArgs,
@@ -50,19 +51,6 @@ fn format(width: u32, height: u32, layout: FrameLayout, sample: SampleFormat) ->
         frame_rate: None,
         field_order: None,
     }
-}
-
-fn capabilities_computing(elements: &[ElementType]) -> Capabilities {
-    let accelerator = default_accelerators()[0];
-
-    let elements = elements.iter().copied();
-
-    Capabilities::builder(accelerator)
-        .plane_size(32, 32)
-        .max_units_per_cube(1024)
-        .max_cube_count(65535, 65535, 65535)
-        .computable(elements)
-        .build()
 }
 
 fn capabilities_multiplying(combinations: &[(ElementType, ElementType)]) -> Capabilities {

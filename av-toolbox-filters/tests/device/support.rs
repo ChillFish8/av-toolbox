@@ -8,6 +8,7 @@ use av_toolbox_core::{
     StageKind,
     StreamType,
 };
+use av_toolbox_cubek::Dispatch;
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_gpu::{
     Backend,
@@ -16,8 +17,11 @@ use av_toolbox_gpu::{
     Channel,
     ChromaLocation,
     ColourInfo,
+    CubeCount,
+    CubeDim,
     Depth,
     Frame,
+    FrameContext,
     FrameFormat,
     FrameLayout,
     FrameMeta,
@@ -38,6 +42,19 @@ use cubecl::prelude::Runtime;
 
 pub(crate) fn backend() -> Backend {
     Backend::open_default(test_device()).expect("a backend should open")
+}
+
+/// Sizes launches the way a stage would, from a frame context.
+pub(crate) struct Sizing(pub(crate) FrameContext);
+
+impl Dispatch for Sizing {
+    fn cube_count(&self, samples: usize) -> CubeCount {
+        self.0.cube_count(samples)
+    }
+
+    fn cube_dim(&self) -> CubeDim {
+        self.0.cube_dim()
+    }
 }
 
 pub(crate) fn frame(

@@ -1,12 +1,15 @@
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{
+    Capabilities,
     Depth as BitDepth,
+    ElementType,
     FormatSet,
     FrameFormat,
     FrameLayout,
     MaskFormat,
     SampleFormat,
     StreamFormat,
+    default_accelerators,
 };
 
 /// Checks that a stage accepts integer and F32 frames as they are, accepts no F16 frame, and refuses a mask
@@ -46,4 +49,17 @@ pub(crate) fn assert_integers_and_floats_accepted_and_mask_refused(
     assert!(half_set.is_empty());
     assert!(mask_message.contains(stage), "{mask_message}");
     assert!(mask_message.contains("mask"), "{mask_message}");
+}
+
+/// Capabilities of the first default accelerator that can compute each of `elements`.
+pub(crate) fn capabilities_computing(elements: &[ElementType]) -> Capabilities {
+    let accelerator = default_accelerators()[0];
+    let elements = elements.iter().copied();
+
+    Capabilities::builder(accelerator)
+        .plane_size(32, 32)
+        .max_units_per_cube(1024)
+        .max_cube_count(65535, 65535, 65535)
+        .computable(elements)
+        .build()
 }

@@ -11,6 +11,7 @@
 //! - `aa/sangnom` anti-aliases by rebuilding each field along its edges, the way SangNom2 does.
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 //! - `deband/placebo` smooths banding with libplacebo's algorithm, then adds grain.
+//! - `deblock/dpir` removes compression blocking with the DPIR network, the way vs-jetpack's dpir does.
 //! - `dehalo/alpha` removes halos by pulling pixels toward a halo-free estimate made by resizing.
 //! - `dehalo/edge_clean` warp-sharpens and repairs away from strong edges.
 //! - `dehalo/fine` runs `dehalo/alpha` only in a band around strong edges.
@@ -45,7 +46,6 @@ mod blend;
 mod checks;
 mod cnn;
 mod deband;
-#[expect(dead_code, reason = "the stage is registered once it can build")]
 mod deblock;
 mod dehalo;
 mod deinterlace;
@@ -86,6 +86,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<aa::Sangnom>()?;
     registry.register_filter::<blend::Masked>()?;
     registry.register_filter::<deband::Placebo>()?;
+    registry.register_filter::<deblock::Dpir>()?;
     registry.register_filter::<dehalo::Alpha>()?;
     registry.register_filter::<dehalo::EdgeClean>()?;
     registry.register_filter::<dehalo::Fine>()?;
@@ -143,6 +144,7 @@ mod tests {
         assert!(registered("aa/sangnom"));
         assert!(registered("blend/masked"));
         assert!(registered("deband/placebo"));
+        assert!(registered("deblock/dpir"));
         assert!(registered("dehalo/alpha"));
         assert!(registered("dehalo/edge_clean"));
         assert!(registered("dehalo/fine"));
