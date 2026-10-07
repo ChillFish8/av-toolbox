@@ -4,8 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use av_toolbox_cubek::artcnn::{Model, Weights};
+use av_toolbox_cubek::dpir::{PACK, Variant};
 use av_toolbox_cubek::testing::reference_artcnn;
 use av_toolbox_gpu::{Backend, test_device};
+use av_toolbox_models::Store;
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
 
@@ -681,4 +683,71 @@ fn the_denoise_nlmeans_hq_example_cleans_a_noisy_ramp() {
 #[test]
 fn the_denoise_nl4d_example_cleans_a_noisy_ramp() {
     assert_denoises("denoise-nl4d.toml");
+}
+
+/// How far an output code of the DPIR example may sit from the smooth input it deblocks.
+///
+/// Every plane measured at most 1 code out, so one code of headroom is kept.
+const DPIR_CODE_BOUND: u8 = 2;
+
+/// Whether the DPIR colour weights are installed, printing why the test does not run when they are not.
+fn dpir_installed() -> bool {
+    let store = Store::from_environment();
+    let file = Variant::Colour.file_name();
+    let found = store.find(PACK, file);
+
+    match found {
+        Ok(_) => true,
+        Err(missing) => {
+            println!("{file} is not installed, so the example is not run: {missing}");
+            false
+        },
+    }
+}
+
+/// A gentle horizontal gradient whose every sample stays inside the RGB gamut with the flat chroma.
+fn in_gamut_luma() -> Vec<u8> {
+    let row: Vec<u8> = (0..SIZE).map(|column| 90 + column as u8).collect();
+    row.repeat(SIZE)
+}
+
+fn largest_move(found: &[u8], expected: &[u8]) -> u8 {
+    found
+        .iter()
+        .zip(expected)
+        .map(|(found_code, expected_code)| found_code.abs_diff(*expected_code))
+        .max()
+        .expect("the plane has samples")
+}
+
+#[test]
+fn the_dpir_example_keeps_a_smooth_clip() {
+    if !dpir_installed() {
+        return;
+    }
+
+    let expected_luma = in_gamut_luma();
+    let clip = clip_with_luma(&expected_luma);
+
+    let decoded = run_example_on("deblock-dpir.toml", &[], &clip);
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for (index, frame) in decoded.frames.iter().enumerate() {
+        let flat_u = vec![FLAT_U; frame.u_plane.len()];
+        let flat_v = vec![FLAT_V; frame.v_plane.len()];
+
+        let luma_move = largest_move(&frame.luma, &expected_luma);
+        let u_move = largest_move(&frame.u_plane, &flat_u);
+        let v_move = largest_move(&frame.v_plane, &flat_v);
+        println!("frame {index}: largest move luma {luma_move}, u {u_move}, v {v_move}");
+
+        assert_eq!(frame.luma.len(), SIZE * SIZE);
+        assert!(
+            luma_move <= DPIR_CODE_BOUND,
+            "frame {index}: luma moved by {luma_move}"
+        );
+        assert!(u_move <= DPIR_CODE_BOUND, "frame {index}: u moved by {u_move}");
+        assert!(v_move <= DPIR_CODE_BOUND, "frame {index}: v moved by {v_move}");
+    }
 }

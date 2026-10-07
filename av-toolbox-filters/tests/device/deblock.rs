@@ -8,6 +8,7 @@ use av_toolbox_gpu::{
     BuildTask,
     ChromaLocation,
     Depth,
+    ElementType,
     FrameFormat,
     FrameLayout,
     SampleFormat,
@@ -20,6 +21,11 @@ use serde_json::json;
 use crate::support::{Sizing, frame, run_once};
 
 const STAGE: &str = "deblock/dpir";
+
+/// How far an f16 output code may sit from the f32 run of the stage.
+///
+/// It measured 1 code out, with 7 of 1920 codes differing, so one code of headroom is kept.
+const F16_CODE_BOUND: f64 = 2.0;
 
 const BODY_PATHS: [BodyPath; 3] = [
     BodyPath::Convolution,
@@ -423,4 +429,40 @@ fn the_colour_model_on_rgb_matches_the_network() {
 
         assert_within(&found_values, &expected_values, 1.0, &label);
     }
+}
+
+#[test]
+fn the_default_f16_precision_matches_the_f32_run() {
+    if !installed(Variant::Gray) {
+        return;
+    }
+
+    let backend = crate::support::backend();
+    if !backend.capabilities().can_compute(ElementType::F16) {
+        println!("the device has no f16 arithmetic, so the f16 stage is not run");
+        return;
+    }
+
+    let input = frame(48, 40, FrameLayout::Grey, SampleFormat::U8, ChromaLocation::Left);
+    let values = blocky(48, 40, MatrixSamples::U8, 2);
+    let encoded = encode_samples(&values, MatrixSamples::U8);
+    let planes = vec![encoded];
+    let full_args = json!({ "precision": "f32" });
+
+    let half = run_once(STAGE, input, input, json!({}), &planes);
+    let full = run_once(STAGE, input, input, full_args, &planes);
+
+    let half_values = decode_samples(&half[0], MatrixSamples::U8);
+    let full_values = decode_samples(&full[0], MatrixSamples::U8);
+    let differences: Vec<f64> = half_values
+        .iter()
+        .zip(&full_values)
+        .map(|(half_value, full_value)| (half_value - full_value).abs())
+        .collect();
+    let largest = differences.iter().copied().fold(0.0, f64::max);
+    let differing = differences.iter().filter(|difference| **difference > 0.0).count();
+    println!("f16 against f32: largest difference {largest}, {differing} codes differ");
+
+    assert_within(&half_values, &full_values, F16_CODE_BOUND, "f16 against f32");
+    assert_ne!(half_values, values, "the stage changed nothing");
 }

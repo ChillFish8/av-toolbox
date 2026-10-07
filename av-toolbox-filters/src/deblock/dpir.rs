@@ -45,7 +45,6 @@ use av_toolbox_gpu::{
     PlaneBuffer,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -53,7 +52,7 @@ use av_toolbox_models::{Located, MissingModel, Store};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::checks::between_f32;
+use crate::checks::{accepts_integer_or_f32_frames, between_f32};
 use crate::cnn::{
     PrecisionName,
     allocation_cap,
@@ -163,6 +162,13 @@ fn colour_needs_rgb(layout: FrameLayout) -> StageError {
     StageError::msg(message)
 }
 
+fn colour_on_grey() -> StageError {
+    let message =
+        format!("{STAGE}'s colour model runs on rgb frames, not grey frames. Set model to \"gray\"");
+
+    StageError::msg(message)
+}
+
 fn planes_with_colour() -> StageError {
     let message = format!(
         "{STAGE}'s colour model runs on all three rgb planes together, so it takes no planes. Set model to \
@@ -220,21 +226,18 @@ pub(crate) fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameForm
 
 /// U8, U16 and F32 frames, refusing masks.
 pub(crate) fn accepted_samples(offered: StreamFormat) -> Result<FormatSet, StageError> {
-    let Some(format) = offered.as_frames() else {
+    let Some(samples) = accepts_integer_or_f32_frames(offered) else {
         return Err(not_frames());
     };
 
-    if !matches!(
-        format.sample,
-        SampleFormat::U8 | SampleFormat::U16 { .. } | SampleFormat::F32
-    ) {
-        return Ok(FormatSet::new());
-    }
-
-    Ok(FormatSet::of([format.sample]))
+    Ok(samples)
 }
 
 fn colour_runs(args: &DpirArgs, layout: FrameLayout) -> Result<Runs, StageError> {
+    if layout == FrameLayout::Grey {
+        return Err(colour_on_grey());
+    }
+
     if layout != FrameLayout::Rgb {
         return Err(colour_needs_rgb(layout));
     }
@@ -337,8 +340,17 @@ fn bad_frame(error: FrameError) -> StageError {
 
 /// The kernels `layers` ran on, grouped by the feature width of their level.
 ///
-/// `layers` holds the ResBlock convolutions of whole forward passes in order, eight to a level.
+/// `layers` holds the ResBlock convolutions of whole forward passes in order, eight to a level. It panics
+/// when `layers` is not a whole number of passes, so a change in how many runs the warm-up gives cannot
+/// silently mislabel the levels.
 pub(super) fn level_summary(layers: &[LayerRun]) -> String {
+    let per_pass = LEVEL_FEATURES.len() * CONVOLUTIONS_PER_LEVEL;
+    assert!(
+        layers.len().is_multiple_of(per_pass),
+        "{STAGE} expected the warm-up to give {per_pass} ResBlock convolutions per pass, got {} in all",
+        layers.len(),
+    );
+
     let parts: Vec<String> = WIDTHS
         .iter()
         .map(|width| {

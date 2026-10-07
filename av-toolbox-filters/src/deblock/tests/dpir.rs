@@ -120,14 +120,20 @@ fn auto_picks_gray_on_grey_and_yuv_and_colour_on_rgb() {
 #[test]
 fn the_colour_model_on_yuv_is_refused_naming_both_resample_stages() {
     let message = refusal(json!({ "model": "colour" }), yuv420());
-    let grey_message = refusal(json!({ "model": "colour" }), grey());
 
-    for text in [message, grey_message] {
-        assert!(text.contains(STAGE), "{text}");
-        assert!(text.contains("resample/chroma"), "{text}");
-        assert!(text.contains("resample/matrix"), "{text}");
-        assert!(text.contains("gray"), "{text}");
-    }
+    assert!(message.contains(STAGE), "{message}");
+    assert!(message.contains("resample/chroma"), "{message}");
+    assert!(message.contains("resample/matrix"), "{message}");
+    assert!(message.contains("gray"), "{message}");
+}
+
+#[test]
+fn the_colour_model_on_grey_is_refused_suggesting_only_the_gray_model() {
+    let message = refusal(json!({ "model": "colour" }), grey());
+
+    assert!(message.contains(STAGE), "{message}");
+    assert!(message.contains("\"gray\""), "{message}");
+    assert!(!message.contains("resample/"), "{message}");
 }
 
 #[test]
@@ -311,4 +317,18 @@ fn the_level_summary_names_each_level_by_its_features() {
         summary,
         "64: fused-cubek x16, 128: fused-cubek x16, 256: fused-cubek x16, 512: cubek x8"
     );
+}
+
+#[test]
+#[should_panic(expected = "ResBlock convolutions per pass")]
+fn the_level_summary_panics_on_a_partial_pass() {
+    let layer = LayerRun {
+        forced: false,
+        fused: true,
+        candidate: Some(Candidate::FusedCubek),
+        winograd_offered: false,
+    };
+    let layers = vec![layer; 57];
+
+    level_summary(&layers);
 }

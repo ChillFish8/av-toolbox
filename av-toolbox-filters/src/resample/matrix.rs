@@ -49,6 +49,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::checks::accepts_integer_or_f32_frames;
 use crate::scratch::device_plane;
 use crate::sizing::Sizing;
 
@@ -359,18 +360,11 @@ impl FilterDefinition for Matrix {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        let Some(format) = offered.as_frames() else {
+        let Some(samples) = accepts_integer_or_f32_frames(offered) else {
             return Err(not_frames());
         };
 
-        if !matches!(
-            format.sample,
-            SampleFormat::U8 | SampleFormat::U16 { .. } | SampleFormat::F32
-        ) {
-            return Ok(FormatSet::new());
-        }
-
-        Ok(FormatSet::of([format.sample]))
+        Ok(samples)
     }
 
     fn produces(

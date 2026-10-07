@@ -1,8 +1,13 @@
 # Deblocks a video with DPIR's colour model.
 #
-# The colour model works on RGB, so the chroma is first resampled to 4:4:4 and the frame converted to RGB, then
-# converted back. Choosing the chroma kernel here is the point of doing it by hand. Working at 16 bits keeps the
-# round trip from adding banding.
+# The colour model works on RGB, so the frame is taken to 16 bits, its chroma resampled to 4:4:4 and the frame
+# converted to RGB, then converted back. Choosing the chroma kernel here is the point of doing it by hand. Working
+# at 16 bits keeps the round trip from adding banding.
+#
+# The rgb stage reads the source as limited range BT.709. Set its args.range and args.matrix to match your source.
+# The yuv stage's args.range and args.matrix set the labels the output is written with.
+#
+# The output is 8-bit. For a 10-bit source, set args.depth = 10 on the last stage, eight_bit.
 #
 # For luma only, drop the six resample stages around the deblock and set args.model = "gray" with
 # args.planes = ["y"].
@@ -24,22 +29,22 @@ default = "output.y4m"
 type = "ffms2/file"
 args.path = "{{ input }}"
 
+[filter.sixteen_bit]
+type = "resample/depth"
+inputs = ["input"]
+args.depth = 16
+
 [filter.full_chroma]
 type = "resample/chroma"
-inputs = ["input"]
+inputs = ["sixteen_bit"]
 args.subsampling = "4:4:4"
 args.kernel = "bicubic"
 args.b = 0.0
 args.c = 0.5
 
-[filter.sixteen_bit]
-type = "resample/depth"
-inputs = ["full_chroma"]
-args.depth = 16
-
 [filter.rgb]
 type = "resample/matrix"
-inputs = ["sixteen_bit"]
+inputs = ["full_chroma"]
 args.to = "rgb"
 args.matrix = "bt709"
 args.range = "limited"
