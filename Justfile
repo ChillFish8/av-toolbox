@@ -51,3 +51,7 @@ dependencies-test:
 # Writes the ArtCNN golden fixture from the cached ONNX model. Run `just dependencies artcnn` first.
 artcnn-golden:
     uv run --script dependencies/artcnn/golden.py target/dependencies/cache/artcnn av-toolbox-cubek/src/testing/fixtures
+
+# Writes the DPIR golden fixtures from the cached ONNX models. Run `just dependencies dpir` first.
+dpir-golden:
+    uv run --script dependencies/dpir/golden.py target/dependencies/cache/dpir av-toolbox-cubek/src/testing/fixtures/dpir

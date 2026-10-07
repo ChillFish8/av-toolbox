@@ -1,0 +1,12 @@
+identifier = "dpir"
+files = ["drunet_deblock_color.bin", "drunet_deblock_gray.bin"]
+
+[[sources]]
+name = "drunet_deblocking_gray.onnx"
+url = "https://github.com/Jaded-Encoding-Thaumaturgy/KAIR/releases/download/20210902/drunet_deblocking_gray.onnx"
+sha256 = "49cb136703af8807fee9d768e114528cb0d98d7b2e36782b0d150ef61a008ba2"
+
+[[sources]]
+name = "drunet_deblocking_color.onnx"
+url = "https://github.com/Jaded-Encoding-Thaumaturgy/KAIR/releases/download/20210902/drunet_deblocking_color.onnx"
+sha256 = "53c54b8e393e445c17de6026a783e5874047159eaaa1e2ff826f4a3a0b6543c3"

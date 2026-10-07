@@ -3,3 +3,7 @@
 [artcnn]
 "ArtCNN_R8F64.bin" = "64633c7443b6f2ba76315972ae0bf6a9eafddf4eb497627e8d6548990a0f9300"
 "ArtCNN_R16F96.bin" = "8f380ddcd0738222ddb543bb8a44eed68d6aa56783b6824da9dc019913dcafb3"
+
+[dpir]
+"drunet_deblock_color.bin" = "8bd846a2837f3da4d082fd1d8dc4d68bfe7b765ae383cfac2d0a55c812ac218a"
+"drunet_deblock_gray.bin" = "05607abbe6d74dd3b8b4a8123329207c1aca89ca7ea00f396d78869db99c0419"
