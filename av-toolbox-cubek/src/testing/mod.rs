@@ -6,6 +6,7 @@ mod cnn;
 mod degrain;
 mod dehalo;
 mod dering;
+pub mod dpir;
 mod edges;
 mod eedi2;
 mod eedi3;

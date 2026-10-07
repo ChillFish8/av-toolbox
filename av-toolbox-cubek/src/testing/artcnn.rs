@@ -7,8 +7,8 @@ use crate::artcnn::{Layer, Weights, layer_shapes};
 /// It was made from [golden_input](crate::testing::golden_input).
 pub const GOLDEN_R8F64: &[u8] = include_bytes!("fixtures/golden_r8f64.f32");
 
-const LCG_MULTIPLIER: u64 = 6364136223846793005;
-const LCG_INCREMENT: u64 = 1442695040888963407;
+pub(super) const LCG_MULTIPLIER: u64 = 6364136223846793005;
+pub(super) const LCG_INCREMENT: u64 = 1442695040888963407;
 
 /// The 16x16 input the golden fixture was made from, `((7x + 13y) mod 16) / 15`.
 pub fn golden_input() -> Vec<f32> {
@@ -128,7 +128,7 @@ pub fn reference_artcnn(input: &[f32], width: u32, height: u32, weights: &Weight
 }
 
 /// Advances a 64-bit LCG and gives its top 53 bits as a value between 0 and 1.
-fn next_unit(state: &mut u64) -> f64 {
+pub(super) fn next_unit(state: &mut u64) -> f64 {
     *state = state.wrapping_mul(LCG_MULTIPLIER).wrapping_add(LCG_INCREMENT);
 
     (*state >> 11) as f64 / (1u64 << 53) as f64

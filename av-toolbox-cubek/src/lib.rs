@@ -42,6 +42,7 @@ pub mod dehalo;
 pub mod deinterlace;
 pub mod depth;
 mod dispatch;
+pub mod dpir;
 pub mod edges;
 pub mod histogram;
 pub mod hysteresis;
