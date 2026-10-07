@@ -45,6 +45,8 @@ mod blend;
 mod checks;
 mod cnn;
 mod deband;
+#[expect(dead_code, reason = "the stage is registered once it can build")]
+mod deblock;
 mod dehalo;
 mod deinterlace;
 mod denoise;
@@ -57,6 +59,8 @@ mod planes;
 mod planewise;
 mod resample;
 mod resize;
+#[cfg(test)]
+mod sample_checks;
 mod scratch;
 mod selection;
 mod sizing;

@@ -8,7 +8,6 @@ use av_toolbox_gpu::{
     FormatSet,
     FrameFormat,
     FrameLayout,
-    MaskFormat,
     Matrix as StreamMatrix,
     Offered,
     SampleFormat,
@@ -20,6 +19,7 @@ use serde_json::json;
 
 use crate::resample::Matrix;
 use crate::resample::matrix::{MatrixArgs, MatrixName, RangeName, TargetName, converted};
+use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
 
 const STAGE: &str = "resample/matrix";
 
@@ -328,40 +328,9 @@ fn grey_and_a_layout_already_at_its_target_are_refused() {
 #[test]
 fn integers_and_floats_are_accepted_and_a_mask_is_refused() {
     let layout = yuv(Subsampling::Yuv444);
-    let samples = [
-        SampleFormat::U8,
-        SampleFormat::U16 {
-            depth: BitDepth::SIXTEEN,
-        },
-        SampleFormat::F32,
-    ];
-    let half = format(
-        layout,
-        SampleFormat::F16,
-        StreamMatrix::Bt709,
-        ColourRange::Limited,
-    );
-    let mask = StreamFormat::Mask(MaskFormat {
-        width: 16,
-        height: 8,
-        sample: SampleFormat::U8,
-        chroma: None,
-    });
+    let frame_format = |layout, sample| format(layout, sample, StreamMatrix::Bt709, ColourRange::Limited);
 
-    for sample in samples {
-        let input = format(layout, sample, StreamMatrix::Bt709, ColourRange::Limited);
-        let set = accepted(StreamFormat::Frames(input)).expect("frames are readable");
-
-        assert_eq!(set, FormatSet::of([sample]));
-    }
-
-    let half_set = accepted(StreamFormat::Frames(half)).expect("frames are readable");
-    let mask_error = accepted(mask).expect_err("a mask is refused");
-    let mask_message = mask_error.to_string();
-
-    assert!(half_set.is_empty());
-    assert!(mask_message.contains(STAGE), "{mask_message}");
-    assert!(mask_message.contains("mask"), "{mask_message}");
+    assert_integers_and_floats_accepted_and_mask_refused(STAGE, layout, frame_format, accepted);
 }
 
 #[test]
