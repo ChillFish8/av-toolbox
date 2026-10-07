@@ -1,6 +1,6 @@
 use super::{R9700, TestDevice};
-use crate::artcnn::kernels::direct::check_variant;
-use crate::artcnn::{Activation, DirectVariant, WeightStaging, direct_variants};
+use crate::cnn::kernels::direct::check_variant;
+use crate::cnn::{Activation, DirectVariant, WeightStaging, direct_variants};
 
 #[test]
 fn the_default_variant_splits_both_model_widths() {

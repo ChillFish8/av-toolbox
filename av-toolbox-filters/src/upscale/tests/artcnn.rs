@@ -1,5 +1,5 @@
 use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition, StageError};
-use av_toolbox_cubek::artcnn::{ArtcnnError, BodyPath, Kernels, Precision};
+use av_toolbox_cubek::artcnn::{BodyPath, CnnError, Kernels, Precision};
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
@@ -141,8 +141,8 @@ fn an_unknown_argument_is_refused() {
 
 #[test]
 fn failing_on_both_paths_names_both_causes() {
-    let convolution = ArtcnnError::Device("sync lost".to_string());
-    let im2col = ArtcnnError::Matmul("no kernel".to_string());
+    let convolution = CnnError::Device("sync lost".to_string());
+    let im2col = CnnError::Matmul("no kernel".to_string());
 
     let error = failed_convolution_and_im2col(convolution, im2col);
     let message = error.to_string();
@@ -391,7 +391,7 @@ fn warm_up_failing(
 
         if failing.contains(&path) {
             let name = format!("{path:?} failed");
-            return Err(ArtcnnError::Device(name));
+            return Err(CnnError::Device(name));
         }
 
         Ok(100)

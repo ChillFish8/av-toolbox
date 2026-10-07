@@ -1,6 +1,6 @@
 use av_toolbox_cubek::artcnn::{
-    ArtcnnError,
     BodyPath,
+    CnnError,
     Maps,
     Network,
     Precision,
@@ -98,7 +98,7 @@ struct WarmUp {
 }
 
 impl BuildTask for WarmUp {
-    type Output = Result<(), ArtcnnError>;
+    type Output = Result<(), CnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
@@ -159,7 +159,7 @@ struct SmallFrame {
 }
 
 impl BuildTask for SmallFrame {
-    type Output = Result<(), ArtcnnError>;
+    type Output = Result<(), CnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
@@ -444,7 +444,7 @@ fn the_warm_up_refuses_an_unsupported_convolution() {
         return;
     }
 
-    assert!(matches!(warmed, Err(ArtcnnError::Convolution(_))), "{warmed:?}");
+    assert!(matches!(warmed, Err(CnnError::Convolution(_))), "{warmed:?}");
 }
 
 #[test]

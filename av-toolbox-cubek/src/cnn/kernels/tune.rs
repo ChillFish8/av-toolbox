@@ -22,8 +22,10 @@ use serde::{Deserialize, Serialize};
 use super::direct::direct_variants;
 use super::winograd::{winograd_allowed, winograd_variants};
 use super::{BodyConvolution, Candidate, DirectVariant, launch_candidate};
-use crate::artcnn::body::{Finish, LayerRun, offers_cmma_16};
-use crate::artcnn::{Activation, ArtcnnError, BodyPath, Model, Network, Precision, Region};
+use crate::artcnn::{Model, Network};
+use crate::cnn::body::{Finish, LayerRun};
+use crate::cnn::convolution::offers_cmma_16;
+use crate::cnn::{Activation, BodyPath, CnnError, Precision, Region};
 
 /// The samples at which a region leaves the smallest bucket, 64k.
 const MEDIUM_SAMPLES: u64 = 1 << 16;
@@ -330,7 +332,7 @@ pub fn offered_candidates(
     candidates
 }
 
-/// The candidate [Kernels::Fixed](crate::artcnn::Kernels::Fixed) runs on a device with `properties`, for maps
+/// The candidate [Kernels::Fixed](crate::cnn::Kernels::Fixed) runs on a device with `properties`, for maps
 /// of `features` channels.
 ///
 /// That is the default direct variant at the device's widest subgroup where the device offers it, and the
@@ -547,7 +549,7 @@ fn run_once<R: Runtime>(
     client: &ComputeClient<R>,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
-) -> Result<TunedRun, ArtcnnError> {
+) -> Result<TunedRun, CnnError> {
     let forced = launch_candidate(client, candidate, convolution)?;
     let run = LayerRun::of_candidate(candidate, forced);
 
@@ -564,7 +566,7 @@ fn run_tuner<R: Runtime>(
     set: &Arc<TunableSet<TuneKey, BodyInputs<R>, LayerRun>>,
     convolution: &BodyConvolution<'_>,
     epilogue: Epilogue,
-) -> Result<TunedRun, ArtcnnError> {
+) -> Result<TunedRun, CnnError> {
     let executions = AtomicU32::new(0);
     let failure = Mutex::new(None);
     let input = TuneInput {
@@ -581,7 +583,7 @@ fn run_tuner<R: Runtime>(
     let failed = failure.into_inner().unwrap_or_else(PoisonError::into_inner);
 
     if let Some(message) = failed {
-        return Err(ArtcnnError::Convolution(message));
+        return Err(CnnError::Convolution(message));
     }
 
     Ok(TunedRun {
@@ -608,13 +610,13 @@ pub fn run_tuned<R: Runtime>(
     kernels: &Kernels,
     convolution: &BodyConvolution<'_>,
     epilogue: Epilogue,
-) -> Result<TunedRun, ArtcnnError> {
+) -> Result<TunedRun, CnnError> {
     convolution.check();
 
     let plan = plan_for(client, kernels, convolution.model, convolution.features);
 
     match plan.as_ref() {
-        Plan::Refused(reasons) => Err(ArtcnnError::Convolution(reasons.clone())),
+        Plan::Refused(reasons) => Err(CnnError::Convolution(reasons.clone())),
         Plan::Once { candidate, winograd } => {
             let once = run_once(client, *candidate, convolution)?;
 
@@ -647,7 +649,7 @@ pub(crate) fn run_tuned_layer<R: Runtime>(
     output: &Handle,
     region: Region,
     finish: Finish<'_>,
-) -> Result<LayerRun, ArtcnnError> {
+) -> Result<LayerRun, CnnError> {
     let convolution = BodyConvolution::of_layer(network, layer, input, output, region, finish);
     let epilogue = Epilogue::of_layer(network, layer, finish);
     let kernels = network.kernels();

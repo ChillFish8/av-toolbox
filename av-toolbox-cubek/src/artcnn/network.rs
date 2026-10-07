@@ -2,30 +2,34 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use half::f16;
 
-use super::body::{Finish, LayerRun, body_layer};
-use super::kernels::{
-    BodyConvolution,
-    Candidate,
-    Kernels,
-    launch_candidate,
-    run_tuned_layer,
-    takes_tuner,
-    transform_weights,
-    winograd_allowed,
-};
 use crate::artcnn::{
-    Activation,
-    ArtcnnError,
-    BodyPath,
     Layer,
     Model,
-    Region,
     Weights,
     WeightsError,
     first_layer,
     last_layer,
     padded_last_layer,
     shuffle,
+};
+use crate::cnn::body::{Finish, body_layer};
+use crate::cnn::kernels::{
+    BodyConvolution,
+    launch_candidate,
+    run_tuned_layer,
+    takes_tuner,
+    transform_weights,
+};
+use crate::cnn::{
+    Activation,
+    BodyPath,
+    Candidate,
+    CnnError,
+    Kernels,
+    LayerRun,
+    Precision,
+    Region,
+    winograd_allowed,
 };
 use crate::{DevicePlane, Dispatch};
 
@@ -34,22 +38,6 @@ pub(crate) const PADDED_CHANNELS: usize = 16;
 
 /// The bytes one sample of the padded last layer's f32 output takes.
 const PADDED_SAMPLE_BYTES: usize = PADDED_CHANNELS * size_of::<f32>();
-
-/// The type feature maps are held in. Accumulation is f32 either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Precision {
-    F16,
-    F32,
-}
-
-impl Precision {
-    pub fn bytes(self) -> usize {
-        match self {
-            Self::F16 => 2,
-            Self::F32 => 4,
-        }
-    }
-}
 
 /// One layer's weights and bias on the device, in the feature maps' type.
 ///
@@ -290,7 +278,7 @@ pub fn run_region<R: Runtime>(
     core: Region,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<Vec<LayerRun>, ArtcnnError> {
+) -> Result<Vec<LayerRun>, CnnError> {
     let body = Body {
         path,
         candidate: None,
@@ -319,7 +307,7 @@ pub fn run_region_with_candidate<R: Runtime>(
     core: Region,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<Vec<LayerRun>, ArtcnnError> {
+) -> Result<Vec<LayerRun>, CnnError> {
     let body = Body {
         path: BodyPath::Convolution,
         candidate: Some(candidate),
@@ -352,7 +340,7 @@ fn run_region_on<R: Runtime>(
     core: Region,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<Vec<LayerRun>, ArtcnnError> {
+) -> Result<Vec<LayerRun>, CnnError> {
     let path = body.path;
     let every_map = [maps.conv0, maps.first, maps.second, maps.third];
     debug_assert!(are_distinct(&every_map), "two of the maps are the same buffer");
@@ -372,7 +360,7 @@ fn run_region_on<R: Runtime>(
     );
 
     if path == BodyPath::Im2col {
-        let columns = maps.columns.ok_or(ArtcnnError::MissingColumns)?;
+        let columns = maps.columns.ok_or(CnnError::MissingColumns)?;
         assert!(
             columns.size_in_used() >= bytes * 9,
             "the columns are smaller than nine of the region's maps"
@@ -489,7 +477,7 @@ fn run_body_layer<R: Runtime>(
     columns: Option<&Handle>,
     region: Region,
     finish: Finish<'_>,
-) -> Result<LayerRun, ArtcnnError> {
+) -> Result<LayerRun, CnnError> {
     if let Some(candidate) = body.candidate {
         let convolution = BodyConvolution::of_layer(network, layer, input, output, region, finish);
         let forced = launch_candidate(client, candidate, &convolution)?;

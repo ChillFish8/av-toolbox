@@ -1,8 +1,8 @@
 use av_toolbox_cubek::artcnn::{
-    ArtcnnError,
     BodyConvolution,
     BodyPath,
     Candidate,
+    CnnError,
     Kernels,
     LayerRun,
     Model,
@@ -590,7 +590,7 @@ fn the_input_transform_rounds_each_position_to_f16_once() {
 struct TunedTwice;
 
 impl BuildTask for TunedTwice {
-    type Output = Option<(TunedRun, Result<TunedRun, ArtcnnError>)>;
+    type Output = Option<(TunedRun, Result<TunedRun, CnnError>)>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();

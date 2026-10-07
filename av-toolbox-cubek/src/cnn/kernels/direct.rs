@@ -5,8 +5,8 @@ use cubecl::prelude::*;
 use half::f16;
 
 use super::BodyConvolution;
-use crate::artcnn::body::offers_cmma_16_in;
-use crate::artcnn::{Activation, ArtcnnError};
+use crate::cnn::convolution::offers_cmma_16_in;
+use crate::cnn::{Activation, CnnError};
 
 /// The side of the cooperative-matrix tiles the kernel multiplies.
 pub(super) const TILE: u32 = 16;
@@ -764,16 +764,16 @@ pub(crate) fn run_direct<R: Runtime>(
     client: &ComputeClient<R>,
     variant: DirectVariant,
     convolution: &BodyConvolution<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<(), CnnError> {
     convolution.check();
 
     let features = convolution.features;
     let residual = convolution.residual.is_some();
     let properties = client.properties();
     let shape = variant.shape(features, convolution.activation, residual);
-    let shape = shape.map_err(ArtcnnError::Convolution)?;
+    let shape = shape.map_err(CnnError::Convolution)?;
     let fits = check_device(properties, &variant, &shape);
-    fits.map_err(ArtcnnError::Convolution)?;
+    fits.map_err(CnnError::Convolution)?;
 
     let width = convolution.width;
     let height = convolution.height;

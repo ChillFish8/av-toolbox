@@ -1,13 +1,11 @@
-mod body;
-
 use cubecl::backtrace::BackTrace;
 use cubecl::server::ServerError;
 use half::f16;
 
 use super::tiling::haloed_scratch;
 use crate::artcnn::{
-    ArtcnnError,
     BodyPath,
+    CnnError,
     Layer,
     Model,
     Precision,
@@ -635,7 +633,7 @@ fn a_device_failure_becomes_a_device_error() {
         backtrace: BackTrace::capture(),
     };
 
-    let error = ArtcnnError::from(failure);
+    let error = CnnError::from(failure);
 
-    assert!(matches!(error, ArtcnnError::Device(_)), "{error}");
+    assert!(matches!(error, CnnError::Device(_)), "{error}");
 }

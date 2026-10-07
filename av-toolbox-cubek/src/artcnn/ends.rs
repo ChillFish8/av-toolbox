@@ -3,32 +3,11 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use cubek_matmul::definition::MatmulGlobalElems;
 
-use super::body::{Operands, convolve_on_tiles, storage_type};
 use super::network::PADDED_CHANNELS;
-use crate::artcnn::{ArtcnnError, Network, Precision};
+use crate::artcnn::Network;
+use crate::cnn::convolution::{Operands, convolve_on_tiles, storage_type};
+use crate::cnn::{CnnError, Precision, Region};
 use crate::{DevicePlane, Dispatch};
-
-/// A rectangle of a plane, in samples.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Region {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl Region {
-    pub fn samples(&self) -> u32 {
-        self.width * self.height
-    }
-
-    fn contains(&self, other: &Region) -> bool {
-        other.x >= self.x
-            && other.y >= self.y
-            && other.x + other.width <= self.x + self.width
-            && other.y + other.height <= self.y + self.height
-    }
-}
 
 #[cube(launch_unchecked)]
 fn first_layer_kernel<F: Float>(
@@ -396,7 +375,7 @@ pub fn padded_last_layer<R: Runtime>(
     input: &Handle,
     region: Region,
     scratch: &Handle,
-) -> Result<bool, ArtcnnError> {
+) -> Result<bool, CnnError> {
     let operands = padded_operands(network);
 
     convolve_on_tiles(client, &operands, input, scratch, region, true)
@@ -412,7 +391,7 @@ pub fn padded_last_layer_with_blueprint<R: Runtime>(
     region: Region,
     scratch: &Handle,
     allow_forced: bool,
-) -> Result<bool, ArtcnnError> {
+) -> Result<bool, CnnError> {
     if allow_forced {
         return padded_last_layer(client, network, input, region, scratch);
     }

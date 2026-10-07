@@ -3,8 +3,8 @@ use std::io;
 use av_toolbox_core::StageError;
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::artcnn::{
-    ArtcnnError,
     BodyPath,
+    CnnError,
     Kernels,
     LayerRun,
     Maps,
@@ -141,14 +141,14 @@ fn path_name(path: BodyPath) -> &'static str {
     }
 }
 
-fn failed_warm_up(stage: &str, path: BodyPath, error: ArtcnnError) -> StageError {
+fn failed_warm_up(stage: &str, path: BodyPath, error: CnnError) -> StageError {
     let name = path_name(path);
     let message = format!("{stage} could not warm up on the {name} path: {error}");
 
     StageError::msg(message)
 }
 
-fn failed_run(stage: &str, path: BodyPath, error: ArtcnnError) -> StageError {
+fn failed_run(stage: &str, path: BodyPath, error: CnnError) -> StageError {
     let name = path_name(path);
     let message = format!("{stage} could not run on the {name} path: {error}");
 
@@ -156,7 +156,7 @@ fn failed_run(stage: &str, path: BodyPath, error: ArtcnnError) -> StageError {
 }
 
 /// The error for a warm-up that failed on every path it tried, naming each path and its cause in turn.
-pub(crate) fn failed_every_path(stage: &str, failures: Vec<(BodyPath, ArtcnnError)>) -> StageError {
+pub(crate) fn failed_every_path(stage: &str, failures: Vec<(BodyPath, CnnError)>) -> StageError {
     let mut causes: Vec<String> = failures
         .iter()
         .map(|(path, error)| {
@@ -368,7 +368,7 @@ fn warm_up_on<R: Runtime>(
     cap: usize,
     width: u32,
     height: u32,
-) -> Result<Warmed, ArtcnnError> {
+) -> Result<Warmed, CnnError> {
     let tile = tile_for(network, path, cap, width, height);
     let buffers = MapBuffers::new(context, network, path, tile, width, height);
     let maps = buffers.maps();
@@ -408,7 +408,7 @@ fn kernel_summary(layers: &[LayerRun]) -> String {
 pub(crate) fn warmed_path<T>(
     stage: &'static str,
     chosen: BodyPath,
-    mut warm: impl FnMut(BodyPath) -> Result<T, ArtcnnError>,
+    mut warm: impl FnMut(BodyPath) -> Result<T, CnnError>,
 ) -> Result<(BodyPath, T), StageError> {
     let ladder = fallbacks(chosen);
     let mut failures = Vec::new();

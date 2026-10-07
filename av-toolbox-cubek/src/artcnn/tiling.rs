@@ -1,7 +1,8 @@
 use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
 
 use super::network::conv0_sample_bytes;
-use crate::artcnn::{ArtcnnError, BodyPath, LayerRun, Maps, Network, Precision, Region, run_region};
+use crate::artcnn::{Maps, Network, run_region};
+use crate::cnn::{BodyPath, CnnError, LayerRun, Precision, tiles};
 use crate::{DevicePlane, Dispatch};
 
 /// How many bytes of scratch a tile may use.
@@ -130,43 +131,6 @@ pub(crate) fn haloed_scratch(
     }
 }
 
-/// Splits a plane into tiles, giving each tile's region and core.
-///
-/// The cores are at most `tile` on a side and cover the plane exactly once. Each region is its core widened
-/// by `halo` on every side, clipped to the plane.
-pub fn tiles(width: u32, height: u32, tile: u32, halo: u32) -> Vec<(Region, Region)> {
-    assert!(tile >= 1, "a tile must be at least one sample on a side");
-
-    let mut list = Vec::new();
-
-    for core_y in (0..height).step_by(tile as usize) {
-        for core_x in (0..width).step_by(tile as usize) {
-            let core_width = tile.min(width - core_x);
-            let core_height = tile.min(height - core_y);
-            let region_x = core_x.saturating_sub(halo);
-            let region_y = core_y.saturating_sub(halo);
-            let region_right = (core_x + core_width + halo).min(width);
-            let region_bottom = (core_y + core_height + halo).min(height);
-
-            let core = Region {
-                x: core_x,
-                y: core_y,
-                width: core_width,
-                height: core_height,
-            };
-            let region = Region {
-                x: region_x,
-                y: region_y,
-                width: region_right - region_x,
-                height: region_bottom - region_y,
-            };
-            list.push((region, core));
-        }
-    }
-
-    list
-}
-
 /// Runs the network over the whole of `input`, divided by `peak`, one tile at a time.
 ///
 /// The result is written into `output`, which must be twice the input on each side. The maps must be sized
@@ -185,7 +149,7 @@ pub fn artcnn<R: Runtime>(
     tile: u32,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<(), CnnError> {
     run_tiles(client, dispatch, network, path, input, peak, tile, maps, output)?;
 
     Ok(())
@@ -206,7 +170,7 @@ fn run_tiles<R: Runtime>(
     tile: u32,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
-) -> Result<Vec<LayerRun>, ArtcnnError> {
+) -> Result<Vec<LayerRun>, CnnError> {
     let width = input.width();
     let height = input.height();
     assert!(
@@ -278,7 +242,7 @@ pub fn warm_up<R: Runtime>(
     height: u32,
     tile: u32,
     maps: Maps<'_>,
-) -> Result<Vec<LayerRun>, ArtcnnError> {
+) -> Result<Vec<LayerRun>, CnnError> {
     let samples = width as usize * height as usize;
     let zeros = vec![0.0f32; samples];
     let output_bytes = samples * 4 * size_of::<f32>();

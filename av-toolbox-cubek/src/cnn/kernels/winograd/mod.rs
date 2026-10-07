@@ -19,7 +19,8 @@ use super::direct::{
     check_limits,
     offered_plane_width,
 };
-use crate::artcnn::{Activation, ArtcnnError, Layer, Model};
+use crate::artcnn::{Layer, Model};
+use crate::cnn::{Activation, CnnError};
 
 /// Lavin and Gray's F(2x2, 3x3) input transform, `Bᵀ`.
 const INPUT_TRANSFORM: [[i32; 4]; 4] = [[1, 0, -1, 0], [0, 1, 1, 0], [0, -1, 1, 0], [0, 1, 0, -1]];
@@ -339,10 +340,10 @@ pub fn winograd_variants(properties: &DeviceProperties, features: u32) -> Vec<Wi
     offered
 }
 
-fn no_transformed_weights() -> ArtcnnError {
+fn no_transformed_weights() -> CnnError {
     let message = "the layer holds no Winograd weights, which only allow-listed models upload".to_string();
 
-    ArtcnnError::Convolution(message)
+    CnnError::Convolution(message)
 }
 
 /// Runs `convolution` as Winograd F(2x2, 3x3), as `variant` describes.
@@ -352,7 +353,7 @@ pub(crate) fn run_winograd<R: Runtime>(
     client: &ComputeClient<R>,
     variant: WinogradVariant,
     convolution: &BodyConvolution<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<(), CnnError> {
     convolution.check();
 
     let transformed = convolution.transformed.ok_or_else(no_transformed_weights)?;
@@ -360,9 +361,9 @@ pub(crate) fn run_winograd<R: Runtime>(
     let residual = convolution.residual.is_some();
     let properties = client.properties();
     let shape = variant.shape(features, convolution.activation, residual);
-    let shape = shape.map_err(ArtcnnError::Convolution)?;
+    let shape = shape.map_err(CnnError::Convolution)?;
     let fits = check_device(properties, &variant, &shape);
-    fits.map_err(ArtcnnError::Convolution)?;
+    fits.map_err(CnnError::Convolution)?;
 
     let width = convolution.width;
     let height = convolution.height;

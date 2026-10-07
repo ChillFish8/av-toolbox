@@ -22,8 +22,10 @@ use self::winograd::{POSITIONS, run_winograd};
 pub use self::winograd::{WinogradVariant, winograd_allowed};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::winograd::{transform_input, winograd_variants};
-use super::body::{Finish, Operands, body_operands, launch_fused_convolution};
-use crate::artcnn::{Activation, ArtcnnError, Model, Network, Precision, Region};
+use crate::artcnn::{Model, Network};
+use crate::cnn::body::{Finish, body_operands};
+use crate::cnn::convolution::{Operands, launch_fused_convolution};
+use crate::cnn::{Activation, CnnError, Precision, Region};
 
 /// One body convolution of f16 NHWC maps, with its bias and what it applies as it writes.
 ///
@@ -215,7 +217,7 @@ pub fn run_candidate<R: Runtime>(
     client: &ComputeClient<R>,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
-) -> Result<(), ArtcnnError> {
+) -> Result<(), CnnError> {
     launch_candidate(client, candidate, convolution)?;
 
     Ok(())
@@ -228,7 +230,7 @@ pub(crate) fn launch_candidate<R: Runtime>(
     client: &ComputeClient<R>,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
-) -> Result<bool, ArtcnnError> {
+) -> Result<bool, CnnError> {
     convolution.check();
 
     match candidate {
@@ -249,7 +251,7 @@ pub(crate) fn launch_candidate<R: Runtime>(
 fn run_fused_cubek<R: Runtime>(
     client: &ComputeClient<R>,
     convolution: &BodyConvolution<'_>,
-) -> Result<bool, ArtcnnError> {
+) -> Result<bool, CnnError> {
     let features = convolution.features as usize;
     let operands = Operands::body(convolution.weights, convolution.bias, features, Precision::F16);
     let region = convolution.region();

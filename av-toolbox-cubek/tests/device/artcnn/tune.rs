@@ -313,7 +313,7 @@ struct CachedFailure {
 }
 
 impl BuildTask for CachedFailure {
-    type Output = Option<(TunedRun, Result<TunedRun, av_toolbox_cubek::artcnn::ArtcnnError>)>;
+    type Output = Option<(TunedRun, Result<TunedRun, av_toolbox_cubek::artcnn::CnnError>)>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();

@@ -4,6 +4,7 @@
 //!
 //! - [aa] for the steps of the anti-aliasing filters.
 //! - [artcnn] for running ArtCNN luma doublers.
+//! - [cnn] for the 3x3 convolutions, epilogues and tiling the networks share.
 //! - [bilateral] for vszip's truncated bilateral.
 //! - [blur] for separable gaussian blurs.
 //! - [deband] for smoothing banding the way libplacebo does.
@@ -34,6 +35,7 @@ pub mod artcnn;
 pub mod bilateral;
 pub mod blur;
 mod border;
+pub mod cnn;
 pub mod deband;
 pub mod degrain;
 pub mod dehalo;

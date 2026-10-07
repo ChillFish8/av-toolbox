@@ -1,8 +1,8 @@
 use av_toolbox_cubek::artcnn::{
     Activation,
-    ArtcnnError,
     BodyPath,
     Candidate,
+    CnnError,
     Finish,
     LayerRun,
     Maps,
@@ -98,7 +98,7 @@ pub(super) struct Forward {
 }
 
 impl BuildTask for Forward {
-    type Output = Result<Vec<f32>, ArtcnnError>;
+    type Output = Result<Vec<f32>, CnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         run_forward(self, build, None, None)
@@ -112,7 +112,7 @@ pub(super) struct CandidateForward {
 }
 
 impl BuildTask for CandidateForward {
-    type Output = Result<Vec<f32>, ArtcnnError>;
+    type Output = Result<Vec<f32>, CnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         run_forward(self.forward, build, None, Some(self.candidate))
@@ -128,7 +128,7 @@ pub(super) struct ModelForward {
 }
 
 impl BuildTask for ModelForward {
-    type Output = Result<(Vec<f32>, Vec<LayerRun>), ArtcnnError>;
+    type Output = Result<(Vec<f32>, Vec<LayerRun>), CnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let model = Some(self.model);
@@ -144,7 +144,7 @@ struct ForwardWithConv0 {
 }
 
 impl BuildTask for ForwardWithConv0 {
-    type Output = Result<Vec<f32>, ArtcnnError>;
+    type Output = Result<Vec<f32>, CnnError>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         run_forward(self.forward, build, Some(self.conv0_bytes), None)
@@ -158,7 +158,7 @@ fn run_forward<R: Runtime>(
     build: &BuildContext<R>,
     conv0_bytes: Option<usize>,
     candidate: Option<Candidate>,
-) -> Result<Vec<f32>, ArtcnnError> {
+) -> Result<Vec<f32>, CnnError> {
     let (values, _) = run_forward_as(task, build, conv0_bytes, candidate, None)?;
 
     Ok(values)
@@ -172,7 +172,7 @@ fn run_forward_as<R: Runtime>(
     conv0_bytes: Option<usize>,
     candidate: Option<Candidate>,
     model: Option<Model>,
-) -> Result<(Vec<f32>, Vec<LayerRun>), ArtcnnError> {
+) -> Result<(Vec<f32>, Vec<LayerRun>), CnnError> {
     let client = build.client();
     let frame_context = build.frame_context();
     let sizing = Sizing(frame_context);
@@ -557,7 +557,7 @@ fn an_unsupported_convolution_is_refused() {
     let ran = backend().build(task);
 
     println!("refusal: {ran:?}");
-    assert!(matches!(ran, Err(ArtcnnError::Convolution(_))), "{ran:?}");
+    assert!(matches!(ran, Err(CnnError::Convolution(_))), "{ran:?}");
 }
 
 /// One body convolution of the same maps with the forced blueprint allowed, and with the inferred one.

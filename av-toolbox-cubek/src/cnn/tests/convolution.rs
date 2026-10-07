@@ -11,8 +11,8 @@ use cubek_matmul::definition::MatmulGlobalElems;
 use cubek_std::SwizzleModes;
 use cubek_std::cube_count::{CubeCountStrategy, GlobalOrder};
 
-use crate::artcnn::Region;
-use crate::artcnn::body::{convolution_problem, forced_blueprint, offers_cmma_16_in};
+use crate::cnn::Region;
+use crate::cnn::convolution::{convolution_problem, forced_blueprint, offers_cmma_16_in};
 
 /// A 3x3 convolution from 64 channels to `out_channels` over a region `width` by `height`, on f16 maps.
 fn half_problem(width: u32, height: u32, out_channels: usize) -> ConvolutionProblem {

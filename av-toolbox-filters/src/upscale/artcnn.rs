@@ -13,7 +13,7 @@ use av_toolbox_core::{
 };
 use av_toolbox_cubek::DevicePlane;
 #[cfg(test)]
-use av_toolbox_cubek::artcnn::{ArtcnnError, BodyPath};
+use av_toolbox_cubek::artcnn::{BodyPath, CnnError};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::resize::{Kernel, Samples};
 use av_toolbox_cubek::values::{narrow, widen};
@@ -126,7 +126,7 @@ pub(crate) fn locate(store: &Store, name: ModelName) -> Result<Located, StageErr
 }
 
 #[cfg(test)]
-pub(crate) fn failed_convolution_and_im2col(convolution: ArtcnnError, im2col: ArtcnnError) -> StageError {
+pub(crate) fn failed_convolution_and_im2col(convolution: CnnError, im2col: CnnError) -> StageError {
     let failures = vec![(BodyPath::Convolution, convolution), (BodyPath::Im2col, im2col)];
 
     crate::artcnn::failed_every_path(STAGE, failures)

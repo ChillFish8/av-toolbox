@@ -4,16 +4,7 @@ use cubecl::prelude::*;
 use half::f16;
 
 use super::{INPUT_TRANSFORM, OUTPUT_TRANSFORM, TILE_OUTPUTS, TILE_QUADS, WINDOW, WinogradShape};
-use crate::artcnn::kernels::direct::{
-    LOAD_WIDTH,
-    Load,
-    Quad,
-    Sums,
-    TILE,
-    WRITE_WIDTH,
-    finish_sums,
-    fragment,
-};
+use crate::cnn::kernels::direct::{LOAD_WIDTH, Load, Quad, Sums, TILE, WRITE_WIDTH, finish_sums, fragment};
 
 /// The plane's place in the workgroup's grid of planes.
 #[derive(CubeType, Clone, Copy)]

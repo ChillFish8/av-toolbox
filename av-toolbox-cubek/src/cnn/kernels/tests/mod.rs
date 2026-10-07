@@ -6,8 +6,8 @@ use cubecl::features::{Features, MmaConfig};
 use cubecl::ir::{DeviceProperties, HardwareProperties, MemoryDeviceProperties};
 use cubecl::profile::TimingMethod;
 
-use crate::artcnn::Precision;
-use crate::artcnn::body::storage_type;
+use crate::cnn::Precision;
+use crate::cnn::convolution::storage_type;
 
 /// What a test device offers the direct convolution.
 pub(super) struct TestDevice {

@@ -42,8 +42,8 @@ use cubek_matmul::routines::simple::SimpleArgs;
 use cubek_matmul::routines::{BlueprintStrategy, Routine};
 use cubek_std::MatrixLayout;
 
-use super::body::{BoundConvolution, convolution_failed};
-use crate::artcnn::{Activation, ArtcnnError};
+use crate::cnn::convolution::{BoundConvolution, convolution_failed};
+use crate::cnn::{Activation, CnnError};
 
 /// The matmul routine of `cubek-convolution`'s `SimpleSyncCyclic` convolution, the only routine the fused
 /// write-out launches with.
@@ -402,7 +402,7 @@ pub(crate) fn launch_fused<R: Runtime>(
     bound: BoundConvolution<R>,
     residual: Option<TensorBinding<R>>,
     activation: Activation,
-) -> Result<(), ArtcnnError> {
+) -> Result<(), CnnError> {
     match activation {
         Activation::Silu => launch_with::<R, WithSilu>(client, bound, residual),
         Activation::None => launch_with::<R, WithoutSilu>(client, bound, residual),
@@ -416,7 +416,7 @@ fn launch_with<R: Runtime, E: Epilogue>(
     client: &ComputeClient<R>,
     bound: BoundConvolution<R>,
     residual: Option<TensorBinding<R>>,
-) -> Result<(), ArtcnnError> {
+) -> Result<(), CnnError> {
     let BoundConvolution {
         problem,
         blueprint,
@@ -489,7 +489,7 @@ fn launch_with<R: Runtime, E: Epilogue>(
     launched.map_err(matmul_failed)
 }
 
-fn matmul_failed(error: MatmulSetupError) -> ArtcnnError {
+fn matmul_failed(error: MatmulSetupError) -> CnnError {
     let setup_error = error.into();
 
     convolution_failed(setup_error)

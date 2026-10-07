@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use super::{R9700, TestDevice};
-use crate::artcnn::kernels::tune::{Choice, SizeBucket, choose, offered_candidates};
-use crate::artcnn::{Candidate, Kernels, Model, direct_variants};
+use crate::artcnn::Model;
+use crate::cnn::kernels::tune::{Choice, SizeBucket, choose, offered_candidates};
+use crate::cnn::{Candidate, Kernels, direct_variants};
 
 #[test]
 fn sizes_fall_into_their_buckets_at_the_boundaries() {
