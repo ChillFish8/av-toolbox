@@ -1,0 +1,31 @@
+# Deblocks a video the way Didée's Deblock_QED does, as vsdenoise's deblock_qed runs it.
+#
+# Two H.264 deblocking passes run. Block borders keep the first, args.quant[0], and each block's interior
+# takes a smoothed share of the second, args.quant[1]. Raise either for heavier blocking, up to 60.
+# args.aoffset and args.boffset take a pair the same way, as deblock/h264 uses them.
+# On a YUV clip, chroma takes the same treatment by default. Set args.chroma = "normal" to give chroma the
+# first pass alone, or "strong" for the second. Set args.planes = ["y"] to leave the chroma alone.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the deblocked clip"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.deblocked]
+type = "deblock/qed"
+inputs = ["input"]
+args.quant = [24, 26]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["deblocked"]
+args.path = "{{ output }}"

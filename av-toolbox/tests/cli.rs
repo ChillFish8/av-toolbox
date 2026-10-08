@@ -41,6 +41,7 @@ fn every_example_explains_without_a_device() {
         "artcnn.toml",
         "deblock-dpir.toml",
         "deblock-h264.toml",
+        "deblock-qed.toml",
     ];
 
     for name in names {

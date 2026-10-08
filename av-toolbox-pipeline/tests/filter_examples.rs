@@ -7,7 +7,15 @@ use av_toolbox_cubek::artcnn::{Model, Weights};
 use av_toolbox_cubek::deblock::h264::thresholds;
 use av_toolbox_cubek::dpir::{PACK, Variant};
 use av_toolbox_cubek::matrix::MatrixSamples;
-use av_toolbox_cubek::testing::{H264Plane, reference_artcnn, reference_h264};
+use av_toolbox_cubek::testing::{
+    H264Plane,
+    QedCase,
+    QedChroma,
+    QedLayout,
+    reference_artcnn,
+    reference_h264,
+    reference_qed,
+};
 use av_toolbox_gpu::{Backend, test_device};
 use av_toolbox_models::Store;
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
@@ -788,6 +796,52 @@ fn the_h264_example_deblocks_like_the_reference() {
     };
     let reference = reference_h264(plane, MatrixSamples::U8, &example_thresholds);
     let expected_luma: Vec<u8> = reference.iter().map(|value| *value as u8).collect();
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for (index, frame) in decoded.frames.iter().enumerate() {
+        let flat_u = vec![FLAT_U; frame.u_plane.len()];
+        let flat_v = vec![FLAT_V; frame.v_plane.len()];
+
+        assert_ne!(frame.luma, luma, "frame {index} came back unchanged");
+        assert_eq!(
+            frame.luma, expected_luma,
+            "frame {index} differs from the reference"
+        );
+        assert_eq!(frame.u_plane, flat_u, "frame {index}: flat U changed");
+        assert_eq!(frame.v_plane, flat_v, "frame {index}: flat V changed");
+    }
+}
+
+/// The case `deblock-qed.toml` runs, the stage's default arguments on the `SIZE` by `SIZE` 4:2:0 test clip.
+fn qed_example_case() -> QedCase {
+    QedCase {
+        width: SIZE as u32,
+        height: SIZE as u32,
+        layout: QedLayout::Yuv { chroma_shift: (1, 1) },
+        samples: MatrixSamples::U8,
+        quant: [24, 26],
+        aoffset: [1, 1],
+        boffset: [2, 2],
+        chroma: QedChroma::Qed,
+    }
+}
+
+#[test]
+fn the_qed_example_deblocks_like_the_reference() {
+    let luma = blocky_luma();
+    let clip = clip_with_luma(&luma);
+
+    let decoded = run_example_on("deblock-qed.toml", &[], &clip);
+
+    let case = qed_example_case();
+    let chroma_samples = (SIZE / 2) * (SIZE / 2);
+    let luma_values: Vec<f64> = luma.iter().map(|code| f64::from(*code)).collect();
+    let flat_u_values = vec![f64::from(FLAT_U); chroma_samples];
+    let flat_v_values = vec![f64::from(FLAT_V); chroma_samples];
+    let inputs = [luma_values, flat_u_values, flat_v_values];
+    let reference = reference_qed(&case, &inputs);
+    let expected_luma: Vec<u8> = reference.output[0].iter().map(|value| *value as u8).collect();
 
     assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
     assert_eq!(decoded.frames.len(), FRAMES as usize);
