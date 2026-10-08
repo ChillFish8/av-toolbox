@@ -73,7 +73,7 @@ fn stored_change(fused: f32, peak: f32) -> f32 {
 /// The zero every kernel product is hidden behind.
 const OPAQUE_ZERO: u32 = 0;
 
-/// The change map's value for every difference of a plane's samples from the strong pass, uploaded once.
+/// The change map's value for every difference of a plane's samples from the strong pass.
 ///
 /// Integer samples hold one entry for each difference from minus the peak to the peak. Float samples need no
 /// table, and hold one unused entry.

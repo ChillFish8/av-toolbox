@@ -609,6 +609,8 @@ fn h264_returns_a_frame_whose_sides_are_not_multiples_of_eight_at_its_own_size()
     let found = run_h264(input, samples, json!({ "quant": 40 }), &planes);
 
     let expected = h264_reference(&input, &planes, samples, 40);
+    assert_eq!(found.len(), 3);
+
     for (index, plane) in found.iter().enumerate() {
         let (width, height) = plane_samples(&input, index);
         let label = format!("plane {index}");
@@ -618,7 +620,7 @@ fn h264_returns_a_frame_whose_sides_are_not_multiples_of_eight_at_its_own_size()
             (width * height) as usize,
             "{label} is {width}x{height}"
         );
-        assert_h264_plane(&found[index], &expected[index], width, samples, &label);
+        assert_h264_plane(plane, &expected[index], width, samples, &label);
     }
 }
 

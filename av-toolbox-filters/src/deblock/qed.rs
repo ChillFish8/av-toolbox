@@ -84,9 +84,9 @@ pub(crate) enum QedChroma {
     /// The QED output, on each plane's own 8 by 8 grid.
     #[default]
     Qed,
-    /// The normal pass.
+    /// The first pass, `quant[0]`, which block borders keep.
     Normal,
-    /// The strong pass.
+    /// The second pass, `quant[1]`.
     Strong,
 }
 
@@ -94,14 +94,14 @@ pub(crate) enum QedChroma {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct QedArgs {
-    /// How strongly each pass deblocks, `[border, interior]`, each between 0 and 60. The border pass keeps
-    /// block borders, and the interior pass is spread into each block's interior.
+    /// How strongly each pass deblocks, `[first, second]`, each between 0 and 60. The first pass is kept at
+    /// block borders, and the second pass is spread into each block's interior.
     #[serde(default = "default_quant")]
     pub(crate) quant: Vec<i32>,
-    /// Each pass's `aoffset`, as `deblock/h264` takes it, `[border, interior]`.
+    /// Each pass's `aoffset`, as `deblock/h264` takes it, `[first, second]`.
     #[serde(default = "default_aoffset")]
     pub(crate) aoffset: Vec<i32>,
-    /// Each pass's `boffset`, as `deblock/h264` takes it, `[border, interior]`.
+    /// Each pass's `boffset`, as `deblock/h264` takes it, `[first, second]`.
     #[serde(default = "default_boffset")]
     pub(crate) boffset: Vec<i32>,
     /// What chroma takes, `"qed"`, `"normal"` or `"strong"`. RGB takes only `"qed"`.

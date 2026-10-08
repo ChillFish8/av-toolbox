@@ -51,7 +51,7 @@ impl BuildTask for Interiors {
         let source = upload_u8(client, &self.source);
         let strong = upload_u8(client, &self.strong);
         let guard = std::iter::repeat_n(GUARD, self.guard_bytes);
-        let mut starting = self.normal.clone();
+        let mut starting = self.normal;
         starting.extend(guard);
         let output = upload_u8(client, &starting);
 
@@ -196,6 +196,7 @@ fn the_kernel_matches_the_reference_and_the_plugin_on_every_fixture() {
 fn a_1080p_plane_matches_the_reference_exactly_at_every_depth() {
     let depths = [
         MatrixSamples::U8,
+        MatrixSamples::U16 { bits: 9 },
         MatrixSamples::U16 { bits: 10 },
         MatrixSamples::U16 { bits: 16 },
         MatrixSamples::F32,

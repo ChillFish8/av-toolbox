@@ -209,6 +209,22 @@ fn chroma_decides_how_selected_chroma_planes_are_treated() {
 }
 
 #[test]
+fn a_chroma_layout_takes_chroma_for_both_planes() {
+    let layout = FrameLayout::Chroma {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = format(layout, SampleFormat::U8);
+
+    let qed = treatments(json!({}), input);
+    let normal = treatments(json!({ "chroma": "normal" }), input);
+    let strong = treatments(json!({ "chroma": "strong" }), input);
+
+    assert_eq!(qed, vec![Treatment::Qed; 2]);
+    assert_eq!(normal, vec![Treatment::NormalPass; 2]);
+    assert_eq!(strong, vec![Treatment::StrongPass; 2]);
+}
+
+#[test]
 fn grey_ignores_chroma() {
     let grey = format(FrameLayout::Grey, SampleFormat::U8);
 
@@ -284,11 +300,21 @@ fn the_lowpass_extends_each_plane_to_its_share_of_a_frame_rounded_to_16() {
         ..yuv420()
     };
 
+    let odd_chroma = FrameFormat {
+        width: 70,
+        height: 46,
+        layout: FrameLayout::Chroma {
+            subsampling: Subsampling::Yuv420,
+        },
+        ..yuv420()
+    };
+
     let sizes_420 = lowpass_sizes(&odd_420);
     let sizes_422 = lowpass_sizes(&odd_422);
 
     assert_eq!(sizes_420, vec![(80, 48), (40, 24), (40, 24)]);
     assert_eq!(sizes_422, vec![(80, 48), (40, 48), (40, 48)]);
+    assert_eq!(lowpass_sizes(&odd_chroma), vec![(80, 48), (80, 48)]);
 }
 
 #[test]
