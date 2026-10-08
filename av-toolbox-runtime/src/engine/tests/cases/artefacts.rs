@@ -1,5 +1,7 @@
+use av_toolbox_graph::{Routing, Spanned};
 use serde_json::json;
 
+use crate::engine::tests::harness::share_a_region;
 use crate::engine::tests::{
     COLLECTED,
     WANTED,
@@ -10,6 +12,7 @@ use crate::engine::tests::{
     engine_from,
     planned_graph,
     planned_width,
+    routing_of,
     run_result_with_watchdog,
     run_with_watchdog,
     sink_spec,
@@ -60,6 +63,34 @@ fn pieces_from_a_chunked_stage_on_two_workers_merge_in_chunk_order() {
     let expected = json!([[0, 2], [1, 3], [2, 1], [3, 2]]);
 
     assert_eq!(collected(), vec![(String::from("filter.count.frames"), expected)]);
+    assert_eq!(report.artefacts, 1);
+    assert_every_thread_exited(property);
+}
+
+#[test]
+fn a_per_frame_stage_in_a_chunk_routed_region_merges_in_chunk_order() {
+    let property = "a_per_frame_stage_in_a_chunk_routed_region_merges_in_chunk_order";
+    let mut tally = artefacting_spec("tally", "count", 2, false, "counting");
+    tally.args = Spanned::unknown(json!({ "mode": "counting", "per_frame": true }));
+
+    let specs = vec![
+        source_spec("input", &[0, 0, 1, 1, 1, 2, 3, 3], 0),
+        artefacting_spec("count", "input", 2, true, "counting"),
+        tally,
+        sink_spec("out", "tally"),
+        collecting_spec("files", &["filter.tally.frames"]),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert!(share_a_region(&graph, "count", "tally"));
+    assert_eq!(routing_of(&graph, "tally"), Routing::ByChunk);
+    assert_eq!(planned_width(&graph, "tally"), 2);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+    let expected = json!([[0, 2], [1, 3], [2, 1], [3, 2]]);
+
+    assert_eq!(collected(), vec![(String::from("filter.tally.frames"), expected)]);
     assert_eq!(report.artefacts, 1);
     assert_every_thread_exited(property);
 }

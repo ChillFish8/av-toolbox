@@ -111,6 +111,7 @@ const GOOD: &[ArtefactDecl] = &[
 const REPEATED: &[ArtefactDecl] = &[ArtefactDecl::structured("cuts"), ArtefactDecl::structured("cuts")];
 const DOTTED: &[ArtefactDecl] = &[ArtefactDecl::structured("grain.table")];
 const EMPTY_NAME: &[ArtefactDecl] = &[ArtefactDecl::structured("")];
+const SLASHED: &[ArtefactDecl] = &[ArtefactDecl::structured("grain/table")];
 
 impl<const ARTEFACTS: usize> StageDefinition for Declaring<ARTEFACTS> {
     type Args = NoArgs;
@@ -128,7 +129,8 @@ impl<const ARTEFACTS: usize> StageDefinition for Declaring<ARTEFACTS> {
             0 => GOOD,
             1 => REPEATED,
             2 => DOTTED,
-            _ => EMPTY_NAME,
+            3 => EMPTY_NAME,
+            _ => SLASHED,
         }
     }
 
@@ -210,6 +212,15 @@ fn an_empty_artefact_name_is_refused() {
     let mut registry = PipelineRegistry::new();
 
     let result = registry.register_filter::<Declaring<3>>();
+
+    assert!(matches!(result, Err(RegistryError::InvalidArtefactName { .. })));
+}
+
+#[test]
+fn an_artefact_name_holding_a_slash_is_refused() {
+    let mut registry = PipelineRegistry::new();
+
+    let result = registry.register_filter::<Declaring<4>>();
 
     assert!(matches!(result, Err(RegistryError::InvalidArtefactName { .. })));
 }

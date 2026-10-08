@@ -74,6 +74,9 @@ pub(crate) struct ArtefactingArgs {
     /// Declares the stage per chunk rather than for the whole stream.
     #[serde(default)]
     per_chunk: bool,
+    /// Declares the stage frame by frame when it is not per chunk.
+    #[serde(default)]
+    per_frame: bool,
 }
 
 pub(crate) struct ArtefactingInstance {
@@ -152,8 +155,12 @@ impl StageDefinition for Artefacting {
     }
 
     fn parallelism(args: &Self::Args) -> Parallelism {
-        match args.per_chunk {
-            true => chunked(),
+        if args.per_chunk {
+            return chunked();
+        }
+
+        match args.per_frame {
+            true => Parallelism::Frame,
             false => Parallelism::Stream,
         }
     }

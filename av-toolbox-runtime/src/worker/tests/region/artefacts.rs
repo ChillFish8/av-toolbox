@@ -167,3 +167,56 @@ fn a_chunked_node_ended_without_a_chunk_hands_over_nothing() {
     let merged = collector.merge().expect("merges");
     assert!(merged.is_empty());
 }
+
+#[test]
+fn a_stream_head_in_a_chunk_routed_runner_is_tagged_with_the_ended_chunk() {
+    let (graph, count) = counting_graph();
+    let collector = Arc::new(ArtefactCollector::new(&graph));
+    let nodes = vec![(count, counting_stage())];
+    let edges = RegionEdges::new(Vec::new(), vec![count]);
+    let mut runner = RegionRunner::new(nodes, edges).collecting(collector.clone());
+
+    run_chunk(&mut runner, &[(0, 1), (1, 1)], 1);
+    run_chunk(&mut runner, &[(2, 0)], 0);
+
+    let expected = ArtefactData::Structured(json!([[0, 1], [1, 2]]));
+    assert_eq!(merged_frames(&collector, count), expected);
+}
+
+#[test]
+fn a_fed_node_not_chunked_in_a_chunk_routed_runner_is_tagged_with_the_ended_chunk() {
+    let (graph, count) = counting_graph();
+    let collector = Arc::new(ArtefactCollector::new(&graph));
+    let head = NodeId::new(1000);
+    let nodes = vec![
+        (head, StageBox::Filter(Box::new(Lagging::new(1)))),
+        (count, counting_stage()),
+    ];
+    let feeds = vec![vec![Feed {
+        producer: head,
+        slot: 0,
+    }]];
+    let chunked = HashSet::from([head]);
+    let edges = RegionEdges::new(feeds, vec![count]).chunked_on_layer_zero(chunked);
+    let mut runner = RegionRunner::new(nodes, edges).collecting(collector.clone());
+
+    run_chunk(&mut runner, &[(0, 1), (1, 1)], 1);
+    run_chunk(&mut runner, &[(2, 0)], 0);
+
+    let expected = ArtefactData::Structured(json!([[0, 1], [1, 2]]));
+    assert_eq!(merged_frames(&collector, count), expected);
+}
+
+#[test]
+fn a_frame_routed_runner_hands_over_untagged_pieces_whatever_chunk_ended() {
+    let (graph, count) = counting_graph();
+    let collector = Arc::new(ArtefactCollector::new(&graph));
+    let nodes = vec![(count, counting_stage())];
+    let edges = RegionEdges::new(Vec::new(), vec![count]).frame_routed();
+    let mut runner = RegionRunner::new(nodes, edges).collecting(collector.clone());
+
+    run_chunk(&mut runner, &[(0, 3), (1, 3)], 3);
+
+    let expected = ArtefactData::Structured(json!([[null, 2]]));
+    assert_eq!(merged_frames(&collector, count), expected);
+}

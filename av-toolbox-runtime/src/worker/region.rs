@@ -228,13 +228,19 @@ impl RegionRunner {
     /// downstream node ends up holding because of the upstream flush is captured too. It ends by
     /// submitting this thread's queued work, before anything it produced is returned.
     ///
-    /// `ended` is the chunk being ended, when the caller knows it. A node given one chunk at a time
-    /// that saw no input since it last started files its artefacts under `ended`.
+    /// `ended` is the chunk being ended, when the caller knows it. A node files its artefacts under the
+    /// chunk it last ran on, or under `ended` when it has none. In a region routed by frame, a node not
+    /// given one chunk at a time files them under no chunk instead. A node given one chunk at a time
+    /// that is left with no chunk has its artefacts discarded.
     pub fn end(&mut self, context: &mut FrameContext, ended: Option<u64>) -> Result<Vec<AnyItem>, RunError> {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
         let head_chunked = self.edges.chunked.contains(&self.nodes[0].0);
-        let head_chunk = ending_chunk(head_chunked, self.last_chunks[0], ended);
+        let head_tagging = Tagging {
+            chunked: head_chunked,
+            frame_routed: self.edges.frame_routed,
+        };
+        let head_chunk = ending_chunk(head_tagging, self.last_chunks[0], ended);
         let head_watch = EndWatch {
             chunk: head_chunk,
             discarding: head_chunked && head_chunk.is_none(),
@@ -334,7 +340,7 @@ fn counted_run(stage: &StageBox) -> Counted {
 /// What ending a node needs beyond the node itself.
 #[derive(Copy, Clone)]
 struct EndWatch<'a> {
-    /// The chunk being ended, or `None` for a node that is not given one chunk at a time.
+    /// The chunk being ended, or `None` when the node files its artefacts under no chunk.
     chunk: Option<u64>,
     /// Drops what the node built rather than collecting it, for a chunked node that saw no chunk.
     discarding: bool,
@@ -342,15 +348,24 @@ struct EndWatch<'a> {
     profiler: Option<&'a Profiler>,
 }
 
+/// What decides the chunk a node's artefacts are filed under as it ends.
+#[derive(Copy, Clone)]
+struct Tagging {
+    chunked: bool,
+    frame_routed: bool,
+}
+
 /// The chunk a node's artefacts are filed under as it ends.
 ///
-/// A node given one chunk at a time uses the chunk it last ran on, or `ended` when it ran on none.
-/// Any other node keeps `last`.
-fn ending_chunk(chunked: bool, last: Option<u64>, ended: Option<u64>) -> Option<u64> {
-    match chunked {
-        true => last.or(ended),
-        false => last,
+/// The node uses the chunk it last ran on, or `ended` when it ran on none. A node in a region routed
+/// by frame that is not given one chunk at a time keeps `last` instead, since `ended` there only names
+/// the chunk its worker last saw.
+fn ending_chunk(tagging: Tagging, last: Option<u64>, ended: Option<u64>) -> Option<u64> {
+    if tagging.chunked || !tagging.frame_routed {
+        return last.or(ended);
     }
+
+    last
 }
 
 /// Ends one node, timed when the run is profiled.
@@ -545,7 +560,11 @@ fn end_fed(
         return Err(RunError::UnpairedFeeds { node, leftover });
     }
 
-    let chunk = ending_chunk(watch.chunked, *watch.last, ended);
+    let tagging = Tagging {
+        chunked: watch.chunked,
+        frame_routed: watch.frame_routed,
+    };
+    let chunk = ending_chunk(tagging, *watch.last, ended);
     let ending = EndWatch {
         chunk,
         discarding: watch.chunked && chunk.is_none(),

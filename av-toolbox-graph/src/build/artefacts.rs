@@ -14,11 +14,15 @@ struct ArtefactKey {
 }
 
 /// Checks every artefact sink's arguments and patterns, and works out what each selects.
+///
+/// With `earlier_errors` set, a rejected stage's artefacts may be missing from `nodes`. Only each
+/// sink's inputs and arguments are checked then, and no sink is returned.
 pub(crate) fn resolve_artefact_sinks(
     registry: &PipelineRegistry,
     specs: &[StageSpec],
     indices: &[usize],
     nodes: &[Node],
+    earlier_errors: bool,
     diagnostics: &mut Diagnostics,
 ) -> Vec<ArtefactSinkNode> {
     let keys = artefact_keys(nodes);
@@ -26,7 +30,15 @@ pub(crate) fn resolve_artefact_sinks(
 
     for index in indices {
         let spec = &specs[*index];
-        let Some(sink) = resolve_one(registry, spec, &keys, diagnostics) else {
+        let Some(selection) = prepare_selection(registry, spec, diagnostics) else {
+            continue;
+        };
+
+        if earlier_errors {
+            continue;
+        }
+
+        let Some(sink) = resolve_one(spec, &selection, &keys, diagnostics) else {
             continue;
         };
 
@@ -56,12 +68,12 @@ fn artefact_keys(nodes: &[Node]) -> Vec<ArtefactKey> {
     keys
 }
 
-fn resolve_one(
+/// Checks an artefact sink takes no inputs and accepts its arguments, answering with what it keeps.
+fn prepare_selection(
     registry: &PipelineRegistry,
     spec: &StageSpec,
-    keys: &[ArtefactKey],
     diagnostics: &mut Diagnostics,
-) -> Option<ArtefactSinkNode> {
+) -> Option<KeyFilter> {
     let name = &spec.name.value;
 
     if let Some(input) = spec.inputs.first() {
@@ -90,8 +102,19 @@ fn resolve_one(
         },
     };
 
-    let selection = prepared.selection();
-    if !check_patterns(spec, &selection, keys, diagnostics) {
+    Some(prepared.selection())
+}
+
+/// Checks a sink's patterns against `keys`, answering with the sink when it selects something.
+fn resolve_one(
+    spec: &StageSpec,
+    selection: &KeyFilter,
+    keys: &[ArtefactKey],
+    diagnostics: &mut Diagnostics,
+) -> Option<ArtefactSinkNode> {
+    let name = &spec.name.value;
+
+    if !check_patterns(spec, selection, keys, diagnostics) {
         return None;
     }
 
@@ -145,7 +168,8 @@ fn check_patterns(
         );
         let known_keys = keys.iter().map(|entry| entry.key.as_str());
         if let Some(closest) = suggest_name(pattern.as_str(), known_keys) {
-            message.push_str(&format!(", did you mean {closest}"));
+            let hint = format!(", did you mean {closest}");
+            message.push_str(&hint);
         }
 
         diagnostics.push(Diagnostic::error(

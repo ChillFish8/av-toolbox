@@ -40,11 +40,13 @@ pub fn build(registry: &PipelineRegistry, specs: &[StageSpec]) -> Result<Built, 
     let nodes = bind::bind(specs, &resolution, &mut diagnostics);
     checks::detect_cycles(&nodes, &mut diagnostics);
 
+    let earlier_errors = diagnostics.has_errors();
     let artefact_sinks = artefacts::resolve_artefact_sinks(
         registry,
         specs,
         &resolution.artefact_sinks,
         &nodes,
+        earlier_errors,
         &mut diagnostics,
     );
 

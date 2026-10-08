@@ -85,6 +85,45 @@ fn a_pattern_matching_no_artefact_fails_with_the_closest_key() {
 }
 
 #[test]
+fn a_rejected_producer_reports_no_follow_on_pattern_error() {
+    let mut specs = specs_with_files(json!({ "include": ["filter.grain.table"] }));
+    specs[1].stage_type = Spanned::unknown(String::from("test/nope"));
+
+    assert_eq!(codes_of(&specs), vec![DiagnosticCode::UnknownStage]);
+}
+
+#[test]
+fn a_rejected_producer_reports_no_follow_on_empty_selection() {
+    let mut specs = specs_with_files(json!({}));
+    specs[1].stage_type = Spanned::unknown(String::from("test/nope"));
+
+    assert_eq!(codes_of(&specs), vec![DiagnosticCode::UnknownStage]);
+}
+
+#[test]
+fn a_rejected_producer_still_reports_an_artefact_sink_with_inputs() {
+    let mut specs = specs_with_files(json!({}));
+    specs[1].stage_type = Spanned::unknown(String::from("test/nope"));
+    specs[3].inputs = vec![testing::positional("input")];
+
+    let codes = codes_of(&specs);
+
+    assert!(codes.contains(&DiagnosticCode::UnknownStage));
+    assert!(codes.contains(&DiagnosticCode::ArtefactSinkHasInputs));
+}
+
+#[test]
+fn a_rejected_producer_still_reports_bad_artefact_sink_arguments() {
+    let mut specs = specs_with_files(json!({ "include": [""] }));
+    specs[1].stage_type = Spanned::unknown(String::from("test/nope"));
+
+    let codes = codes_of(&specs);
+
+    assert!(codes.contains(&DiagnosticCode::UnknownStage));
+    assert!(codes.contains(&DiagnosticCode::InvalidArgs));
+}
+
+#[test]
 fn an_empty_include_fails_as_selecting_nothing() {
     let specs = specs_with_files(json!({ "include": [] }));
 
