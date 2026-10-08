@@ -385,11 +385,20 @@ impl CompiledGraph {
         &mut self.nodes[id.index()]
     }
 
+    /// Every node some artefact sink selects an artefact of.
+    pub(crate) fn artefact_producers(&self) -> HashSet<NodeId> {
+        self.artefact_sinks
+            .iter()
+            .flat_map(|sink| sink.selected())
+            .map(|(node, _)| *node)
+            .collect()
+    }
+
     /// Drops nodes and points every edge that read a dropped node at its replacement.
     ///
     /// Surviving nodes are reindexed, so every [NodeId](crate::NodeId) held across this call is
     /// stale afterwards. A stored plan is keyed by those same stale ids, so it does not survive
-    /// the call either.
+    /// the call either. Every artefact sink's selections are moved with their nodes.
     pub(crate) fn retain_nodes(&mut self, replacements: &HashMap<NodeId, NodeId>, dropped: &HashSet<NodeId>) {
         let mut moved: HashMap<NodeId, NodeId> = HashMap::new();
         let mut kept: Vec<Node> = Vec::with_capacity(self.nodes.len());
@@ -415,6 +424,14 @@ impl CompiledGraph {
 
                 edge.set_source(reindexed);
             }
+        }
+
+        for sink in &mut self.artefact_sinks {
+            sink.remap(|node| {
+                let survivor = follow_replacements(replacements, node);
+
+                moved.get(&survivor).copied()
+            });
         }
 
         self.nodes = kept;

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use super::{Change, OptimisationPass, PassReport};
 use crate::graph::{CompiledGraph, NodeId};
 
-/// Drops every stage no sink transitively depends on.
+/// Drops every stage no sink transitively depends on, keeping those an artefact sink reads.
 pub struct DeadStageElimination;
 
 impl OptimisationPass for DeadStageElimination {
@@ -38,7 +38,9 @@ impl OptimisationPass for DeadStageElimination {
 
 fn reachable_from_sinks(graph: &CompiledGraph) -> HashSet<NodeId> {
     let mut reachable = HashSet::new();
+    let producers = graph.artefact_producers();
     let mut pending: Vec<NodeId> = graph.sinks().collect();
+    pending.extend(producers);
 
     while let Some(id) = pending.pop() {
         if !reachable.insert(id) {

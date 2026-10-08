@@ -33,6 +33,26 @@ impl ArtefactSinkNode {
         }
     }
 
+    /// Points every selection at its node's new id, dropping one whose node is gone and any repeat.
+    pub(crate) fn remap<F: Fn(NodeId) -> Option<NodeId>>(&mut self, reindex: F) {
+        let mut remapped: Vec<(NodeId, &'static str)> = Vec::with_capacity(self.selected.len());
+
+        for (node, name) in &self.selected {
+            let Some(moved) = reindex(*node) else {
+                continue;
+            };
+
+            let pair = (moved, *name);
+            if remapped.contains(&pair) {
+                continue;
+            }
+
+            remapped.push(pair);
+        }
+
+        self.selected = remapped;
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }

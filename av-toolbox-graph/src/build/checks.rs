@@ -94,10 +94,12 @@ fn report_cycle(nodes: &[Node], repeated: NodeId, stack: &[NodeId], diagnostics:
     diagnostics.push(diagnostic);
 }
 
-/// Warns about every stage no sink transitively depends on.
+/// Warns about every stage no sink transitively depends on, frame or artefact.
 pub(crate) fn report_unused(graph: &CompiledGraph, diagnostics: &mut Diagnostics) {
     let mut reachable = vec![false; graph.len()];
+    let producers = graph.artefact_producers();
     let mut pending: Vec<NodeId> = graph.sinks().collect();
+    pending.extend(producers);
 
     while let Some(id) = pending.pop() {
         if reachable[id.index()] {

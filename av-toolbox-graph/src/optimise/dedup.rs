@@ -19,6 +19,8 @@ struct StageKey {
 }
 
 /// Merges stages that do the same work on the same inputs.
+///
+/// A stage an artefact sink reads is never merged, since each one's artefacts are written under its own name.
 pub struct CommonStageElimination;
 
 impl OptimisationPass for CommonStageElimination {
@@ -31,7 +33,13 @@ impl OptimisationPass for CommonStageElimination {
         let mut seen: HashMap<StageKey, NodeId> = HashMap::new();
         let mut replacements: HashMap<NodeId, NodeId> = HashMap::new();
 
+        let producers = graph.artefact_producers();
+
         for id in graph.order() {
+            if producers.contains(id) {
+                continue;
+            }
+
             let node = graph.node(*id);
             let key = key_for(node, &replacements);
 

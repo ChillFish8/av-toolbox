@@ -142,3 +142,87 @@ fn the_selected_sinks_build_through_the_registry() {
     assert_eq!(built.len(), 1);
     assert_eq!(written, 0);
 }
+
+/// A source feeding a frame sink directly, and a grain filter only an artefact sink reads.
+fn specs_with_a_producer_only() -> Vec<StageSpec> {
+    let source = testing::spec(StageKind::Source, "input", "test/file");
+
+    let mut grain = testing::spec(StageKind::Filter, "grain", "test/grain");
+    grain.inputs = vec![testing::positional("input")];
+
+    let mut sink = testing::spec(StageKind::Sink, "out", "test/stdout");
+    sink.inputs = vec![testing::positional("input")];
+
+    let files = testing::spec(StageKind::Sink, "files", "test/files");
+
+    vec![source, grain, sink, files]
+}
+
+#[test]
+fn a_producer_only_an_artefact_sink_reads_is_not_unused() {
+    let registry = testing::registry();
+    let specs = specs_with_a_producer_only();
+
+    let built = build(&registry, &specs).expect("should build");
+
+    assert!(built.warnings().is_empty());
+}
+
+#[test]
+fn a_producer_only_an_artefact_sink_reads_survives_optimisation() {
+    let registry = testing::registry();
+    let specs = specs_with_a_producer_only();
+    let mut graph = build(&registry, &specs).expect("should build").into_graph();
+
+    crate::optimise(&mut graph, &crate::default_passes());
+    let grain = graph
+        .nodes()
+        .iter()
+        .find(|node| node.name() == "grain")
+        .expect("grain survives")
+        .id();
+
+    assert_eq!(
+        graph.artefact_sinks()[0].selected(),
+        &[(grain, "table"), (grain, "cuts")]
+    );
+}
+
+#[test]
+fn selections_follow_their_nodes_when_others_are_dropped() {
+    let registry = testing::registry();
+    let mut specs = specs_with_a_producer_only();
+    let mut spare = testing::spec(StageKind::Filter, "spare", "test/blur");
+    spare.inputs = vec![testing::positional("input")];
+    specs.insert(1, spare);
+    let mut graph = build(&registry, &specs).expect("should build").into_graph();
+
+    crate::optimise(&mut graph, &crate::default_passes());
+    let names: Vec<&str> = graph.nodes().iter().map(|node| node.name()).collect();
+    let grain = graph
+        .nodes()
+        .iter()
+        .find(|node| node.name() == "grain")
+        .expect("grain survives")
+        .id();
+
+    assert!(!names.contains(&"spare"));
+    assert_eq!(graph.artefact_sinks()[0].selected()[0].0, grain);
+}
+
+#[test]
+fn two_identical_producers_are_never_merged() {
+    let registry = testing::registry();
+    let mut specs = specs_with_a_producer_only();
+    let mut twin = testing::spec(StageKind::Filter, "twin", "test/grain");
+    twin.inputs = vec![testing::positional("input")];
+    specs.insert(2, twin);
+    let mut graph = build(&registry, &specs).expect("should build").into_graph();
+
+    crate::optimise(&mut graph, &crate::default_passes());
+    let names: Vec<&str> = graph.nodes().iter().map(|node| node.name()).collect();
+
+    assert!(names.contains(&"grain"));
+    assert!(names.contains(&"twin"));
+    assert_eq!(graph.artefact_sinks()[0].selected().len(), 4);
+}
