@@ -1,6 +1,15 @@
 use std::process::ExitCode;
 
-use av_toolbox_core::{InputSignature, PipelineRegistry, StageInfo, StageKind, StreamType, Tag};
+use av_toolbox_core::{
+    ArtefactDecl,
+    ArtefactKind,
+    InputSignature,
+    PipelineRegistry,
+    StageInfo,
+    StageKind,
+    StreamType,
+    Tag,
+};
 
 use crate::cli::ListStagesArgs;
 use crate::load;
@@ -144,7 +153,30 @@ fn describe_stage(info: &StageInfo<'_>) -> String {
     let stage_type = info.full_identifier();
     let kind = info.kind();
 
-    format!("{stage_type} ({kind})\n\ninputs:\n{inputs}\narguments:\n{schema}\n")
+    let artefacts = info.artefacts();
+    let declared = describe_artefacts(artefacts.declared());
+
+    format!("{stage_type} ({kind})\n\ninputs:\n{inputs}\nartefacts:\n{declared}\narguments:\n{schema}\n")
+}
+
+fn describe_artefacts(declared: &[ArtefactDecl]) -> String {
+    if declared.is_empty() {
+        return "  none\n".to_string();
+    }
+
+    let mut lines = String::new();
+    for decl in declared {
+        let kind = match decl.kind {
+            ArtefactKind::Structured => "structured",
+            ArtefactKind::Opaque { .. } => "opaque",
+        };
+        let extension = decl.kind.extension();
+        let line = format!("  {}  {kind}  .{extension}\n", decl.name);
+
+        lines.push_str(&line);
+    }
+
+    lines
 }
 
 fn describe_inputs(signature: &InputSignature) -> String {
@@ -301,6 +333,23 @@ mod tests {
         assert!(described.starts_with("y4m/stdout (sink)"));
         assert!(described.contains("input"));
         assert!(described.contains("\"frame_rate\""));
+    }
+
+    #[test]
+    fn declared_artefacts_are_listed_with_their_kind() {
+        let declared = [
+            ArtefactDecl::opaque("table", "tbl"),
+            ArtefactDecl::structured("cuts"),
+        ];
+
+        let described = describe_artefacts(&declared);
+
+        assert_eq!(described, "  table  opaque  .tbl\n  cuts  structured  .json\n");
+    }
+
+    #[test]
+    fn a_stage_with_no_artefacts_lists_none() {
+        assert_eq!(describe_artefacts(&[]), "  none\n");
     }
 
     #[test]

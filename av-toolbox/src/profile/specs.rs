@@ -1,4 +1,4 @@
-use av_toolbox_core::StageKind;
+use av_toolbox_core::{PipelineRegistry, StageKind};
 use av_toolbox_graph::{ArgSpans, Spanned, StageSpec};
 use serde_json::json;
 
@@ -6,6 +6,11 @@ use super::file::stage_key;
 
 /// The sink every pass writes into, so nothing leaves the pipeline.
 const DISCARD: &str = "null/discard";
+
+/// Drops every artefact sink, since a profiling pass writes nothing out of the pipeline.
+pub(super) fn drop_artefact_sinks(specs: &mut Vec<StageSpec>, registry: &PipelineRegistry) {
+    specs.retain(|spec| !registry.is_artefact_sink(&spec.stage_type.value));
+}
 
 /// Replaces every sink with `null/discard`, keeping its inputs, and returns the replaced sinks' keys.
 pub(super) fn discard_sinks(specs: &mut [StageSpec]) -> Vec<String> {
@@ -98,6 +103,19 @@ mod tests {
         assert_eq!(specs[1].args.value, json!({}));
         assert_eq!(specs[1].inputs.len(), 1);
         assert_eq!(specs[0].stage_type.value, "y4m/stdout");
+    }
+
+    #[test]
+    fn artefact_sinks_are_dropped_before_profiling() {
+        let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+        let mut files = spec(StageKind::Sink, "reports", &[]);
+        files.stage_type = Spanned::unknown(String::from("artefacts/files"));
+        let mut specs = vec![spec(StageKind::Sink, "output", &["blur"]), files];
+
+        drop_artefact_sinks(&mut specs, &registry);
+        let names: Vec<&str> = specs.iter().map(|spec| spec.name.value.as_str()).collect();
+
+        assert_eq!(names, vec!["output"]);
     }
 
     #[test]

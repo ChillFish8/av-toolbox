@@ -114,7 +114,7 @@ fn finish(run: &RunReport, progress: &Progress, names: &[String]) -> ExitCode {
         return ExitCode::from(CANCELLED);
     }
 
-    tracing::info!(frames = run.frames, read, %elapsed, "the run finished");
+    tracing::info!(frames = run.frames, read, artefacts = run.artefacts, %elapsed, "the run finished");
     for line in snapshot.sink_lines() {
         tracing::info!("{line}");
     }

@@ -50,6 +50,7 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
     };
 
     let mut written = loaded.specs.clone();
+    specs::drop_artefact_sinks(&mut written, &registry);
     let discarded = specs::discard_sinks(&mut written);
 
     if !reads_only_files(&registry, &written, &loaded.files, &mut stderr) {
