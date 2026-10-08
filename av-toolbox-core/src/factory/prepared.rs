@@ -9,6 +9,7 @@ use av_toolbox_gpu::{
 };
 
 use crate::{
+    ArtefactSink,
     BuildStageError,
     BuiltFilter,
     BuiltMask,
@@ -16,6 +17,7 @@ use crate::{
     BuiltSink,
     BuiltSource,
     InputDemand,
+    KeyFilter,
     MetaSink,
     Parallelism,
     Residency,
@@ -224,4 +226,12 @@ pub trait PreparedMetaSink: Send + Sync {
         backend: &Backend,
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn MetaSink>, BuildStageError>;
+}
+
+/// An artefact sink whose arguments are deserialized.
+pub trait PreparedArtefactSink: Send + Sync {
+    /// The artefacts this sink takes.
+    fn selection(&self) -> KeyFilter;
+
+    fn build(self: Box<Self>) -> Result<Box<dyn ArtefactSink>, BuildStageError>;
 }

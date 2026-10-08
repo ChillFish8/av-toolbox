@@ -56,6 +56,7 @@ pub use self::artefact::{
     ArtefactDecl,
     ArtefactKind,
     ArtefactPiece,
+    ArtefactSink,
     MergeArtefactFn,
     MergedArtefact,
     StageArtefacts,
@@ -74,6 +75,7 @@ pub use self::error::{
     StageError,
 };
 pub use self::factory::{
+    PreparedArtefactSink,
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,
@@ -127,6 +129,7 @@ pub use self::residency::{
 pub use self::sink::Sink;
 pub use self::source::Source;
 pub use self::stage::{
+    ArtefactSinkDefinition,
     FilterDefinition,
     MaskDefinition,
     MetaSinkDefinition,

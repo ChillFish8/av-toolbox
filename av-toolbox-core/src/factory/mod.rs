@@ -1,3 +1,4 @@
+mod artefact;
 mod builders;
 mod definition;
 mod meta;
@@ -17,6 +18,7 @@ use serde_json::Value;
 
 pub(crate) use self::definition::Definition;
 pub use self::prepared::{
+    PreparedArtefactSink,
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,

@@ -176,3 +176,9 @@ impl WantedArtefacts {
         self.names.is_empty()
     }
 }
+
+/// A sink handed every artefact it selected once the run has ended.
+pub trait ArtefactSink: Send + 'static {
+    /// Writes `artefacts`, answering with how many files were written.
+    fn write(&mut self, artefacts: &[&MergedArtefact]) -> Result<usize, StageError>;
+}

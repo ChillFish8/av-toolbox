@@ -19,10 +19,12 @@ use crate::{
     ArtefactData,
     ArtefactDecl,
     ArtefactPiece,
+    ArtefactSink,
     BoundInputs,
     Filter,
     InputDemand,
     InputSignature,
+    KeyFilter,
     Mask,
     MetaSink,
     Parallelism,
@@ -415,6 +417,16 @@ pub trait MetaSinkDefinition: StageDefinition {
         inputs: BoundInputs,
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn MetaSink>, StageError>;
+}
+
+/// A sink that writes the artefacts stages hand over, rather than frames.
+///
+/// It takes no inputs and is handed its artefacts once the run has ended.
+pub trait ArtefactSinkDefinition: StageDefinition {
+    /// The artefacts this sink takes, matched against keys such as `filter.grain.table`.
+    fn selection(args: &Self::Args) -> KeyFilter;
+
+    fn build(args: Self::Args) -> Result<Box<dyn ArtefactSink>, StageError>;
 }
 
 /// A stage that consumes the finished stream.

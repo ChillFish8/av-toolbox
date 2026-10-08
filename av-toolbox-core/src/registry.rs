@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::factory::Definition;
 use crate::{
     AnyDemand,
+    ArtefactSinkDefinition,
     BuildStageError,
     Crossing,
     DemandDefinition,
@@ -22,6 +23,7 @@ use crate::{
     PathView,
     PlaceError,
     PlaceFn,
+    PreparedArtefactSink,
     PreparedFilter,
     PreparedMask,
     PreparedMetaSink,
@@ -72,6 +74,7 @@ pub struct PipelineRegistry {
     providers: Factories<dyn PreparedProvider>,
     sinks: Factories<dyn PreparedSink>,
     meta_sinks: Factories<dyn PreparedMetaSink>,
+    artefact_sinks: Factories<dyn PreparedArtefactSink>,
     demands: HashMap<&'static str, RegisteredDemand>,
     served: HashMap<DemandKind, RegisteredProvider>,
 }
@@ -163,13 +166,7 @@ impl PipelineRegistry {
 
     pub fn register_sink<D: SinkDefinition>(&mut self) -> Result<(), RegistryError> {
         let definition = Definition::<D>::new(StageKind::Sink)?;
-        let identifier = definition.full_identifier();
-        if self.meta_sinks.contains_key(identifier) {
-            return Err(RegistryError::DuplicateStage {
-                kind: StageKind::Sink,
-                identifier: identifier.to_string(),
-            });
-        }
+        self.check_sink_identifier(definition.full_identifier())?;
 
         insert(&mut self.sinks, definition)
     }
@@ -177,15 +174,62 @@ impl PipelineRegistry {
     /// Registers a metadata-only sink, which shares the sink identifiers.
     pub fn register_meta_sink<D: MetaSinkDefinition>(&mut self) -> Result<(), RegistryError> {
         let definition = Definition::<D>::new(StageKind::Sink)?;
+        self.check_sink_identifier(definition.full_identifier())?;
+
+        insert(&mut self.meta_sinks, definition)
+    }
+
+    /// Registers an artefact sink, which shares the sink identifiers and takes no inputs.
+    pub fn register_artefact_sink<D: ArtefactSinkDefinition>(&mut self) -> Result<(), RegistryError> {
+        let definition = Definition::<D>::new(StageKind::Sink)?;
         let identifier = definition.full_identifier();
-        if self.sinks.contains_key(identifier) {
-            return Err(RegistryError::DuplicateStage {
-                kind: StageKind::Sink,
+        if !D::inputs().is_empty() {
+            return Err(RegistryError::ArtefactSinkTakesInputs {
                 identifier: identifier.to_string(),
             });
         }
 
-        insert(&mut self.meta_sinks, definition)
+        self.check_sink_identifier(identifier)?;
+
+        insert(&mut self.artefact_sinks, definition)
+    }
+
+    /// Whether `identifier` names a registered artefact sink.
+    pub fn is_artefact_sink(&self, identifier: &str) -> bool {
+        self.artefact_sinks.contains_key(identifier)
+    }
+
+    /// Deserializes an artefact sink's arguments, without needing a device.
+    pub fn prepare_artefact_sink(
+        &self,
+        identifier: &str,
+        args: &Value,
+    ) -> Result<Box<dyn PreparedArtefactSink>, BuildStageError> {
+        let slot = OpenSlot::new();
+
+        prepare(
+            &self.artefact_sinks,
+            StageKind::Sink,
+            identifier,
+            args,
+            &[],
+            &slot,
+        )
+    }
+
+    /// Refuses an identifier any kind of sink already holds.
+    fn check_sink_identifier(&self, identifier: &str) -> Result<(), RegistryError> {
+        let taken = self.sinks.contains_key(identifier)
+            || self.meta_sinks.contains_key(identifier)
+            || self.artefact_sinks.contains_key(identifier);
+        if !taken {
+            return Ok(());
+        }
+
+        Err(RegistryError::DuplicateStage {
+            kind: StageKind::Sink,
+            identifier: identifier.to_string(),
+        })
     }
 
     /// Deserializes the arguments and binds the inputs, without needing a device.
@@ -289,6 +333,7 @@ impl PipelineRegistry {
         let providers = self.providers.values().map(|factory| factory.info());
         let sinks = self.sinks.values().map(|factory| factory.info());
         let meta_sinks = self.meta_sinks.values().map(|factory| factory.info());
+        let artefact_sinks = self.artefact_sinks.values().map(|factory| factory.info());
 
         sources
             .chain(filters)
@@ -296,6 +341,7 @@ impl PipelineRegistry {
             .chain(providers)
             .chain(sinks)
             .chain(meta_sinks)
+            .chain(artefact_sinks)
     }
 }
 
