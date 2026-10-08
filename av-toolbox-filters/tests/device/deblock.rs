@@ -553,6 +553,7 @@ fn h264_on_a_420_frame_matches_the_reference() {
     let found = run_h264(input, samples, json!({ "quant": 51 }), &planes);
 
     let expected = h264_reference(&input, &planes, samples, 51);
+
     for index in 0..3 {
         let (width, _) = plane_samples(&input, index);
         let label = format!("plane {index}");
@@ -630,5 +631,69 @@ fn h264_on_a_float_frame_matches_the_reference_within_tolerance() {
         let label = format!("plane {index}");
 
         assert_h264_plane(&found[index], &expected[index], 70, samples, &label);
+    }
+}
+
+#[test]
+fn h264_on_a_frame_smaller_than_its_pad_comes_back_its_own_size() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(5, 3, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+
+    let found = run_h264(input, samples, json!({ "quant": 51 }), &planes);
+
+    let expected = h264_reference(&input, &planes, samples, 51);
+
+    for index in 0..3 {
+        let (width, height) = plane_samples(&input, index);
+        let label = format!("plane {index}");
+
+        assert_eq!(
+            found[index].len(),
+            (width * height) as usize,
+            "{label} is {width}x{height}"
+        );
+        assert_h264_plane(&found[index], &expected[index], width, samples, &label);
+    }
+}
+
+#[test]
+fn h264_on_a_nine_bit_grey_frame_matches_the_reference() {
+    let nine_bit = SampleFormat::U16 {
+        depth: Depth::new(9).expect("nine is a depth"),
+    };
+    let input = frame(64, 48, FrameLayout::Grey, nine_bit, ChromaLocation::Left);
+    let samples = MatrixSamples::U16 { bits: 9 };
+    let planes = h264_planes(&input, samples);
+
+    let found = run_h264(input, samples, json!({ "quant": 51 }), &planes);
+
+    let expected = h264_reference(&input, &planes, samples, 51);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].len(), 64 * 48);
+    assert_h264_plane(&found[0], &expected[0], 64, samples, "grey");
+    assert_ne!(found[0], planes[0], "the grey plane came back unchanged");
+}
+
+#[test]
+fn h264_on_an_rgb_frame_filters_all_three_planes() {
+    let input = frame(64, 48, FrameLayout::Rgb, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+
+    let found = run_h264(input, samples, json!({ "quant": 51 }), &planes);
+
+    let expected = h264_reference(&input, &planes, samples, 51);
+    assert_eq!(found.len(), 3);
+
+    for index in 0..3 {
+        let label = format!("rgb plane {index}");
+
+        assert_eq!(found[index].len(), 64 * 48, "{label} changed size");
+        assert_h264_plane(&found[index], &expected[index], 64, samples, &label);
+        assert_ne!(found[index], planes[index], "{label} came back unchanged");
     }
 }

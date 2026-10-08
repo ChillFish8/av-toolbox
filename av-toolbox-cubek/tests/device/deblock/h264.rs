@@ -327,3 +327,14 @@ fn a_scratch_too_small_for_the_layout_is_refused() {
 
     backend().build(run);
 }
+
+#[test]
+#[should_panic(expected = "thresholds peak at 255 but U16 { bits: 10 } samples peak at 1023")]
+fn thresholds_made_for_other_samples_are_refused() {
+    let samples = MatrixSamples::U16 { bits: 10 };
+    let frame = TestFrame::blocky(16, 16, None, samples);
+    let eight_bit_thresholds = thresholds(25, 0, 0, MatrixSamples::U8);
+    let run = task(&frame, eight_bit_thresholds, None);
+
+    backend().build(run);
+}

@@ -120,7 +120,7 @@ impl H264Fixture {
 }
 
 impl H264Case {
-    /// The size of each plane, in channel order.
+    /// The size of each plane in channel order, with chroma rounded down as in the fixture clips.
     pub fn plane_sizes(&self) -> Vec<(u32, u32)> {
         let (shift_x, shift_y) = self.chroma_shift;
         let chroma = (self.width >> shift_x, self.height >> shift_y);

@@ -58,12 +58,23 @@ pub struct Thresholds {
 ///
 /// The alpha index is `quant + aoffset` and the beta index `quant + boffset`, each kept between 0 and 60.
 /// Integer thresholds scale with the depth, and float thresholds are divided by 255.
+///
+/// # Panics
+///
+/// Panics when `samples` is a `U16` of fewer than 9 or more than 16 bits.
 pub fn thresholds(quant: i32, aoffset: i32, boffset: i32, samples: MatrixSamples) -> Thresholds {
     let alpha_index = table_index(quant, aoffset);
     let beta_index = table_index(quant, boffset);
     let alpha = f32::from(ALPHA_TABLE[alpha_index]);
     let beta = f32::from(BETA_TABLE[beta_index]);
     let c0 = f32::from(TC0_TABLE[alpha_index]);
+
+    if let MatrixSamples::U16 { bits } = samples {
+        assert!(
+            (9..=16).contains(&bits),
+            "U16 samples hold between 9 and 16 bits, found {bits}"
+        );
+    }
 
     let Some(bits) = samples.bits() else {
         return Thresholds {
@@ -84,6 +95,14 @@ pub fn thresholds(quant: i32, aoffset: i32, boffset: i32, samples: MatrixSamples
         c0: c0 * scale,
         c1: scale,
         peak,
+    }
+}
+
+/// The largest code value `samples` hold, as [Thresholds] records it.
+fn peak_of(samples: MatrixSamples) -> f32 {
+    match samples.bits() {
+        Some(bits) => ((1u64 << bits) - 1) as f32,
+        None => 1.0,
     }
 }
 
@@ -564,6 +583,10 @@ fn assert_fits(planes: DeblockPlanes<'_>, layout: &DeblockLayout) {
 ///
 /// Each input is padded with its mirror into its region of `scratch`, filtered there, and cropped into its
 /// output. One cube runs each plane, so `dispatch`'s cube size sets how many units share its lines.
+///
+/// # Panics
+///
+/// Panics when `thresholds` was not made for `samples` by the `thresholds` function.
 pub fn deblock<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -574,6 +597,13 @@ pub fn deblock<R: Runtime>(
     thresholds: Thresholds,
 ) {
     assert_fits(planes, layout);
+
+    let expected_peak = peak_of(samples);
+    assert!(
+        thresholds.peak == expected_peak,
+        "thresholds peak at {} but {samples:?} samples peak at {expected_peak}",
+        thresholds.peak
+    );
 
     let bytes = layout.bytes();
     assert_holds(scratch, bytes, "deblocking scratch");
@@ -765,6 +795,29 @@ mod tests {
             peak: 1023.0,
         };
         assert_eq!(found, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "between 9 and 16 bits")]
+    fn thresholds_reject_a_u16_depth_of_eight() {
+        thresholds(25, 0, 0, MatrixSamples::U16 { bits: 8 });
+    }
+
+    #[test]
+    #[should_panic(expected = "between 9 and 16 bits")]
+    fn thresholds_reject_a_u16_depth_above_sixteen() {
+        thresholds(25, 0, 0, MatrixSamples::U16 { bits: 17 });
+    }
+
+    #[test]
+    fn peaks_follow_the_sample_kind() {
+        let peaks = [
+            peak_of(MatrixSamples::U8),
+            peak_of(MatrixSamples::U16 { bits: 10 }),
+            peak_of(MatrixSamples::F32),
+        ];
+
+        assert_eq!(peaks, [255.0, 1023.0, 1.0]);
     }
 
     #[test]
