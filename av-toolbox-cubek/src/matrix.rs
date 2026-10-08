@@ -46,7 +46,7 @@ pub enum MatrixSamples {
 }
 
 impl MatrixSamples {
-    fn bits(self) -> Option<u32> {
+    pub(crate) fn bits(self) -> Option<u32> {
         match self {
             Self::U8 => Some(8),
             Self::U16 { bits } => Some(bits),

@@ -10,6 +10,7 @@ pub mod dpir;
 mod edges;
 mod eedi2;
 mod eedi3;
+mod h264;
 mod hysteresis;
 mod ivtc;
 mod lineart;
@@ -103,6 +104,18 @@ pub use self::eedi3::{
     reference_eedi3_field,
     reference_eedi3_field_variant,
     worked_edge_plane,
+};
+pub use self::h264::{
+    H264_FIXTURES,
+    H264_FLOAT_TOLERANCE,
+    H264Case,
+    H264Fixture,
+    H264Plane,
+    assert_h264_plane,
+    blocky_plane,
+    reference_h264,
+    reference_h264_padded,
+    split_planes,
 };
 pub use self::hysteresis::reference_hysteresis;
 pub use self::ivtc::{

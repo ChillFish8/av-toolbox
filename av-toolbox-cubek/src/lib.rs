@@ -8,6 +8,7 @@
 //! - [bilateral] for vszip's truncated bilateral.
 //! - [blur] for separable gaussian blurs.
 //! - [deband] for smoothing banding the way libplacebo does.
+//! - [deblock] for removing compression blocking the way H.264's in-loop filter does.
 //! - [degrain] for averaging a frame with its motion-compensated neighbours, the way MVTools' MDegrain does.
 //! - [dehalo] for the fused per-pixel steps of the dehalo filters.
 //! - [depth] for changing a plane's bit depth, with dithering.
@@ -38,6 +39,7 @@ pub mod blur;
 mod border;
 pub mod cnn;
 pub mod deband;
+pub mod deblock;
 pub mod degrain;
 pub mod dehalo;
 pub mod deinterlace;
