@@ -1,5 +1,6 @@
 #[macro_use]
 mod macros;
+mod artefacts;
 mod counted;
 mod endpoints;
 mod filters;
@@ -14,6 +15,7 @@ mod specs;
 use av_toolbox_core::testing::{FixtureCuts, HostStamping, Stamping};
 use av_toolbox_core::{Parallelism, PipelineRegistry};
 
+use self::artefacts::{Files, Grain};
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
 use self::endpoints::{Deep, File, FloatFirst, Stdout, Wide, WideningSource};
@@ -97,6 +99,10 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry
         .register_meta_sink::<TagReading>()
         .expect("should register");
+    registry.register_filter::<Grain>().expect("should register");
+    registry
+        .register_artefact_sink::<Files>()
+        .expect("should register");
 
     registry
 }
@@ -113,7 +119,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 45);
+        assert_eq!(identifiers.len(), 47);
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
@@ -137,6 +143,8 @@ mod tests {
         assert!(identifiers.contains(&"test/relaying"));
         assert!(identifiers.contains(&"test/tagging"));
         assert!(identifiers.contains(&"test/tag-reading"));
+        assert!(identifiers.contains(&"test/grain"));
+        assert!(identifiers.contains(&"test/files"));
     }
 
     #[test]

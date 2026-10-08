@@ -26,6 +26,7 @@
 //! # }
 //! ```
 
+mod artefacts;
 mod build;
 mod chroma;
 mod demands;
@@ -44,6 +45,7 @@ mod testing;
 #[cfg(test)]
 mod tests;
 
+pub use self::artefacts::ArtefactSinkNode;
 pub use self::build::{Built, build};
 pub use self::chroma::settle_mask_planes;
 pub use self::demands::{NodeDemand, ProviderPlacement, ServedLayer, satisfy_demands};

@@ -364,7 +364,7 @@ fn report(graph: &CompiledGraph, node: &Node, error: BuildStageError, diagnostic
 }
 
 /// Renders an error together with whatever it was caused by.
-fn describe(error: &BuildStageError) -> String {
+pub(crate) fn describe(error: &BuildStageError) -> String {
     let mut message = error.to_string();
     let mut source = std::error::Error::source(error);
 

@@ -57,6 +57,12 @@ pub enum DiagnosticCode {
     PlaceFailed,
     ProviderCycle,
     RemovedTransforms,
+    /// An artefact sink's pattern matches no artefact any stage declares.
+    UnmatchedArtefactPattern,
+    /// An artefact sink's include and exclude keep no artefact.
+    ArtefactSinkSelectsNothing,
+    /// An artefact sink was given inputs.
+    ArtefactSinkHasInputs,
 }
 
 impl DiagnosticCode {
@@ -95,6 +101,9 @@ impl DiagnosticCode {
             Self::PlaceFailed => "place-failed",
             Self::ProviderCycle => "provider-cycle",
             Self::RemovedTransforms => "removed-transforms",
+            Self::UnmatchedArtefactPattern => "unmatched-artefact-pattern",
+            Self::ArtefactSinkSelectsNothing => "artefact-sink-selects-nothing",
+            Self::ArtefactSinkHasInputs => "artefact-sink-has-inputs",
         }
     }
 }
@@ -348,6 +357,22 @@ mod tests {
         assert_eq!(DiagnosticCode::UnknownCallOutput.as_str(), "unknown-call-output");
         assert_eq!(DiagnosticCode::UnreadableFile.as_str(), "unreadable-file");
         assert_eq!(DiagnosticCode::CallCycle.as_str(), "call-cycle");
+    }
+
+    #[test]
+    fn the_artefact_sink_codes_render_as_kebab_case() {
+        assert_eq!(
+            DiagnosticCode::UnmatchedArtefactPattern.as_str(),
+            "unmatched-artefact-pattern"
+        );
+        assert_eq!(
+            DiagnosticCode::ArtefactSinkSelectsNothing.as_str(),
+            "artefact-sink-selects-nothing"
+        );
+        assert_eq!(
+            DiagnosticCode::ArtefactSinkHasInputs.as_str(),
+            "artefact-sink-has-inputs"
+        );
     }
 
     #[test]

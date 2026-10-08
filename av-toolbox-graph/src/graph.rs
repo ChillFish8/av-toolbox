@@ -1,14 +1,14 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use av_toolbox_core::{Crossing, OpenSlot, Residency, StageHandle, StageKind, StreamType};
+use av_toolbox_core::{Crossing, OpenSlot, Residency, StageArtefacts, StageHandle, StageKind, StreamType};
 use av_toolbox_gpu::ChunkRoute;
 use serde_json::Value;
 
 use crate::demands::{NodeDemand, ProviderPlacement};
 use crate::diagnostic::stage_path;
 use crate::plan::ExecutionPlan;
-use crate::{ArgSpans, Span};
+use crate::{ArgSpans, ArtefactSinkNode, Span};
 
 /// A node's position in the graph.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -156,6 +156,7 @@ pub(crate) struct NodeParts {
     pub(crate) inputs: Vec<Edge>,
     pub(crate) workers: Option<usize>,
     pub(crate) span: Span,
+    pub(crate) artefacts: StageArtefacts,
 }
 
 /// One stage placed in the graph.
@@ -172,6 +173,7 @@ pub struct Node {
     consumers: Vec<NodeId>,
     workers: Option<usize>,
     span: Span,
+    artefacts: StageArtefacts,
     role: NodeRole,
     /// Where this node runs, once transfers have been placed.
     residency: Option<Residency>,
@@ -200,6 +202,7 @@ impl Node {
             consumers: Vec::new(),
             workers: parts.workers,
             span: parts.span,
+            artefacts: parts.artefacts,
             role: NodeRole::Stage,
             residency: None,
             stream: parts.kind.output(),
@@ -233,6 +236,11 @@ impl Node {
     /// The `package/stage` identifier the stage was registered under.
     pub fn identifier(&self) -> &str {
         &self.identifier
+    }
+
+    /// The artefacts this node's stage declares and how it merges them.
+    pub fn artefacts(&self) -> StageArtefacts {
+        self.artefacts
     }
 
     pub fn args(&self) -> &Value {
@@ -312,6 +320,7 @@ pub struct CompiledGraph {
     nodes: Vec<Node>,
     order: Vec<NodeId>,
     plan: Option<ExecutionPlan>,
+    artefact_sinks: Vec<ArtefactSinkNode>,
 }
 
 impl CompiledGraph {
@@ -320,6 +329,7 @@ impl CompiledGraph {
             nodes,
             order: Vec::new(),
             plan: None,
+            artefact_sinks: Vec::new(),
         };
 
         graph.refresh();
@@ -333,6 +343,15 @@ impl CompiledGraph {
 
     pub fn set_execution_plan(&mut self, plan: ExecutionPlan) {
         self.plan = Some(plan);
+    }
+
+    /// The artefact sinks the pipeline declared, kept beside the graph rather than in it.
+    pub fn artefact_sinks(&self) -> &[ArtefactSinkNode] {
+        &self.artefact_sinks
+    }
+
+    pub(crate) fn set_artefact_sinks(&mut self, sinks: Vec<ArtefactSinkNode>) {
+        self.artefact_sinks = sinks;
     }
 
     pub fn nodes(&self) -> &[Node] {
@@ -423,6 +442,7 @@ impl CompiledGraph {
             consumers: Vec::new(),
             workers: None,
             span: source.span(),
+            artefacts: StageArtefacts::NONE,
             role: NodeRole::Crossing(crossing),
             residency: Some(crossing.to_side()),
             stream: source.output_stream(),
@@ -465,6 +485,7 @@ impl CompiledGraph {
             consumers: Vec::new(),
             workers: None,
             span: provider.span,
+            artefacts: StageArtefacts::NONE,
             role: NodeRole::Provider(provider.placement),
             residency: None,
             stream: producer.output_stream(),
@@ -607,6 +628,7 @@ pub(crate) mod tests {
             inputs: edges,
             workers: None,
             span: Span::unknown(),
+            artefacts: StageArtefacts::NONE,
         })
     }
 

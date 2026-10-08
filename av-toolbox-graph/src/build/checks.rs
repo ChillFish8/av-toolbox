@@ -126,7 +126,7 @@ pub(crate) fn report_unused(graph: &CompiledGraph, diagnostics: &mut Diagnostics
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_core::StageKind;
+    use av_toolbox_core::{StageArtefacts, StageKind};
     use serde_json::json;
 
     use super::*;
@@ -151,6 +151,7 @@ mod tests {
             inputs: edges,
             workers: None,
             span: Span::unknown(),
+            artefacts: StageArtefacts::NONE,
         })
     }
 

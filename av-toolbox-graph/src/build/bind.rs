@@ -197,6 +197,7 @@ fn build_nodes(resolution: &Resolution<'_>, accepted: &[bool], ids: &HashMap<usi
             inputs,
             workers: stage.spec.workers,
             span: stage.spec.span,
+            artefacts: stage.info.artefacts(),
         }));
     }
 

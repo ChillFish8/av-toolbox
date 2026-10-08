@@ -17,6 +17,8 @@ pub(crate) struct Resolution<'a> {
     pub(crate) stages: Vec<Option<ResolvedStage<'a>>>,
     /// Every name a spec declared, mapped to the index of its first definition.
     pub(crate) by_name: HashMap<String, usize>,
+    /// The index of every spec naming an artefact sink, which never becomes a node.
+    pub(crate) artefact_sinks: Vec<usize>,
 }
 
 /// Checks names, types and the rules about how kinds may connect.
@@ -29,6 +31,7 @@ pub(crate) fn resolve<'a>(
     let registered = index_registry(registry);
 
     let mut stages: Vec<Option<ResolvedStage<'a>>> = Vec::with_capacity(specs.len());
+    let mut artefact_sinks = Vec::new();
     for (index, spec) in specs.iter().enumerate() {
         let is_first_definition = by_name.get(&spec.name.value) == Some(&index);
         if !is_first_definition {
@@ -41,6 +44,14 @@ pub(crate) fn resolve<'a>(
             continue;
         };
 
+        let identifier = spec.stage_type.value.as_str();
+        let takes_artefacts = spec.kind == StageKind::Sink && registry.is_artefact_sink(identifier);
+        if takes_artefacts {
+            artefact_sinks.push(index);
+            stages.push(None);
+            continue;
+        }
+
         if !check_inputs(spec, specs, &by_name, diagnostics) {
             stages.push(None);
             continue;
@@ -49,9 +60,13 @@ pub(crate) fn resolve<'a>(
         stages.push(Some(ResolvedStage { spec, info }));
     }
 
-    check_has_sink(specs, diagnostics);
+    check_has_sink(registry, specs, diagnostics);
 
-    Resolution { stages, by_name }
+    Resolution {
+        stages,
+        by_name,
+        artefact_sinks,
+    }
 }
 
 /// Maps every name to its first definition, rejecting anything that repeats one.
@@ -195,8 +210,12 @@ fn check_input(
     false
 }
 
-fn check_has_sink(specs: &[StageSpec], diagnostics: &mut Diagnostics) {
-    if specs.iter().any(|spec| spec.kind == StageKind::Sink) {
+fn check_has_sink(registry: &PipelineRegistry, specs: &[StageSpec], diagnostics: &mut Diagnostics) {
+    let has_frame_sink = specs
+        .iter()
+        .filter(|spec| spec.kind == StageKind::Sink)
+        .any(|spec| !registry.is_artefact_sink(&spec.stage_type.value));
+    if has_frame_sink {
         return;
     }
 

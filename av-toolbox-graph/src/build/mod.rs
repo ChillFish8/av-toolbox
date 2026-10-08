@@ -1,3 +1,4 @@
+mod artefacts;
 mod bind;
 mod checks;
 mod resolve;
@@ -39,11 +40,20 @@ pub fn build(registry: &PipelineRegistry, specs: &[StageSpec]) -> Result<Built, 
     let nodes = bind::bind(specs, &resolution, &mut diagnostics);
     checks::detect_cycles(&nodes, &mut diagnostics);
 
+    let artefact_sinks = artefacts::resolve_artefact_sinks(
+        registry,
+        specs,
+        &resolution.artefact_sinks,
+        &nodes,
+        &mut diagnostics,
+    );
+
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
 
-    let graph = CompiledGraph::new(nodes);
+    let mut graph = CompiledGraph::new(nodes);
+    graph.set_artefact_sinks(artefact_sinks);
     checks::report_unused(&graph, &mut diagnostics);
 
     Ok(Built {
