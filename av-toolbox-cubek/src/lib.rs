@@ -9,7 +9,7 @@
 //! - [blur] for separable gaussian blurs.
 //! - [deband] for smoothing banding the way libplacebo does.
 //! - [deblock] for removing compression blocking with H.264's in-loop filter, alone or as Deblock_QED blends
-//!   it.
+//!   it, and with pp7's thresholded transform.
 //! - [degrain] for averaging a frame with its motion-compensated neighbours, the way MVTools' MDegrain does.
 //! - [dehalo] for the fused per-pixel steps of the dehalo filters.
 //! - [depth] for changing a plane's bit depth, with dithering.

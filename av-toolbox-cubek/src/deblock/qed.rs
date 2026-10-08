@@ -4,6 +4,7 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 
 use super::h264::peak_of;
+use super::rounding::{OPAQUE_ZERO, rounded_product};
 use crate::matrix::MatrixSamples;
 use crate::{DevicePlane, Dispatch};
 
@@ -70,9 +71,6 @@ fn stored_change(fused: f32, peak: f32) -> f32 {
     rounded.clamp(0.0, peak)
 }
 
-/// The zero every kernel product is hidden behind.
-const OPAQUE_ZERO: u32 = 0;
-
 /// The change map's value for every difference of a plane's samples from the strong pass.
 ///
 /// Integer samples hold one entry for each difference from minus the peak to the peak. Float samples need no
@@ -129,15 +127,6 @@ pub struct QedPlanes<'a> {
     pub strong: DevicePlane<'a>,
     /// The normal pass of `source`, whose interior samples the launch overwrites.
     pub output: DevicePlane<'a>,
-}
-
-/// `left * right` rounded to f32, behind an always-zero `opaque_zero` so no compiler fuses it into an add.
-#[cube]
-fn rounded_product(left: f32, right: f32, opaque_zero: u32) -> f32 {
-    let product = left * right;
-    let bits = u32::reinterpret(product) ^ opaque_zero;
-
-    f32::reinterpret(bits)
 }
 
 /// Where the low-pass reads position `index` of a side of `length` samples.

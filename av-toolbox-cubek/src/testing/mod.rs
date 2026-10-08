@@ -115,6 +115,7 @@ pub use self::h264::{
     H264Plane,
     assert_h264_plane,
     blocky_plane,
+    noise_plane,
     reference_h264,
     reference_h264_padded,
     split_planes,

@@ -7,3 +7,4 @@
 pub mod h264;
 pub mod pp7;
 pub mod qed;
+mod rounding;

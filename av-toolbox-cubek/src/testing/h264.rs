@@ -1,5 +1,5 @@
 use super::dpir::reference_mirror;
-use super::{assert_same_plane, decode_samples, largest_difference};
+use super::{assert_same_plane, decode_samples, encode_samples, largest_difference};
 use crate::deblock::h264::{Thresholds, padded_frame, thresholds};
 use crate::matrix::MatrixSamples;
 
@@ -222,6 +222,30 @@ pub fn blocky_plane(width: u32, height: u32, samples: MatrixSamples, seed: u32) 
     }
 
     values
+}
+
+/// A `width` by `height` plane of noise over the whole range of `samples`, as the device stores it.
+///
+/// Integer samples run from 0 to the peak, and float samples from -0.1 to 1.1. Each `seed` gives other noise.
+pub fn noise_plane(width: u32, height: u32, samples: MatrixSamples, seed: u32) -> Vec<f64> {
+    let mut values = Vec::with_capacity(width as usize * height as usize);
+
+    for row in 0..height {
+        for column in 0..width {
+            let unit = hashed_unit(column, row, seed);
+            let value = match samples {
+                MatrixSamples::U8 => (unit * 255.0).round(),
+                MatrixSamples::U16 { bits } => (unit * f64::from((1u32 << bits) - 1)).round(),
+                MatrixSamples::F32 => unit * 1.2 - 0.1,
+            };
+
+            values.push(value);
+        }
+    }
+
+    let stored = encode_samples(&values, samples);
+
+    decode_samples(&stored, samples)
 }
 
 /// One plane, `width` by `height`, and the size it is padded to before deblocking.
