@@ -6,6 +6,7 @@ mod bilateral;
 mod blur;
 mod cnn;
 mod deband;
+mod deblock;
 mod degrain;
 mod dehalo;
 mod deinterlace;
