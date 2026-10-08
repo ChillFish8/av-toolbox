@@ -92,10 +92,13 @@ fn an_unknown_argument_is_refused() {
 
 #[test]
 fn quant_outside_0_to_60_is_refused_naming_its_half() {
-    let border = refusal(json!({ "quant": [61, 26] }), yuv420());
-    let interior = refusal(json!({ "quant": [24, -1] }), yuv420());
+    let first = refusal(json!({ "quant": [61, 26] }), yuv420());
+    let second = refusal(json!({ "quant": [24, -1] }), yuv420());
 
-    for (message, half) in [(border, "quant[0] (border)"), (interior, "quant[1] (interior)")] {
+    for (message, half) in [
+        (first, "quant[0] (first pass)"),
+        (second, "quant[1] (second pass)"),
+    ] {
         assert!(message.contains(STAGE), "{message}");
         assert!(message.contains(half), "{message}");
         assert!(message.contains("between 0 and 60"), "{message}");

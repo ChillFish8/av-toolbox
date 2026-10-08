@@ -156,7 +156,7 @@ fn unsupported_sample(sample: SampleFormat) -> StageError {
 }
 
 fn wrong_length(name: &str, count: usize) -> StageError {
-    let message = format!("{STAGE} takes {name} as two values, [border, interior], not {count}");
+    let message = format!("{STAGE} takes {name} as two values, [first, second], not {count}");
 
     StageError::msg(message)
 }
@@ -218,11 +218,11 @@ pub(crate) fn accepted_samples(offered: StreamFormat) -> Result<FormatSet, Stage
 
 /// The two values of the pair `name`, refusing any other count.
 fn pair(name: &str, values: &[i32]) -> Result<[i32; 2], StageError> {
-    let [border, interior] = values else {
+    let [first, second] = values else {
         return Err(wrong_length(name, values.len()));
     };
 
-    Ok([*border, *interior])
+    Ok([*first, *second])
 }
 
 /// How a selected or unselected plane carrying `channel` is deblocked, given what chroma takes.
@@ -250,8 +250,8 @@ pub(crate) fn checked_qed(args: &QedArgs, input: &FrameFormat) -> Result<QedDebl
     let quant = pair("quant", &args.quant)?;
     let aoffset = pair("aoffset", &args.aoffset)?;
     let boffset = pair("boffset", &args.boffset)?;
-    between_i32(STAGE, "quant[0] (border)", quant[0], 0, MAX_QUANT)?;
-    between_i32(STAGE, "quant[1] (interior)", quant[1], 0, MAX_QUANT)?;
+    between_i32(STAGE, "quant[0] (first pass)", quant[0], 0, MAX_QUANT)?;
+    between_i32(STAGE, "quant[1] (second pass)", quant[1], 0, MAX_QUANT)?;
 
     let rgb_needs_qed = matches!(input.layout, FrameLayout::Rgb) && args.chroma != QedChroma::Qed;
     if rgb_needs_qed {
