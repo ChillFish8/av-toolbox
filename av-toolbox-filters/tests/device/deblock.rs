@@ -5,11 +5,16 @@ use av_toolbox_cubek::dpir::{Dpir, DpirMaps, DpirPlanes, PACK, Variant, Weights,
 use av_toolbox_cubek::matrix::MatrixSamples;
 use av_toolbox_cubek::testing::{
     H264Plane,
+    QedCase,
+    QedChroma,
+    QedLayout,
+    QedReference,
     assert_h264_plane,
     blocky_plane,
     decode_samples,
     encode_samples,
     reference_h264,
+    reference_qed,
 };
 use av_toolbox_gpu::{
     BuildContext,
@@ -524,8 +529,9 @@ fn h264_reference(
         .collect()
 }
 
-/// Runs `deblock/h264` with `args` on `planes` and reads every plane back as code values.
-fn run_h264(
+/// Runs `stage` with `args` on `planes` and reads every plane back as code values.
+fn run_decoded(
+    stage: &str,
     format: FrameFormat,
     samples: MatrixSamples,
     args: serde_json::Value,
@@ -536,9 +542,19 @@ fn run_h264(
         .map(|plane| encode_samples(plane, samples))
         .collect();
 
-    let found = run_once(H264_STAGE, format, format, args, &encoded);
+    let found = run_once(stage, format, format, args, &encoded);
 
     found.iter().map(|bytes| decode_samples(bytes, samples)).collect()
+}
+
+/// Runs `deblock/h264` with `args` on `planes` and reads every plane back as code values.
+fn run_h264(
+    format: FrameFormat,
+    samples: MatrixSamples,
+    args: serde_json::Value,
+    planes: &[Vec<f64>],
+) -> Vec<Vec<f64>> {
+    run_decoded(H264_STAGE, format, samples, args, planes)
 }
 
 #[test]
@@ -593,12 +609,12 @@ fn h264_returns_a_frame_whose_sides_are_not_multiples_of_eight_at_its_own_size()
     let found = run_h264(input, samples, json!({ "quant": 40 }), &planes);
 
     let expected = h264_reference(&input, &planes, samples, 40);
-    for index in 0..3 {
+    for (index, plane) in found.iter().enumerate() {
         let (width, height) = plane_samples(&input, index);
         let label = format!("plane {index}");
 
         assert_eq!(
-            found[index].len(),
+            plane.len(),
             (width * height) as usize,
             "{label} is {width}x{height}"
         );
@@ -696,4 +712,251 @@ fn h264_on_an_rgb_frame_filters_all_three_planes() {
         assert_h264_plane(&found[index], &expected[index], 64, samples, &label);
         assert_ne!(found[index], planes[index], "{label} came back unchanged");
     }
+}
+
+const QED_STAGE: &str = "deblock/qed";
+
+/// The [QedLayout] of the frames these tests build.
+fn qed_layout(layout: FrameLayout) -> QedLayout {
+    match layout {
+        FrameLayout::Grey => QedLayout::Grey,
+        FrameLayout::Rgb => QedLayout::Rgb,
+        FrameLayout::Yuv { subsampling } => {
+            let chroma_shift = match subsampling {
+                Subsampling::Yuv444 => (0, 0),
+                Subsampling::Yuv422 => (1, 0),
+                Subsampling::Yuv420 => (1, 1),
+            };
+
+            QedLayout::Yuv { chroma_shift }
+        },
+        FrameLayout::Chroma { .. } => panic!("no test here builds a chroma-only frame"),
+    }
+}
+
+/// Every plane of a `format` frame deblocked on the CPU with `deblock/qed`'s default arguments and `chroma`.
+fn qed_reference(
+    format: &FrameFormat,
+    planes: &[Vec<f64>],
+    samples: MatrixSamples,
+    chroma: QedChroma,
+) -> QedReference {
+    let layout = qed_layout(format.layout);
+    let case = QedCase {
+        width: format.width,
+        height: format.height,
+        layout,
+        samples,
+        quant: [24, 26],
+        aoffset: [1, 1],
+        boffset: [2, 2],
+        chroma,
+    };
+
+    reference_qed(&case, planes)
+}
+
+/// `planes` with every chroma plane moved down by 0.5, so float chroma is centred on 0.
+fn centred_chroma(planes: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
+    planes
+        .into_iter()
+        .enumerate()
+        .map(|(index, plane)| {
+            let centre = if index == 0 { 0.0 } else { 0.5 };
+
+            plane.iter().map(|value| value - centre).collect()
+        })
+        .collect()
+}
+
+/// `plane` as the device sees it, rounded to the stored sample type.
+fn stored_as_f32(plane: &[f64], samples: MatrixSamples) -> Vec<f64> {
+    let encoded = encode_samples(plane, samples);
+
+    decode_samples(&encoded, samples)
+}
+
+#[test]
+fn qed_on_a_420_frame_matches_the_reference_under_each_chroma() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(64, 48, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+    let settings = [
+        ("qed", QedChroma::Qed),
+        ("normal", QedChroma::Normal),
+        ("strong", QedChroma::Strong),
+    ];
+
+    for (name, chroma) in settings {
+        let found = run_decoded(QED_STAGE, input, samples, json!({ "chroma": name }), &planes);
+
+        let expected = qed_reference(&input, &planes, samples, chroma);
+        for index in 1..3 {
+            let passes_differ = expected.normal[index] != expected.strong[index];
+
+            assert!(
+                passes_differ,
+                "chroma {name}: plane {index} takes the same either pass"
+            );
+        }
+
+        assert_eq!(found, expected.output, "chroma {name}");
+        assert_ne!(found[0], planes[0], "chroma {name}: luma came back unchanged");
+    }
+}
+
+#[test]
+fn qed_leaves_planes_not_selected_unchanged() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(64, 48, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+
+    let found = run_decoded(QED_STAGE, input, samples, json!({ "planes": ["y"] }), &planes);
+
+    let expected = qed_reference(&input, &planes, samples, QedChroma::Qed);
+    assert_eq!(found[0], expected.output[0], "luma");
+    assert_eq!(found[1], planes[1], "the unselected U plane changed");
+    assert_eq!(found[2], planes[2], "the unselected V plane changed");
+}
+
+#[test]
+fn qed_on_selected_chroma_under_normal_takes_the_normal_pass() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(64, 48, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+    let args = json!({ "chroma": "normal", "planes": ["u", "v"] });
+
+    let found = run_decoded(QED_STAGE, input, samples, args, &planes);
+
+    let expected = qed_reference(&input, &planes, samples, QedChroma::Normal);
+    assert_ne!(
+        expected.normal[1], expected.strong[1],
+        "U takes the same either pass"
+    );
+    assert_ne!(
+        expected.normal[2], expected.strong[2],
+        "V takes the same either pass"
+    );
+    assert_eq!(found[0], planes[0], "the unselected luma changed");
+    assert_eq!(found[1], expected.normal[1], "U against its normal pass");
+    assert_eq!(found[2], expected.normal[2], "V against its normal pass");
+    assert_ne!(found[1], planes[1], "U came back unchanged");
+}
+
+#[test]
+fn qed_returns_a_70x46_frame_at_its_own_size() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+    let input = frame(70, 46, layout, ten_bit, ChromaLocation::Left);
+    let samples = MatrixSamples::U16 { bits: 10 };
+    let planes = h264_planes(&input, samples);
+
+    let found = run_decoded(QED_STAGE, input, samples, json!({}), &planes);
+
+    let expected = qed_reference(&input, &planes, samples, QedChroma::Qed);
+    assert_eq!(found.len(), 3);
+    for (index, plane) in found.iter().enumerate() {
+        let (width, height) = plane_samples(&input, index);
+        let label = format!("plane {index}");
+
+        assert_eq!(
+            plane.len(),
+            (width * height) as usize,
+            "{label} is {width}x{height}"
+        );
+        assert_eq!(*plane, expected.output[index], "{label}");
+    }
+}
+
+#[test]
+fn qed_on_an_odd_420_frame_matches_the_reference() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(71, 45, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+
+    let found = run_decoded(QED_STAGE, input, samples, json!({}), &planes);
+
+    let expected = qed_reference(&input, &planes, samples, QedChroma::Qed);
+    assert_eq!(plane_samples(&input, 1), (36, 23));
+    assert_eq!(found, expected.output);
+}
+
+#[test]
+fn qed_on_an_rgb_frame_treats_every_plane_like_luma() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let input = frame(64, 48, FrameLayout::Rgb, sixteen_bit, ChromaLocation::Left);
+    let samples = MatrixSamples::U16 { bits: 16 };
+    let planes = h264_planes(&input, samples);
+
+    let found = run_decoded(QED_STAGE, input, samples, json!({}), &planes);
+
+    let expected = qed_reference(&input, &planes, samples, QedChroma::Qed);
+    assert_eq!(expected.changes.len(), 3, "every RGB plane takes the QED output");
+    for index in 0..3 {
+        let label = format!("rgb plane {index}");
+
+        assert_eq!(found[index], expected.output[index], "{label}");
+        assert_ne!(found[index], planes[index], "{label} came back unchanged");
+    }
+}
+
+#[test]
+fn qed_on_a_float_frame_matches_the_reference_exactly() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv444,
+    };
+    let input = frame(70, 46, layout, SampleFormat::F32, ChromaLocation::Left);
+    let samples = MatrixSamples::F32;
+    let unshifted = h264_planes(&input, samples);
+    let centred = centred_chroma(unshifted);
+    let planes: Vec<Vec<f64>> = centred
+        .iter()
+        .map(|plane| stored_as_f32(plane, samples))
+        .collect();
+
+    let found = run_decoded(QED_STAGE, input, samples, json!({}), &planes);
+
+    let expected = qed_reference(&input, &planes, samples, QedChroma::Qed);
+    assert_eq!(found, expected.output);
+}
+
+#[test]
+fn qed_on_a_frame_smaller_than_one_block_comes_back_its_own_size() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(6, 4, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+
+    let found = run_decoded(QED_STAGE, input, samples, json!({}), &planes);
+
+    let expected = qed_reference(&input, &planes, samples, QedChroma::Qed);
+    for (index, plane) in found.iter().enumerate() {
+        let (width, height) = plane_samples(&input, index);
+
+        assert_eq!(
+            plane.len(),
+            (width * height) as usize,
+            "plane {index} is {width}x{height}"
+        );
+    }
+
+    assert_eq!(found, expected.output);
 }
