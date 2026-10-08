@@ -272,7 +272,7 @@ pub trait StageDefinition: 'static {
     /// Merges the pieces of the artefact `name` into one, given in chunk order.
     ///
     /// A stage run as more than one instance, or given one chunk at a time, hands over a piece per instance and
-    /// chunk. The default accepts a lone piece and refuses more.
+    /// chunk, as does a stage sharing a region routed by chunk. The default accepts a lone piece and refuses more.
     fn merge_artefact(name: &'static str, pieces: Vec<ArtefactPiece>) -> Result<ArtefactData, StageError> {
         merge_single(name, pieces)
     }

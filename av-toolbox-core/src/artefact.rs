@@ -70,7 +70,7 @@ impl ArtefactDecl {
 
 /// The part of an artefact one instance produced for one chunk.
 ///
-/// `chunk` is `None` for a stage that is not given one chunk at a time.
+/// `chunk` is `None` for a stage that is not given one chunk at a time in a region routed by frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArtefactPiece {
     pub chunk: Option<u64>,

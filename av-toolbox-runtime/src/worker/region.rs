@@ -358,8 +358,8 @@ struct Tagging {
 /// The chunk a node's artefacts are filed under as it ends.
 ///
 /// The node uses the chunk it last ran on, or `ended` when it ran on none. A node in a region routed
-/// by frame that is not given one chunk at a time keeps `last` instead, since `ended` there only names
-/// the chunk its worker last saw.
+/// by frame that is not given one chunk at a time keeps `last` instead, since `ended` there names a
+/// unit of work, not a chunk.
 fn ending_chunk(tagging: Tagging, last: Option<u64>, ended: Option<u64>) -> Option<u64> {
     if tagging.chunked || !tagging.frame_routed {
         return last.or(ended);
