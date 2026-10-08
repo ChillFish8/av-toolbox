@@ -62,7 +62,7 @@ pub struct H264Case {
     pub boffset: i32,
 }
 
-fn number<T: std::str::FromStr>(word: &str, name: &str) -> T {
+pub(super) fn number<T: std::str::FromStr>(word: &str, name: &str) -> T {
     let parsed = word.parse();
 
     match parsed {

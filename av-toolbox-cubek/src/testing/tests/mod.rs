@@ -1,6 +1,7 @@
 mod based;
 mod h264;
 mod matrix;
+mod qed;
 
 use super::{reference_narrow, within_ulps};
 

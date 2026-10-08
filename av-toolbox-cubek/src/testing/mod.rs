@@ -19,6 +19,7 @@ mod motion;
 mod neighbourhood;
 mod normalise;
 mod padding;
+mod qed;
 mod qtgmc;
 mod resize;
 mod retinex;
@@ -212,6 +213,24 @@ pub use self::neighbourhood::{
 };
 pub use self::normalise::reference_normalise;
 pub use self::padding::{reference_crop, reference_pad};
+pub use self::qed::{
+    QED_FIXTURES,
+    QED_FLOAT_TOLERANCE,
+    QedCase,
+    QedChroma,
+    QedFixture,
+    QedLayout,
+    QedPlane,
+    QedReference,
+    count_qed_differences,
+    half_lowpass_planes,
+    is_border_sample,
+    reference_change,
+    reference_lowpass,
+    reference_lowpass_mirror,
+    reference_qed,
+    reference_qed_plane,
+};
 pub use self::qtgmc::{
     FieldClip,
     FixturePlane,

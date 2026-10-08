@@ -99,7 +99,7 @@ pub fn thresholds(quant: i32, aoffset: i32, boffset: i32, samples: MatrixSamples
 }
 
 /// The largest code value `samples` hold, as [Thresholds] records it.
-fn peak_of(samples: MatrixSamples) -> f32 {
+pub(crate) fn peak_of(samples: MatrixSamples) -> f32 {
     match samples.bits() {
         Some(bits) => ((1u64 << bits) - 1) as f32,
         None => 1.0,
