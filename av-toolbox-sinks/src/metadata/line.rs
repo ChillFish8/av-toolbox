@@ -1,12 +1,11 @@
 use std::io;
 use std::io::Write;
 
+use av_toolbox_core::KeyFilter;
 use av_toolbox_gpu::{FrameMeta, MetaValue};
 use av_toolbox_providers::SceneScore;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
-
-use super::filter::KeyFilter;
 
 /// Writes one frame's metadata as a JSON object followed by a newline.
 ///
@@ -110,11 +109,11 @@ impl Serialize for Value<'_> {
 mod tests {
     use std::time::Duration;
 
+    use av_toolbox_core::{KeyFilter, Pattern};
     use av_toolbox_gpu::{FrameMeta, MetaValue};
     use serde_json::json;
 
     use super::*;
-    use crate::metadata::filter::{KeyFilter, Pattern};
 
     fn line_of(
         meta: &FrameMeta,

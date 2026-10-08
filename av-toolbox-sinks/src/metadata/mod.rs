@@ -1,4 +1,3 @@
-mod filter;
 mod line;
 
 use std::io;
@@ -10,9 +9,11 @@ use av_toolbox_core::{
     BoundInputs,
     InputDemand,
     InputSignature,
+    KeyFilter,
     MetaInputs,
     MetaSink,
     MetaSinkDefinition,
+    Pattern,
     Provision,
     StageDefinition,
     StageError,
@@ -32,7 +33,6 @@ use av_toolbox_providers::{SceneRequest, SceneScores, Scenes, ScoreRequest};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use self::filter::{KeyFilter, Pattern};
 use self::line::write_line;
 use crate::shared::{INPUTS, open_target};
 

@@ -4,13 +4,17 @@ use serde::{Deserialize, Deserializer};
 
 const EMPTY_PATTERN: &str = "a pattern cannot be empty, expected a key such as \"index\" or \"filter.*\"";
 
-/// A pattern matching top-level keys, where `*` matches any run of characters.
+/// A pattern matching a key, where `*` matches any run of characters.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
-pub(crate) struct Pattern(String);
+pub struct Pattern(String);
 
 impl Pattern {
-    pub(crate) fn matches(&self, key: &str) -> bool {
+    pub fn matches(&self, key: &str) -> bool {
         glob(self.0.as_bytes(), key.as_bytes())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -25,25 +29,25 @@ impl<'de> Deserialize<'de> for Pattern {
     }
 }
 
-/// Which top-level keys a line keeps.
+/// Which keys to keep.
 ///
 /// With no `include`, every key starts kept. `exclude` then drops what it matches, so it wins
 /// over `include`.
-#[derive(Debug, Default)]
-pub(crate) struct KeyFilter {
+#[derive(Debug, Default, Clone)]
+pub struct KeyFilter {
     include: Option<Vec<Pattern>>,
     exclude: Vec<Pattern>,
 }
 
 impl KeyFilter {
-    pub(crate) fn new(include: Option<Vec<Pattern>>, exclude: Option<Vec<Pattern>>) -> Self {
+    pub fn new(include: Option<Vec<Pattern>>, exclude: Option<Vec<Pattern>>) -> Self {
         Self {
             include,
             exclude: exclude.unwrap_or_default(),
         }
     }
 
-    pub(crate) fn keeps(&self, key: &str) -> bool {
+    pub fn keeps(&self, key: &str) -> bool {
         let included = match &self.include {
             Some(patterns) => patterns.iter().any(|pattern| pattern.matches(key)),
             None => true,
@@ -56,6 +60,13 @@ impl KeyFilter {
         let excluded = self.exclude.iter().any(|pattern| pattern.matches(key));
 
         !excluded
+    }
+
+    /// Every include pattern, then every exclude pattern.
+    pub fn patterns(&self) -> impl Iterator<Item = &Pattern> {
+        let included = self.include.iter().flatten();
+
+        included.chain(self.exclude.iter())
     }
 }
 
@@ -176,5 +187,14 @@ mod tests {
         let filter = KeyFilter::new(Some(Vec::new()), None);
 
         assert!(!filter.keeps("index"));
+    }
+
+    #[test]
+    fn patterns_lists_includes_then_excludes() {
+        let filter = KeyFilter::new(Some(patterns(&["filter.*"])), Some(patterns(&["*.debug"])));
+
+        let listed: Vec<&str> = filter.patterns().map(Pattern::as_str).collect();
+
+        assert_eq!(listed, vec!["filter.*", "*.debug"]);
     }
 }

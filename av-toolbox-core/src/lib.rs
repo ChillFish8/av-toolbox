@@ -27,6 +27,7 @@ mod error;
 mod factory;
 mod filter;
 mod inputs;
+mod key_filter;
 mod mask;
 mod meta;
 mod open;
@@ -94,6 +95,7 @@ pub use self::inputs::{
     VariadicInput,
     bind_inputs,
 };
+pub use self::key_filter::{KeyFilter, Pattern};
 pub use self::mask::Mask;
 pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, run_meta_sink};
 pub use self::open::OpenSlot;
