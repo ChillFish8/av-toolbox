@@ -15,6 +15,10 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
 use crate::{
+    Artefact,
+    ArtefactData,
+    ArtefactDecl,
+    ArtefactPiece,
     BoundInputs,
     Filter,
     InputDemand,
@@ -28,6 +32,8 @@ use crate::{
     StageSide,
     StreamType,
     Tag,
+    WantedArtefacts,
+    merge_single,
 };
 
 /// The category a stage belongs to.
@@ -78,6 +84,18 @@ pub trait StageInstance: Send + 'static {
     /// chunk, because each chunk is a stream of its own to it.
     fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         Ok(())
+    }
+
+    /// Called once after the stage is built and before its first stream, with the artefacts some sink will write.
+    ///
+    /// A stage skips the work behind any artefact not named here.
+    fn wants_artefacts(&mut self, _wanted: &WantedArtefacts) {}
+
+    /// Hands over the artefacts built since the last call.
+    ///
+    /// Called each time the stream ends, which for a stage given one chunk at a time is the end of every chunk.
+    fn take_artefacts(&mut self, _context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
+        Ok(Vec::new())
     }
 }
 
@@ -242,6 +260,19 @@ pub trait StageDefinition: 'static {
     /// How many workers this stage would like when the pipeline does not say.
     fn workers(_args: &Self::Args) -> Option<usize> {
         None
+    }
+
+    /// The artefacts this stage can hand over at the end of a stream.
+    fn artefacts() -> &'static [ArtefactDecl] {
+        &[]
+    }
+
+    /// Merges the pieces of the artefact `name` into one, given in chunk order.
+    ///
+    /// A stage run as more than one instance, or given one chunk at a time, hands over a piece per instance and
+    /// chunk. The default accepts a lone piece and refuses more.
+    fn merge_artefact(name: &'static str, pieces: Vec<ArtefactPiece>) -> Result<ArtefactData, StageError> {
+        merge_single(name, pieces)
     }
 
     fn inputs() -> &'static InputSignature;

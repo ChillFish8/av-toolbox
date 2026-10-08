@@ -57,6 +57,12 @@ pub enum RegistryError {
     DuplicateDemand { kind: &'static str },
     #[error("a provider of {kind} demands is already registered")]
     DuplicateProvider { kind: &'static str },
+    #[error("stage {identifier} declares the artefact {name} more than once")]
+    DuplicateArtefact { identifier: String, name: &'static str },
+    #[error(
+        "stage {identifier} declares an artefact named {name:?}, which must be non-empty and hold no '.' or '/'"
+    )]
+    InvalidArtefactName { identifier: String, name: &'static str },
 }
 
 /// A failure raised while binding a pipeline's inputs to a stage's signature.

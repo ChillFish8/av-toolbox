@@ -18,6 +18,7 @@
 //! validates arguments against the schema and binds inputs to the signature before handing them
 //! to the stage.
 
+mod artefact;
 mod chroma;
 mod claims;
 mod crossing;
@@ -48,6 +49,18 @@ mod tests;
 
 pub use av_toolbox_gpu::{AnyItem, DeviceSide, HostSide, Side};
 
+pub use self::artefact::{
+    Artefact,
+    ArtefactData,
+    ArtefactDecl,
+    ArtefactKind,
+    ArtefactPiece,
+    MergeArtefactFn,
+    MergedArtefact,
+    StageArtefacts,
+    WantedArtefacts,
+    merge_single,
+};
 pub use self::claims::{ClaimError, Claims, DescriptorClaim};
 pub use self::crossing::Crossing;
 pub use self::demand::{AnyDemand, DemandDefinition, DemandKind, InputDemand, RequestError};

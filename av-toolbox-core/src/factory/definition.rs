@@ -20,6 +20,7 @@ use crate::{
     Parallelism,
     RegistryError,
     SchemaViolation,
+    StageArtefacts,
     StageDefinition,
     StageError,
     StageKind,
@@ -45,6 +46,7 @@ impl<D: StageDefinition> Definition<D> {
         let full_identifier = format!("{}/{}", D::package(), D::identifier());
 
         Self::check_planes_of(&full_identifier)?;
+        Self::check_artefacts(&full_identifier)?;
 
         let generator = schemars::SchemaGenerator::default();
         let generated = generator.into_root_schema_for::<D::Args>();
@@ -84,6 +86,7 @@ impl<D: StageDefinition> Definition<D> {
             tags: D::tags(),
             schema: &self.schema,
             inputs: D::inputs(),
+            artefacts: StageArtefacts::of::<D>(),
         }
     }
 
@@ -113,6 +116,32 @@ impl<D: StageDefinition> Definition<D> {
             identifier: self.full_identifier.clone(),
             source,
         }
+    }
+
+    /// Rejects an artefact name that is empty, holds a `.` or `/`, or is declared twice.
+    fn check_artefacts(full_identifier: &str) -> Result<(), RegistryError> {
+        let declared = D::artefacts();
+
+        for (position, decl) in declared.iter().enumerate() {
+            let malformed = decl.name.is_empty() || decl.name.contains(['.', '/']);
+            if malformed {
+                return Err(RegistryError::InvalidArtefactName {
+                    identifier: full_identifier.to_string(),
+                    name: decl.name,
+                });
+            }
+
+            let earlier = &declared[..position];
+            let repeated = earlier.iter().any(|other| other.name == decl.name);
+            if repeated {
+                return Err(RegistryError::DuplicateArtefact {
+                    identifier: full_identifier.to_string(),
+                    name: decl.name,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Rejects a `planes_of` that names no input of the signature, or that is set on an input

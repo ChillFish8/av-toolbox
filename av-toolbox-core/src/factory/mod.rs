@@ -33,6 +33,7 @@ use crate::{
     OpenSlot,
     Parallelism,
     Residency,
+    StageArtefacts,
     StageError,
     StageKind,
     Tag,
@@ -48,6 +49,7 @@ pub struct StageInfo<'a> {
     tags: &'static [Tag],
     schema: &'a Value,
     inputs: &'static InputSignature,
+    artefacts: StageArtefacts,
 }
 
 impl<'a> StageInfo<'a> {
@@ -77,6 +79,11 @@ impl<'a> StageInfo<'a> {
 
     pub fn inputs(&self) -> &'static InputSignature {
         self.inputs
+    }
+
+    /// The artefacts this stage declares and how it merges them.
+    pub fn artefacts(&self) -> StageArtefacts {
+        self.artefacts
     }
 }
 
