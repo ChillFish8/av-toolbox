@@ -47,7 +47,7 @@ fn feeds_that_still_disagree_when_the_region_ends_are_an_error() {
         .run(&mut context_of(&context), vec![Some(item(&context, 0, 0))])
         .expect("a step whose feeds lag each other still runs");
 
-    let result = runner.end(&mut context_of(&context));
+    let result = runner.end(&mut context_of(&context), None);
 
     let Err(RunError::UnpairedFeeds { node, leftover }) = result else {
         panic!("feeds left holding items at the end should have been an error");
@@ -115,7 +115,7 @@ fn a_join_waits_for_its_lagging_feed_and_pairs_by_index() {
         runner.run(&mut context_of(&context), bundle).expect("should run");
     }
 
-    runner.end(&mut context_of(&context)).expect("should end");
+    runner.end(&mut context_of(&context), None).expect("should end");
 
     let expected = vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4];
     assert_eq!(*seen.lock().expect("not poisoned"), expected);

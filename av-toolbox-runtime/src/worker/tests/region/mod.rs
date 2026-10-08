@@ -601,7 +601,7 @@ fn run_steps(runner: &mut RegionRunner, items: &[(u64, u64)]) -> Vec<Vec<u64>> {
         steps.push(output.iter().map(|item| item.meta().index).collect());
     }
 
-    let flushed = runner.end(&mut context_of(&context)).expect("should end");
+    let flushed = runner.end(&mut context_of(&context), None).expect("should end");
     steps.push(flushed.iter().map(|item| item.meta().index).collect());
 
     steps

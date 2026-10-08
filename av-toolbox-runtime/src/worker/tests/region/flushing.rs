@@ -65,7 +65,7 @@ fn ending_a_region_flushes_its_nodes_in_topological_order() {
     let edges = RegionEdges::new(feeds, vec![downstream]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner.end(&mut context_of(&context)).expect("should end");
+    let produced = runner.end(&mut context_of(&context), None).expect("should end");
 
     assert_eq!(produced.len(), 1);
     assert_eq!(produced[0].meta().index, 9);
@@ -122,7 +122,7 @@ fn a_shared_stream_region_never_flushes_and_lets_inputs_go_at_once() {
         runner.run(&mut context, bundle).expect("should run");
     }
 
-    runner.end(&mut context).expect("should end");
+    runner.end(&mut context, None).expect("should end");
 
     let seen = sightings.lock().expect("not poisoned").clone();
     let expected = Sighting {
@@ -142,7 +142,7 @@ fn ending_a_flush_at_hand_off_region_flushes_it() {
     let edges = RegionEdges::new(vec![], vec![head]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    runner.end(&mut context).expect("should end");
+    runner.end(&mut context, None).expect("should end");
 
     assert_eq!(flushes.load(Ordering::SeqCst), 1);
 }

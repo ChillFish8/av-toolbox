@@ -72,6 +72,13 @@ pub enum RunError {
     /// that was not cancelled reports it rather than answering with a report nobody reads.
     #[error("the run finished with {dropped} items that never reached a worker")]
     DroppedItems { dropped: usize },
+    /// An artefact sink failed while writing what it selected.
+    #[error("artefact sink {sink} failed: {source}")]
+    ArtefactSink {
+        sink: String,
+        #[source]
+        source: StageError,
+    },
     /// A failure that happened while a worker was running one chunk.
     ///
     /// Which chunk is what localises a failure in a long encode, so a worker names it around
@@ -98,7 +105,8 @@ impl RunError {
             Self::Panicked { .. }
             | Self::Exchange { .. }
             | Self::BudgetStalled { .. }
-            | Self::DroppedItems { .. } => None,
+            | Self::DroppedItems { .. }
+            | Self::ArtefactSink { .. } => None,
         }
     }
 

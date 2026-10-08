@@ -19,9 +19,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use av_toolbox_core::PipelineRegistry;
+use av_toolbox_core::{ArtefactSink, PipelineRegistry};
 use av_toolbox_gpu::{Backend, FrameBudget, FrameContext};
 use av_toolbox_graph::{
+    ArtefactSinkNode,
     CompiledGraph,
     Diagnostics,
     NodeId,
@@ -59,6 +60,7 @@ use self::spawn::{Outcome, spawn, spawn_exchanged};
 #[cfg(test)]
 pub(crate) use self::worker::run_worker;
 use self::wrap::{SinkTally, wrap_head_source, wrap_sinks};
+use crate::artefacts::{ArtefactCollector, write_artefacts};
 use crate::profile::Profiler;
 use crate::worker::RegionRunner;
 use crate::{Aggregate, Cancel, Disperse, NodeTiming, Profiling, Progress, RunError};
@@ -88,6 +90,8 @@ pub struct RunReport {
     /// A sink reading two inputs therefore counts two for each step it runs, since two items
     /// genuinely reached it.
     pub frames: u64,
+    /// How many files the artefact sinks wrote, zero for a cancelled run.
+    pub artefacts: usize,
     /// Whether the run was stopped before its sources ran out.
     pub cancelled: bool,
     /// How many items a stopped run was still holding, and so never gave to a worker.
@@ -118,6 +122,10 @@ pub struct Engine {
     dropped: Arc<AtomicUsize>,
     cancel: Arc<Cancel>,
     profiler: Option<Arc<Profiler>>,
+    artefacts: Arc<ArtefactCollector>,
+    /// The artefact sinks the graph declared, lined up with `artefact_writers`.
+    artefact_sinks: Vec<ArtefactSinkNode>,
+    artefact_writers: Vec<Box<dyn ArtefactSink>>,
 }
 
 impl Engine {
@@ -134,15 +142,18 @@ impl Engine {
         settings: Settings,
     ) -> Result<Engine, Diagnostics> {
         let held = graph.held_frames(registry, formats)?;
+        let writers = graph.build_artefact_sinks(registry)?;
 
-        Self::build_with(
+        let engine = Self::build_with(
             graph,
             formats,
             &held,
             settings,
             |region, _worker| graph.instantiate_region(registry, backend, formats, region),
             || backend.frame_context(),
-        )
+        )?;
+
+        Ok(engine.writing_artefacts_to(writers))
     }
 
     /// Instantiates every worker a planned graph needs, however `instantiate` and
@@ -193,6 +204,7 @@ impl Engine {
         let dropped = Arc::new(AtomicUsize::new(0));
         let cancel = Arc::new(Cancel::new());
         let profiler = settings.profiling.clone().map(Profiler::new).map(Arc::new);
+        let artefacts = Arc::new(ArtefactCollector::new(graph));
 
         let mut built_regions = Vec::with_capacity(regions.len());
         for region in regions {
@@ -295,7 +307,8 @@ impl Engine {
                     let edges = build_region_edges(graph, region);
                     let runner = RegionRunner::new(nodes, edges)
                         .routed_on(region.route())
-                        .profiled(profiler.clone());
+                        .profiled(profiler.clone())
+                        .collecting(artefacts.clone());
 
                     prepared.push(PreparedRegion::Source(SourceRegion {
                         runner,
@@ -315,7 +328,8 @@ impl Engine {
                     let edges = build_region_edges(graph, region);
                     let runner = RegionRunner::new(nodes, edges)
                         .routed_on(region.route())
-                        .profiled(profiler.clone());
+                        .profiled(profiler.clone())
+                        .collecting(artefacts.clone());
                     let upstream = inbound
                         .remove(&region.id())
                         .expect("a region that reads no input is refused before anything is wired");
@@ -400,7 +414,8 @@ impl Engine {
                 let edges = build_region_edges(graph, region);
                 let runner = RegionRunner::new(nodes, edges)
                     .routed_on(region.route())
-                    .profiled(profiler.clone());
+                    .profiled(profiler.clone())
+                    .collecting(artefacts.clone());
                 let context = make_context();
                 let (result_sender, result_receiver) = mpsc::sync_channel(results_in_flight);
 
@@ -442,7 +457,25 @@ impl Engine {
             dropped,
             cancel,
             profiler,
+            artefacts,
+            artefact_sinks: graph.artefact_sinks().to_vec(),
+            artefact_writers: Vec::new(),
         })
+    }
+
+    /// The same engine, writing the artefacts its graph's artefact sinks select through `writers`.
+    ///
+    /// `writers` is what [CompiledGraph::build_artefact_sinks](av_toolbox_graph::CompiledGraph::build_artefact_sinks)
+    /// built from the same graph, in the same order.
+    pub fn writing_artefacts_to(mut self, writers: Vec<Box<dyn ArtefactSink>>) -> Self {
+        assert_eq!(
+            writers.len(),
+            self.artefact_sinks.len(),
+            "every artefact sink the graph declares needs exactly one writer"
+        );
+
+        self.artefact_writers = writers;
+        self
     }
 
     /// The signal that stops this run, wherever its threads have got to.
@@ -479,6 +512,9 @@ impl Engine {
             dropped,
             cancel,
             profiler,
+            artefacts: collector,
+            artefact_sinks,
+            artefact_writers,
         } = self;
 
         let started = Instant::now();
@@ -524,6 +560,11 @@ impl Engine {
             return Err(RunError::DroppedItems { dropped });
         }
 
+        let artefacts = match cancelled {
+            true => 0,
+            false => write_artefacts(&collector, &artefact_sinks, artefact_writers)?,
+        };
+
         let wall = ended.duration_since(started);
         let counted_wall = tally.counted_wall(started, ended);
 
@@ -534,6 +575,7 @@ impl Engine {
 
         Ok(RunReport {
             frames: tally.frames(),
+            artefacts,
             cancelled,
             dropped,
             wall,

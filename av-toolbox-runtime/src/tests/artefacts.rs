@@ -138,3 +138,32 @@ fn a_failing_merge_fails_naming_its_node() {
 
     assert!(matches!(error, RunError::Stage { node, .. } if node == count));
 }
+
+#[test]
+fn a_discarded_piece_is_never_merged() {
+    let (graph, count) = graph_with("counting", &["filter.count.frames"]);
+    let collector = ArtefactCollector::new(&graph);
+    let mut stage = instance("counting");
+    let mut context = testing_context();
+
+    collector
+        .discard(count, &mut stage, &mut context)
+        .expect("discards");
+    let merged = collector.merge().expect("merges");
+
+    assert!(merged.is_empty());
+}
+
+#[test]
+fn a_discarded_piece_of_the_wrong_kind_still_fails_naming_its_node() {
+    let (graph, count) = graph_with("wrong_kind", &["filter.count.frames"]);
+    let collector = ArtefactCollector::new(&graph);
+    let mut stage = instance("wrong_kind");
+    let mut context = testing_context();
+
+    let error = collector
+        .discard(count, &mut stage, &mut context)
+        .expect_err("refused");
+
+    assert!(matches!(error, RunError::Stage { node, .. } if node == count));
+}

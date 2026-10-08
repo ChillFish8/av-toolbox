@@ -25,7 +25,7 @@ pub(super) fn run_passthrough(region: PassthroughRegion) -> Result<(), RunError>
         forward(&downstream, produced);
     }
 
-    let flushed = runner.end(&mut context)?;
+    let flushed = runner.end(&mut context, None)?;
     forward(&downstream, flushed);
     send_done(&downstream);
 

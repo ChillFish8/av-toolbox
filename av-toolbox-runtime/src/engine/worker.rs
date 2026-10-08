@@ -72,7 +72,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                 chunk_in_hand = Some(chunk);
 
                 if started {
-                    let end = runner.end(&mut context);
+                    let end = runner.end(&mut context, Some(chunk));
                     let flushed = end.map_err(|error| error.in_chunk(chunk))?;
                     started = false;
 
@@ -90,7 +90,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
     }
 
     if started {
-        let end = runner.end(&mut context);
+        let end = runner.end(&mut context, chunk_in_hand);
         let flushed = end.map_err(|error| named_chunk(error, chunk_in_hand))?;
         send_results(&result_sender, flushed).ok();
     }

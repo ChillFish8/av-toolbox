@@ -146,7 +146,6 @@ impl RegionRunner {
     }
 
     /// The same runner, telling its nodes what is wanted of them and handing what they build to `artefacts`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "only the tests build a collector"))]
     pub(crate) fn collecting(mut self, artefacts: Arc<ArtefactCollector>) -> Self {
         for (id, stage) in &mut self.nodes {
             artefacts.announce(*id, stage);
@@ -228,11 +227,17 @@ impl RegionRunner {
     /// exactly like a normal step, before its own flush is taken. That way anything the
     /// downstream node ends up holding because of the upstream flush is captured too. It ends by
     /// submitting this thread's queued work, before anything it produced is returned.
-    pub fn end(&mut self, context: &mut FrameContext) -> Result<Vec<AnyItem>, RunError> {
+    ///
+    /// `ended` is the chunk being ended, when the caller knows it. A node given one chunk at a time
+    /// that saw no input since it last started files its artefacts under `ended`.
+    pub fn end(&mut self, context: &mut FrameContext, ended: Option<u64>) -> Result<Vec<AnyItem>, RunError> {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
+        let head_chunked = self.edges.chunked.contains(&self.nodes[0].0);
+        let head_chunk = ending_chunk(head_chunked, self.last_chunks[0], ended);
         let head_watch = EndWatch {
-            chunk: self.last_chunks[0],
+            chunk: head_chunk,
+            discarding: head_chunked && head_chunk.is_none(),
             artefacts: self.artefacts.as_deref(),
             profiler: self.profiler.as_deref(),
         };
@@ -256,7 +261,7 @@ impl RegionRunner {
                 artefacts: self.artefacts.as_deref(),
                 profiler: self.profiler.as_deref(),
             };
-            let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
+            let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], watch, ended, context)?;
             stamp(&self.edges.paths, node, &mut flushed);
             outputs.push(flushed);
         }
@@ -331,8 +336,21 @@ fn counted_run(stage: &StageBox) -> Counted {
 struct EndWatch<'a> {
     /// The chunk being ended, or `None` for a node that is not given one chunk at a time.
     chunk: Option<u64>,
+    /// Drops what the node built rather than collecting it, for a chunked node that saw no chunk.
+    discarding: bool,
     artefacts: Option<&'a ArtefactCollector>,
     profiler: Option<&'a Profiler>,
+}
+
+/// The chunk a node's artefacts are filed under as it ends.
+///
+/// A node given one chunk at a time uses the chunk it last ran on, or `ended` when it ran on none.
+/// Any other node keeps `last`.
+fn ending_chunk(chunked: bool, last: Option<u64>, ended: Option<u64>) -> Option<u64> {
+    match chunked {
+        true => last.or(ended),
+        false => last,
+    }
 }
 
 /// Ends one node, timed when the run is profiled.
@@ -360,8 +378,13 @@ fn end_and_collect(
 ) -> Result<Vec<AnyItem>, RunError> {
     let flushed = end_node(id, stage, context)?;
 
-    if let Some(artefacts) = watch.artefacts {
-        artefacts.take(id, watch.chunk, stage, context)?;
+    let Some(artefacts) = watch.artefacts else {
+        return Ok(flushed);
+    };
+
+    match watch.discarding {
+        true => artefacts.discard(id, stage, context)?,
+        false => artefacts.take(id, watch.chunk, stage, context)?,
     }
 
     Ok(flushed)
@@ -435,6 +458,7 @@ fn restart_on_new_chunk(
 
     let ending = EndWatch {
         chunk: Some(previous),
+        discarding: false,
         artefacts: watch.artefacts,
         profiler: watch.profiler,
     };
@@ -510,6 +534,7 @@ fn end_fed(
     queues: &mut [VecDeque<AnyItem>],
     node: &mut (NodeId, StageBox),
     mut watch: NodeWatch<'_>,
+    ended: Option<u64>,
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
     let mut forwarded = run_fed(feeds, queues, node, &mut watch, context)?;
@@ -520,8 +545,10 @@ fn end_fed(
         return Err(RunError::UnpairedFeeds { node, leftover });
     }
 
+    let chunk = ending_chunk(watch.chunked, *watch.last, ended);
     let ending = EndWatch {
-        chunk: *watch.last,
+        chunk,
+        discarding: watch.chunked && chunk.is_none(),
         artefacts: watch.artefacts,
         profiler: watch.profiler,
     };

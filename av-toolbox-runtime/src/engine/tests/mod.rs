@@ -4,7 +4,7 @@ mod harness;
 mod specs;
 mod support;
 
-pub(crate) use self::fixtures::artefacts::{ArtefactingArgs, ArtefactingInstance, WANTED};
+pub(crate) use self::fixtures::artefacts::{ArtefactingArgs, ArtefactingInstance, COLLECTED, WANTED};
 pub(crate) use self::fixtures::filters::FLUSHED_TIMESTAMP;
 pub(crate) use self::fixtures::gated::{SLOW_GATES, SLOW_PARKED};
 pub(crate) use self::fixtures::sinks::{GATED_GOT, GATED_RELEASE};
@@ -26,6 +26,7 @@ pub(crate) use self::harness::{
     recorded_indices,
     routing_of,
     run_driven_with_watchdog,
+    run_result_with_watchdog,
     run_with_watchdog,
 };
 pub(crate) use self::specs::{

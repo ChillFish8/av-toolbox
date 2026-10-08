@@ -96,7 +96,7 @@ fn a_lagging_branch_flushes_its_chunk_before_the_join_pairs_the_next() {
         }
     }
 
-    runner.end(&mut context_of(&context)).expect("should end");
+    runner.end(&mut context_of(&context), None).expect("should end");
 
     let expected = vec![0, 0, 1, 1, 2, 2, 3, 3];
     assert_eq!(*seen.lock().expect("not poisoned"), expected);
@@ -277,7 +277,7 @@ fn a_node_restarts_on_its_own_layer() {
         runner.run(&mut context_of(&context), bundle).expect("should run");
     }
 
-    runner.end(&mut context_of(&context)).expect("should end");
+    runner.end(&mut context_of(&context), None).expect("should end");
 
     let started = u64::MAX;
     let expected = vec![started, 0, 1, started, 2, 3];
@@ -349,7 +349,7 @@ fn a_node_restarts_on_a_chunk_key_that_is_not_a_scene() {
         runner.run(&mut context_of(&context), bundle).expect("should run");
     }
 
-    runner.end(&mut context_of(&context)).expect("should end");
+    runner.end(&mut context_of(&context), None).expect("should end");
 
     let started = u64::MAX;
     let expected = vec![started, 0, 1, started, 2, 3];

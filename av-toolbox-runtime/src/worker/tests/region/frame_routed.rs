@@ -51,7 +51,7 @@ fn ending_a_frame_routed_region_does_not_check_flushes() {
 
     let bundle = vec![Some(item(&context, 0, 0))];
     runner.run(&mut context_of(&context), bundle).expect("should run");
-    let flushed = runner.end(&mut context_of(&context)).expect("should end");
+    let flushed = runner.end(&mut context_of(&context), None).expect("should end");
 
     assert!(flushed.is_empty());
 }

@@ -320,6 +320,7 @@ fn settings_and_reports_carry_the_derives_a_caller_needs() {
     let settings = Settings::default();
     let report = RunReport {
         frames: 2,
+        artefacts: 0,
         cancelled: false,
         dropped: 0,
         wall: Duration::ZERO,

@@ -60,7 +60,7 @@ fn a_replayed_item_keeps_its_first_stamp() {
     runner
         .run(&mut stage_context, vec![Some(item(&context, 4, 0))])
         .expect("should run");
-    let flushed = runner.end(&mut stage_context).expect("should end");
+    let flushed = runner.end(&mut stage_context, None).expect("should end");
 
     assert_eq!(flushed.len(), 1);
     assert_eq!(stage_paths(&flushed[0]), vec!["filter.tag"]);
@@ -80,7 +80,7 @@ fn an_item_released_at_end_of_stream_is_stamped_with_its_path() {
         .expect("should run");
     assert!(produced.is_empty());
 
-    let flushed = runner.end(&mut stage_context).expect("should end");
+    let flushed = runner.end(&mut stage_context, None).expect("should end");
 
     assert_eq!(flushed.len(), 1);
     assert_eq!(stage_paths(&flushed[0]), vec!["filter.flush"]);

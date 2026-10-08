@@ -1,9 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use av_toolbox_core::{Artefact, ArtefactPiece, MergedArtefact, StageArtefacts, StageError, WantedArtefacts};
+use av_toolbox_core::{
+    Artefact,
+    ArtefactPiece,
+    ArtefactSink,
+    MergedArtefact,
+    StageArtefacts,
+    StageError,
+    WantedArtefacts,
+};
 use av_toolbox_gpu::FrameContext;
-use av_toolbox_graph::{CompiledGraph, NodeId, StageBox};
+use av_toolbox_graph::{ArtefactSinkNode, CompiledGraph, NodeId, StageBox};
 
 use crate::RunError;
 
@@ -84,12 +92,7 @@ impl ArtefactCollector {
         stage: &mut StageBox,
         context: &mut FrameContext,
     ) -> Result<(), RunError> {
-        let Some(instance) = stage.instance_mut() else {
-            return Ok(());
-        };
-
-        let taken = instance.take_artefacts(context);
-        let artefacts = taken.map_err(|source| RunError::Stage { node, source })?;
+        let artefacts = self.take_checked(node, stage, context)?;
         if artefacts.is_empty() {
             return Ok(());
         }
@@ -98,8 +101,6 @@ impl ArtefactCollector {
         let mut kept = Vec::with_capacity(artefacts.len());
 
         for artefact in artefacts {
-            check_declared(node, entry, &artefact)?;
-
             let wanted = entry.is_some_and(|entry| entry.wanted.contains(artefact.name));
             if !wanted {
                 continue;
@@ -123,6 +124,41 @@ impl ArtefactCollector {
         pieces.extend(kept);
 
         Ok(())
+    }
+
+    /// Takes whatever `stage` built since it last handed artefacts over, and keeps none of it.
+    ///
+    /// The artefacts are still checked against what the node declared, so a bad one fails the run.
+    pub(crate) fn discard(
+        &self,
+        node: NodeId,
+        stage: &mut StageBox,
+        context: &mut FrameContext,
+    ) -> Result<(), RunError> {
+        self.take_checked(node, stage, context)?;
+        Ok(())
+    }
+
+    /// Takes what `stage` built, failing the run when any of it is not what `node` declared.
+    fn take_checked(
+        &self,
+        node: NodeId,
+        stage: &mut StageBox,
+        context: &mut FrameContext,
+    ) -> Result<Vec<Artefact>, RunError> {
+        let Some(instance) = stage.instance_mut() else {
+            return Ok(Vec::new());
+        };
+
+        let taken = instance.take_artefacts(context);
+        let artefacts = taken.map_err(|source| RunError::Stage { node, source })?;
+
+        let entry = self.nodes.get(&node);
+        for artefact in &artefacts {
+            check_declared(node, entry, artefact)?;
+        }
+
+        Ok(artefacts)
     }
 
     /// Merges every piece collected so far, by node and artefact, with each node's pieces in chunk order.
@@ -189,4 +225,41 @@ fn check_declared(node: NodeId, entry: Option<&NodeArtefacts>, artefact: &Artefa
     let source = StageError::msg(message);
 
     Err(RunError::Stage { node, source })
+}
+
+/// Merges what was collected and hands each artefact sink what it selected, answering with the files written.
+///
+/// `writers` lines up with `sinks`. A sink whose selected artefacts were never handed over is given none.
+pub(crate) fn write_artefacts(
+    collector: &ArtefactCollector,
+    sinks: &[ArtefactSinkNode],
+    writers: Vec<Box<dyn ArtefactSink>>,
+) -> Result<usize, RunError> {
+    if writers.is_empty() {
+        return Ok(0);
+    }
+
+    let merged = collector.merge()?;
+    let mut written = 0;
+
+    for (sink, mut writer) in sinks.iter().zip(writers) {
+        let selected: Vec<&MergedArtefact> = sink
+            .selected()
+            .iter()
+            .filter_map(|pair| merged.get(pair))
+            .collect();
+
+        let result = writer.write(&selected);
+        let count = result.map_err(|source| sink_failed(sink, source))?;
+        written += count;
+    }
+
+    Ok(written)
+}
+
+fn sink_failed(sink: &ArtefactSinkNode, source: StageError) -> RunError {
+    RunError::ArtefactSink {
+        sink: sink.path(),
+        source,
+    }
 }

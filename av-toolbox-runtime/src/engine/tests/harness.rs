@@ -268,6 +268,9 @@ pub(crate) fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, setting
     let held = graph
         .held_frames(&registry, solved)
         .expect("every fixture prepares");
+    let writers = graph
+        .build_artefact_sinks(&registry)
+        .expect("every fixture artefact sink builds");
 
     Engine::build_with(
         graph,
@@ -278,6 +281,7 @@ pub(crate) fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, setting
         testing_context,
     )
     .expect("should build the engine")
+    .writing_artefacts_to(writers)
 }
 
 /// The frames each node declares it holds, read the way [engine_from] reads them.

@@ -1,3 +1,4 @@
+mod artefacts;
 mod budgets;
 mod delays;
 mod failures;

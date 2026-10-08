@@ -1,5 +1,4 @@
 mod aggregate;
-#[cfg_attr(not(test), expect(dead_code, reason = "only the tests build a collector"))]
 mod artefacts;
 mod cancel;
 mod chunks;

@@ -27,7 +27,7 @@ pub(super) fn run_source(region: SourceRegion, cancel: &Cancel) -> Result<(), Ru
         }
     }
 
-    let flushed = runner.end(&mut context)?;
+    let flushed = runner.end(&mut context, None)?;
     forward(&downstream, flushed);
     check_budget(&budget)?;
     send_done(&downstream);
