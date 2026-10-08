@@ -1,5 +1,6 @@
-//! Sinks that write the finished stream out of the pipeline.
+//! Sinks that write the finished stream and its artefacts out of the pipeline.
 
+mod artefacts;
 mod metadata;
 mod null;
 mod pipe;
@@ -14,6 +15,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_sink::<pipe::Pipe>()?;
     registry.register_sink::<null::Discard>()?;
     registry.register_meta_sink::<metadata::Ndjson>()?;
+    registry.register_artefact_sink::<artefacts::Files>()?;
 
     Ok(())
 }
