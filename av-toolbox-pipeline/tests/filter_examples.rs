@@ -5,15 +5,18 @@ use std::path::{Path, PathBuf};
 
 use av_toolbox_cubek::artcnn::{Model, Weights};
 use av_toolbox_cubek::deblock::h264::thresholds;
+use av_toolbox_cubek::deblock::pp7::Pp7Mode;
 use av_toolbox_cubek::dpir::{PACK, Variant};
 use av_toolbox_cubek::matrix::MatrixSamples;
 use av_toolbox_cubek::testing::{
     H264Plane,
+    Pp7Case,
     QedCase,
     QedChroma,
     QedLayout,
     reference_artcnn,
     reference_h264,
+    reference_pp7,
     reference_qed,
 };
 use av_toolbox_gpu::{Backend, test_device};
@@ -778,6 +781,34 @@ fn blocky_luma() -> Vec<u8> {
         .collect()
 }
 
+/// The planes of the test clip as the references take them, `luma` and then the flat chroma.
+fn yuv_inputs(luma: &[u8]) -> [Vec<f64>; 3] {
+    let chroma_samples = (SIZE / 2) * (SIZE / 2);
+    let luma_values: Vec<f64> = luma.iter().map(|code| f64::from(*code)).collect();
+    let flat_u_values = vec![f64::from(FLAT_U); chroma_samples];
+    let flat_v_values = vec![f64::from(FLAT_V); chroma_samples];
+
+    [luma_values, flat_u_values, flat_v_values]
+}
+
+/// Checks every frame has `expected_luma` in place of `input_luma`, with the flat chroma untouched.
+fn assert_luma_deblocked(decoded: &Decoded, input_luma: &[u8], expected_luma: &[u8]) {
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for (index, frame) in decoded.frames.iter().enumerate() {
+        let flat_u = vec![FLAT_U; frame.u_plane.len()];
+        let flat_v = vec![FLAT_V; frame.v_plane.len()];
+
+        assert_ne!(frame.luma, input_luma, "frame {index} came back unchanged");
+        assert_eq!(
+            frame.luma, expected_luma,
+            "frame {index} differs from the reference"
+        );
+        assert_eq!(frame.u_plane, flat_u, "frame {index}: flat U changed");
+        assert_eq!(frame.v_plane, flat_v, "frame {index}: flat V changed");
+    }
+}
+
 #[test]
 fn the_h264_example_deblocks_like_the_reference() {
     let luma = blocky_luma();
@@ -797,20 +828,7 @@ fn the_h264_example_deblocks_like_the_reference() {
     let reference = reference_h264(plane, MatrixSamples::U8, &example_thresholds);
     let expected_luma: Vec<u8> = reference.iter().map(|value| *value as u8).collect();
 
-    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
-    assert_eq!(decoded.frames.len(), FRAMES as usize);
-    for (index, frame) in decoded.frames.iter().enumerate() {
-        let flat_u = vec![FLAT_U; frame.u_plane.len()];
-        let flat_v = vec![FLAT_V; frame.v_plane.len()];
-
-        assert_ne!(frame.luma, luma, "frame {index} came back unchanged");
-        assert_eq!(
-            frame.luma, expected_luma,
-            "frame {index} differs from the reference"
-        );
-        assert_eq!(frame.u_plane, flat_u, "frame {index}: flat U changed");
-        assert_eq!(frame.v_plane, flat_v, "frame {index}: flat V changed");
-    }
+    assert_luma_deblocked(&decoded, &luma, &expected_luma);
 }
 
 /// The case `deblock-qed.toml` runs, the stage's default arguments on the `SIZE` by `SIZE` 4:2:0 test clip.
@@ -835,26 +853,36 @@ fn the_qed_example_deblocks_like_the_reference() {
     let decoded = run_example_on("deblock-qed.toml", &[], &clip);
 
     let case = qed_example_case();
-    let chroma_samples = (SIZE / 2) * (SIZE / 2);
-    let luma_values: Vec<f64> = luma.iter().map(|code| f64::from(*code)).collect();
-    let flat_u_values = vec![f64::from(FLAT_U); chroma_samples];
-    let flat_v_values = vec![f64::from(FLAT_V); chroma_samples];
-    let inputs = [luma_values, flat_u_values, flat_v_values];
+    let inputs = yuv_inputs(&luma);
     let reference = reference_qed(&case, &inputs);
     let expected_luma: Vec<u8> = reference.output[0].iter().map(|value| *value as u8).collect();
 
-    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
-    assert_eq!(decoded.frames.len(), FRAMES as usize);
-    for (index, frame) in decoded.frames.iter().enumerate() {
-        let flat_u = vec![FLAT_U; frame.u_plane.len()];
-        let flat_v = vec![FLAT_V; frame.v_plane.len()];
+    assert_luma_deblocked(&decoded, &luma, &expected_luma);
+}
 
-        assert_ne!(frame.luma, luma, "frame {index} came back unchanged");
-        assert_eq!(
-            frame.luma, expected_luma,
-            "frame {index} differs from the reference"
-        );
-        assert_eq!(frame.u_plane, flat_u, "frame {index}: flat U changed");
-        assert_eq!(frame.v_plane, flat_v, "frame {index}: flat V changed");
+/// The case `deblock-pp7.toml` runs, qp 2 and hard on the `SIZE` by `SIZE` 4:2:0 test clip.
+fn pp7_example_case() -> Pp7Case {
+    Pp7Case {
+        width: SIZE as u32,
+        height: SIZE as u32,
+        layout: QedLayout::Yuv { chroma_shift: (1, 1) },
+        samples: MatrixSamples::U8,
+        qp: 2.0,
+        mode: Pp7Mode::Hard,
     }
+}
+
+#[test]
+fn the_pp7_example_deblocks_like_the_reference() {
+    let luma = blocky_luma();
+    let clip = clip_with_luma(&luma);
+
+    let decoded = run_example_on("deblock-pp7.toml", &[], &clip);
+
+    let case = pp7_example_case();
+    let inputs = yuv_inputs(&luma);
+    let reference = reference_pp7(&case, &inputs);
+    let expected_luma: Vec<u8> = reference[0].iter().map(|value| *value as u8).collect();
+
+    assert_luma_deblocked(&decoded, &luma, &expected_luma);
 }

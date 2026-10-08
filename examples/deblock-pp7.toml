@@ -1,0 +1,30 @@
+# Deblocks a video with pp7, the way VapourSynth's pp7.DeblockPP7 does.
+#
+# Each sample keeps only the strongest frequencies of the 7 by 7 square around it. Raise args.qp, from 1 up to
+# 63, for heavier blocking. Set args.mode = "soft" or "medium" to ease the frequencies it keeps toward zero
+# for a gentler result. Set args.planes = ["y"] to leave the chroma alone.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the deblocked clip"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.deblocked]
+type = "deblock/pp7"
+inputs = ["input"]
+args.qp = 2.0
+args.mode = "hard"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["deblocked"]
+args.path = "{{ output }}"

@@ -42,6 +42,7 @@ fn every_example_explains_without_a_device() {
         "deblock-dpir.toml",
         "deblock-h264.toml",
         "deblock-qed.toml",
+        "deblock-pp7.toml",
     ];
 
     for name in names {
