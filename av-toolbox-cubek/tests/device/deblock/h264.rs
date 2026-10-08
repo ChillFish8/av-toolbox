@@ -1,5 +1,6 @@
 use av_toolbox_cubek::deblock::h264::{
     DeblockPlanes,
+    LayoutPlane,
     Thresholds,
     deblock,
     padded_frame,
@@ -116,7 +117,8 @@ struct Deblock {
     sizes: Vec<(u32, u32)>,
     padded: Vec<(u32, u32)>,
     samples: MatrixSamples,
-    thresholds: Thresholds,
+    /// What each plane, in order, is filtered against.
+    thresholds: Vec<Thresholds>,
     /// The units to a cube, or the frame context's cube size when `None`.
     units: Option<u32>,
     /// The scratch's size in bytes, or the layout's own when `None`.
@@ -131,12 +133,26 @@ fn device_planes<'a>(handles: &'a [Handle], sizes: &[(u32, u32)]) -> Vec<DeviceP
         .collect()
 }
 
+/// One layout plane for each padded size, each with its own thresholds.
+fn layout_planes(padded: &[(u32, u32)], thresholds: &[Thresholds]) -> Vec<LayoutPlane> {
+    padded
+        .iter()
+        .zip(thresholds)
+        .map(|((width, height), plane_thresholds)| LayoutPlane {
+            width: *width,
+            height: *height,
+            thresholds: *plane_thresholds,
+        })
+        .collect()
+}
+
 impl BuildTask for Deblock {
     type Output = Vec<Vec<u8>>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
-        let layout = upload_layout(client, &self.padded);
+        let layout_planes = layout_planes(&self.padded, &self.thresholds);
+        let layout = upload_layout(client, &layout_planes);
         let layout_bytes = layout.bytes();
         let scratch_bytes = self.scratch_bytes.unwrap_or(layout_bytes);
         let scratch = empty(client, scratch_bytes);
@@ -157,27 +173,11 @@ impl BuildTask for Deblock {
         match self.units {
             Some(units) => {
                 let dispatch = Units(units);
-                deblock(
-                    client,
-                    &dispatch,
-                    planes,
-                    &scratch,
-                    &layout,
-                    self.samples,
-                    self.thresholds,
-                );
+                deblock(client, &dispatch, planes, &scratch, &layout, self.samples);
             },
             None => {
                 let sizing = Sizing(build.frame_context());
-                deblock(
-                    client,
-                    &sizing,
-                    planes,
-                    &scratch,
-                    &layout,
-                    self.samples,
-                    self.thresholds,
-                );
+                deblock(client, &sizing, planes, &scratch, &layout, self.samples);
             },
         }
 
@@ -197,7 +197,7 @@ fn task(frame: &TestFrame, frame_thresholds: Thresholds, units: Option<u32>) -> 
         sizes: frame.sizes.clone(),
         padded: frame.padded.clone(),
         samples: frame.samples,
-        thresholds: frame_thresholds,
+        thresholds: vec![frame_thresholds; frame.values.len()],
         units,
         scratch_bytes: None,
     }
@@ -337,4 +337,68 @@ fn thresholds_made_for_other_samples_are_refused() {
     let run = task(&frame, eight_bit_thresholds, None);
 
     backend().build(run);
+}
+
+#[test]
+#[should_panic(expected = "thresholds peak at 255 but U16 { bits: 10 } samples peak at 1023")]
+fn a_later_region_with_thresholds_made_for_other_samples_is_refused() {
+    let samples = MatrixSamples::U16 { bits: 10 };
+    let single = TestFrame::blocky(16, 16, None, samples);
+    let matching = thresholds(25, 0, 0, samples);
+    let eight_bit_thresholds = thresholds(25, 0, 0, MatrixSamples::U8);
+    let twice = TestFrame {
+        values: vec![single.values[0].clone(); 2],
+        sizes: vec![single.sizes[0]; 2],
+        padded: vec![single.padded[0]; 2],
+        samples,
+    };
+    let mut run = task(&twice, matching, None);
+    run.thresholds = vec![matching, eight_bit_thresholds];
+
+    backend().build(run);
+}
+
+#[test]
+fn two_regions_of_one_plane_take_their_own_thresholds() {
+    let samples = MatrixSamples::U8;
+    let single = TestFrame::blocky(70, 46, None, samples);
+    let gentle = thresholds(24, 1, 2, samples);
+    let strong = thresholds(40, 1, 2, samples);
+    let twice = TestFrame {
+        values: vec![single.values[0].clone(); 2],
+        sizes: vec![single.sizes[0]; 2],
+        padded: vec![single.padded[0]; 2],
+        samples,
+    };
+    let mut run = task(&twice, gentle, None);
+    run.thresholds = vec![gentle, strong];
+
+    let written = backend().build(run);
+
+    let together: Vec<Vec<f64>> = written
+        .iter()
+        .map(|bytes| decode_samples(bytes, samples))
+        .collect();
+    let gentle_alone = deblocked(&single, gentle, None);
+    let strong_alone = deblocked(&single, strong, None);
+    let gentle_expected = single.reference(gentle);
+    let strong_expected = single.reference(strong);
+
+    assert_eq!(
+        together[0], gentle_alone[0],
+        "the gentle region against its own launch"
+    );
+    assert_eq!(
+        together[1], strong_alone[0],
+        "the strong region against its own launch"
+    );
+    assert_eq!(
+        together[0], gentle_expected[0],
+        "the gentle region against the CPU"
+    );
+    assert_eq!(
+        together[1], strong_expected[0],
+        "the strong region against the CPU"
+    );
+    assert_ne!(together[0], together[1], "both thresholds deblocked alike");
 }

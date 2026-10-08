@@ -14,6 +14,7 @@ use av_toolbox_core::{
 use av_toolbox_cubek::deblock::h264::{
     DeblockLayout,
     DeblockPlanes,
+    LayoutPlane,
     Thresholds,
     deblock,
     padded_frame,
@@ -186,6 +187,18 @@ pub(crate) fn padded_sizes(format: &FrameFormat, selected: &[bool]) -> Vec<(u32,
         .collect()
 }
 
+/// One layout plane for each of the `padded` sizes, all filtered against `plane_thresholds`.
+fn uniform_layout(padded: &[(u32, u32)], plane_thresholds: Thresholds) -> Vec<LayoutPlane> {
+    padded
+        .iter()
+        .map(|(width, height)| LayoutPlane {
+            width: *width,
+            height: *height,
+            thresholds: plane_thresholds,
+        })
+        .collect()
+}
+
 /// Removes compression blocking with H.264's in-loop deblocking filter, the way VapourSynth's
 /// `deblock.Deblock` does.
 pub(crate) struct H264;
@@ -253,7 +266,8 @@ impl FilterDefinition for H264 {
 
         let client = context.client().clone();
         let padded = padded_sizes(&input, &deblocking.selected);
-        let layout = upload_layout(&client, &padded);
+        let layout_planes = uniform_layout(&padded, deblocking.thresholds);
+        let layout = upload_layout(&client, &layout_planes);
         let deblocker = Deblocker {
             client,
             format: input,
@@ -323,7 +337,6 @@ impl<R: Runtime> Deblocker<R> {
         let bytes = self.layout.bytes();
         let scratch = context.scratch(bytes);
         let sizing = Sizing(context);
-        let frame_thresholds = self.deblocking.thresholds;
 
         deblock(
             &self.client,
@@ -332,7 +345,6 @@ impl<R: Runtime> Deblocker<R> {
             scratch.handle(),
             &self.layout,
             samples,
-            frame_thresholds,
         );
     }
 }

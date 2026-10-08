@@ -122,8 +122,9 @@ pub fn padded_frame(width: u32, height: u32) -> (u32, u32) {
     (padded_width, padded_height)
 }
 
-/// How many values describe one plane in the uploaded layout, its offset, width and height.
-const REGION_VALUES: usize = 3;
+/// How many values describe one plane in the uploaded layout, its offset, width and height, then the bits of
+/// its alpha, beta, c0 and c1.
+const REGION_VALUES: usize = 7;
 
 /// Where one padded plane sits in the scratch, in samples, and its padded size.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -156,16 +157,38 @@ fn regions_of(padded: &[(u32, u32)]) -> Vec<PlaneRegion> {
     regions
 }
 
+/// One plane of a layout, its padded size and what its lines are filtered against.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct LayoutPlane {
+    pub width: u32,
+    pub height: u32,
+    pub thresholds: Thresholds,
+}
+
+/// The layout's values for `region`, filtered against `plane_thresholds`.
+fn region_values(region: PlaneRegion, plane_thresholds: Thresholds) -> [u32; REGION_VALUES] {
+    [
+        region.offset,
+        region.width,
+        region.height,
+        plane_thresholds.alpha.to_bits(),
+        plane_thresholds.beta.to_bits(),
+        plane_thresholds.c0.to_bits(),
+        plane_thresholds.c1.to_bits(),
+    ]
+}
+
 /// How many bytes the scratch keeps for each sample, whatever the plane's sample type.
 const WORD_BYTES: usize = size_of::<u32>();
 
-/// Where every padded plane of a frame sits in one scratch buffer, back to back, kept on the host and the
-/// device.
+/// Where every padded plane of a frame sits in one scratch buffer, back to back, and what each one's lines
+/// are filtered against, kept on the host and the device.
 ///
 /// The scratch keeps each sample as an atomic 32-bit word, the integer value or the float's bits.
 #[derive(Debug)]
 pub struct DeblockLayout {
     regions: Vec<PlaneRegion>,
+    thresholds: Vec<Thresholds>,
     values: Handle,
 }
 
@@ -189,14 +212,17 @@ impl DeblockLayout {
     }
 }
 
-/// Lays planes of the `padded` sizes out back to back in one scratch, and uploads where each one sits.
+/// Lays `planes` out back to back in one scratch, and uploads where each one sits and what it is filtered
+/// against.
 ///
-/// Every padded side must be a whole number of 4 sample blocks.
-pub fn upload_layout<R: Runtime>(client: &ComputeClient<R>, padded: &[(u32, u32)]) -> DeblockLayout {
-    assert!(!padded.is_empty(), "a deblocking layout needs at least one plane");
+/// Every padded side must be a whole number of 4 sample blocks. Two planes may hold the same input.
+pub fn upload_layout<R: Runtime>(client: &ComputeClient<R>, planes: &[LayoutPlane]) -> DeblockLayout {
+    assert!(!planes.is_empty(), "a deblocking layout needs at least one plane");
 
-    for (width, height) in padded {
-        let whole_blocks = *width > 0 && *height > 0 && width % 4 == 0 && height % 4 == 0;
+    for plane in planes {
+        let width = plane.width;
+        let height = plane.height;
+        let whole_blocks = width > 0 && height > 0 && width % 4 == 0 && height % 4 == 0;
 
         assert!(
             whole_blocks,
@@ -204,15 +230,22 @@ pub fn upload_layout<R: Runtime>(client: &ComputeClient<R>, padded: &[(u32, u32)
         );
     }
 
-    let regions = regions_of(padded);
+    let padded: Vec<(u32, u32)> = planes.iter().map(|plane| (plane.width, plane.height)).collect();
+    let regions = regions_of(&padded);
+    let thresholds: Vec<Thresholds> = planes.iter().map(|plane| plane.thresholds).collect();
     let flattened: Vec<u32> = regions
         .iter()
-        .flat_map(|region| [region.offset, region.width, region.height])
+        .zip(&thresholds)
+        .flat_map(|(region, plane_thresholds)| region_values(*region, *plane_thresholds))
         .collect();
     let bytes = u32::as_bytes(&flattened);
     let values = client.create_from_slice(bytes);
 
-    DeblockLayout { regions, values }
+    DeblockLayout {
+        regions,
+        thresholds,
+        values,
+    }
 }
 
 /// The planes one deblock reads and the planes it writes, in the order of the layout's regions.
@@ -415,7 +448,7 @@ fn filter_line(
     }
 }
 
-/// Filters every plane of the layout in place, one cube to a plane.
+/// Filters every plane of the layout in place, one cube to a plane, each against its own thresholds.
 ///
 /// Block `(i, j)` runs at step `i + 2j`. Each step filters its blocks' top edges, then their left edges, and
 /// no two edges of one phase touch the same sample, so the cube's units share each phase's lines. Every unit
@@ -427,10 +460,6 @@ fn filter_line(
 fn wavefront_kernel(
     samples: &mut Array<Atomic<u32>>,
     layout: &Array<u32>,
-    alpha: f32,
-    beta: f32,
-    c0: f32,
-    c1: f32,
     peak: f32,
     #[comptime] float: bool,
 ) {
@@ -438,6 +467,10 @@ fn wavefront_kernel(
     let offset = layout[entry];
     let width = layout[entry + 1];
     let height = layout[entry + 2];
+    let alpha = f32::reinterpret(layout[entry + 3]);
+    let beta = f32::reinterpret(layout[entry + 4]);
+    let c0 = f32::reinterpret(layout[entry + 5]);
+    let c1 = f32::reinterpret(layout[entry + 6]);
     let across = (width / 4) as i32;
     let down = (height / 4) as i32;
     let steps = (across + 2 * down - 2) as u32;
@@ -581,12 +614,13 @@ fn assert_fits(planes: DeblockPlanes<'_>, layout: &DeblockLayout) {
 
 /// Deblocks every plane of `planes` into its output with H.264's in-loop filter, in one wavefront launch.
 ///
-/// Each input is padded with its mirror into its region of `scratch`, filtered there, and cropped into its
-/// output. One cube runs each plane, so `dispatch`'s cube size sets how many units share its lines.
+/// Each input is padded with its mirror into its region of `scratch`, filtered there against its region's
+/// thresholds, and cropped into its output. One cube runs each plane, so `dispatch`'s cube size sets how many
+/// units share its lines.
 ///
 /// # Panics
 ///
-/// Panics when `thresholds` was not made for `samples` by the `thresholds` function.
+/// Panics when any plane's thresholds were not made for `samples` by the `thresholds` function.
 pub fn deblock<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -594,26 +628,25 @@ pub fn deblock<R: Runtime>(
     scratch: &Handle,
     layout: &DeblockLayout,
     samples: MatrixSamples,
-    thresholds: Thresholds,
 ) {
     assert_fits(planes, layout);
 
-    let expected_peak = peak_of(samples);
-    assert!(
-        thresholds.peak == expected_peak,
-        "thresholds peak at {} but {samples:?} samples peak at {expected_peak}",
-        thresholds.peak
-    );
+    let peak = peak_of(samples);
+    for plane_thresholds in &layout.thresholds {
+        assert!(
+            plane_thresholds.peak == peak,
+            "thresholds peak at {} but {samples:?} samples peak at {peak}",
+            plane_thresholds.peak
+        );
+    }
 
     let bytes = layout.bytes();
     assert_holds(scratch, bytes, "deblocking scratch");
 
     match samples {
-        MatrixSamples::U8 => launch::<u8, R>(client, dispatch, planes, scratch, layout, thresholds, false),
-        MatrixSamples::U16 { .. } => {
-            launch::<u16, R>(client, dispatch, planes, scratch, layout, thresholds, false)
-        },
-        MatrixSamples::F32 => launch::<f32, R>(client, dispatch, planes, scratch, layout, thresholds, true),
+        MatrixSamples::U8 => launch::<u8, R>(client, dispatch, planes, scratch, layout, peak, false),
+        MatrixSamples::U16 { .. } => launch::<u16, R>(client, dispatch, planes, scratch, layout, peak, false),
+        MatrixSamples::F32 => launch::<f32, R>(client, dispatch, planes, scratch, layout, peak, true),
     }
 }
 
@@ -623,7 +656,7 @@ fn launch<E: CubePrimitive, R: Runtime>(
     planes: DeblockPlanes<'_>,
     scratch: &Handle,
     layout: &DeblockLayout,
-    thresholds: Thresholds,
+    peak: f32,
     float: bool,
 ) {
     let total = layout.samples();
@@ -633,7 +666,7 @@ fn launch<E: CubePrimitive, R: Runtime>(
         launch_pad::<E, R>(client, dispatch, *input, scratch, total, *region, float);
     }
 
-    launch_wavefront::<R>(client, dispatch, scratch, layout, thresholds, float);
+    launch_wavefront::<R>(client, dispatch, scratch, layout, peak, float);
 
     let outputs = planes.outputs.iter().zip(&layout.regions);
     for (output, region) in outputs {
@@ -683,7 +716,7 @@ fn launch_wavefront<R: Runtime>(
     dispatch: &impl Dispatch,
     scratch: &Handle,
     layout: &DeblockLayout,
-    thresholds: Thresholds,
+    peak: f32,
     float: bool,
 ) {
     let total = layout.samples();
@@ -699,19 +732,7 @@ fn launch_wavefront<R: Runtime>(
     // Safety: cube `k` reads region `k`, and every tap of every line it filters lies inside that region,
     // since a region is whole 4 by 4 blocks and only edges with three samples on each side are filtered.
     unsafe {
-        wavefront_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            samples,
-            regions,
-            thresholds.alpha,
-            thresholds.beta,
-            thresholds.c0,
-            thresholds.c1,
-            thresholds.peak,
-            float,
-        );
+        wavefront_kernel::launch_unchecked::<R>(client, cubes, unit, samples, regions, peak, float);
     }
 }
 
@@ -756,6 +777,22 @@ mod tests {
 
     fn eight_bit(quant: i32, aoffset: i32, boffset: i32) -> Thresholds {
         thresholds(quant, aoffset, boffset, MatrixSamples::U8)
+    }
+
+    #[test]
+    fn a_regions_values_hold_its_place_then_its_thresholds_bits() {
+        let region = PlaneRegion {
+            offset: 3456,
+            width: 36,
+            height: 24,
+        };
+        let plane_thresholds = eight_bit(30, 10, -10);
+
+        let values = region_values(region, plane_thresholds);
+
+        let bits = [80.0f32, 3.0, 5.0, 1.0].map(f32::to_bits);
+        assert_eq!(values[..3], [3456, 36, 24]);
+        assert_eq!(values[3..], bits);
     }
 
     #[test]
