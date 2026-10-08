@@ -9,11 +9,11 @@ use av_toolbox_cubek::deblock::pp7::Pp7Mode;
 use av_toolbox_cubek::dpir::{PACK, Variant};
 use av_toolbox_cubek::matrix::MatrixSamples;
 use av_toolbox_cubek::testing::{
+    FixtureLayout,
     H264Plane,
     Pp7Case,
     QedCase,
     QedChroma,
-    QedLayout,
     reference_artcnn,
     reference_h264,
     reference_pp7,
@@ -795,6 +795,7 @@ fn yuv_inputs(luma: &[u8]) -> [Vec<f64>; 3] {
 fn assert_luma_deblocked(decoded: &Decoded, input_luma: &[u8], expected_luma: &[u8]) {
     assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
     assert_eq!(decoded.frames.len(), FRAMES as usize);
+
     for (index, frame) in decoded.frames.iter().enumerate() {
         let flat_u = vec![FLAT_U; frame.u_plane.len()];
         let flat_v = vec![FLAT_V; frame.v_plane.len()];
@@ -836,7 +837,7 @@ fn qed_example_case() -> QedCase {
     QedCase {
         width: SIZE as u32,
         height: SIZE as u32,
-        layout: QedLayout::Yuv { chroma_shift: (1, 1) },
+        layout: FixtureLayout::Yuv { chroma_shift: (1, 1) },
         samples: MatrixSamples::U8,
         quant: [24, 26],
         aoffset: [1, 1],
@@ -865,7 +866,7 @@ fn pp7_example_case() -> Pp7Case {
     Pp7Case {
         width: SIZE as u32,
         height: SIZE as u32,
-        layout: QedLayout::Yuv { chroma_shift: (1, 1) },
+        layout: FixtureLayout::Yuv { chroma_shift: (1, 1) },
         samples: MatrixSamples::U8,
         qp: 2.0,
         mode: Pp7Mode::Hard,

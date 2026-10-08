@@ -105,7 +105,7 @@ fn qp_at_either_end_and_fractional_qp_are_kept_as_they_are() {
 }
 
 #[test]
-fn each_mode_reaches_the_kernel() {
+fn each_mode_maps_to_its_kernel_mode() {
     let modes = [
         ("hard", Pp7Mode::Hard),
         ("soft", Pp7Mode::Soft),

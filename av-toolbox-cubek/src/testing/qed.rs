@@ -62,7 +62,7 @@ pub const QED_FIXTURES: &[QedFixture] = &[
 
 /// How a deblocking fixture's planes are laid out.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum QedLayout {
+pub enum FixtureLayout {
     Grey,
     /// Luma and two chroma planes, each chroma side shifted down from luma's by `chroma_shift`, across then
     /// down.
@@ -72,7 +72,7 @@ pub enum QedLayout {
     Rgb,
 }
 
-impl QedLayout {
+impl FixtureLayout {
     pub(super) fn named(word: &str, name: &str) -> Self {
         match word {
             "420" => Self::Yuv { chroma_shift: (1, 1) },
@@ -112,7 +112,7 @@ pub enum QedChroma {
 pub struct QedCase {
     pub width: u32,
     pub height: u32,
-    pub layout: QedLayout,
+    pub layout: FixtureLayout,
     pub samples: MatrixSamples,
     pub quant: [i32; 2],
     pub aoffset: [i32; 2],
@@ -141,7 +141,7 @@ impl QedFixture {
             panic!("{}: the metadata is not eleven words", self.name);
         };
 
-        let layout = QedLayout::named(layout, self.name);
+        let layout = FixtureLayout::named(layout, self.name);
         let samples = samples_named(bits, self.name);
         let chroma = match chroma {
             "qed" => QedChroma::Qed,
@@ -204,7 +204,7 @@ impl QedFixture {
 impl QedCase {
     /// The size of each plane in channel order, chroma rounded up.
     pub fn plane_sizes(&self) -> Vec<(u32, u32)> {
-        self.shares(self.width, self.height)
+        self.layout.plane_shares(self.width, self.height)
     }
 
     /// The size each plane is padded to for a deblocking pass, its share of the padded frame, in channel
@@ -212,14 +212,14 @@ impl QedCase {
     pub fn deblock_sizes(&self) -> Vec<(u32, u32)> {
         let (padded_width, padded_height) = padded_frame(self.width, self.height);
 
-        self.shares(padded_width, padded_height)
+        self.layout.plane_shares(padded_width, padded_height)
     }
 
     /// The size each plane is extended to before the low-pass, its share of the frame rounded up to 16.
     pub fn lowpass_sizes(&self) -> Vec<(u32, u32)> {
         let (lowpass_width, lowpass_height) = lowpass_frame(self.width, self.height);
 
-        self.shares(lowpass_width, lowpass_height)
+        self.layout.plane_shares(lowpass_width, lowpass_height)
     }
 
     pub fn normal_thresholds(&self) -> Thresholds {
@@ -238,14 +238,9 @@ impl QedCase {
     }
 
     fn takes_qed(&self, index: usize) -> bool {
-        let is_chroma = matches!(self.layout, QedLayout::Yuv { .. }) && index > 0;
+        let is_chroma = matches!(self.layout, FixtureLayout::Yuv { .. }) && index > 0;
 
         !is_chroma || self.chroma == QedChroma::Qed
-    }
-
-    /// Each plane's share of a `width` by `height` frame, in channel order, chroma rounded up.
-    fn shares(&self, width: u32, height: u32) -> Vec<(u32, u32)> {
-        self.layout.plane_shares(width, height)
     }
 }
 

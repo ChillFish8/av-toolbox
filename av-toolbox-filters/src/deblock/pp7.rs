@@ -12,6 +12,8 @@ use av_toolbox_core::{
     StreamType,
 };
 use av_toolbox_cubek::deblock::pp7::{
+    MAX_QP,
+    MIN_QP,
     Pp7Mode,
     Pp7Planes,
     ThresholdTable,
@@ -54,10 +56,6 @@ pub(crate) const STAGE: &str = "deblock/pp7";
 
 const DEFAULT_QP: f64 = 2.0;
 
-const MIN_QP: f64 = 1.0;
-
-const MAX_QP: f64 = 63.0;
-
 fn default_qp() -> f64 {
     DEFAULT_QP
 }
@@ -92,7 +90,7 @@ pub(crate) struct Pp7Args {
     /// How strongly to deblock, between 1 and 63. Fractions are used as they are.
     #[serde(default = "default_qp")]
     pub(crate) qp: f64,
-    /// How a frequency strong enough to keep is kept, `"hard"`, `"soft"` or `"medium"`.
+    /// How each frequency past its threshold is kept, `"hard"`, `"soft"` or `"medium"`.
     #[serde(default)]
     pub(crate) mode: Mode,
     /// The planes to deblock, every plane by default.

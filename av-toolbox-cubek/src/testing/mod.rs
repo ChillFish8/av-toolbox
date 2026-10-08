@@ -235,12 +235,12 @@ pub use self::pp7::{
     reference_transform,
 };
 pub use self::qed::{
+    FixtureLayout,
     QED_FIXTURES,
     QED_FLOAT_TOLERANCE,
     QedCase,
     QedChroma,
     QedFixture,
-    QedLayout,
     QedPlane,
     QedReference,
     count_qed_differences,

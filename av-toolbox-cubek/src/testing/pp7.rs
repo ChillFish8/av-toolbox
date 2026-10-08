@@ -2,7 +2,7 @@ use std::ops::{Add, Sub};
 
 use super::dpir::reference_mirror;
 use super::h264::{number, samples_named, split_planes};
-use super::qed::QedLayout;
+use super::qed::FixtureLayout;
 use super::{assert_plane_within, assert_same_plane};
 use crate::deblock::h264::peak_of;
 use crate::deblock::pp7::{
@@ -74,7 +74,7 @@ pub const PP7_FIXTURES: &[Pp7Fixture] = &[
 pub struct Pp7Case {
     pub width: u32,
     pub height: u32,
-    pub layout: QedLayout,
+    pub layout: FixtureLayout,
     pub samples: MatrixSamples,
     pub qp: f64,
     pub mode: Pp7Mode,
@@ -88,7 +88,7 @@ impl Pp7Fixture {
             panic!("{}: the metadata is not six words", self.name);
         };
 
-        let layout = QedLayout::named(layout, self.name);
+        let layout = FixtureLayout::named(layout, self.name);
         let samples = samples_named(bits, self.name);
         let mode = match mode {
             "hard" => Pp7Mode::Hard,

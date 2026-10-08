@@ -67,10 +67,10 @@ const MAX_SAMPLES: u64 = i32::MAX as u64;
 const MAX_ALIGNED: u32 = i32::MAX as u32 / 2;
 
 /// The lowest `qp` a threshold table is made for.
-const MIN_QP: f64 = 1.0;
+pub const MIN_QP: f64 = 1.0;
 
 /// The highest `qp` a threshold table is made for.
-const MAX_QP: f64 = 63.0;
+pub const MAX_QP: f64 = 63.0;
 
 /// Each side of a frame is padded to a multiple of this before its border folds back a second time.
 const ALIGNMENT: u32 = 16;

@@ -6,10 +6,10 @@ use av_toolbox_cubek::deblock::h264::{padded_frame, thresholds};
 use av_toolbox_cubek::dpir::{Dpir, DpirMaps, DpirPlanes, PACK, Variant, Weights, deblock, scratch_sizes};
 use av_toolbox_cubek::matrix::MatrixSamples;
 use av_toolbox_cubek::testing::{
+    FixtureLayout,
     H264Plane,
     QedCase,
     QedChroma,
-    QedLayout,
     QedReference,
     assert_h264_plane,
     blocky_plane,
@@ -720,11 +720,11 @@ fn h264_on_an_rgb_frame_filters_all_three_planes() {
 
 const QED_STAGE: &str = "deblock/qed";
 
-/// The [QedLayout] of the frames these tests build.
-fn qed_layout(layout: FrameLayout) -> QedLayout {
+/// The [FixtureLayout] of the frames these tests build.
+fn qed_layout(layout: FrameLayout) -> FixtureLayout {
     match layout {
-        FrameLayout::Grey => QedLayout::Grey,
-        FrameLayout::Rgb => QedLayout::Rgb,
+        FrameLayout::Grey => FixtureLayout::Grey,
+        FrameLayout::Rgb => FixtureLayout::Rgb,
         FrameLayout::Yuv { subsampling } => {
             let chroma_shift = match subsampling {
                 Subsampling::Yuv444 => (0, 0),
@@ -732,7 +732,7 @@ fn qed_layout(layout: FrameLayout) -> QedLayout {
                 Subsampling::Yuv420 => (1, 1),
             };
 
-            QedLayout::Yuv { chroma_shift }
+            FixtureLayout::Yuv { chroma_shift }
         },
         FrameLayout::Chroma { .. } => panic!("no test here builds a chroma-only frame"),
     }
