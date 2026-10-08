@@ -1,8 +1,16 @@
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::cnn::{BodyPath, Precision};
+use av_toolbox_cubek::deblock::h264::{padded_frame, thresholds};
 use av_toolbox_cubek::dpir::{Dpir, DpirMaps, DpirPlanes, PACK, Variant, Weights, deblock, scratch_sizes};
 use av_toolbox_cubek::matrix::MatrixSamples;
-use av_toolbox_cubek::testing::{decode_samples, encode_samples};
+use av_toolbox_cubek::testing::{
+    H264Plane,
+    assert_h264_plane,
+    blocky_plane,
+    decode_samples,
+    encode_samples,
+    reference_h264,
+};
 use av_toolbox_gpu::{
     BuildContext,
     BuildTask,
@@ -465,4 +473,162 @@ fn the_default_f16_precision_matches_the_f32_run() {
 
     assert_within(&half_values, &full_values, F16_CODE_BOUND, "f16 against f32");
     assert_ne!(half_values, values, "the stage changed nothing");
+}
+
+const H264_STAGE: &str = "deblock/h264";
+
+/// Blocky planes for every channel of `format`, as code values of `samples`.
+fn h264_planes(format: &FrameFormat, samples: MatrixSamples) -> Vec<Vec<f64>> {
+    let channels = format.channels().len();
+
+    (0..channels)
+        .map(|index| {
+            let (width, height) = plane_samples(format, index);
+
+            blocky_plane(width, height, samples, index as u32)
+        })
+        .collect()
+}
+
+/// Every plane of `format` deblocked on the CPU at `quant`, padded the way the stage pads it.
+fn h264_reference(
+    format: &FrameFormat,
+    planes: &[Vec<f64>],
+    samples: MatrixSamples,
+    quant: i32,
+) -> Vec<Vec<f64>> {
+    let (padded_width, padded_height) = padded_frame(format.width, format.height);
+    let frame_thresholds = thresholds(quant, 0, 0, samples);
+    let channels = format.channels();
+
+    planes
+        .iter()
+        .zip(channels)
+        .enumerate()
+        .map(|(index, (values, channel))| {
+            let (width, height) = plane_samples(format, index);
+            let padded = format
+                .layout
+                .channel_dimensions(*channel, padded_width, padded_height);
+            let (plane_padded_width, plane_padded_height) = padded.expect("a carried channel");
+            let plane = H264Plane {
+                values,
+                width,
+                height,
+                padded_width: plane_padded_width,
+                padded_height: plane_padded_height,
+            };
+
+            reference_h264(plane, samples, &frame_thresholds)
+        })
+        .collect()
+}
+
+/// Runs `deblock/h264` with `args` on `planes` and reads every plane back as code values.
+fn run_h264(
+    format: FrameFormat,
+    samples: MatrixSamples,
+    args: serde_json::Value,
+    planes: &[Vec<f64>],
+) -> Vec<Vec<f64>> {
+    let encoded: Vec<Vec<u8>> = planes
+        .iter()
+        .map(|plane| encode_samples(plane, samples))
+        .collect();
+
+    let found = run_once(H264_STAGE, format, format, args, &encoded);
+
+    found.iter().map(|bytes| decode_samples(bytes, samples)).collect()
+}
+
+#[test]
+fn h264_on_a_420_frame_matches_the_reference() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(64, 48, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+
+    let found = run_h264(input, samples, json!({ "quant": 51 }), &planes);
+
+    let expected = h264_reference(&input, &planes, samples, 51);
+    for index in 0..3 {
+        let (width, _) = plane_samples(&input, index);
+        let label = format!("plane {index}");
+
+        assert_h264_plane(&found[index], &expected[index], width, samples, &label);
+        assert_ne!(found[index], planes[index], "plane {index} came back unchanged");
+    }
+}
+
+#[test]
+fn h264_leaves_planes_not_selected_unchanged() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(64, 48, layout, SampleFormat::U8, ChromaLocation::Left);
+    let samples = MatrixSamples::U8;
+    let planes = h264_planes(&input, samples);
+
+    let found = run_h264(input, samples, json!({ "quant": 51, "planes": ["y"] }), &planes);
+
+    let expected = h264_reference(&input, &planes, samples, 51);
+    assert_h264_plane(&found[0], &expected[0], 64, samples, "luma");
+    assert_eq!(found[1], planes[1], "the unselected U plane changed");
+    assert_eq!(found[2], planes[2], "the unselected V plane changed");
+}
+
+#[test]
+fn h264_returns_a_frame_whose_sides_are_not_multiples_of_eight_at_its_own_size() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+    let input = frame(70, 46, layout, ten_bit, ChromaLocation::Left);
+    let samples = MatrixSamples::U16 { bits: 10 };
+    let planes = h264_planes(&input, samples);
+
+    let found = run_h264(input, samples, json!({ "quant": 40 }), &planes);
+
+    let expected = h264_reference(&input, &planes, samples, 40);
+    for index in 0..3 {
+        let (width, height) = plane_samples(&input, index);
+        let label = format!("plane {index}");
+
+        assert_eq!(
+            found[index].len(),
+            (width * height) as usize,
+            "{label} is {width}x{height}"
+        );
+        assert_h264_plane(&found[index], &expected[index], width, samples, &label);
+    }
+}
+
+#[test]
+fn h264_on_a_float_frame_matches_the_reference_within_tolerance() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv444,
+    };
+    let input = frame(70, 45, layout, SampleFormat::F32, ChromaLocation::Left);
+    let samples = MatrixSamples::F32;
+    let unshifted = h264_planes(&input, samples);
+    let planes: Vec<Vec<f64>> = unshifted
+        .iter()
+        .enumerate()
+        .map(|(index, plane)| {
+            let centre = if index == 0 { 0.0 } else { 0.5 };
+
+            plane.iter().map(|value| value - centre).collect()
+        })
+        .collect();
+
+    let found = run_h264(input, samples, json!({ "quant": 60 }), &planes);
+
+    let expected = h264_reference(&input, &planes, samples, 60);
+    for index in 0..3 {
+        let label = format!("plane {index}");
+
+        assert_h264_plane(&found[index], &expected[index], 70, samples, &label);
+    }
 }

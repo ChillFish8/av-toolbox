@@ -49,6 +49,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::bits::sample_kind;
 use crate::checks::accepts_integer_or_f32_frames;
 use crate::scratch::device_plane;
 use crate::sizing::Sizing;
@@ -212,14 +213,11 @@ fn unsupported_sample(sample: SampleFormat) -> StageError {
 }
 
 fn matrix_samples(sample: SampleFormat) -> Result<MatrixSamples, StageError> {
-    match sample {
-        SampleFormat::U8 => Ok(MatrixSamples::U8),
-        SampleFormat::U16 { depth } => Ok(MatrixSamples::U16 {
-            bits: u32::from(depth.bits()),
-        }),
-        SampleFormat::F32 => Ok(MatrixSamples::F32),
-        other => Err(unsupported_sample(other)),
-    }
+    let Some(samples) = sample_kind(sample) else {
+        return Err(unsupported_sample(sample));
+    };
+
+    Ok(samples)
 }
 
 fn stream_coefficients(matrix: StreamMatrix) -> Option<Coefficients> {
