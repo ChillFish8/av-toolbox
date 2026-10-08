@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{FormatSet, SampleFormat, StreamFormat};
 
@@ -42,7 +44,7 @@ fn out_of_range_i32(stage: &str, name: &str, value: i32, minimum: i32, maximum: 
     StageError::msg(message)
 }
 
-fn out_of_range_f32(stage: &str, name: &str, value: f32, minimum: f32, maximum: f32) -> StageError {
+fn out_of_range<T: Display>(stage: &str, name: &str, value: T, minimum: T, maximum: T) -> StageError {
     let message = format!("{stage} needs {name} between {minimum} and {maximum}, got {value}");
 
     StageError::msg(message)
@@ -88,6 +90,23 @@ pub(crate) fn between_i32(
 }
 
 /// Refuses `value` unless it falls between `minimum` and `maximum`, inclusive.
+///
+/// NaN is never between them, so it is refused.
+fn between<T: PartialOrd + Display + Copy>(
+    stage: &str,
+    name: &str,
+    value: T,
+    minimum: T,
+    maximum: T,
+) -> Result<(), StageError> {
+    if (minimum..=maximum).contains(&value) {
+        return Ok(());
+    }
+
+    Err(out_of_range(stage, name, value, minimum, maximum))
+}
+
+/// Refuses `value` unless it falls between `minimum` and `maximum`, inclusive.
 pub(crate) fn between_f32(
     stage: &str,
     name: &str,
@@ -95,11 +114,18 @@ pub(crate) fn between_f32(
     minimum: f32,
     maximum: f32,
 ) -> Result<(), StageError> {
-    if (minimum..=maximum).contains(&value) {
-        return Ok(());
-    }
+    between(stage, name, value, minimum, maximum)
+}
 
-    Err(out_of_range_f32(stage, name, value, minimum, maximum))
+/// Refuses `value` unless it falls between `minimum` and `maximum`, inclusive.
+pub(crate) fn between_f64(
+    stage: &str,
+    name: &str,
+    value: f64,
+    minimum: f64,
+    maximum: f64,
+) -> Result<(), StageError> {
+    between(stage, name, value, minimum, maximum)
 }
 
 #[cfg(test)]
@@ -161,5 +187,23 @@ mod tests {
 
         assert!(above.to_string().contains("256"));
         assert!(nan.to_string().contains(STAGE));
+    }
+
+    #[test]
+    fn between_f64_accepts_the_bounds_and_refuses_nan_infinity_and_values_outside_them() {
+        let lowest = between_f64(STAGE, "value", 1.0, 1.0, 63.0);
+        let highest = between_f64(STAGE, "value", 63.0, 1.0, 63.0);
+
+        assert!(lowest.is_ok());
+        assert!(highest.is_ok());
+
+        let refused = [0.99, 63.01, f64::NAN, f64::INFINITY];
+        for value in refused {
+            let error = between_f64(STAGE, "value", value, 1.0, 63.0).expect_err("outside the range");
+            let message = error.to_string();
+
+            assert!(message.contains(STAGE), "{message}");
+            assert!(message.contains("value between 1 and 63"), "{message}");
+        }
     }
 }

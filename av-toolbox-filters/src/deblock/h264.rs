@@ -33,7 +33,6 @@ use av_toolbox_gpu::{
     FrameContext,
     FrameError,
     FrameFormat,
-    FrameLayout,
     FrameMeta,
     Offered,
     OutputFormats,
@@ -47,6 +46,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use super::planes::plane_like;
 use crate::bits::sample_kind;
 use crate::checks::{accepts_integer_or_f32_frames, between_i32};
 use crate::planes::ChannelName;
@@ -296,20 +296,11 @@ impl<R: Runtime> Deblocker<R> {
         source: &Plane,
         meta: &FrameMeta,
     ) -> Result<Plane, StageError> {
-        let (width, height) = source.dimensions();
-        let plane_format = FrameFormat {
-            width,
-            height,
-            layout: FrameLayout::Grey,
-            ..self.format
-        };
-        let frame = context.alloc_frame(&plane_format, meta.clone());
-
-        let Some(plane) = frame.plane(Channel::Y) else {
+        let Some(plane) = plane_like(context, &self.format, source, meta) else {
             return Err(missing_channel(Channel::Y));
         };
 
-        Ok(plane.clone())
+        Ok(plane)
     }
 
     /// Deblocks `sources`, the selected planes in channel order, into the same-sized `targets`.

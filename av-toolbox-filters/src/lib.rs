@@ -16,6 +16,8 @@
 //!   VapourSynth's deblock.Deblock does.
 //! - `deblock/qed` deblocks block borders gently and spreads a stronger pass into each block's interior, the
 //!   way vsdenoise's deblock_qed does.
+//! - `deblock/pp7` removes compression blocking by dropping each sample's weak local frequencies, the way
+//!   VapourSynth's pp7.DeblockPP7 does.
 //! - `dehalo/alpha` removes halos by pulling pixels toward a halo-free estimate made by resizing.
 //! - `dehalo/edge_clean` warp-sharpens and repairs away from strong edges.
 //! - `dehalo/fine` runs `dehalo/alpha` only in a band around strong edges.
@@ -93,6 +95,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<deblock::Dpir>()?;
     registry.register_filter::<deblock::H264>()?;
     registry.register_filter::<deblock::Qed>()?;
+    registry.register_filter::<deblock::Pp7>()?;
     registry.register_filter::<dehalo::Alpha>()?;
     registry.register_filter::<dehalo::EdgeClean>()?;
     registry.register_filter::<dehalo::Fine>()?;
@@ -153,6 +156,7 @@ mod tests {
         assert!(registered("deblock/dpir"));
         assert!(registered("deblock/h264"));
         assert!(registered("deblock/qed"));
+        assert!(registered("deblock/pp7"));
         assert!(registered("dehalo/alpha"));
         assert!(registered("dehalo/edge_clean"));
         assert!(registered("dehalo/fine"));

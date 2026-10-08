@@ -1,13 +1,4 @@
-use av_toolbox_core::{
-    FilterDefinition,
-    InputArgument,
-    Parallelism,
-    PipelineRegistry,
-    StageDefinition,
-    StageHandle,
-    StageKind,
-    StreamType,
-};
+use av_toolbox_core::{FilterDefinition, Parallelism, StageDefinition};
 use av_toolbox_cubek::deblock::h264::{Thresholds, thresholds};
 use av_toolbox_cubek::matrix::MatrixSamples;
 use av_toolbox_gpu::{
@@ -21,6 +12,7 @@ use av_toolbox_gpu::{
 };
 use serde_json::json;
 
+use super::prepared_refusal;
 use crate::deblock::Qed;
 use crate::deblock::qed::{
     QedArgs,
@@ -71,28 +63,6 @@ fn treatments(value: serde_json::Value, input: FrameFormat) -> Vec<Treatment> {
     let deblocking = checked_qed(&arguments, &input).expect("accepted");
 
     deblocking.treatments
-}
-
-/// Every message in the chain the pipeline refuses `value` with, one per line.
-fn prepared_refusal(value: serde_json::Value) -> String {
-    let mut registry = PipelineRegistry::new();
-    crate::register(&mut registry).expect("the filters register");
-
-    let handle = StageHandle::new(1);
-    let arguments = [InputArgument::positional(handle, StreamType::Frames)];
-    let prepared = registry.prepare(StageKind::Filter, STAGE, &value, &arguments);
-    let Err(error) = prepared else {
-        panic!("{STAGE} should refuse {value}");
-    };
-
-    let mut lines = vec![error.to_string()];
-    let mut cause = std::error::Error::source(&error);
-    while let Some(inner) = cause {
-        lines.push(inner.to_string());
-        cause = inner.source();
-    }
-
-    lines.join("\n")
 }
 
 #[test]
@@ -156,7 +126,7 @@ fn a_pair_of_the_wrong_length_is_refused_naming_the_argument() {
 fn an_unknown_chroma_is_refused_naming_chroma() {
     let parsed = serde_json::from_value::<QedArgs>(json!({ "chroma": "soft" }));
     let message = parsed.expect_err("soft is not a chroma").to_string();
-    let prepared = prepared_refusal(json!({ "chroma": "soft" }));
+    let prepared = prepared_refusal(STAGE, json!({ "chroma": "soft" }));
 
     assert!(
         message.contains("soft") && message.contains("normal"),

@@ -1,5 +1,7 @@
 mod dpir;
 mod h264;
+mod planes;
+mod pp7;
 mod qed;
 mod staging;
 
@@ -8,4 +10,5 @@ mod tests;
 
 pub(crate) use self::dpir::Dpir;
 pub(crate) use self::h264::H264;
+pub(crate) use self::pp7::Pp7;
 pub(crate) use self::qed::Qed;

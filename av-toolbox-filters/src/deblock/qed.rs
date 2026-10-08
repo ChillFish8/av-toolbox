@@ -54,6 +54,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::h264::padded_sizes;
+use super::planes::{channel_shares, plane_like};
 use crate::bits::sample_kind;
 use crate::checks::{accepts_integer_or_f32_frames, between_i32};
 use crate::planes::ChannelName;
@@ -317,18 +318,8 @@ pub(crate) fn layout_planes(format: &FrameFormat, deblocking: &QedDeblocking) ->
 /// up to multiples of 16, in channel order.
 pub(crate) fn lowpass_sizes(format: &FrameFormat) -> Vec<(u32, u32)> {
     let (lowpass_width, lowpass_height) = lowpass_frame(format.width, format.height);
-    let channels = format.channels();
 
-    channels
-        .iter()
-        .map(|channel| {
-            let dimensions = format
-                .layout
-                .channel_dimensions(*channel, lowpass_width, lowpass_height);
-
-            dimensions.expect("every channel of a format's own layout is carried")
-        })
-        .collect()
+    channel_shares(format, lowpass_width, lowpass_height)
 }
 
 /// Removes compression blocking the way Didée's Deblock_QED does, as vsdenoise's `deblock_qed` runs it.
@@ -441,20 +432,11 @@ impl<R: Runtime> QedDeblocker<R> {
         source: &Plane,
         meta: &FrameMeta,
     ) -> Result<Plane, StageError> {
-        let (width, height) = source.dimensions();
-        let plane_format = FrameFormat {
-            width,
-            height,
-            layout: FrameLayout::Grey,
-            ..self.format
-        };
-        let frame = context.alloc_frame(&plane_format, meta.clone());
-
-        let Some(plane) = frame.plane(Channel::Y) else {
+        let Some(plane) = plane_like(context, &self.format, source, meta) else {
             return Err(missing_channel(Channel::Y));
         };
 
-        Ok(plane.clone())
+        Ok(plane)
     }
 
     /// A scratch plane for the strong pass of `item`, when it takes the QED output.
