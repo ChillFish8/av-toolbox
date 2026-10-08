@@ -1,3 +1,4 @@
+mod artefacts;
 mod chunks;
 mod feeds;
 mod flushing;

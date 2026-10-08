@@ -16,6 +16,7 @@ use av_toolbox_core::{
     Sided,
     Sink,
     Source,
+    StageInstance,
 };
 use av_toolbox_gpu::{Backend, HostSide, ResolvedFormats};
 
@@ -40,6 +41,29 @@ pub enum StageBox {
     HostSink(Box<dyn Sink<HostSide>>),
     /// A crossing that moves one item between host and device.
     Crossing(Crossing),
+}
+
+impl StageBox {
+    /// The stage behind this box, or `None` for a crossing, which has no instance.
+    pub fn instance_mut(&mut self) -> Option<&mut dyn StageInstance> {
+        let instance: &mut dyn StageInstance = match self {
+            Self::Source(stage) => stage.as_mut(),
+            Self::Filter(stage) => stage.as_mut(),
+            Self::Mask(stage) => stage.as_mut(),
+            Self::Provider(stage) => stage.as_mut(),
+            Self::Sink(stage) => stage.as_mut(),
+            Self::MetaProvider(stage) => stage.as_mut(),
+            Self::MetaSink(stage) => stage.as_mut(),
+            Self::HostSource(stage) => stage.as_mut(),
+            Self::HostFilter(stage) => stage.as_mut(),
+            Self::HostMask(stage) => stage.as_mut(),
+            Self::HostProvider(stage) => stage.as_mut(),
+            Self::HostSink(stage) => stage.as_mut(),
+            Self::Crossing(_) => return None,
+        };
+
+        Some(instance)
+    }
 }
 
 impl fmt::Debug for StageBox {

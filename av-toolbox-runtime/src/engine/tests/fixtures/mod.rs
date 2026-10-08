@@ -1,3 +1,4 @@
+pub(crate) mod artefacts;
 pub(crate) mod delay;
 pub(crate) mod double;
 pub(crate) mod failing;

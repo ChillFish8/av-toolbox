@@ -6,6 +6,7 @@ use av_toolbox_graph::{NodeId, StageBox};
 
 use super::node::{end_node, run_node, start_node};
 use crate::RunError;
+use crate::artefacts::ArtefactCollector;
 use crate::chunks::chunk_in;
 use crate::profile::{Counted, Profiler};
 
@@ -97,6 +98,7 @@ pub struct RegionRunner {
     last_chunks: Vec<Option<u64>>,
     route: Option<ChunkRoute>,
     profiler: Option<Arc<Profiler>>,
+    artefacts: Option<Arc<ArtefactCollector>>,
 }
 
 impl RegionRunner {
@@ -122,6 +124,7 @@ impl RegionRunner {
             last_chunks,
             route: None,
             profiler: None,
+            artefacts: None,
         }
     }
 
@@ -139,6 +142,17 @@ impl RegionRunner {
     /// The same runner, timing every stage call through `profiler` when there is one.
     pub(crate) fn profiled(mut self, profiler: Option<Arc<Profiler>>) -> Self {
         self.profiler = profiler;
+        self
+    }
+
+    /// The same runner, telling its nodes what is wanted of them and handing what they build to `artefacts`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "only the tests build a collector"))]
+    pub(crate) fn collecting(mut self, artefacts: Arc<ArtefactCollector>) -> Self {
+        for (id, stage) in &mut self.nodes {
+            artefacts.announce(*id, stage);
+        }
+
+        self.artefacts = Some(artefacts);
         self
     }
 
@@ -172,6 +186,7 @@ impl RegionRunner {
             authority: self.edges.authorities.get(&self.nodes[0].0).copied(),
             route: self.edges.routes.get(&self.nodes[0].0).copied(),
             last: &mut self.last_chunks[0],
+            artefacts: self.artefacts.as_deref(),
             profiler: self.profiler.as_deref(),
         };
         let mut head_output = step_node(&mut self.nodes[0], &mut head_watch, context, bundle)?;
@@ -184,15 +199,16 @@ impl RegionRunner {
             enqueue(feeds, queues, &outputs, &self.positions);
 
             let node = self.nodes[index].0;
-            let watch = NodeWatch {
+            let mut watch = NodeWatch {
                 chunked: self.edges.chunked.contains(&node),
                 frame_routed: self.edges.frame_routed,
                 authority: self.edges.authorities.get(&node).copied(),
                 route: self.edges.routes.get(&node).copied(),
                 last: &mut self.last_chunks[index],
+                artefacts: self.artefacts.as_deref(),
                 profiler: self.profiler.as_deref(),
             };
-            let mut produced = run_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
+            let mut produced = run_fed(feeds, queues, &mut self.nodes[index], &mut watch, context)?;
             stamp(&self.edges.paths, node, &mut produced);
             outputs.push(produced);
         }
@@ -215,9 +231,13 @@ impl RegionRunner {
     pub fn end(&mut self, context: &mut FrameContext) -> Result<Vec<AnyItem>, RunError> {
         let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
 
-        let profiler = self.profiler.as_deref();
+        let head_watch = EndWatch {
+            chunk: self.last_chunks[0],
+            artefacts: self.artefacts.as_deref(),
+            profiler: self.profiler.as_deref(),
+        };
         let (head_id, head_stage) = &mut self.nodes[0];
-        let mut head_flush = call_end(*head_id, head_stage, context, profiler)?;
+        let mut head_flush = call_end(*head_id, head_stage, context, head_watch)?;
         stamp(&self.edges.paths, *head_id, &mut head_flush);
         outputs.push(head_flush);
 
@@ -233,6 +253,7 @@ impl RegionRunner {
                 authority: self.edges.authorities.get(&node).copied(),
                 route: self.edges.routes.get(&node).copied(),
                 last: &mut self.last_chunks[index],
+                artefacts: self.artefacts.as_deref(),
                 profiler: self.profiler.as_deref(),
             };
             let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], watch, context)?;
@@ -274,6 +295,7 @@ struct NodeWatch<'a> {
     authority: Option<usize>,
     route: Option<ChunkRoute>,
     last: &'a mut Option<u64>,
+    artefacts: Option<&'a ArtefactCollector>,
     profiler: Option<&'a Profiler>,
 }
 
@@ -304,20 +326,45 @@ fn counted_run(stage: &StageBox) -> Counted {
     }
 }
 
+/// What ending a node needs beyond the node itself.
+#[derive(Copy, Clone)]
+struct EndWatch<'a> {
+    /// The chunk being ended, or `None` for a node that is not given one chunk at a time.
+    chunk: Option<u64>,
+    artefacts: Option<&'a ArtefactCollector>,
+    profiler: Option<&'a Profiler>,
+}
+
 /// Ends one node, timed when the run is profiled.
 fn call_end(
     id: NodeId,
     stage: &mut StageBox,
     context: &mut FrameContext,
-    profiler: Option<&Profiler>,
+    watch: EndWatch<'_>,
 ) -> Result<Vec<AnyItem>, RunError> {
-    let Some(profiler) = profiler else {
-        return end_node(id, stage, context);
+    let Some(profiler) = watch.profiler else {
+        return end_and_collect(id, stage, context, watch);
     };
 
     profiler.time(id, Counted::Never, context, |context| {
-        end_node(id, stage, context)
+        end_and_collect(id, stage, context, watch)
     })
+}
+
+/// Ends a node, then takes whatever artefacts it built for the stream or chunk that ended.
+fn end_and_collect(
+    id: NodeId,
+    stage: &mut StageBox,
+    context: &mut FrameContext,
+    watch: EndWatch<'_>,
+) -> Result<Vec<AnyItem>, RunError> {
+    let flushed = end_node(id, stage, context)?;
+
+    if let Some(artefacts) = watch.artefacts {
+        artefacts.take(id, watch.chunk, stage, context)?;
+    }
+
+    Ok(flushed)
 }
 
 /// Runs one node over one bundle of its inputs.
@@ -386,7 +433,12 @@ fn restart_on_new_chunk(
         return Ok(Vec::new());
     }
 
-    let restarted = end_and_start(node, context, watch.profiler);
+    let ending = EndWatch {
+        chunk: Some(previous),
+        artefacts: watch.artefacts,
+        profiler: watch.profiler,
+    };
+    let restarted = end_and_start(node, context, ending);
 
     in_chunk(restarted, previous)
 }
@@ -394,10 +446,10 @@ fn restart_on_new_chunk(
 fn end_and_start(
     node: &mut (NodeId, StageBox),
     context: &mut FrameContext,
-    profiler: Option<&Profiler>,
+    ending: EndWatch<'_>,
 ) -> Result<Vec<AnyItem>, RunError> {
     let (id, stage) = node;
-    let flushed = call_end(*id, stage, context, profiler)?;
+    let flushed = call_end(*id, stage, context, ending)?;
     start_node(*id, stage, context)?;
 
     Ok(flushed)
@@ -431,11 +483,11 @@ fn run_fed(
     feeds: &[Feed],
     queues: &mut [VecDeque<AnyItem>],
     node: &mut (NodeId, StageBox),
-    mut watch: NodeWatch<'_>,
+    watch: &mut NodeWatch<'_>,
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
     if feeds.is_empty() {
-        return step_node(node, &mut watch, context, Vec::new());
+        return step_node(node, watch, context, Vec::new());
     }
 
     let ready = ready_count(queues);
@@ -443,7 +495,7 @@ fn run_fed(
 
     for _ in 0..ready {
         let slots = take_inputs(node.0, feeds, queues)?;
-        let mut result = step_node(node, &mut watch, context, slots)?;
+        let mut result = step_node(node, watch, context, slots)?;
         produced.append(&mut result);
     }
 
@@ -457,11 +509,10 @@ fn end_fed(
     feeds: &[Feed],
     queues: &mut [VecDeque<AnyItem>],
     node: &mut (NodeId, StageBox),
-    watch: NodeWatch<'_>,
+    mut watch: NodeWatch<'_>,
     context: &mut FrameContext,
 ) -> Result<Vec<AnyItem>, RunError> {
-    let profiler = watch.profiler;
-    let mut forwarded = run_fed(feeds, queues, node, watch, context)?;
+    let mut forwarded = run_fed(feeds, queues, node, &mut watch, context)?;
 
     let leftover: Vec<usize> = queues.iter().map(VecDeque::len).collect();
     if leftover.iter().any(|&count| count > 0) {
@@ -469,8 +520,13 @@ fn end_fed(
         return Err(RunError::UnpairedFeeds { node, leftover });
     }
 
+    let ending = EndWatch {
+        chunk: *watch.last,
+        artefacts: watch.artefacts,
+        profiler: watch.profiler,
+    };
     let (id, stage) = node;
-    let flushed = call_end(*id, stage, context, profiler)?;
+    let flushed = call_end(*id, stage, context, ending)?;
 
     forwarded.extend(flushed);
     Ok(forwarded)

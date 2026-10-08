@@ -2,7 +2,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use av_toolbox_core::{Inputs, MetaInputs, MetaSink, Sink, Source, StageError, StageInstance};
+use av_toolbox_core::{
+    Artefact,
+    Inputs,
+    MetaInputs,
+    MetaSink,
+    Sink,
+    Source,
+    StageError,
+    StageInstance,
+    WantedArtefacts,
+};
 use av_toolbox_gpu::{FrameContext, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
@@ -24,6 +34,14 @@ pub(super) struct WatchedSource<S: Side> {
 impl<S: Side> StageInstance for WatchedSource<S> {
     fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
         self.inner.start_of_stream(context)
+    }
+
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
+        self.inner.wants_artefacts(wanted);
+    }
+
+    fn take_artefacts(&mut self, context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
+        self.inner.take_artefacts(context)
     }
 }
 
@@ -105,6 +123,14 @@ impl<S: Side> StageInstance for CountingSink<S> {
     fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
         self.inner.start_of_stream(context)
     }
+
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
+        self.inner.wants_artefacts(wanted);
+    }
+
+    fn take_artefacts(&mut self, context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
+        self.inner.take_artefacts(context)
+    }
 }
 
 impl<S: Side> Sink<S> for CountingSink<S> {
@@ -144,6 +170,14 @@ struct CountingMetaSink {
 impl StageInstance for CountingMetaSink {
     fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
         self.inner.start_of_stream(context)
+    }
+
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
+        self.inner.wants_artefacts(wanted);
+    }
+
+    fn take_artefacts(&mut self, context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
+        self.inner.take_artefacts(context)
     }
 }
 
@@ -253,4 +287,113 @@ pub(super) fn wrap_sinks(
             other => (id, other),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use av_toolbox_core::ArtefactData;
+    use av_toolbox_gpu::{Frame, testing_context};
+
+    use super::*;
+
+    /// A stage of every wrapped kind, recording whether it was told `frames` is wanted and handing over one
+    /// artefact.
+    struct Handing {
+        wanted: Arc<Mutex<Option<bool>>>,
+    }
+
+    impl StageInstance for Handing {
+        fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
+            let mut seen = self.wanted.lock().expect("unpoisoned");
+            *seen = Some(wanted.contains("frames"));
+        }
+
+        fn take_artefacts(&mut self, _context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
+            let artefact = Artefact {
+                name: "frames",
+                data: ArtefactData::Opaque(vec![7]),
+            };
+
+            Ok(vec![artefact])
+        }
+    }
+
+    impl Source for Handing {
+        fn next(&mut self, _context: &mut FrameContext) -> Result<Option<Frame>, StageError> {
+            Ok(None)
+        }
+    }
+
+    impl Sink for Handing {
+        fn consume(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<(), StageError> {
+            Ok(())
+        }
+    }
+
+    impl MetaSink for Handing {
+        fn consume(&mut self, _context: &mut FrameContext, _inputs: MetaInputs) -> Result<(), StageError> {
+            Ok(())
+        }
+    }
+
+    fn handing() -> (Handing, Arc<Mutex<Option<bool>>>) {
+        let wanted = Arc::new(Mutex::new(None));
+        let stage = Handing {
+            wanted: wanted.clone(),
+        };
+
+        (stage, wanted)
+    }
+
+    /// Wraps `stage` as the engine would, as the only node of a region.
+    fn wrapped(stage: StageBox) -> StageBox {
+        let id = NodeId::new(0);
+        let progress = Progress::new([id]);
+        let tally = Arc::new(SinkTally::new(0));
+        let exhausted = Arc::new(AtomicBool::new(false));
+        let read = Arc::new(AtomicU64::new(0));
+
+        let watched = wrap_head_source(vec![(id, stage)], exhausted, None, read);
+        let mut counted = wrap_sinks(watched, tally, &progress);
+        let (_, stage) = counted.pop().expect("one node");
+
+        stage
+    }
+
+    fn assert_forwards_artefacts(stage: StageBox, wanted: &Mutex<Option<bool>>) {
+        let mut stage = wrapped(stage);
+        let instance = stage.instance_mut().expect("a stage instance");
+        let mut context = testing_context();
+
+        let wanting = WantedArtefacts::new(vec!["frames"]);
+        instance.wants_artefacts(&wanting);
+        let taken = instance.take_artefacts(&mut context).expect("takes");
+
+        assert_eq!(*wanted.lock().expect("unpoisoned"), Some(true));
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].name, "frames");
+    }
+
+    #[test]
+    fn a_wrapped_source_forwards_artefacts() {
+        let (stage, wanted) = handing();
+
+        assert_forwards_artefacts(StageBox::Source(Box::new(stage)), &wanted);
+    }
+
+    #[test]
+    fn a_wrapped_sink_forwards_artefacts() {
+        let (stage, wanted) = handing();
+
+        assert_forwards_artefacts(StageBox::Sink(Box::new(stage)), &wanted);
+    }
+
+    #[test]
+    fn a_wrapped_meta_sink_forwards_artefacts() {
+        let (stage, wanted) = handing();
+
+        assert_forwards_artefacts(StageBox::MetaSink(Box::new(stage)), &wanted);
+    }
 }

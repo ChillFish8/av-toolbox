@@ -1,3 +1,4 @@
+mod artefacts;
 mod assignment;
 mod backpressure;
 mod exchange;

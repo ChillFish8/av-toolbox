@@ -238,6 +238,28 @@ pub(crate) fn pairing_spec(name: &str, base: &str, overlay: &str) -> StageSpec {
     sink
 }
 
+/// A filter handing over its frame count as `frames`, or misbehaving as `mode` says.
+pub(crate) fn artefacting_spec(
+    name: &str,
+    input: &str,
+    workers: usize,
+    per_chunk: bool,
+    mode: &str,
+) -> StageSpec {
+    let mut artefacting = spec(StageKind::Filter, name, "test/artefacting");
+    artefacting.inputs = vec![positional(input)];
+    artefacting.args = Spanned::unknown(json!({ "mode": mode, "per_chunk": per_chunk }));
+    artefacting.workers = Some(workers);
+    artefacting
+}
+
+/// An artefact sink recording what it is handed, keeping only what `include` matches.
+pub(crate) fn collecting_spec(name: &str, include: &[&str]) -> StageSpec {
+    let mut collecting = spec(StageKind::Sink, name, "test/collecting");
+    collecting.args = Spanned::unknown(json!({ "include": include }));
+    collecting
+}
+
 pub(crate) fn sink_spec(name: &str, input: &str) -> StageSpec {
     let mut sink = spec(StageKind::Sink, name, "test/recording");
     sink.inputs = vec![positional(input)];

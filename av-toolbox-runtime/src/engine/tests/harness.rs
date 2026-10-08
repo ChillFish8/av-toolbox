@@ -24,6 +24,12 @@ use av_toolbox_graph::{
     solve,
 };
 
+use crate::engine::tests::fixtures::artefacts::{
+    Artefacting,
+    ArtefactingArgs,
+    ArtefactingInstance,
+    Collecting,
+};
 use crate::engine::tests::fixtures::delay::{Delay, DelayArgs, DelayInstance};
 use crate::engine::tests::fixtures::double::{Double, DoubleInstance};
 use crate::engine::tests::fixtures::failing::{
@@ -105,6 +111,9 @@ fn registry() -> PipelineRegistry {
     registry.register_filter::<Matching>().expect("should register");
     registry.register_filter::<Failing>().expect("should register");
     registry.register_filter::<Panicking>().expect("should register");
+    registry
+        .register_filter::<Artefacting>()
+        .expect("should register");
     registry.register_sink::<Recording>().expect("should register");
     registry
         .register_sink::<HostRecording>()
@@ -122,6 +131,9 @@ fn registry() -> PipelineRegistry {
     registry.register_provider::<Tagging>().expect("should register");
     registry
         .register_meta_sink::<TagRecording>()
+        .expect("should register");
+    registry
+        .register_artefact_sink::<Collecting>()
         .expect("should register");
     registry
 }
@@ -163,6 +175,11 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
             StageBox::Filter(Box::new(DelayInstance::from_args(args)))
         },
         "test/double" => StageBox::Filter(Box::new(DoubleInstance::new())),
+        "test/artefacting" => {
+            let args: ArtefactingArgs =
+                serde_json::from_value(node.args().clone()).expect("valid artefacting args");
+            StageBox::Filter(Box::new(ArtefactingInstance::from_args(args)))
+        },
         "test/masking" => StageBox::Mask(Box::new(MaskingInstance::new())),
         "test/multiplying" => StageBox::Filter(Box::new(MultiplyingInstance::new())),
         "test/join" => StageBox::Filter(Box::new(JoinInstance::new())),
