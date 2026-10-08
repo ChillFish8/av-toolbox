@@ -1,5 +1,5 @@
 use super::assert_plane_within;
-use super::h264::{H264Plane, number, reference_h264, split_planes};
+use super::h264::{H264Plane, number, reference_h264, samples_named, split_planes};
 use crate::deblock::h264::{Thresholds, padded_frame, peak_of, thresholds};
 use crate::deblock::qed::{COSINES, change_value, lowpass_frame, neutral_of};
 use crate::matrix::MatrixSamples;
@@ -60,7 +60,7 @@ pub const QED_FIXTURES: &[QedFixture] = &[
     fixture!("420_16x4_32_q24-26_a1-1_b2-2_qed", 0),
 ];
 
-/// How a QED frame's planes are laid out.
+/// How a deblocking fixture's planes are laid out.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum QedLayout {
     Grey,
@@ -70,6 +70,33 @@ pub enum QedLayout {
         chroma_shift: (u32, u32),
     },
     Rgb,
+}
+
+impl QedLayout {
+    pub(super) fn named(word: &str, name: &str) -> Self {
+        match word {
+            "420" => Self::Yuv { chroma_shift: (1, 1) },
+            "422" => Self::Yuv { chroma_shift: (1, 0) },
+            "444" => Self::Yuv { chroma_shift: (0, 0) },
+            "grey" => Self::Grey,
+            other => panic!("{name}: {other} is not a layout"),
+        }
+    }
+
+    /// Each plane's share of a `width` by `height` frame, in channel order, chroma rounded up.
+    pub fn plane_shares(self, width: u32, height: u32) -> Vec<(u32, u32)> {
+        match self {
+            Self::Grey => vec![(width, height)],
+            Self::Rgb => vec![(width, height); 3],
+            Self::Yuv {
+                chroma_shift: (shift_x, shift_y),
+            } => {
+                let chroma = (width.div_ceil(1 << shift_x), height.div_ceil(1 << shift_y));
+
+                vec![(width, height), chroma, chroma]
+            },
+        }
+    }
 }
 
 /// What the chroma planes of a YUV frame take.
@@ -114,20 +141,8 @@ impl QedFixture {
             panic!("{}: the metadata is not eleven words", self.name);
         };
 
-        let layout = match layout {
-            "420" => QedLayout::Yuv { chroma_shift: (1, 1) },
-            "422" => QedLayout::Yuv { chroma_shift: (1, 0) },
-            "444" => QedLayout::Yuv { chroma_shift: (0, 0) },
-            "grey" => QedLayout::Grey,
-            other => panic!("{}: {other} is not a layout", self.name),
-        };
-        let samples = match bits {
-            "8" => MatrixSamples::U8,
-            "32" => MatrixSamples::F32,
-            deeper => MatrixSamples::U16 {
-                bits: number(deeper, self.name),
-            },
-        };
+        let layout = QedLayout::named(layout, self.name);
+        let samples = samples_named(bits, self.name);
         let chroma = match chroma {
             "qed" => QedChroma::Qed,
             "normal" => QedChroma::Normal,
@@ -230,17 +245,7 @@ impl QedCase {
 
     /// Each plane's share of a `width` by `height` frame, in channel order, chroma rounded up.
     fn shares(&self, width: u32, height: u32) -> Vec<(u32, u32)> {
-        match self.layout {
-            QedLayout::Grey => vec![(width, height)],
-            QedLayout::Rgb => vec![(width, height); 3],
-            QedLayout::Yuv {
-                chroma_shift: (shift_x, shift_y),
-            } => {
-                let chroma = (width.div_ceil(1 << shift_x), height.div_ceil(1 << shift_y));
-
-                vec![(width, height), chroma, chroma]
-            },
-        }
+        self.layout.plane_shares(width, height)
     }
 }
 

@@ -19,6 +19,7 @@ mod motion;
 mod neighbourhood;
 mod normalise;
 mod padding;
+mod pp7;
 mod qed;
 mod qtgmc;
 mod resize;
@@ -213,6 +214,25 @@ pub use self::neighbourhood::{
 };
 pub use self::normalise::reference_normalise;
 pub use self::padding::{reference_crop, reference_pad};
+pub use self::pp7::{
+    PP7_FIXTURES,
+    PP7_FLIP_BOUND,
+    PP7_FLOAT_TOLERANCE,
+    Pp7Case,
+    Pp7Fixture,
+    Pp7Plane,
+    count_pp7_differences,
+    plugin_output_at_peak,
+    reference_coefficients,
+    reference_extended_index,
+    reference_float_output,
+    reference_integer_output,
+    reference_kept_float,
+    reference_kept_integer,
+    reference_pp7,
+    reference_pp7_plane,
+    reference_transform,
+};
 pub use self::qed::{
     QED_FIXTURES,
     QED_FLOAT_TOLERANCE,

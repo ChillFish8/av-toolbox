@@ -62,6 +62,18 @@ pub struct H264Case {
     pub boffset: i32,
 }
 
+pub(super) fn samples_named(word: &str, name: &str) -> MatrixSamples {
+    match word {
+        "8" => MatrixSamples::U8,
+        "32" => MatrixSamples::F32,
+        deeper => {
+            let bits = number(deeper, name);
+
+            MatrixSamples::U16 { bits }
+        },
+    }
+}
+
 pub(super) fn number<T: std::str::FromStr>(word: &str, name: &str) -> T {
     let parsed = word.parse();
 
@@ -85,13 +97,7 @@ impl H264Fixture {
             "444" => (0, 0),
             other => panic!("{}: {other} is not a subsampling", self.name),
         };
-        let samples = match bits {
-            "8" => MatrixSamples::U8,
-            "32" => MatrixSamples::F32,
-            deeper => MatrixSamples::U16 {
-                bits: number(deeper, self.name),
-            },
-        };
+        let samples = samples_named(bits, self.name);
 
         H264Case {
             width: number(width, self.name),
