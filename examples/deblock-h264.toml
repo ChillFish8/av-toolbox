@@ -1,0 +1,30 @@
+# Deblocks a video with H.264's in-loop deblocking filter, the way VapourSynth's deblock.Deblock does.
+#
+# Raise args.quant for heavier blocking, up to 60. args.aoffset raises or lowers how large a step across a
+# block edge still counts as blocking, and args.boffset how flat each side of it must be. With no offsets,
+# nothing changes below 16.
+# Set args.planes = ["y"] to leave the chroma alone.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.output]
+type = "path"
+description = "Where to write the deblocked clip"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.deblocked]
+type = "deblock/h264"
+inputs = ["input"]
+args.quant = 25
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["deblocked"]
+args.path = "{{ output }}"

@@ -4,8 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use av_toolbox_cubek::artcnn::{Model, Weights};
+use av_toolbox_cubek::deblock::h264::thresholds;
 use av_toolbox_cubek::dpir::{PACK, Variant};
-use av_toolbox_cubek::testing::reference_artcnn;
+use av_toolbox_cubek::matrix::MatrixSamples;
+use av_toolbox_cubek::testing::{H264Plane, reference_artcnn, reference_h264};
 use av_toolbox_gpu::{Backend, test_device};
 use av_toolbox_models::Store;
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
@@ -749,5 +751,56 @@ fn the_dpir_example_keeps_a_smooth_clip() {
         );
         assert!(u_move <= DPIR_CODE_BOUND, "frame {index}: u moved by {u_move}");
         assert!(v_move <= DPIR_CODE_BOUND, "frame {index}: v moved by {v_move}");
+    }
+}
+
+/// The `quant` that `deblock-h264.toml` sets.
+const H264_EXAMPLE_QUANT: i32 = 25;
+
+/// A luma of flat 8 by 8 blocks 3 to 9 codes apart, blocking that quant 25 smooths across every edge.
+fn blocky_luma() -> Vec<u8> {
+    (0..SIZE)
+        .flat_map(|row| {
+            (0..SIZE).map(move |column| {
+                let block = row / 8 + 2 * (column / 8);
+
+                110 + (block % 4) as u8 * 3
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn the_h264_example_deblocks_like_the_reference() {
+    let luma = blocky_luma();
+    let clip = clip_with_luma(&luma);
+
+    let decoded = run_example_on("deblock-h264.toml", &[], &clip);
+
+    let values: Vec<f64> = luma.iter().map(|code| f64::from(*code)).collect();
+    let example_thresholds = thresholds(H264_EXAMPLE_QUANT, 0, 0, MatrixSamples::U8);
+    let plane = H264Plane {
+        values: &values,
+        width: SIZE as u32,
+        height: SIZE as u32,
+        padded_width: SIZE as u32,
+        padded_height: SIZE as u32,
+    };
+    let reference = reference_h264(plane, MatrixSamples::U8, &example_thresholds);
+    let expected_luma: Vec<u8> = reference.iter().map(|value| *value as u8).collect();
+
+    assert!(matches!(decoded.colorspace, y4m::Colorspace::C420));
+    assert_eq!(decoded.frames.len(), FRAMES as usize);
+    for (index, frame) in decoded.frames.iter().enumerate() {
+        let flat_u = vec![FLAT_U; frame.u_plane.len()];
+        let flat_v = vec![FLAT_V; frame.v_plane.len()];
+
+        assert_ne!(frame.luma, luma, "frame {index} came back unchanged");
+        assert_eq!(
+            frame.luma, expected_luma,
+            "frame {index} differs from the reference"
+        );
+        assert_eq!(frame.u_plane, flat_u, "frame {index}: flat U changed");
+        assert_eq!(frame.v_plane, flat_v, "frame {index}: flat V changed");
     }
 }

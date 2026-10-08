@@ -40,6 +40,7 @@ fn every_example_explains_without_a_device() {
         "recolour-lines.toml",
         "artcnn.toml",
         "deblock-dpir.toml",
+        "deblock-h264.toml",
     ];
 
     for name in names {
