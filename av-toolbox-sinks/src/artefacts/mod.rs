@@ -21,7 +21,7 @@ const STAGE: &str = "artefacts/files";
 /// Arguments for `artefacts/files`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct FilesArgs {
-    /// The directory to write into, created when missing.
+    /// The directory to write into, created when there is something to write.
     pub(crate) directory: PathBuf,
     /// Artefacts to keep, such as `filter.grain.*`, where `*` matches any run of characters. Every artefact is
     /// kept when unset.
@@ -56,9 +56,8 @@ impl ArtefactSinkDefinition for Files {
         KeyFilter::new(include, exclude)
     }
 
-    /// Creates the directory when it is missing.
     fn build(args: Self::Args) -> Result<Box<dyn ArtefactSink>, StageError> {
-        prepare_directory(&args.directory)?;
+        refuse_non_directory(&args.directory)?;
 
         let sink = FilesSink {
             directory: args.directory,
@@ -100,6 +99,13 @@ impl FilesSink {
 
 impl ArtefactSink for FilesSink {
     fn write(&mut self, artefacts: &[&MergedArtefact]) -> Result<usize, StageError> {
+        if artefacts.is_empty() {
+            return Ok(0);
+        }
+
+        let created = std::fs::create_dir_all(&self.directory);
+        created.map_err(|error| create_error(&self.directory, error))?;
+
         for artefact in artefacts {
             self.write_one(artefact)?;
         }
@@ -108,17 +114,18 @@ impl ArtefactSink for FilesSink {
     }
 }
 
-/// Creates `directory` when missing, refusing a path that exists and is not a directory.
-fn prepare_directory(directory: &Path) -> Result<(), StageError> {
-    if directory.exists() && !directory.is_dir() {
-        let message = format!(
-            "{STAGE} cannot write into {}, which is not a directory",
-            directory.display()
-        );
-        return Err(StageError::msg(message));
+/// Refuses `directory` when it exists and is not a directory.
+fn refuse_non_directory(directory: &Path) -> Result<(), StageError> {
+    if !directory.exists() || directory.is_dir() {
+        return Ok(());
     }
 
-    std::fs::create_dir_all(directory).map_err(|error| create_error(directory, error))
+    let message = format!(
+        "{STAGE} cannot write into {}, which is not a directory",
+        directory.display()
+    );
+
+    Err(StageError::msg(message))
 }
 
 fn create_error(directory: &Path, error: std::io::Error) -> StageError {
@@ -196,14 +203,53 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_directory_is_created() {
+    fn building_creates_no_directory() {
         let folder = tempfile::tempdir().expect("a temp dir");
         let nested = folder.path().join("reports").join("run");
 
         let built = Files::build(args(&nested));
 
         assert!(built.is_ok());
-        assert!(nested.is_dir());
+        assert!(!nested.exists());
+    }
+
+    #[test]
+    fn writing_creates_a_missing_directory() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let nested = folder.path().join("reports").join("run");
+        let mut sink = Files::build(args(&nested)).expect("builds");
+        let artefact = opaque();
+
+        sink.write(&[&artefact]).expect("writes");
+        let path = nested.join("filter.grain.table.tbl");
+        let bytes = std::fs::read(path).expect("the file exists");
+
+        assert_eq!(bytes, b"filmgrn1\n");
+    }
+
+    #[test]
+    fn a_directory_that_became_a_file_fails_the_write() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let taken = folder.path().join("taken");
+        let mut sink = Files::build(args(&taken)).expect("builds");
+        std::fs::write(&taken, b"").expect("writes a file");
+        let artefact = opaque();
+
+        let error = sink.write(&[&artefact]).expect_err("refused");
+
+        assert!(error.to_string().contains("artefacts/files"));
+    }
+
+    #[test]
+    fn writing_nothing_creates_no_directory() {
+        let folder = tempfile::tempdir().expect("a temp dir");
+        let nested = folder.path().join("reports");
+        let mut sink = Files::build(args(&nested)).expect("builds");
+
+        let written = sink.write(&[]).expect("writes");
+
+        assert_eq!(written, 0);
+        assert!(!nested.exists());
     }
 
     #[test]
