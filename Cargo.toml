@@ -25,38 +25,41 @@ debug-assertions = true
 overflow-checks = true
 
 [workspace.dependencies]
-indicatif = "0.18"
-tracing-indicatif = "0.3"
+bytesize = "2.7"
+codespan-reporting = "0.13"
 console = "0.16"
-av-toolbox-gpu = { path = "av-toolbox-gpu" }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-schemars = "1.2.2"
-jsonschema = { version = "0.56.0", default-features = false }
-thiserror = "2.0.20"
-av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
-av-denoise-core = { version = "=0.5.0-alpha4", default-features = false }
-v_frame = "0.7"
-cubecl = { version = "0.10", features = ["std"] }
+ctrlc = "3.5"
 cubek-convolution = "=0.2.0"
 cubek-matmul = "=0.2.0"
 cubek-std = "=0.2.0"
-half = "2.7"
 etcetera = "0.11"
+ffms2-sys = "0.3"
+half = "2.7"
+indicatif = "0.18"
+schemars = "1.2.2"
+semver = "1.0"
+serde_json = "1.0.151"
+sha2 = "0.11"
 strum = "0.28"
 strum_macros = "0.28"
-tracing = "0.1"
 tempfile = "3"
-y4m = "0.8"
-ffms2-sys = "0.3"
-toml = { version = "1.1", default-features = false, features = ["std", "parse", "preserve_order"] }
-bytesize = "2.7"
-clap = { version = "4.6", features = ["derive", "env"] }
-codespan-reporting = "0.13"
-ctrlc = "3.5"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-semver = "1.0"
-sha2 = "0.10"
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+thiserror = "2.0.21"
+tracing = "0.1"
+tracing-indicatif = "0.3"
 ureq = "3.4"
+v_frame = "0.7"
+y4m = "0.8"
+
+clap = { version = "4.6", features = ["derive", "env"] }
+cubecl = { version = "0.10", features = ["std"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+jsonschema = { version = "0.58", default-features = false }
+mimalloc = { version = "0.1.52", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "preserve_order"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+av-toolbox-gpu = { path = "av-toolbox-gpu" }
+av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
+av-denoise-core = { version = "=0.5.0-alpha4", default-features = false }

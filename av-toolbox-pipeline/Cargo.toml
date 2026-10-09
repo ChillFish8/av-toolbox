@@ -5,27 +5,29 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
 av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-filters = { path = "../av-toolbox-filters" }
 av-toolbox-gpu = { workspace = true }
 av-toolbox-graph = { path = "../av-toolbox-graph" }
 av-toolbox-masks = { path = "../av-toolbox-masks" }
+av-toolbox-providers = { path = "../av-toolbox-providers" }
 av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 av-toolbox-sinks = { path = "../av-toolbox-sinks" }
 av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
-av-toolbox-providers = { path = "../av-toolbox-providers" }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-toml = { workspace = true }
 
 [dev-dependencies]
-av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
-av-toolbox-gpu = { workspace = true, features = ["test-support"] }
-av-toolbox-models = { path = "../av-toolbox-models" }
 schemars = { workspace = true }
 serde = { workspace = true }
 tempfile = { workspace = true }
 y4m = { workspace = true }
+
+av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
+av-toolbox-gpu = { workspace = true, features = ["test-support"] }
+av-toolbox-models = { path = "../av-toolbox-models" }
 
 [features]
 default = ["ffms2"]

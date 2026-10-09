@@ -5,20 +5,22 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-av-toolbox-core = { path = "../av-toolbox-core" }
-av-toolbox-gpu = { workspace = true }
-av-toolbox-providers = { path = "../av-toolbox-providers" }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-gpu = { workspace = true }
+av-toolbox-providers = { path = "../av-toolbox-providers" }
+
 [dev-dependencies]
+tempfile = { workspace = true }
+y4m = { workspace = true }
+
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 av-toolbox-graph = { path = "../av-toolbox-graph" }
 av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
-tempfile = { workspace = true }
-y4m = { workspace = true }
 
 [features]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-providers/vulkan"]

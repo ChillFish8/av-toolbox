@@ -5,14 +5,15 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-av-toolbox-cubek = { path = "../av-toolbox-cubek" }
-av-toolbox-gpu = { workspace = true }
 cubecl = { workspace = true }
+jsonschema = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-schemars = { workspace = true }
-jsonschema = { workspace = true }
 thiserror = { workspace = true }
+
+av-toolbox-cubek = { path = "../av-toolbox-cubek" }
+av-toolbox-gpu = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }

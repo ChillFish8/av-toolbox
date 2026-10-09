@@ -6,23 +6,25 @@ license.workspace = true
 description = "Filters that change the frames of av-toolbox pipelines."
 
 [dependencies]
-av-denoise-core = { workspace = true }
-av-toolbox-core = { path = "../av-toolbox-core" }
-av-toolbox-cubek = { path = "../av-toolbox-cubek" }
-av-toolbox-gpu = { workspace = true }
-av-toolbox-models = { path = "../av-toolbox-models" }
-av-toolbox-providers = { path = "../av-toolbox-providers" }
 cubecl = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-cubek = { path = "../av-toolbox-cubek" }
+av-toolbox-gpu = { workspace = true }
+av-toolbox-models = { path = "../av-toolbox-models" }
+av-toolbox-providers = { path = "../av-toolbox-providers" }
+av-denoise-core = { workspace = true }
+
 [dev-dependencies]
-av-toolbox-filters = { path = ".", features = ["test-support"] }
-av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
-av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
+
+av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
+av-toolbox-filters = { path = ".", features = ["test-support"] }
+av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 
 [features]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-providers/vulkan", "av-toolbox-cubek/vulkan", "av-denoise-core/vulkan"]

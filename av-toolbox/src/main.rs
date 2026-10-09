@@ -13,10 +13,14 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use indicatif::MultiProgress;
+use mimalloc::MiMalloc;
 use tracing_indicatif::writer::{IndicatifWriter, Stderr};
 use tracing_subscriber::EnvFilter;
 
 use self::cli::{Args, Command};
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> ExitCode {
     // SAFETY: no other thread exists yet, so nothing can race the environment change.
