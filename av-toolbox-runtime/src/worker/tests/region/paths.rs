@@ -8,9 +8,10 @@ fn a_heads_output_is_stamped_with_its_path() {
     let edges = RegionEdges::new(vec![], vec![head]).with_paths(paths(&[(head, "filter.tag")]));
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner
+    let flows = runner
         .run(&mut context_of(&context), vec![Some(item(&context, 4, 0))])
         .expect("should run");
+    let produced = items(flows);
 
     assert_eq!(stage_paths(&produced[0]), vec!["filter.tag"]);
 }
@@ -32,9 +33,10 @@ fn each_node_in_a_chain_is_stamped_with_its_own_path() {
     let edges = RegionEdges::new(feeds, vec![second]).with_paths(named);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner
+    let flows = runner
         .run(&mut context_of(&context), vec![Some(item(&context, 4, 0))])
         .expect("should run");
+    let produced = items(flows);
 
     assert_eq!(stage_paths(&produced[0]), vec!["filter.first", "filter.second"]);
 }
@@ -60,7 +62,8 @@ fn a_replayed_item_keeps_its_first_stamp() {
     runner
         .run(&mut stage_context, vec![Some(item(&context, 4, 0))])
         .expect("should run");
-    let flushed = runner.end(&mut stage_context, None).expect("should end");
+    let flows = runner.end(&mut stage_context, None).expect("should end");
+    let flushed = items(flows);
 
     assert_eq!(flushed.len(), 1);
     assert_eq!(stage_paths(&flushed[0]), vec!["filter.tag"]);
@@ -75,12 +78,14 @@ fn an_item_released_at_end_of_stream_is_stamped_with_its_path() {
     let mut runner = RegionRunner::new(nodes, edges);
     let mut stage_context = context_of(&context);
 
-    let produced = runner
+    let flows = runner
         .run(&mut stage_context, vec![Some(item(&context, 4, 0))])
         .expect("should run");
+    let produced = items(flows);
     assert!(produced.is_empty());
 
-    let flushed = runner.end(&mut stage_context, None).expect("should end");
+    let flows = runner.end(&mut stage_context, None).expect("should end");
+    let flushed = items(flows);
 
     assert_eq!(flushed.len(), 1);
     assert_eq!(stage_paths(&flushed[0]), vec!["filter.flush"]);

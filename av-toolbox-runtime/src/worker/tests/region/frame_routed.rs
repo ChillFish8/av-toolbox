@@ -27,7 +27,8 @@ fn a_filter_emitting_several_frames_in_a_frame_routed_region_runs() {
     let mut runner = RegionRunner::new(nodes, edges);
 
     let bundle = vec![Some(item(&context, 3, 0))];
-    let produced = runner.run(&mut context_of(&context), bundle).expect("should run");
+    let flows = runner.run(&mut context_of(&context), bundle).expect("should run");
+    let produced = items(flows);
 
     let indices: Vec<u64> = produced.iter().map(|item| item.meta().index).collect();
     assert_eq!(indices, vec![6, 7]);
@@ -51,7 +52,8 @@ fn ending_a_frame_routed_region_does_not_check_flushes() {
 
     let bundle = vec![Some(item(&context, 0, 0))];
     runner.run(&mut context_of(&context), bundle).expect("should run");
-    let flushed = runner.end(&mut context_of(&context), None).expect("should end");
+    let flows = runner.end(&mut context_of(&context), None).expect("should end");
+    let flushed = items(flows);
 
     assert!(flushed.is_empty());
 }

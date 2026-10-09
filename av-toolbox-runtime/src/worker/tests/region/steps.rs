@@ -8,9 +8,10 @@ fn a_single_node_region_passes_its_bundle_straight_through() {
     let edges = RegionEdges::new(vec![], vec![head]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner
+    let flows = runner
         .run(&mut context_of(&context), vec![Some(item(&context, 4, 0))])
         .expect("should run");
+    let produced = items(flows);
 
     assert_eq!(produced.len(), 1);
     assert_eq!(produced[0].meta().index, 4);
@@ -32,9 +33,10 @@ fn a_chain_threads_one_nodes_output_into_the_next() {
     let edges = RegionEdges::new(feeds, vec![second]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner
+    let flows = runner
         .run(&mut context_of(&context), vec![Some(item(&context, 4, 0))])
         .expect("should run");
+    let produced = items(flows);
 
     assert_eq!(produced.len(), 1);
     assert_eq!(produced[0].meta().index, 4);
@@ -77,9 +79,10 @@ fn a_diamond_feeds_both_branches_from_one_producer_and_joins_them() {
     let edges = RegionEdges::new(feeds, vec![join]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner
+    let flows = runner
         .run(&mut context_of(&context), vec![Some(item(&context, 4, 0))])
         .expect("should run");
+    let produced = items(flows);
 
     assert_eq!(produced.len(), 1);
     assert_eq!(produced[0].meta().index, 4);
@@ -173,9 +176,10 @@ fn a_node_producing_nothing_does_not_run_its_consumer() {
     let edges = RegionEdges::new(feeds, vec![sink]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner
+    let flows = runner
         .run(&mut context_of(&context), vec![Some(item(&context, 0, 0))])
         .expect("should run");
+    let produced = items(flows);
 
     assert!(produced.is_empty());
     assert!(seen.lock().expect("not poisoned").is_empty());

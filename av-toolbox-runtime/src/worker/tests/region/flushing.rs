@@ -65,7 +65,8 @@ fn ending_a_region_flushes_its_nodes_in_topological_order() {
     let edges = RegionEdges::new(feeds, vec![downstream]);
     let mut runner = RegionRunner::new(nodes, edges);
 
-    let produced = runner.end(&mut context_of(&context), None).expect("should end");
+    let flows = runner.end(&mut context_of(&context), None).expect("should end");
+    let produced = items(flows);
 
     assert_eq!(produced.len(), 1);
     assert_eq!(produced[0].meta().index, 9);

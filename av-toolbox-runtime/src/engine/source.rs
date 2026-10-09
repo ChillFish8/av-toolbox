@@ -4,7 +4,7 @@ use av_toolbox_gpu::FrameBudget;
 
 use super::channel::{forward, send_done};
 use super::region::SourceRegion;
-use crate::{Cancel, RunError};
+use crate::{Cancel, Flow, RunError};
 
 pub(super) fn run_source(region: SourceRegion, cancel: &Cancel) -> Result<(), RunError> {
     let SourceRegion {
@@ -18,7 +18,8 @@ pub(super) fn run_source(region: SourceRegion, cancel: &Cancel) -> Result<(), Ru
     runner.start(&mut context)?;
 
     loop {
-        let produced = runner.run(&mut context, Vec::new())?;
+        let flows = runner.run(&mut context, Vec::new())?;
+        let produced = flows.into_iter().filter_map(Flow::into_item).collect();
         forward(&downstream, produced);
         check_budget(&budget)?;
 
@@ -27,7 +28,8 @@ pub(super) fn run_source(region: SourceRegion, cancel: &Cancel) -> Result<(), Ru
         }
     }
 
-    let flushed = runner.end(&mut context, None)?;
+    let flows = runner.end(&mut context, None)?;
+    let flushed = flows.into_iter().filter_map(Flow::into_item).collect();
     forward(&downstream, flushed);
     check_budget(&budget)?;
     send_done(&downstream);

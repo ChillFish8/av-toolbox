@@ -4,7 +4,7 @@ use av_toolbox_gpu::{AnyItem, ChunkRoute};
 
 use super::region::WorkerSlot;
 use crate::chunks::chunk_in;
-use crate::{RunError, WorkItem, WorkResult};
+use crate::{Flow, RunError, WorkItem, WorkResult};
 
 /// Runs one worker of an exchanged region, one unit at a time.
 ///
@@ -114,7 +114,9 @@ fn named_chunk(error: RunError, chunk: Option<u64>) -> RunError {
     }
 }
 
-fn send_results(result_sender: &SyncSender<WorkResult>, items: Vec<AnyItem>) -> Result<(), ()> {
+fn send_results(result_sender: &SyncSender<WorkResult>, flows: Vec<Flow>) -> Result<(), ()> {
+    let items = flows.into_iter().filter_map(Flow::into_item);
+
     for item in items {
         result_sender.send(WorkResult::Item(item)).map_err(|_| ())?;
     }

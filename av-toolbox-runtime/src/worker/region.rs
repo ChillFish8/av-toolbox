@@ -1,14 +1,15 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use av_toolbox_gpu::{AnyItem, ChunkRoute, FrameContext, StreamItem, StreamPolicy};
+use av_toolbox_core::StageError;
+use av_toolbox_gpu::{AnyItem, ChunkRoute, FrameContext, MetaRecord, RecordId, StreamItem, StreamPolicy};
 use av_toolbox_graph::{NodeId, StageBox};
 
-use super::node::{end_node, run_node, start_node};
-use crate::RunError;
+use super::node::{deliver_record, end_node, run_node, start_node};
 use crate::artefacts::ArtefactCollector;
 use crate::chunks::chunk_in;
 use crate::profile::{Counted, Profiler};
+use crate::{Flow, RunError};
 
 /// One node's output filling one of another node's input slots.
 #[derive(Debug, Clone, Copy)]
@@ -90,11 +91,15 @@ impl RegionEdges {
 ///
 /// Every node after the head keeps one queue per feed, holding what its producers emitted until
 /// every feed has an item ready, so a node whose producers lag each other still sees matching frames.
+///
+/// A record keeps its place among the items around it. A node passes one on once it has taken every
+/// item that arrived ahead of it, and a meta sink reads it instead of passing it on.
 pub struct RegionRunner {
     nodes: Vec<(NodeId, StageBox)>,
     edges: RegionEdges,
     positions: HashMap<NodeId, usize>,
-    queues: Vec<Vec<VecDeque<AnyItem>>>,
+    inboxes: Vec<Inbox>,
+    offered: Offered,
     last_chunks: Vec<Option<u64>>,
     route: Option<ChunkRoute>,
     profiler: Option<Arc<Profiler>>,
@@ -108,11 +113,7 @@ impl RegionRunner {
             .enumerate()
             .map(|(position, (id, _))| (*id, position))
             .collect();
-        let queues = edges
-            .feeds
-            .iter()
-            .map(|feeds| vec![VecDeque::new(); feeds.len()])
-            .collect();
+        let inboxes = edges.feeds.iter().map(|feeds| Inbox::new(feeds.len())).collect();
 
         let last_chunks = vec![None; nodes.len()];
 
@@ -120,7 +121,8 @@ impl RegionRunner {
             nodes,
             edges,
             positions,
-            queues,
+            inboxes,
+            offered: Offered::default(),
             last_chunks,
             route: None,
             profiler: None,
@@ -166,18 +168,33 @@ impl RegionRunner {
         Ok(())
     }
 
+    /// Holds records that reached the region from outside, leaving out any it was already offered.
+    ///
+    /// They leave through the head, ahead of its next output, or after its end flush.
+    pub fn offer_records(&mut self, records: Vec<MetaRecord>) {
+        for record in records {
+            self.offered.offer(record);
+        }
+    }
+
     /// Runs the region once over `bundle`, the head's inputs, returning what its exits produced.
     ///
     /// The step ends by flushing this thread's queued work, before anything it read is let go or
     /// anything it produced is returned. Under [StreamPolicy::FlushAtHandOff] the device items in
     /// `bundle` are held until then, so a head dropping its inputs early cannot release them first.
+    /// Records offered to the region leave ahead of the head's output.
     pub fn run(
         &mut self,
         context: &mut FrameContext,
         bundle: Vec<Option<AnyItem>>,
-    ) -> Result<Vec<AnyItem>, RunError> {
-        let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
+    ) -> Result<Vec<Flow>, RunError> {
+        let mut outputs: Vec<Vec<Flow>> = Vec::with_capacity(self.nodes.len());
         let held_inputs = hold_until_flushed(context, &bundle);
+
+        let mut head_output = Vec::new();
+        let (head_id, head_stage) = &mut self.nodes[0];
+        let offered = self.offered.take();
+        release(*head_id, head_stage, context, offered, &mut head_output)?;
 
         let mut head_watch = NodeWatch {
             chunked: self.edges.chunked.contains(&self.nodes[0].0),
@@ -188,14 +205,15 @@ impl RegionRunner {
             artefacts: self.artefacts.as_deref(),
             profiler: self.profiler.as_deref(),
         };
-        let mut head_output = step_node(&mut self.nodes[0], &mut head_watch, context, bundle)?;
+        let mut stepped = step_node(&mut self.nodes[0], &mut head_watch, context, bundle)?;
+        head_output.append(&mut stepped);
         stamp(&self.edges.paths, self.nodes[0].0, &mut head_output);
         outputs.push(head_output);
 
         for index in 1..self.nodes.len() {
             let feeds = &self.edges.feeds[index - 1];
-            let queues = &mut self.queues[index - 1];
-            enqueue(feeds, queues, &outputs, &self.positions);
+            let inbox = &mut self.inboxes[index - 1];
+            enqueue(feeds, inbox, &outputs, &self.positions);
 
             let node = self.nodes[index].0;
             let mut watch = NodeWatch {
@@ -207,7 +225,7 @@ impl RegionRunner {
                 artefacts: self.artefacts.as_deref(),
                 profiler: self.profiler.as_deref(),
             };
-            let mut produced = run_fed(feeds, queues, &mut self.nodes[index], &mut watch, context)?;
+            let mut produced = run_fed(feeds, inbox, &mut self.nodes[index], &mut watch, context)?;
             stamp(&self.edges.paths, node, &mut produced);
             outputs.push(produced);
         }
@@ -226,14 +244,15 @@ impl RegionRunner {
     /// A node downstream of the flushing one is run on whatever the upstream flush produced,
     /// exactly like a normal step, before its own flush is taken. That way anything the
     /// downstream node ends up holding because of the upstream flush is captured too. It ends by
-    /// submitting this thread's queued work, before anything it produced is returned.
+    /// submitting this thread's queued work, before anything it produced is returned. Every record
+    /// still waiting in the region leaves after the end flush of the node it is waiting at.
     ///
     /// `ended` is the chunk being ended, when the caller knows it. A node files its artefacts under the
     /// chunk it last ran on, or under `ended` when it has none. In a region routed by frame, a node not
     /// given one chunk at a time files them under no chunk instead. A node given one chunk at a time
     /// that is left with no chunk has its artefacts discarded.
-    pub fn end(&mut self, context: &mut FrameContext, ended: Option<u64>) -> Result<Vec<AnyItem>, RunError> {
-        let mut outputs: Vec<Vec<AnyItem>> = Vec::with_capacity(self.nodes.len());
+    pub fn end(&mut self, context: &mut FrameContext, ended: Option<u64>) -> Result<Vec<Flow>, RunError> {
+        let mut outputs: Vec<Vec<Flow>> = Vec::with_capacity(self.nodes.len());
 
         let head_chunked = self.edges.chunked.contains(&self.nodes[0].0);
         let head_tagging = Tagging {
@@ -249,13 +268,16 @@ impl RegionRunner {
         };
         let (head_id, head_stage) = &mut self.nodes[0];
         let mut head_flush = call_end(*head_id, head_stage, context, head_watch)?;
+
+        let offered = self.offered.take();
+        release(*head_id, head_stage, context, offered, &mut head_flush)?;
         stamp(&self.edges.paths, *head_id, &mut head_flush);
         outputs.push(head_flush);
 
         for index in 1..self.nodes.len() {
             let feeds = &self.edges.feeds[index - 1];
-            let queues = &mut self.queues[index - 1];
-            enqueue(feeds, queues, &outputs, &self.positions);
+            let inbox = &mut self.inboxes[index - 1];
+            enqueue(feeds, inbox, &outputs, &self.positions);
 
             let node = self.nodes[index].0;
             let watch = NodeWatch {
@@ -267,7 +289,7 @@ impl RegionRunner {
                 artefacts: self.artefacts.as_deref(),
                 profiler: self.profiler.as_deref(),
             };
-            let mut flushed = end_fed(feeds, queues, &mut self.nodes[index], watch, ended, context)?;
+            let mut flushed = end_fed(feeds, inbox, &mut self.nodes[index], watch, ended, context)?;
             stamp(&self.edges.paths, node, &mut flushed);
             outputs.push(flushed);
         }
@@ -278,6 +300,136 @@ impl RegionRunner {
 
         Ok(exits)
     }
+}
+
+/// Records offered to a region from outside, waiting to leave through its head.
+///
+/// `seen` names every record ever offered, so one arriving again by another route is dropped.
+#[derive(Default)]
+struct Offered {
+    waiting: VecDeque<MetaRecord>,
+    seen: HashSet<RecordId>,
+}
+
+impl Offered {
+    fn offer(&mut self, record: MetaRecord) {
+        let first_sighting = self.seen.insert(record.id());
+        if first_sighting {
+            self.waiting.push_back(record);
+        }
+    }
+
+    fn take(&mut self) -> Vec<MetaRecord> {
+        self.waiting.drain(..).collect()
+    }
+}
+
+/// What one node after the head is waiting on.
+///
+/// `queues` holds one queue of items per feed. `waiting` holds each record that reached the node beside
+/// how many bundles the node must have taken before it leaves, which is every item that arrived ahead
+/// of it on its feed. `seen` names every record that reached the node, so one arriving by a second feed
+/// is dropped.
+struct Inbox {
+    queues: Vec<VecDeque<AnyItem>>,
+    waiting: VecDeque<(u64, MetaRecord)>,
+    seen: HashSet<RecordId>,
+    consumed: u64,
+}
+
+impl Inbox {
+    fn new(feeds: usize) -> Self {
+        Self {
+            queues: vec![VecDeque::new(); feeds],
+            waiting: VecDeque::new(),
+            seen: HashSet::new(),
+            consumed: 0,
+        }
+    }
+
+    /// Places `flow`, arriving on feed `feed`, behind everything that feed already holds.
+    fn receive(&mut self, feed: usize, flow: &Flow) {
+        let queue = &mut self.queues[feed];
+
+        match flow {
+            Flow::Item(item) => queue.push_back(item.clone()),
+            Flow::Record(record) => {
+                let first_sighting = self.seen.insert(record.id());
+                if !first_sighting {
+                    return;
+                }
+
+                let threshold = self.consumed + queue.len() as u64;
+                self.waiting.push_back((threshold, record.clone()));
+            },
+        }
+    }
+
+    /// Takes every waiting record whose items ahead of it have all been taken, in the order they arrived.
+    fn due(&mut self) -> Vec<MetaRecord> {
+        let mut due = Vec::new();
+        let mut later = VecDeque::with_capacity(self.waiting.len());
+
+        for (threshold, record) in self.waiting.drain(..) {
+            if threshold <= self.consumed {
+                due.push(record);
+            } else {
+                later.push_back((threshold, record));
+            }
+        }
+
+        self.waiting = later;
+        due
+    }
+
+    /// Takes every waiting record, and forgets every record seen, once nothing more can reach the node.
+    fn drain(&mut self) -> Vec<MetaRecord> {
+        self.seen.clear();
+
+        self.waiting.drain(..).map(|(_, record)| record).collect()
+    }
+}
+
+/// Hands each of `records` on from `node`, in order.
+///
+/// A meta sink reads each one itself. Any other node passes it on at the end of `produced`.
+fn release(
+    node: NodeId,
+    stage: &mut StageBox,
+    context: &mut FrameContext,
+    records: Vec<MetaRecord>,
+    produced: &mut Vec<Flow>,
+) -> Result<(), RunError> {
+    for record in records {
+        let delivered = deliver_record(node, stage, context, &record)?;
+        if !delivered {
+            produced.push(Flow::Record(record));
+        }
+    }
+
+    Ok(())
+}
+
+/// The records a node made during its last call, checked and ready to place after that call's output.
+fn taken_records(node: NodeId, context: &mut FrameContext) -> Result<Vec<Flow>, RunError> {
+    let records = context.take_records();
+    let mut flows = Vec::with_capacity(records.len());
+
+    for record in records {
+        if let Err(reason) = MetaRecord::check_kind(record.kind()) {
+            return Err(malformed_kind(node, reason));
+        }
+
+        flows.push(Flow::Record(record));
+    }
+
+    Ok(flows)
+}
+
+fn malformed_kind(node: NodeId, reason: String) -> RunError {
+    let source = StageError::msg(reason);
+
+    RunError::Stage { node, source }
 }
 
 /// Copies of the device items in `bundle`, to keep alive until the step's work is flushed.
@@ -368,8 +520,29 @@ fn ending_chunk(tagging: Tagging, last: Option<u64>, ended: Option<u64>) -> Opti
     last
 }
 
-/// Ends one node, timed when the run is profiled.
+/// Ends one node, placing the records it made after what it flushed.
 fn call_end(
+    id: NodeId,
+    stage: &mut StageBox,
+    context: &mut FrameContext,
+    watch: EndWatch<'_>,
+) -> Result<Vec<Flow>, RunError> {
+    let flushed = timed_end(id, stage, context, watch)?;
+    let records = taken_records(id, context)?;
+
+    Ok(followed_by(flushed, records))
+}
+
+/// `items` as flows, followed by `records`.
+fn followed_by(items: Vec<AnyItem>, records: Vec<Flow>) -> Vec<Flow> {
+    let mut flows: Vec<Flow> = items.into_iter().map(Flow::Item).collect();
+    flows.extend(records);
+
+    flows
+}
+
+/// Ends one node, timed when the run is profiled.
+fn timed_end(
     id: NodeId,
     stage: &mut StageBox,
     context: &mut FrameContext,
@@ -408,13 +581,14 @@ fn end_and_collect(
 /// Runs one node over one bundle of its inputs.
 ///
 /// A node given one chunk at a time is ended and started again first when the bundle opens a new chunk,
-/// and what that end flushed comes ahead of what the bundle produces.
+/// and what that end flushed comes ahead of what the bundle produces. The records a call made follow
+/// that call's items.
 fn step_node(
     node: &mut (NodeId, StageBox),
     watch: &mut NodeWatch<'_>,
     context: &mut FrameContext,
     slots: Vec<Option<AnyItem>>,
-) -> Result<Vec<AnyItem>, RunError> {
+) -> Result<Vec<Flow>, RunError> {
     let mut produced = Vec::new();
 
     if watch.chunked {
@@ -424,14 +598,16 @@ fn step_node(
     }
 
     let (id, stage) = node;
-    let mut result = call_node(*id, stage, context, slots, watch.profiler)?;
+    let result = call_node(*id, stage, context, slots, watch.profiler)?;
+    let records = taken_records(*id, context)?;
 
     let held_back = watch.frame_routed && is_filter(stage) && result.is_empty();
     if held_back {
         return Err(RunError::HeldInFrameRegion { node: *id });
     }
 
-    produced.append(&mut result);
+    let mut stepped = followed_by(result, records);
+    produced.append(&mut stepped);
 
     Ok(produced)
 }
@@ -458,7 +634,7 @@ fn restart_on_new_chunk(
     watch: &mut NodeWatch<'_>,
     chunk: Option<u64>,
     context: &mut FrameContext,
-) -> Result<Vec<AnyItem>, RunError> {
+) -> Result<Vec<Flow>, RunError> {
     let Some(chunk) = chunk else {
         return Ok(Vec::new());
     };
@@ -486,7 +662,7 @@ fn end_and_start(
     node: &mut (NodeId, StageBox),
     context: &mut FrameContext,
     ending: EndWatch<'_>,
-) -> Result<Vec<AnyItem>, RunError> {
+) -> Result<Vec<Flow>, RunError> {
     let (id, stage) = node;
     let flushed = call_end(*id, stage, context, ending)?;
     start_node(*id, stage, context)?;
@@ -502,40 +678,47 @@ fn in_chunk<T>(result: Result<T, RunError>, chunk: u64) -> Result<T, RunError> {
     }
 }
 
-/// Appends what each of a node's producers emitted this step to that feed's queue.
-fn enqueue(
-    feeds: &[Feed],
-    queues: &mut [VecDeque<AnyItem>],
-    outputs: &[Vec<AnyItem>],
-    positions: &HashMap<NodeId, usize>,
-) {
-    for (feed, queue) in feeds.iter().zip(queues.iter_mut()) {
+/// Places what each of a node's producers emitted this step on that feed, in order.
+fn enqueue(feeds: &[Feed], inbox: &mut Inbox, outputs: &[Vec<Flow>], positions: &HashMap<NodeId, usize>) {
+    for (index, feed) in feeds.iter().enumerate() {
         let position = positions[&feed.producer];
-        queue.extend(outputs[position].iter().cloned());
+
+        for flow in &outputs[position] {
+            inbox.receive(index, flow);
+        }
     }
 }
 
 /// Runs one non-head node once for every item all of its feeds have ready, in the order they arrived.
 ///
-/// A node with no feeds needs no input at all, so it runs once.
+/// A node with no feeds needs no input at all, so it runs once. A waiting record leaves as soon as the
+/// node has taken every item that arrived ahead of it, after the output of the step that took the last.
 fn run_fed(
     feeds: &[Feed],
-    queues: &mut [VecDeque<AnyItem>],
+    inbox: &mut Inbox,
     node: &mut (NodeId, StageBox),
     watch: &mut NodeWatch<'_>,
     context: &mut FrameContext,
-) -> Result<Vec<AnyItem>, RunError> {
+) -> Result<Vec<Flow>, RunError> {
     if feeds.is_empty() {
         return step_node(node, watch, context, Vec::new());
     }
 
-    let ready = ready_count(queues);
     let mut produced = Vec::new();
+    let due = inbox.due();
+    release(node.0, &mut node.1, context, due, &mut produced)?;
+
+    let ready = ready_count(&inbox.queues);
 
     for _ in 0..ready {
-        let slots = take_inputs(node.0, feeds, queues)?;
+        let slots = take_inputs(node.0, feeds, &mut inbox.queues)?;
+        inbox.consumed += 1;
+
         let mut result = step_node(node, watch, context, slots)?;
         produced.append(&mut result);
+
+        let due = inbox.due();
+        release(node.0, &mut node.1, context, due, &mut produced)?;
     }
 
     Ok(produced)
@@ -543,18 +726,19 @@ fn run_fed(
 
 /// Feeds a node whatever its producers flushed, then flushes the node itself.
 ///
-/// Anything its feeds still hold afterwards was never matched by the others, and is an error.
+/// Anything its feeds still hold afterwards was never matched by the others, and is an error. Any
+/// record still waiting leaves after the node's own flush.
 fn end_fed(
     feeds: &[Feed],
-    queues: &mut [VecDeque<AnyItem>],
+    inbox: &mut Inbox,
     node: &mut (NodeId, StageBox),
     mut watch: NodeWatch<'_>,
     ended: Option<u64>,
     context: &mut FrameContext,
-) -> Result<Vec<AnyItem>, RunError> {
-    let mut forwarded = run_fed(feeds, queues, node, &mut watch, context)?;
+) -> Result<Vec<Flow>, RunError> {
+    let mut forwarded = run_fed(feeds, inbox, node, &mut watch, context)?;
 
-    let leftover: Vec<usize> = queues.iter().map(VecDeque::len).collect();
+    let leftover: Vec<usize> = inbox.queues.iter().map(VecDeque::len).collect();
     if leftover.iter().any(|&count| count > 0) {
         let node = node.0;
         return Err(RunError::UnpairedFeeds { node, leftover });
@@ -573,21 +757,29 @@ fn end_fed(
     };
     let (id, stage) = node;
     let flushed = call_end(*id, stage, context, ending)?;
-
     forwarded.extend(flushed);
+
+    let remaining = inbox.drain();
+    release(*id, stage, context, remaining, &mut forwarded)?;
+
     Ok(forwarded)
 }
 
-/// Files whatever `node` attached to `items` under its path.
+/// Files whatever `node` attached to the items and records in `flows` under its path.
 ///
-/// A node with no path, such as a crossing, attaches nothing.
-fn stamp(paths: &HashMap<NodeId, Arc<str>>, node: NodeId, items: &mut [AnyItem]) {
+/// A node with no path, such as a crossing, attaches nothing. A record passed on from another node has
+/// nothing left to file, so stamping it again changes nothing.
+fn stamp(paths: &HashMap<NodeId, Arc<str>>, node: NodeId, flows: &mut [Flow]) {
     let Some(path) = paths.get(&node) else {
         return;
     };
 
-    for item in items {
-        item.meta_mut().attachments.stamp(path);
+    for flow in flows {
+        let attachments = match flow {
+            Flow::Item(item) => &mut item.meta_mut().attachments,
+            Flow::Record(record) => record.attachments_mut(),
+        };
+        attachments.stamp(path);
     }
 }
 
@@ -626,11 +818,7 @@ fn take_inputs(
 }
 
 /// Concatenates what every exit node produced, in the order the region names them.
-fn collect_exits(
-    exits: &[NodeId],
-    positions: &HashMap<NodeId, usize>,
-    outputs: &[Vec<AnyItem>],
-) -> Vec<AnyItem> {
+fn collect_exits(exits: &[NodeId], positions: &HashMap<NodeId, usize>, outputs: &[Vec<Flow>]) -> Vec<Flow> {
     let mut collected = Vec::new();
 
     for exit in exits {

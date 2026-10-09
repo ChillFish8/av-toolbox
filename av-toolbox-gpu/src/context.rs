@@ -87,6 +87,12 @@ impl FrameContext {
         std::mem::take(&mut self.records)
     }
 
+    /// Places `record` as if a stage had started it, without checking its kind.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn push_record_unchecked(&mut self, record: MetaRecord) {
+        self.records.push(record);
+    }
+
     /// A context over a fake allocator, for tests that need no device.
     #[cfg(test)]
     fn for_testing(allocator: Arc<dyn DeviceAllocator>, capabilities: Capabilities) -> Self {

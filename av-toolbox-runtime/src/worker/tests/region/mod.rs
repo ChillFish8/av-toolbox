@@ -4,6 +4,7 @@ mod feeds;
 mod flushing;
 mod frame_routed;
 mod paths;
+mod records;
 mod steps;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -32,9 +33,9 @@ use av_toolbox_gpu::{
 };
 use av_toolbox_graph::{NodeId, StageBox};
 
-use crate::RunError;
 use crate::tests::routes::{meta_in, route};
 use crate::worker::{Feed, RegionEdges, RegionRunner};
+use crate::{Flow, RunError};
 
 fn format() -> FrameFormat {
     FrameFormat {
@@ -58,6 +59,11 @@ fn frame(context: &FrameContext, index: u64, chunk: u64) -> Frame {
 
 fn item(context: &FrameContext, index: u64, chunk: u64) -> AnyItem {
     StreamItem::Frame(frame(context, index, chunk)).into()
+}
+
+/// The items among `flows`, in order, leaving out records.
+fn items(flows: Vec<Flow>) -> Vec<AnyItem> {
+    flows.into_iter().filter_map(Flow::into_item).collect()
 }
 
 /// Restarts each of `chunked` on layer 0, the layer [frame] puts its chunk in.
@@ -584,24 +590,26 @@ fn missing_item() -> StageError {
 }
 
 /// Runs one item per `(index, chunk)` through `runner`, then ends it, returning what its exits produced.
-fn run_all(runner: &mut RegionRunner, items: &[(u64, u64)]) -> Vec<u64> {
-    run_steps(runner, items).concat()
+fn run_all(runner: &mut RegionRunner, frames: &[(u64, u64)]) -> Vec<u64> {
+    run_steps(runner, frames).concat()
 }
 
 /// The same as [run_all], with what each `run` produced in its own entry and what `end` produced last.
-fn run_steps(runner: &mut RegionRunner, items: &[(u64, u64)]) -> Vec<Vec<u64>> {
+fn run_steps(runner: &mut RegionRunner, frames: &[(u64, u64)]) -> Vec<Vec<u64>> {
     let context = testing_context();
     let mut steps = Vec::new();
 
     runner.start(&mut context_of(&context)).expect("should start");
 
-    for &(index, chunk) in items {
+    for &(index, chunk) in frames {
         let bundle = vec![Some(item(&context, index, chunk))];
-        let output = runner.run(&mut context_of(&context), bundle).expect("should run");
+        let flows = runner.run(&mut context_of(&context), bundle).expect("should run");
+        let output = items(flows);
         steps.push(output.iter().map(|item| item.meta().index).collect());
     }
 
-    let flushed = runner.end(&mut context_of(&context), None).expect("should end");
+    let flows = runner.end(&mut context_of(&context), None).expect("should end");
+    let flushed = items(flows);
     steps.push(flushed.iter().map(|item| item.meta().index).collect());
 
     steps

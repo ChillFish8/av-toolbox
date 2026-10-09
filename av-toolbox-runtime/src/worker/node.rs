@@ -9,10 +9,11 @@ use av_toolbox_core::{
     StageError,
     end_meta_provider,
     end_meta_sink,
+    record_meta_sink,
     run_meta_provider,
     run_meta_sink,
 };
-use av_toolbox_gpu::{AnyItem, FrameContext, Side};
+use av_toolbox_gpu::{AnyItem, FrameContext, MetaRecord, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
 use crate::RunError;
@@ -162,6 +163,24 @@ pub fn end_node(
         StageBox::HostProvider(provider) => end_provider(node, provider.as_mut(), context),
         StageBox::HostSink(sink) => end_sink(node, sink.as_mut(), context),
     }
+}
+
+/// Hands `record` to `stage` when it reads records, answering whether it took it.
+pub fn deliver_record(
+    node: NodeId,
+    stage: &mut StageBox,
+    context: &mut FrameContext,
+    record: &MetaRecord,
+) -> Result<bool, RunError> {
+    let StageBox::MetaSink(sink) = stage else {
+        return Ok(false);
+    };
+
+    if let Err(source) = record_meta_sink(sink.as_mut(), context, record) {
+        return Err(RunError::Stage { node, source });
+    }
+
+    Ok(true)
 }
 
 /// Moves one item across to the side the crossing leads to.

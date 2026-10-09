@@ -1,6 +1,6 @@
 use super::channel::{ExitMessage, forward, send_done};
 use super::region::PassthroughRegion;
-use crate::RunError;
+use crate::{Flow, RunError};
 
 /// Runs a region that only carries one upstream's output forward.
 ///
@@ -21,11 +21,13 @@ pub(super) fn run_passthrough(region: PassthroughRegion) -> Result<(), RunError>
         let mut bundle = vec![None; slot + 1];
         bundle[slot] = Some(item);
 
-        let produced = runner.run(&mut context, bundle)?;
+        let flows = runner.run(&mut context, bundle)?;
+        let produced = flows.into_iter().filter_map(Flow::into_item).collect();
         forward(&downstream, produced);
     }
 
-    let flushed = runner.end(&mut context, None)?;
+    let flows = runner.end(&mut context, None)?;
+    let flushed = flows.into_iter().filter_map(Flow::into_item).collect();
     forward(&downstream, flushed);
     send_done(&downstream);
 
