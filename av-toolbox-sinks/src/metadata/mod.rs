@@ -222,13 +222,10 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
             return Ok(());
         }
 
+        let index = meta.index;
         let written = write_line(&mut self.output, meta, chunk, score, &self.filter);
 
-        written.map_err(|error| {
-            let position = format!("frame {}", meta.index);
-
-            write_error(&position, &error)
-        })
+        written.map_err(|error| frame_write_error(index, &error))
     }
 
     fn consume_record(&mut self, _context: &mut FrameContext, record: &MetaRecord) -> Result<(), StageError> {
@@ -239,11 +236,7 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
         let chunk = self.scenes.map(|_| self.last_chunk);
         let written = write_record_line(&mut self.output, record, self.last_index, chunk, &self.filter);
 
-        written.map_err(|error| {
-            let position = format!("the {} record", record.kind());
-
-            write_error(&position, &error)
-        })
+        written.map_err(|error| record_write_error(record, &error))
     }
 
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
@@ -251,6 +244,18 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
 
         flushed.map_err(|error| flush_error(&error))
     }
+}
+
+fn frame_write_error(index: u64, error: &io::Error) -> StageError {
+    let position = format!("frame {index}");
+
+    write_error(&position, error)
+}
+
+fn record_write_error(record: &MetaRecord, error: &io::Error) -> StageError {
+    let position = format!("the {} record", record.kind());
+
+    write_error(&position, error)
 }
 
 fn write_error(position: &str, error: &io::Error) -> StageError {
@@ -301,7 +306,9 @@ mod tests {
         default_accelerators,
         testing_context,
     };
+    use av_toolbox_graph::{NodeId, StageBox};
     use av_toolbox_providers::{SceneChunk, SceneCut, SceneRequest, SceneScore, SceneSpeed};
+    use av_toolbox_runtime::{RegionEdges, RegionRunner};
 
     use super::*;
     use crate::shared::testing::{SharedBuffer, filled_frame, yuv420};
@@ -379,25 +386,46 @@ mod tests {
         assert_eq!(text.lines().count(), 1);
     }
 
-    #[test]
-    fn a_closed_reader_gives_the_broken_pipe_error() {
-        struct ClosedReader;
+    struct ClosedReader;
 
-        impl Write for ClosedReader {
-            fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
-                Err(io::ErrorKind::BrokenPipe.into())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Err(io::ErrorKind::BrokenPipe.into())
-            }
+    impl Write for ClosedReader {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
         }
 
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    #[test]
+    fn a_closed_reader_gives_the_broken_pipe_error() {
         let mut sink = NdjsonSink::new(ClosedReader, KeyFilter::default(), None);
 
         let error = run(&mut sink, vec![frame_item(0, false)]).expect_err("the reader is gone");
 
         assert!(error.to_string().contains("reader closed"), "{error}");
+    }
+
+    #[test]
+    fn a_closed_reader_names_the_record_it_could_not_write() {
+        let mut sink = NdjsonSink::new(ClosedReader, KeyFilter::default(), None);
+        let mut context = testing_context();
+
+        let mut record = MetaRecord::new("chunk");
+        let filler = "x".repeat(16 * 1024);
+        record
+            .attachments_mut()
+            .attach("filler", MetaValue::String(filler));
+        record.attachments_mut().stamp("filter.stats");
+
+        let error = record_meta_sink(&mut sink, &mut context, &record).expect_err("the reader is gone");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("before the chunk record was written"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -693,6 +721,28 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_kind_name_fails_to_deserialize() {
+        let value = serde_json::json!({ "path": "out.ndjson", "kinds": ["frame", "Chunk"] });
+
+        let error = serde_json::from_value::<NdjsonArgs>(value).expect_err("malformed");
+
+        let message = error.to_string();
+        assert!(message.contains("\"Chunk\""), "{message}");
+        assert!(message.contains("expected a name such as"), "{message}");
+    }
+
+    #[test]
+    fn the_frame_kind_name_is_accepted() {
+        let value = serde_json::json!({ "path": "out.ndjson", "kinds": ["frame", "chunk_2"] });
+
+        let args = serde_json::from_value::<NdjsonArgs>(value).expect("parses");
+
+        let kinds = args.kinds.expect("kinds were given");
+        assert!(kinds.keeps("frame"));
+        assert!(kinds.keeps("chunk_2"));
+    }
+
+    #[test]
     fn a_record_before_any_frame_has_a_null_chunk_with_scenes() {
         let buffer = SharedBuffer::default();
         let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), Some(scenes_provision()));
@@ -705,5 +755,28 @@ mod tests {
         assert!(lines[0]["after"].is_null(), "{lines:?}");
         assert!(lines[0]["chunk"].is_null(), "{lines:?}");
         assert!(lines[0].get("chunk").is_some(), "{lines:?}");
+    }
+
+    #[test]
+    fn a_record_offered_to_a_region_it_heads_is_written_before_it_ends() {
+        let buffer = SharedBuffer::default();
+        let sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
+        let head = NodeId::new(0);
+        let nodes = vec![(head, StageBox::MetaSink(Box::new(sink)))];
+        let edges = RegionEdges::new(Vec::new(), vec![head]);
+        let mut runner = RegionRunner::new(nodes, edges);
+        let mut context = testing_context();
+
+        runner.start(&mut context).expect("starts");
+
+        let bundle = vec![Some(frame_item(0, false))];
+        runner.run(&mut context, bundle).expect("runs");
+
+        runner.offer_records(vec![a_record()]);
+        runner.end(&mut context, None).expect("ends");
+
+        let lines = written_lines(&buffer);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[1]["kind"], "chunk");
     }
 }

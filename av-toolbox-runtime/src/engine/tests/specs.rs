@@ -41,6 +41,20 @@ pub(crate) fn host_source_spec(name: &str, chunks: &[u64], id: u32) -> StageSpec
     source
 }
 
+/// A source recording a `produced` for every frame it produces.
+pub(crate) fn recording_source_spec(name: &str, chunks: &[u64], id: u32) -> StageSpec {
+    let mut source = source_spec(name, chunks, id);
+    source.args = Spanned::unknown(json!({ "chunks": chunks, "id": id, "record": true }));
+    source
+}
+
+/// The same as [recording_source_spec], on the host.
+pub(crate) fn recording_host_source_spec(name: &str, chunks: &[u64], id: u32) -> StageSpec {
+    let mut source = host_source_spec(name, chunks, id);
+    source.args = Spanned::unknown(json!({ "chunks": chunks, "id": id, "record": true }));
+    source
+}
+
 /// A source whose frame indices start at `index_base` rather than zero.
 pub(crate) fn offset_source_spec(name: &str, chunks: &[u64], id: u32, index_base: u64) -> StageSpec {
     let mut source = spec(StageKind::Source, name, "test/listed");
@@ -280,6 +294,13 @@ pub(crate) fn flow_recording_spec(name: &str, input: &str) -> StageSpec {
 pub(crate) fn per_frame_flow_recording_spec(name: &str, input: &str) -> StageSpec {
     let mut sink = flow_recording_spec(name, input);
     sink.args = Spanned::unknown(json!({ "per_frame": true }));
+    sink
+}
+
+/// The same as [flow_recording_spec], demanding tags so a metadata provider sits right before it.
+pub(crate) fn tagged_flow_recording_spec(name: &str, input: &str) -> StageSpec {
+    let mut sink = flow_recording_spec(name, input);
+    sink.args = Spanned::unknown(json!({ "tags": true }));
     sink
 }
 

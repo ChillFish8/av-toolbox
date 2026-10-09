@@ -1,9 +1,11 @@
 use std::sync::Mutex;
 
 use av_toolbox_core::{
+    AnyDemand,
     BoundInputs,
     Filter,
     FilterDefinition,
+    InputDemand,
     InputParam,
     InputSignature,
     Inputs,
@@ -36,6 +38,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::chunked;
+use super::tags::{FixtureTags, TagsRequest};
 use crate::engine::tests::support::StageLife;
 
 /// Every flow `test/flow-recording` saw, as `frame <index>` or `<kind> <path> <value>`, in order.
@@ -167,6 +170,9 @@ pub(crate) struct FlowRecordingArgs {
     /// Declares the sink frame by frame rather than for the whole stream.
     #[serde(default)]
     per_frame: bool,
+    /// Demands tags, served by a metadata provider placed right before the sink.
+    #[serde(default)]
+    tags: bool,
 }
 
 pub(crate) struct FlowRecordingInstance {
@@ -238,6 +244,22 @@ impl StageDefinition for FlowRecording {
 
     fn identifier() -> &'static str {
         "flow-recording"
+    }
+
+    fn demands(args: &Self::Args) -> Vec<InputDemand> {
+        if !args.tags {
+            return Vec::new();
+        }
+
+        let request = TagsRequest {
+            host_cuts: false,
+            before_demander: true,
+        };
+
+        vec![InputDemand {
+            input: "input",
+            demand: AnyDemand::new::<FixtureTags>(request),
+        }]
     }
 
     fn parallelism(args: &Self::Args) -> Parallelism {

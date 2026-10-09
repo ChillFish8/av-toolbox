@@ -1,8 +1,15 @@
-use av_toolbox_graph::{CompiledGraph, Routing, Spanned, StageSpec};
+use av_toolbox_core::Crossing;
+use av_toolbox_graph::{CompiledGraph, NodeId, NodeRole, Routing, Spanned, StageSpec};
 use serde_json::json;
 
 use crate::engine::tests::harness::{node_id, share_a_region};
-use crate::engine::tests::specs::{delay_spec, per_frame_flow_recording_spec};
+use crate::engine::tests::specs::{
+    delay_spec,
+    per_frame_flow_recording_spec,
+    recording_host_source_spec,
+    recording_source_spec,
+    tagged_flow_recording_spec,
+};
 use crate::engine::tests::{
     FLOWS,
     assert_every_thread_exited,
@@ -13,6 +20,7 @@ use crate::engine::tests::{
     filter_spec,
     flow_recording_spec,
     hold_workers,
+    host_pass_spec,
     marking_spec,
     matched,
     matching_spec,
@@ -45,6 +53,27 @@ fn steps_by_name(graph: &CompiledGraph, progress: &Progress, names: &[&str]) -> 
     }
 
     steps
+}
+
+/// Every crossing the graph placed, in the order its nodes are listed.
+fn crossings(graph: &CompiledGraph) -> Vec<Crossing> {
+    let mut crossings = Vec::new();
+
+    for node in graph.nodes() {
+        if let NodeRole::Crossing(crossing) = node.role() {
+            crossings.push(*crossing);
+        }
+    }
+
+    crossings
+}
+
+/// The node feeding the first input of the node named `name`.
+fn producer_of(graph: &CompiledGraph, name: &str) -> NodeId {
+    let node = node_id(graph, name);
+    let first_input = &graph.node(node).inputs()[0];
+
+    first_input.source()
 }
 
 /// The frames counted by a `chunk` entry, read from its value.
@@ -116,6 +145,51 @@ fn records_keep_chunk_order_across_two_chunk_routed_workers() {
         "chunk filter.mark 3",
         "frame 5",
         "mark filter.mark 5",
+        "chunk filter.mark 1",
+    ];
+
+    assert_eq!(flows(), expected);
+    assert_eq!(report.frames, 6);
+    assert_eq!(report.records, 9);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}
+
+/// `delay` holds every frame of its chunk until the chunk ends, so each chunk's frames leave in its end
+/// flush, ahead of the `chunk` record `mark` made as that chunk ended.
+#[test]
+fn a_chunk_record_follows_the_frames_a_chunk_routed_stage_flushes() {
+    let property = "a_chunk_record_follows_the_frames_a_chunk_routed_stage_flushes";
+    clear_flows();
+    let specs = vec![
+        source_spec("input", &[0, 0, 1, 1, 1, 2], 0),
+        marking_spec("mark", "input", 2, true),
+        delay_spec("delay", "mark", &[4], 2, false),
+        flow_recording_spec("log", "delay"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert!(share_a_region(&graph, "mark", "delay"));
+    assert_eq!(routing_of(&graph, "delay"), Routing::ByChunk);
+    assert_eq!(planned_width(&graph, "delay"), 2);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+    let expected = vec![
+        "mark filter.mark 0",
+        "mark filter.mark 1",
+        "frame 0",
+        "frame 1",
+        "chunk filter.mark 2",
+        "mark filter.mark 2",
+        "mark filter.mark 3",
+        "mark filter.mark 4",
+        "frame 2",
+        "frame 3",
+        "frame 4",
+        "chunk filter.mark 3",
+        "mark filter.mark 5",
+        "frame 5",
         "chunk filter.mark 1",
     ];
 
@@ -343,7 +417,7 @@ fn a_record_reaching_an_exchanged_region_on_two_slots_leaves_once() {
 /// The copy on `match`'s second slot is seen before bundle `k` and the copy on its first slot before
 /// bundle `k + 1`. `mark 7` and the closing `chunk` leave `delay` after its end flush, behind `frame 7`,
 /// so they ride the first closing unit. This checks where each record lands. `log` sits in a region of
-/// its own, whose head would drop a second copy anyway.
+/// its own fed by one link, so only the disperse's check keeps a second copy out of it.
 #[test]
 fn a_record_reaching_an_exchanged_region_by_a_lagging_path_leaves_once() {
     let property = "a_record_reaching_an_exchanged_region_by_a_lagging_path_leaves_once";
@@ -482,6 +556,109 @@ fn a_record_reaching_a_widened_meta_sink_by_a_lagging_path_is_logged_once() {
     assert_eq!(seen, expected);
     assert_eq!(report.frames, 8);
     assert_eq!(report.records, 9);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}
+
+#[test]
+fn records_reach_a_meta_sink_in_place_from_a_source() {
+    let property = "records_reach_a_meta_sink_in_place_from_a_source";
+    clear_flows();
+    let specs = vec![
+        recording_source_spec("input", &[0, 0, 0], 0),
+        flow_recording_spec("log", "input"),
+    ];
+
+    let engine = build_engine(&specs, Settings::default());
+    let report = run_with_watchdog(engine, property);
+    let expected = vec![
+        "frame 0",
+        "produced source.input 0",
+        "frame 1",
+        "produced source.input 1",
+        "frame 2",
+        "produced source.input 2",
+    ];
+
+    assert_eq!(flows(), expected);
+    assert_eq!(report.frames, 3);
+    assert_eq!(report.records, 3);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}
+
+/// `produced k` crosses the upload into `mark` and the unload out of it, and `mark k` crosses the unload.
+/// `mark` hands `mark k` on with frame `k`, and `produced k` right after, as the step that took frame `k`
+/// ends.
+#[test]
+fn records_cross_an_upload_and_an_unload_in_place() {
+    let property = "records_cross_an_upload_and_an_unload_in_place";
+    clear_flows();
+    let specs = vec![
+        recording_host_source_spec("input", &[0, 0, 0], 0),
+        marking_spec("mark", "input", 1, false),
+        host_pass_spec("pass", "mark", None),
+        flow_recording_spec("log", "pass"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(crossings(&graph), vec![Crossing::Upload, Crossing::Unload]);
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+    let expected = vec![
+        "frame 0",
+        "mark filter.mark 0",
+        "produced source.input 0",
+        "frame 1",
+        "mark filter.mark 1",
+        "produced source.input 1",
+        "frame 2",
+        "mark filter.mark 2",
+        "produced source.input 2",
+        "chunk filter.mark 3",
+    ];
+
+    assert_eq!(flows(), expected);
+    assert_eq!(report.frames, 3);
+    assert_eq!(report.records, 7);
+    assert_eq!(report.dropped, 0);
+    assert_every_thread_exited(property);
+}
+
+/// `log` demands tags, so the graph places the `tags` metadata provider between `mark` and `log`, naming
+/// it after the source its path starts at.
+#[test]
+fn records_pass_a_meta_provider_in_place() {
+    let property = "records_pass_a_meta_provider_in_place";
+    clear_flows();
+    let specs = vec![
+        source_spec("input", &[0, 0, 0], 0),
+        marking_spec("mark", "input", 1, false),
+        tagged_flow_recording_spec("log", "mark"),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+    let tags = node_id(&graph, "tags(input)");
+
+    assert_eq!(producer_of(&graph, "tags(input)"), node_id(&graph, "mark"));
+    assert_eq!(producer_of(&graph, "log"), tags);
+    assert!(matches!(graph.node(tags).role(), NodeRole::Provider(_)));
+
+    let engine = engine_from(&graph, &solved, Settings::default());
+    let report = run_with_watchdog(engine, property);
+    let expected = vec![
+        "frame 0",
+        "mark filter.mark 0",
+        "frame 1",
+        "mark filter.mark 1",
+        "frame 2",
+        "mark filter.mark 2",
+        "chunk filter.mark 3",
+    ];
+
+    assert_eq!(flows(), expected);
+    assert_eq!(report.frames, 3);
+    assert_eq!(report.records, 4);
     assert_eq!(report.dropped, 0);
     assert_every_thread_exited(property);
 }

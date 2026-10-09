@@ -66,6 +66,9 @@ impl FrameContext {
     /// Starts a record of `kind`, placed in the stream after the frames this call returns.
     ///
     /// `kind` must be non-empty, use only lowercase letters, digits and underscores, and not be `frame`.
+    ///
+    /// Only a source's `next` and a stage's `process`, `select`, `consume` or `end_of_stream` may start one.
+    /// A record started anywhere else, such as in `start_of_stream` or `consume_record`, fails the run.
     pub fn record(&mut self, kind: &str) -> &mut Attachments {
         debug_assert!(
             MetaRecord::check_kind(kind).is_ok(),

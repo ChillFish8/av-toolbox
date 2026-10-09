@@ -328,7 +328,9 @@ impl Engine {
                         None => make_context(),
                     };
                     let edges = build_region_edges(graph, region);
+                    let links = graph.node(region.head()).inputs().len();
                     let runner = RegionRunner::new(nodes, edges)
+                        .fed_by(links)
                         .routed_on(region.route())
                         .profiled(profiler.clone())
                         .collecting(artefacts.clone());

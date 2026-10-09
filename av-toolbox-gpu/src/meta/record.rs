@@ -59,7 +59,7 @@ impl MetaRecord {
             return Ok(());
         }
 
-        let message = format!("the kind {kind:?} must be non-empty and use only a-z, 0-9 and _");
+        let message = format!("a record's kind {kind:?} must be non-empty and use only a-z, 0-9 and _");
 
         Err(message)
     }
@@ -118,6 +118,13 @@ mod tests {
     #[test]
     fn an_empty_kind_is_refused() {
         assert!(MetaRecord::check_kind("").is_err());
+    }
+
+    #[test]
+    fn a_malformed_kind_is_refused_as_a_record_kind() {
+        let refused = MetaRecord::check_kind("Chunk").expect_err("malformed");
+
+        assert!(refused.starts_with("a record's kind \"Chunk\""), "{refused}");
     }
 
     #[test]

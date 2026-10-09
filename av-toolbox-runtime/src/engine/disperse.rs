@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
-use av_toolbox_gpu::{MetaRecord, RecordId};
+use av_toolbox_gpu::MetaRecord;
 
 use super::channel::{AggregateSignal, ExitMessage, send_routed};
 use super::freedom::{FirstIdle, WorkerFreedom};
 use super::region::DisperseSide;
 use crate::disperse::Dropped;
+use crate::flow::Sightings;
 use crate::{Cancel, Disperse, ExchangeError, Flow, RunError, WorkItem};
 
 /// Drives a region's disperse from its one merged, slot-tagged upstream channel.
@@ -25,9 +26,9 @@ use crate::{Cancel, Disperse, ExchangeError, Flow, RunError, WorkItem};
 ///
 /// Records never join a bundle. Every record at the front of a slot's queue is handed to the disperse
 /// before the next bundle forms, so it goes to that bundle's worker ahead of it, and a bundle only
-/// forms once every slot's front is an item. A record reaching this by more than one slot is handed
-/// over once. Whatever records are left when the stream ends are handed over before the disperse
-/// finishes.
+/// forms once every slot's front is an item. With more than one bound slot, a record reaching this by
+/// several slots is handed over once. Whatever records are left when the stream ends are handed over
+/// before the disperse finishes.
 ///
 /// Owning the disperse outright, on one thread, is what keeps the state machine's own
 /// lock-step assumption true: `Disperse` assumes whoever calls `offer` and `place` does so in
@@ -55,7 +56,7 @@ pub(super) fn drive_disperse(
     let mut queues: HashMap<usize, VecDeque<Flow>> =
         slots.iter().map(|&slot| (slot, VecDeque::new())).collect();
     let mut done: HashSet<usize> = HashSet::new();
-    let mut seen: HashSet<RecordId> = HashSet::new();
+    let mut seen = Sightings::for_routes(slots.len());
 
     'routing: loop {
         if cancel.is_stopped() {
@@ -134,11 +135,11 @@ pub(super) fn drive_disperse(
     Ok(())
 }
 
-/// Takes every record at the front of each slot's queue, in slot order, leaving out any already seen.
+/// Takes every record at the front of each slot's queue, in slot order, leaving out any `seen` already holds.
 fn take_front_records(
     slots: &[usize],
     queues: &mut HashMap<usize, VecDeque<Flow>>,
-    seen: &mut HashSet<RecordId>,
+    seen: &mut Sightings,
 ) -> Vec<MetaRecord> {
     let mut records = Vec::new();
 
@@ -164,7 +165,7 @@ fn take_front_records(
 fn take_every_record(
     slots: &[usize],
     queues: &mut HashMap<usize, VecDeque<Flow>>,
-    seen: &mut HashSet<RecordId>,
+    seen: &mut Sightings,
 ) -> Vec<MetaRecord> {
     let mut records = Vec::new();
 
@@ -187,8 +188,8 @@ fn take_every_record(
     records
 }
 
-fn keep_first_sighting(record: MetaRecord, seen: &mut HashSet<RecordId>, records: &mut Vec<MetaRecord>) {
-    let first_sighting = seen.insert(record.id());
+fn keep_first_sighting(record: MetaRecord, seen: &mut Sightings, records: &mut Vec<MetaRecord>) {
+    let first_sighting = seen.first(&record);
     if first_sighting {
         records.push(record);
     }
@@ -256,7 +257,7 @@ fn drain_holding(
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{AnyItem, FrameMeta, StreamItem, testing_context};
+    use av_toolbox_gpu::{AnyItem, FrameMeta, RecordId, StreamItem, testing_context};
 
     use super::*;
     use crate::engine::tests::format;
@@ -288,7 +289,7 @@ mod tests {
         let second_slot = VecDeque::from([Flow::Record(record.clone()), item(0)]);
         queues.insert(0, first_slot);
         queues.insert(1, second_slot);
-        let mut seen = HashSet::new();
+        let mut seen = Sightings::for_routes(slots.len());
 
         let before_first = take_front_records(&slots, &mut queues, &mut seen);
         take_bundle(&slots, &mut queues);
@@ -310,7 +311,8 @@ mod tests {
         let second_slot = VecDeque::from([Flow::Record(fresh.clone()), Flow::Record(taken.clone())]);
         queues.insert(0, first_slot);
         queues.insert(1, second_slot);
-        let mut seen = HashSet::from([taken.id()]);
+        let mut seen = Sightings::for_routes(slots.len());
+        seen.first(&taken);
 
         let leftover = take_every_record(&slots, &mut queues, &mut seen);
 

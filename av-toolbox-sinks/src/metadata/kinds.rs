@@ -1,9 +1,10 @@
+use av_toolbox_gpu::MetaRecord;
 use schemars::JsonSchema;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 
 const EMPTY_KINDS: &str = "kinds cannot be empty, expected a list such as [\"frame\", \"chunk\"]";
-const EMPTY_KIND: &str = "a kind cannot be empty, expected a name such as \"frame\" or \"chunk\"";
+const EXPECTED_NAME: &str = "expected a name such as \"frame\" or \"chunk\"";
 
 /// The kinds of line to write.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -22,11 +23,24 @@ impl<'de> Deserialize<'de> for Kinds {
             return Err(D::Error::custom(EMPTY_KINDS));
         }
 
-        let has_empty = names.iter().any(String::is_empty);
-        if has_empty {
-            return Err(D::Error::custom(EMPTY_KIND));
+        for name in &names {
+            if let Err(reason) = check_name(name) {
+                return Err(D::Error::custom(reason));
+            }
         }
 
         Ok(Self(names))
+    }
+}
+
+/// Checks `name` is a well formed record kind, or `frame`, the kind of frame lines.
+fn check_name(name: &str) -> Result<(), String> {
+    if name == "frame" {
+        return Ok(());
+    }
+
+    match MetaRecord::check_kind(name) {
+        Ok(()) => Ok(()),
+        Err(reason) => Err(format!("{reason}, {EXPECTED_NAME}")),
     }
 }

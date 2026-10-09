@@ -2,14 +2,18 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use av_toolbox_core::StageError;
-use av_toolbox_gpu::{AnyItem, ChunkRoute, FrameContext, MetaRecord, RecordId, StreamItem, StreamPolicy};
+use av_toolbox_gpu::{AnyItem, ChunkRoute, FrameContext, MetaRecord, StreamItem, StreamPolicy};
 use av_toolbox_graph::{NodeId, StageBox};
 
 use super::node::{deliver_record, end_node, run_node, start_node};
 use crate::artefacts::ArtefactCollector;
 use crate::chunks::chunk_in;
+use crate::flow::Sightings;
 use crate::profile::{Counted, Profiler};
 use crate::{Flow, RunError};
+
+const STRAY_RECORDS: &str =
+    "records can only be made while a stage produces, processes, selects, consumes or ends a stream";
 
 /// One node's output filling one of another node's input slots.
 #[derive(Debug, Clone, Copy)]
@@ -114,6 +118,7 @@ impl RegionRunner {
             .map(|(position, (id, _))| (*id, position))
             .collect();
         let inboxes = edges.feeds.iter().map(|feeds| Inbox::new(feeds.len())).collect();
+        let offered = Offered::fed_by(1);
 
         let last_chunks = vec![None; nodes.len()];
 
@@ -122,7 +127,7 @@ impl RegionRunner {
             edges,
             positions,
             inboxes,
-            offered: Offered::default(),
+            offered,
             last_chunks,
             route: None,
             profiler: None,
@@ -138,6 +143,15 @@ impl RegionRunner {
     /// The same runner, routing its chunks on `route`.
     pub(crate) fn routed_on(mut self, route: Option<ChunkRoute>) -> Self {
         self.route = route;
+        self
+    }
+
+    /// The same runner, offered records from outside by `links` upstream edges.
+    ///
+    /// Only a region fed by several links checks what it is offered for repeats, since one link never
+    /// carries a record twice. A region is fed by one link unless told otherwise.
+    pub(crate) fn fed_by(mut self, links: usize) -> Self {
+        self.offered = Offered::fed_by(links);
         self
     }
 
@@ -163,14 +177,16 @@ impl RegionRunner {
 
         for (id, stage) in &mut self.nodes {
             start_node(*id, stage, context)?;
+            refuse_stray_records(*id, context)?;
         }
 
         Ok(())
     }
 
-    /// Holds records that reached the region from outside, leaving out any it was already offered.
+    /// Holds records that reached the region from outside.
     ///
-    /// They leave through the head, ahead of its next output, or after its end flush.
+    /// They leave through the head, ahead of its next output, or after its end flush. A region fed by
+    /// several links leaves out any record it was already offered since it last ended.
     pub fn offer_records(&mut self, records: Vec<MetaRecord>) {
         for record in records {
             self.offered.offer(record);
@@ -182,7 +198,8 @@ impl RegionRunner {
     /// The step ends by flushing this thread's queued work, before anything it read is let go or
     /// anything it produced is returned. Under [StreamPolicy::FlushAtHandOff] the device items in
     /// `bundle` are held until then, so a head dropping its inputs early cannot release them first.
-    /// Records offered to the region leave ahead of the head's output.
+    /// Records offered to the region leave ahead of the head's output, behind anything the head flushed
+    /// for a chunk it restarted on.
     pub fn run(
         &mut self,
         context: &mut FrameContext,
@@ -191,11 +208,7 @@ impl RegionRunner {
         let mut outputs: Vec<Vec<Flow>> = Vec::with_capacity(self.nodes.len());
         let held_inputs = hold_until_flushed(context, &bundle);
 
-        let mut head_output = Vec::new();
-        let (head_id, head_stage) = &mut self.nodes[0];
         let offered = self.offered.take();
-        release(*head_id, head_stage, context, offered, &mut head_output)?;
-
         let mut head_watch = NodeWatch {
             chunked: self.edges.chunked.contains(&self.nodes[0].0),
             frame_routed: self.edges.frame_routed,
@@ -205,8 +218,7 @@ impl RegionRunner {
             artefacts: self.artefacts.as_deref(),
             profiler: self.profiler.as_deref(),
         };
-        let mut stepped = step_node(&mut self.nodes[0], &mut head_watch, context, bundle)?;
-        head_output.append(&mut stepped);
+        let mut head_output = step_node(&mut self.nodes[0], &mut head_watch, context, bundle, offered)?;
         stamp(&self.edges.paths, self.nodes[0].0, &mut head_output);
         outputs.push(head_output);
 
@@ -245,7 +257,8 @@ impl RegionRunner {
     /// exactly like a normal step, before its own flush is taken. That way anything the
     /// downstream node ends up holding because of the upstream flush is captured too. It ends by
     /// submitting this thread's queued work, before anything it produced is returned. Every record
-    /// still waiting in the region leaves after the end flush of the node it is waiting at.
+    /// still waiting in the region leaves after the end flush of the node it is waiting at. A meta sink
+    /// reads the records waiting at it before it ends.
     ///
     /// `ended` is the chunk being ended, when the caller knows it. A node files its artefacts under the
     /// chunk it last ran on, or under `ended` when it has none. In a region routed by frame, a node not
@@ -267,10 +280,8 @@ impl RegionRunner {
             profiler: self.profiler.as_deref(),
         };
         let (head_id, head_stage) = &mut self.nodes[0];
-        let mut head_flush = call_end(*head_id, head_stage, context, head_watch)?;
-
-        let offered = self.offered.take();
-        release(*head_id, head_stage, context, offered, &mut head_flush)?;
+        let offered = self.offered.drain();
+        let mut head_flush = end_owing(*head_id, head_stage, context, head_watch, offered)?;
         stamp(&self.edges.paths, *head_id, &mut head_flush);
         outputs.push(head_flush);
 
@@ -304,16 +315,23 @@ impl RegionRunner {
 
 /// Records offered to a region from outside, waiting to leave through its head.
 ///
-/// `seen` names every record ever offered, so one arriving again by another route is dropped.
-#[derive(Default)]
+/// `seen` names the records offered since the region last ended, so one arriving again by another link
+/// is dropped.
 struct Offered {
     waiting: VecDeque<MetaRecord>,
-    seen: HashSet<RecordId>,
+    seen: Sightings,
 }
 
 impl Offered {
+    fn fed_by(links: usize) -> Self {
+        Self {
+            waiting: VecDeque::new(),
+            seen: Sightings::for_routes(links),
+        }
+    }
+
     fn offer(&mut self, record: MetaRecord) {
-        let first_sighting = self.seen.insert(record.id());
+        let first_sighting = self.seen.first(&record);
         if first_sighting {
             self.waiting.push_back(record);
         }
@@ -322,18 +340,25 @@ impl Offered {
     fn take(&mut self) -> Vec<MetaRecord> {
         self.waiting.drain(..).collect()
     }
+
+    /// Takes every waiting record, and forgets every record seen, as the region ends.
+    fn drain(&mut self) -> Vec<MetaRecord> {
+        self.seen.forget();
+
+        self.take()
+    }
 }
 
 /// What one node after the head is waiting on.
 ///
 /// `queues` holds one queue of items per feed. `waiting` holds each record that reached the node beside
 /// how many bundles the node must have taken before it leaves, which is every item that arrived ahead
-/// of it on its feed. `seen` names every record that reached the node, so one arriving by a second feed
-/// is dropped.
+/// of it on its feed. `seen` names every record that reached a node with several feeds, so one arriving by
+/// a second feed is dropped.
 struct Inbox {
     queues: Vec<VecDeque<AnyItem>>,
     waiting: VecDeque<(u64, MetaRecord)>,
-    seen: HashSet<RecordId>,
+    seen: Sightings,
     consumed: u64,
 }
 
@@ -342,7 +367,7 @@ impl Inbox {
         Self {
             queues: vec![VecDeque::new(); feeds],
             waiting: VecDeque::new(),
-            seen: HashSet::new(),
+            seen: Sightings::for_routes(feeds),
             consumed: 0,
         }
     }
@@ -354,7 +379,7 @@ impl Inbox {
         match flow {
             Flow::Item(item) => queue.push_back(item.clone()),
             Flow::Record(record) => {
-                let first_sighting = self.seen.insert(record.id());
+                let first_sighting = self.seen.first(record);
                 if !first_sighting {
                     return;
                 }
@@ -384,7 +409,7 @@ impl Inbox {
 
     /// Takes every waiting record, and forgets every record seen, once nothing more can reach the node.
     fn drain(&mut self) -> Vec<MetaRecord> {
-        self.seen.clear();
+        self.seen.forget();
 
         self.waiting.drain(..).map(|(_, record)| record).collect()
     }
@@ -402,6 +427,8 @@ fn release(
 ) -> Result<(), RunError> {
     for record in records {
         let delivered = deliver_record(node, stage, context, &record)?;
+        refuse_stray_records(node, context)?;
+
         if !delivered {
             produced.push(Flow::Record(record));
         }
@@ -424,6 +451,22 @@ fn taken_records(node: NodeId, context: &mut FrameContext) -> Result<Vec<Flow>, 
     }
 
     Ok(flows)
+}
+
+/// Fails naming `node` when it left records on the context during a call whose records are not taken.
+fn refuse_stray_records(node: NodeId, context: &mut FrameContext) -> Result<(), RunError> {
+    let stray = context.take_records();
+    if stray.is_empty() {
+        return Ok(());
+    }
+
+    Err(stray_records(node))
+}
+
+fn stray_records(node: NodeId) -> RunError {
+    let source = StageError::msg(STRAY_RECORDS);
+
+    RunError::Stage { node, source }
 }
 
 fn malformed_kind(node: NodeId, reason: String) -> RunError {
@@ -520,6 +563,35 @@ fn ending_chunk(tagging: Tagging, last: Option<u64>, ended: Option<u64>) -> Opti
     last
 }
 
+/// Ends one node, handing on `owed`, the records still waiting at it.
+///
+/// A meta sink reads them before it ends, since it has no end flush for them to follow. Any other node
+/// passes them on after its end flush.
+fn end_owing(
+    id: NodeId,
+    stage: &mut StageBox,
+    context: &mut FrameContext,
+    watch: EndWatch<'_>,
+    owed: Vec<MetaRecord>,
+) -> Result<Vec<Flow>, RunError> {
+    let reads_records = matches!(stage, StageBox::MetaSink(_));
+
+    if reads_records {
+        let mut produced = Vec::new();
+        release(id, stage, context, owed, &mut produced)?;
+
+        let mut flushed = call_end(id, stage, context, watch)?;
+        produced.append(&mut flushed);
+
+        return Ok(produced);
+    }
+
+    let mut flushed = call_end(id, stage, context, watch)?;
+    release(id, stage, context, owed, &mut flushed)?;
+
+    Ok(flushed)
+}
+
 /// Ends one node, placing the records it made after what it flushed.
 fn call_end(
     id: NodeId,
@@ -578,16 +650,17 @@ fn end_and_collect(
     Ok(flushed)
 }
 
-/// Runs one node over one bundle of its inputs.
+/// Runs one node over one bundle of its inputs, handing `arrived` on ahead of what the bundle produces.
 ///
 /// A node given one chunk at a time is ended and started again first when the bundle opens a new chunk,
-/// and what that end flushed comes ahead of what the bundle produces. The records a call made follow
-/// that call's items.
+/// and what that end flushed comes ahead of `arrived`, since those records reached the node after the
+/// chunk it ended. The records a call made follow that call's items.
 fn step_node(
     node: &mut (NodeId, StageBox),
     watch: &mut NodeWatch<'_>,
     context: &mut FrameContext,
     slots: Vec<Option<AnyItem>>,
+    arrived: Vec<MetaRecord>,
 ) -> Result<Vec<Flow>, RunError> {
     let mut produced = Vec::new();
 
@@ -598,6 +671,8 @@ fn step_node(
     }
 
     let (id, stage) = node;
+    release(*id, stage, context, arrived, &mut produced)?;
+
     let result = call_node(*id, stage, context, slots, watch.profiler)?;
     let records = taken_records(*id, context)?;
 
@@ -666,6 +741,7 @@ fn end_and_start(
     let (id, stage) = node;
     let flushed = call_end(*id, stage, context, ending)?;
     start_node(*id, stage, context)?;
+    refuse_stray_records(*id, context)?;
 
     Ok(flushed)
 }
@@ -693,6 +769,8 @@ fn enqueue(feeds: &[Feed], inbox: &mut Inbox, outputs: &[Vec<Flow>], positions: 
 ///
 /// A node with no feeds needs no input at all, so it runs once. A waiting record leaves as soon as the
 /// node has taken every item that arrived ahead of it, after the output of the step that took the last.
+/// One that arrived after every item already taken leaves ahead of the next step's output, behind
+/// anything a restart on a new chunk flushes, or right away when no step is ready.
 fn run_fed(
     feeds: &[Feed],
     inbox: &mut Inbox,
@@ -700,34 +778,58 @@ fn run_fed(
     watch: &mut NodeWatch<'_>,
     context: &mut FrameContext,
 ) -> Result<Vec<Flow>, RunError> {
-    if feeds.is_empty() {
-        return step_node(node, watch, context, Vec::new());
-    }
-
-    let mut produced = Vec::new();
-    let due = inbox.due();
-    release(node.0, &mut node.1, context, due, &mut produced)?;
-
-    let ready = ready_count(&inbox.queues);
-
-    for _ in 0..ready {
-        let slots = take_inputs(node.0, feeds, &mut inbox.queues)?;
-        inbox.consumed += 1;
-
-        let mut result = step_node(node, watch, context, slots)?;
-        produced.append(&mut result);
-
-        let due = inbox.due();
-        release(node.0, &mut node.1, context, due, &mut produced)?;
-    }
+    let (mut produced, settled) = feed_node(feeds, inbox, node, watch, context)?;
+    release(node.0, &mut node.1, context, settled, &mut produced)?;
 
     Ok(produced)
 }
 
+/// Runs a node the same way as [run_fed], handing back unreleased the records due once the last step ran.
+///
+/// Those are the records due on entry when no step is ready, and the ones that become due after the last
+/// step. While the node ends, no item is left behind them on its input.
+fn feed_node(
+    feeds: &[Feed],
+    inbox: &mut Inbox,
+    node: &mut (NodeId, StageBox),
+    watch: &mut NodeWatch<'_>,
+    context: &mut FrameContext,
+) -> Result<(Vec<Flow>, Vec<MetaRecord>), RunError> {
+    if feeds.is_empty() {
+        let produced = step_node(node, watch, context, Vec::new(), Vec::new())?;
+        return Ok((produced, Vec::new()));
+    }
+
+    let mut produced = Vec::new();
+    let mut arrived = inbox.due();
+    let ready = ready_count(&inbox.queues);
+
+    for step in 0..ready {
+        let slots = take_inputs(node.0, feeds, &mut inbox.queues)?;
+        inbox.consumed += 1;
+
+        let arriving = std::mem::take(&mut arrived);
+        let mut result = step_node(node, watch, context, slots, arriving)?;
+        produced.append(&mut result);
+
+        let due = inbox.due();
+        let last_step = step + 1 == ready;
+        if last_step {
+            arrived = due;
+            break;
+        }
+
+        release(node.0, &mut node.1, context, due, &mut produced)?;
+    }
+
+    Ok((produced, arrived))
+}
+
 /// Feeds a node whatever its producers flushed, then flushes the node itself.
 ///
-/// Anything its feeds still hold afterwards was never matched by the others, and is an error. Any
-/// record still waiting leaves after the node's own flush.
+/// Anything its feeds still hold afterwards was never matched by the others, and is an error. A record
+/// with no item left behind it on the node's input leaves after the node's own flush, as does any record
+/// still waiting. A meta sink reads those records before it ends instead.
 fn end_fed(
     feeds: &[Feed],
     inbox: &mut Inbox,
@@ -736,7 +838,7 @@ fn end_fed(
     ended: Option<u64>,
     context: &mut FrameContext,
 ) -> Result<Vec<Flow>, RunError> {
-    let mut forwarded = run_fed(feeds, inbox, node, &mut watch, context)?;
+    let (mut forwarded, settled) = feed_node(feeds, inbox, node, &mut watch, context)?;
 
     let leftover: Vec<usize> = inbox.queues.iter().map(VecDeque::len).collect();
     if leftover.iter().any(|&count| count > 0) {
@@ -755,12 +857,12 @@ fn end_fed(
         artefacts: watch.artefacts,
         profiler: watch.profiler,
     };
-    let (id, stage) = node;
-    let flushed = call_end(*id, stage, context, ending)?;
-    forwarded.extend(flushed);
+    let mut owed = settled;
+    owed.extend(inbox.drain());
 
-    let remaining = inbox.drain();
-    release(*id, stage, context, remaining, &mut forwarded)?;
+    let (id, stage) = node;
+    let mut flushed = end_owing(*id, stage, context, ending, owed)?;
+    forwarded.append(&mut flushed);
 
     Ok(forwarded)
 }

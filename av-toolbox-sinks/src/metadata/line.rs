@@ -31,7 +31,7 @@ pub(crate) fn write_line<W: Write>(
 
 /// Writes one record as a JSON object followed by a newline.
 ///
-/// `after` is the index of the last frame written, and is `null` before any.
+/// `after` is the index of the last frame received, and is `null` before any.
 /// `chunk` is the scene chunk of that frame, and is left out unless scenes were asked for.
 pub(crate) fn write_record_line<W: Write>(
     output: &mut W,

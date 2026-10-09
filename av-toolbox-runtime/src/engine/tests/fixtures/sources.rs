@@ -26,6 +26,7 @@ use av_toolbox_gpu::{
     FrameRate,
     HostFrame,
     HostSide,
+    MetaValue,
     OutputFormats,
     ResolvedFormats,
     Runtime,
@@ -53,6 +54,9 @@ pub(crate) struct ListedArgs {
     /// The frame rate the source declares, as numerator and denominator. Unknown when absent.
     #[serde(default)]
     frame_rate: Option<[u32; 2]>,
+    /// Records a `produced` for every frame, holding its index.
+    #[serde(default)]
+    record: bool,
 }
 
 /// The frame budget limit every `Listed` source instance saw, by its `id`.
@@ -92,12 +96,18 @@ fn would_wait_for_room(budget: &FrameBudget, bytes: usize) -> bool {
     outstanding != 0 && outstanding + bytes > budget.limit()
 }
 
+fn record_produced(context: &mut FrameContext, meta: &FrameMeta) {
+    let index = meta.index as i64;
+    context.record("produced").attach("index", MetaValue::Int(index));
+}
+
 pub(crate) struct ListedInstance {
     _life: StageLife,
     remaining: VecDeque<u64>,
     position: u64,
     index_base: u64,
     id: u32,
+    record: bool,
 }
 
 impl ListedInstance {
@@ -108,6 +118,7 @@ impl ListedInstance {
             position: 0,
             index_base: args.index_base,
             id: args.id,
+            record: args.record,
         }
     }
 }
@@ -151,6 +162,10 @@ impl Source for ListedInstance {
         let frame = context.alloc_frame(&format(), meta);
         if let Some(budget) = context.budget() {
             record_budget_peak(budget.outstanding());
+        }
+
+        if self.record {
+            record_produced(context, frame.meta());
         }
 
         Ok(Some(frame))
@@ -220,6 +235,7 @@ pub(crate) struct HostListedInstance {
     position: u64,
     index_base: u64,
     id: u32,
+    record: bool,
 }
 
 impl HostListedInstance {
@@ -230,6 +246,7 @@ impl HostListedInstance {
             position: 0,
             index_base: args.index_base,
             id: args.id,
+            record: args.record,
         }
     }
 }
@@ -270,6 +287,10 @@ impl Source<HostSide> for HostListedInstance {
         let frame = context.alloc_host_frame(&format(), meta).freeze();
         if let Some(budget) = context.budget() {
             record_budget_peak(budget.outstanding());
+        }
+
+        if self.record {
+            record_produced(context, frame.meta());
         }
 
         Ok(Some(frame))

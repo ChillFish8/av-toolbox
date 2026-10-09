@@ -90,6 +90,48 @@ impl Filter for Malformed {
     }
 }
 
+/// Passes each frame through, recording a `start` each time it is started after its first start.
+#[derive(Default)]
+struct RestartMarking {
+    started: bool,
+}
+
+impl StageInstance for RestartMarking {
+    fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
+        if self.started {
+            context.record("start");
+        }
+
+        self.started = true;
+        Ok(())
+    }
+}
+
+impl Filter for RestartMarking {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs.take_frame(0).ok_or_else(missing_frame)?;
+
+        Ok(vec![frame])
+    }
+}
+
+/// Answers every record that reaches it with an `echo` record of its own.
+struct Echoing;
+
+impl StageInstance for Echoing {}
+
+impl MetaSink for Echoing {
+    fn consume(&mut self, _context: &mut FrameContext, _inputs: MetaInputs) -> Result<(), StageError> {
+        Ok(())
+    }
+
+    fn consume_record(&mut self, context: &mut FrameContext, _record: &MetaRecord) -> Result<(), StageError> {
+        context.record("echo");
+
+        Ok(())
+    }
+}
+
 /// Writes down every frame and record that reaches it, in order.
 struct Watching {
     seen: Arc<Mutex<Vec<String>>>,
@@ -116,6 +158,36 @@ impl MetaSink for Watching {
 
         Ok(())
     }
+}
+
+/// The same as [Watching], also writing down `end` when it is ended.
+struct WatchingToEnd {
+    watching: Watching,
+}
+
+impl StageInstance for WatchingToEnd {}
+
+impl MetaSink for WatchingToEnd {
+    fn consume(&mut self, context: &mut FrameContext, inputs: MetaInputs) -> Result<(), StageError> {
+        self.watching.consume(context, inputs)
+    }
+
+    fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
+        let ended = String::from("end");
+        self.watching.seen.lock().expect("not poisoned").push(ended);
+
+        Ok(())
+    }
+
+    fn consume_record(&mut self, context: &mut FrameContext, record: &MetaRecord) -> Result<(), StageError> {
+        self.watching.consume_record(context, record)
+    }
+}
+
+fn watching_to_end(seen: &Arc<Mutex<Vec<String>>>) -> StageBox {
+    let watching = Watching { seen: seen.clone() };
+
+    StageBox::MetaSink(Box::new(WatchingToEnd { watching }))
 }
 
 /// A record's kind, followed by the first path it was stamped with when it has one.
@@ -148,6 +220,14 @@ fn watched_chain(
     stages: Vec<(&str, StageBox)>,
     seen: &Arc<Mutex<Vec<String>>>,
 ) -> (Vec<(NodeId, StageBox)>, RegionEdges) {
+    let watching = Watching { seen: seen.clone() };
+    let exit = StageBox::MetaSink(Box::new(watching));
+
+    chain_into(stages, exit)
+}
+
+/// `stages` named by their paths, each feeding the next, with `exit` at the end.
+fn chain_into(stages: Vec<(&str, StageBox)>, exit: StageBox) -> (Vec<(NodeId, StageBox)>, RegionEdges) {
     let mut nodes = Vec::with_capacity(stages.len() + 1);
     let mut named = Vec::with_capacity(stages.len());
 
@@ -157,9 +237,8 @@ fn watched_chain(
         nodes.push((node, stage));
     }
 
-    let watching = Watching { seen: seen.clone() };
     let sink = NodeId::new(nodes.len());
-    nodes.push((sink, StageBox::MetaSink(Box::new(watching))));
+    nodes.push((sink, exit));
 
     let feeds = (1..nodes.len())
         .map(|position| {
@@ -283,8 +362,37 @@ fn a_record_passes_a_stage_that_holds_frames_back() {
         "mark filter.marking",
         "frame 0",
         "mark filter.marking",
-        "chunk filter.marking",
         "frame 1",
+        "chunk filter.marking",
+    ];
+    assert_eq!(watched(&seen), expected);
+}
+
+#[test]
+fn a_record_from_an_end_flush_follows_the_frame_a_holding_stage_flushes() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let stages = vec![
+        (
+            "filter.marking",
+            StageBox::Filter(Box::<FlushingMarking>::default()),
+        ),
+        (
+            "filter.delay",
+            StageBox::Filter(Box::new(Delaying { held: None })),
+        ),
+    ];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    run_frames(&mut runner, &[(0, 0), (1, 0)]);
+
+    let expected = vec![
+        "mark filter.marking",
+        "frame 0",
+        "mark filter.marking",
+        "frame 1",
+        "frame 1",
+        "chunk filter.marking",
     ];
     assert_eq!(watched(&seen), expected);
 }
@@ -399,7 +507,7 @@ fn a_record_offered_twice_leaves_once() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let stages = vec![("filter.marking", StageBox::Filter(Box::<Marking>::default()))];
     let (nodes, edges) = watched_chain(stages, &seen);
-    let mut runner = RegionRunner::new(nodes, edges);
+    let mut runner = RegionRunner::new(nodes, edges).fed_by(2);
     let mut stage_context = context_of(&context);
     let outside = MetaRecord::new("outside");
 
@@ -430,7 +538,7 @@ fn a_malformed_kind_fails_the_run_naming_the_node() {
 
     let message = source.to_string();
     assert_eq!(node, head);
-    assert!(message.contains("\"Bad\""), "{message}");
+    assert!(message.contains("a record's kind \"Bad\""), "{message}");
     assert!(message.contains("a-z, 0-9 and _"), "{message}");
 }
 
@@ -466,4 +574,297 @@ fn a_stage_returning_only_records_in_a_frame_routed_region_still_holds_its_frame
     };
 
     assert_eq!(node, head);
+}
+
+/// The failure `result` holds, which must be a stage failure, as the node it names and its message.
+fn stage_failure<T>(result: Result<T, RunError>) -> (NodeId, String) {
+    let Err(RunError::Stage { node, source }) = result else {
+        panic!("the run should have failed in a stage");
+    };
+
+    (node, source.to_string())
+}
+
+#[test]
+fn a_record_made_while_starting_fails_the_run_naming_the_node() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let starting = NodeId::new(1);
+    let stages = vec![
+        ("filter.pass", StageBox::Filter(Box::new(PassThrough))),
+        (
+            "filter.starting",
+            StageBox::Filter(Box::<RestartMarking>::default()),
+        ),
+    ];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let mut runner = RegionRunner::new(nodes, edges);
+    let mut stage_context = context_of(&context);
+
+    runner
+        .start(&mut stage_context)
+        .expect("the first start records nothing");
+    let result = runner.start(&mut stage_context);
+
+    let (node, message) = stage_failure(result);
+    assert_eq!(node, starting);
+    assert!(message.contains("records can only be made while"), "{message}");
+}
+
+#[test]
+fn a_record_made_while_restarting_on_a_new_chunk_fails_the_run_naming_the_node() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let starting = NodeId::new(1);
+    let stages = vec![
+        ("filter.pass", StageBox::Filter(Box::new(PassThrough))),
+        (
+            "filter.starting",
+            StageBox::Filter(Box::<RestartMarking>::default()),
+        ),
+    ];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let chunked_edges = edges.chunked_on_layer_zero(HashSet::from([starting]));
+    let mut runner = RegionRunner::new(nodes, chunked_edges);
+    let mut stage_context = context_of(&context);
+
+    runner.start(&mut stage_context).expect("should start");
+
+    let first = vec![Some(item(&context, 0, 0))];
+    runner.run(&mut stage_context, first).expect("should run");
+
+    let second = vec![Some(item(&context, 1, 1))];
+    let result = runner.run(&mut stage_context, second);
+
+    let Err(RunError::InChunk { chunk, source }) = result else {
+        panic!("the restart should have failed naming the chunk it ended");
+    };
+
+    let (node, message) = stage_failure::<()>(Err(*source));
+    assert_eq!(chunk, 0);
+    assert_eq!(node, starting);
+    assert!(message.contains("records can only be made while"), "{message}");
+}
+
+#[test]
+fn a_record_made_by_a_meta_sink_reading_a_record_fails_the_run_naming_the_sink() {
+    let context = testing_context();
+    let head = NodeId::new(0);
+    let echoing = NodeId::new(1);
+    let nodes = vec![
+        (head, StageBox::Filter(Box::<Marking>::default())),
+        (echoing, StageBox::MetaSink(Box::new(Echoing))),
+    ];
+    let feeds = vec![vec![Feed {
+        producer: head,
+        slot: 0,
+    }]];
+    let named = paths(&[(head, "filter.marking"), (echoing, "metadata.echo")]);
+    let edges = RegionEdges::new(feeds, vec![echoing]).with_paths(named);
+    let mut runner = RegionRunner::new(nodes, edges);
+    let mut stage_context = context_of(&context);
+
+    runner.start(&mut stage_context).expect("should start");
+
+    let bundle = vec![Some(item(&context, 0, 0))];
+    let result = runner.run(&mut stage_context, bundle);
+
+    let (node, message) = stage_failure(result);
+    assert_eq!(node, echoing);
+    assert!(message.contains("records can only be made while"), "{message}");
+}
+
+/// The marking stage's restart sends its `chunk` record on with frame 2, after frames 0 and 1 the
+/// buffering stage still holds for chunk 0.
+#[test]
+fn a_record_arriving_after_a_chunk_follows_the_frames_a_restart_flushes() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let marking = NodeId::new(0);
+    let buffering = NodeId::new(1);
+    let stages = vec![
+        ("filter.marking", StageBox::Filter(Box::<Marking>::default())),
+        (
+            "filter.buffer",
+            StageBox::Filter(Box::new(Buffering { held: Vec::new() })),
+        ),
+    ];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let chunked_edges = edges.chunked_on_layer_zero(HashSet::from([marking, buffering]));
+    let mut runner = RegionRunner::new(nodes, chunked_edges);
+
+    run_frames(&mut runner, &[(0, 0), (1, 0), (2, 1)]);
+
+    let expected = vec![
+        "mark filter.marking",
+        "mark filter.marking",
+        "frame 0",
+        "frame 1",
+        "chunk filter.marking",
+        "mark filter.marking",
+        "frame 2",
+        "chunk filter.marking",
+    ];
+    assert_eq!(watched(&seen), expected);
+}
+
+#[test]
+fn a_record_offered_after_a_chunk_follows_the_frames_the_head_restart_flushes() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let head = NodeId::new(0);
+    let stages = vec![(
+        "filter.buffer",
+        StageBox::Filter(Box::new(Buffering { held: Vec::new() })),
+    )];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let chunked_edges = edges.chunked_on_layer_zero(HashSet::from([head]));
+    let mut runner = RegionRunner::new(nodes, chunked_edges);
+    let mut stage_context = context_of(&context);
+
+    runner.start(&mut stage_context).expect("should start");
+
+    for (index, chunk) in [(0, 0), (1, 0)] {
+        let bundle = vec![Some(item(&context, index, chunk))];
+        runner.run(&mut stage_context, bundle).expect("should run");
+    }
+
+    runner.offer_records(vec![MetaRecord::new("outside")]);
+
+    let bundle = vec![Some(item(&context, 2, 1))];
+    runner.run(&mut stage_context, bundle).expect("should run");
+
+    let expected = vec!["frame 0", "frame 1", "outside"];
+    assert_eq!(watched(&seen), expected);
+}
+
+#[test]
+fn a_record_offered_twice_to_a_region_fed_by_one_link_is_not_checked_for_repeats() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let stages = vec![("filter.pass", StageBox::Filter(Box::new(PassThrough)))];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let mut runner = RegionRunner::new(nodes, edges).fed_by(1);
+    let mut stage_context = context_of(&context);
+    let outside = MetaRecord::new("outside");
+
+    runner.start(&mut stage_context).expect("should start");
+    runner.offer_records(vec![outside.clone(), outside]);
+
+    let bundle = vec![Some(item(&context, 0, 0))];
+    runner.run(&mut stage_context, bundle).expect("should run");
+
+    let expected = vec!["outside", "outside", "frame 0"];
+    assert_eq!(watched(&seen), expected);
+}
+
+#[test]
+fn a_region_forgets_the_records_offered_to_it_once_it_ends() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let stages = vec![("filter.pass", StageBox::Filter(Box::new(PassThrough)))];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let mut runner = RegionRunner::new(nodes, edges).fed_by(2);
+    let mut stage_context = context_of(&context);
+    let outside = MetaRecord::new("outside");
+
+    runner.start(&mut stage_context).expect("should start");
+    runner.offer_records(vec![outside.clone()]);
+    runner.end(&mut stage_context, None).expect("should end");
+
+    runner.start(&mut stage_context).expect("should start again");
+    runner.offer_records(vec![outside]);
+    runner.end(&mut stage_context, None).expect("should end again");
+
+    assert_eq!(watched(&seen), vec!["outside", "outside"]);
+}
+
+#[test]
+fn a_meta_sink_reads_a_record_due_at_its_end_before_it_ends() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let stages = vec![("filter.marking", StageBox::Filter(Box::<Marking>::default()))];
+    let (nodes, edges) = chain_into(stages, watching_to_end(&seen));
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    run_frames(&mut runner, &[(0, 0), (1, 0)]);
+
+    let expected = vec![
+        "frame 0",
+        "mark filter.marking",
+        "frame 1",
+        "mark filter.marking",
+        "chunk filter.marking",
+        "end",
+    ];
+    assert_eq!(watched(&seen), expected);
+}
+
+#[test]
+fn a_meta_sink_reads_a_record_due_after_its_last_end_step_before_it_ends() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let flushing = StageBox::Filter(Box::<FlushingMarking>::default());
+    let (nodes, edges) = chain_into(vec![("filter.marking", flushing)], watching_to_end(&seen));
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    run_frames(&mut runner, &[(0, 0)]);
+
+    let expected = vec![
+        "frame 0",
+        "mark filter.marking",
+        "frame 0",
+        "chunk filter.marking",
+        "end",
+    ];
+    assert_eq!(watched(&seen), expected);
+}
+
+#[test]
+fn a_meta_sink_heading_a_region_reads_an_offered_record_before_it_ends() {
+    let context = testing_context();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let head = NodeId::new(0);
+    let nodes = vec![(head, watching_to_end(&seen))];
+    let edges = RegionEdges::new(Vec::new(), vec![head]);
+    let mut runner = RegionRunner::new(nodes, edges);
+    let mut stage_context = context_of(&context);
+
+    runner.start(&mut stage_context).expect("should start");
+
+    let bundle = vec![Some(item(&context, 0, 0))];
+    runner.run(&mut stage_context, bundle).expect("should run");
+
+    runner.offer_records(vec![MetaRecord::new("outside")]);
+    runner.end(&mut stage_context, None).expect("should end");
+
+    assert_eq!(watched(&seen), vec!["frame 0", "outside", "end"]);
+}
+
+/// `buffer` hands both frames on only as it ends, so `delay`'s end feed takes two steps with `mark`'s first
+/// record between them.
+#[test]
+fn a_record_between_end_feed_steps_leaves_ahead_of_the_end_flush() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let stages = vec![
+        (
+            "filter.buffer",
+            StageBox::Filter(Box::new(Buffering { held: Vec::new() })),
+        ),
+        ("filter.marking", StageBox::Filter(Box::<Marking>::default())),
+        (
+            "filter.delay",
+            StageBox::Filter(Box::new(Delaying { held: None })),
+        ),
+    ];
+    let (nodes, edges) = watched_chain(stages, &seen);
+    let mut runner = RegionRunner::new(nodes, edges);
+
+    run_frames(&mut runner, &[(0, 0), (1, 0)]);
+
+    let expected = vec![
+        "mark filter.marking",
+        "frame 0",
+        "frame 1",
+        "mark filter.marking",
+        "chunk filter.marking",
+    ];
+    assert_eq!(watched(&seen), expected);
 }

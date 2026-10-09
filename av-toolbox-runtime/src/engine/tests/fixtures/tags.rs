@@ -52,6 +52,9 @@ pub(crate) struct TagsRequest {
     /// Whether `Tagging` demands [HostFixtureCuts] of its own input.
     #[serde(default)]
     pub(crate) host_cuts: bool,
+    /// Places `Tagging` right before the demanding stage rather than right after the source.
+    #[serde(default)]
+    pub(crate) before_demander: bool,
 }
 
 /// A demand kind served by `Tagging`, which runs on metadata alone.
@@ -96,7 +99,7 @@ impl MetaProvider for TaggingInstance {
     }
 }
 
-/// Serves [FixtureTags] directly after the source, on metadata alone.
+/// Serves [FixtureTags] on metadata alone, directly after the source unless asked to sit before the demander.
 ///
 /// It demands [HostFixtureCuts] of its input when any request it serves asks it to.
 pub(crate) struct Tagging;
@@ -137,8 +140,11 @@ impl ProviderDefinition for Tagging {
     type Side = MetaSide;
     type Demand = FixtureTags;
 
-    fn place(_request: &TagsRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
-        Ok(path.after_source())
+    fn place(request: &TagsRequest, path: &PathView<'_>) -> Result<PathEdge, PlaceError> {
+        match request.before_demander {
+            true => Ok(path.before_demander()),
+            false => Ok(path.after_source()),
+        }
     }
 
     fn accepts_input(
@@ -218,6 +224,7 @@ impl StageDefinition for TagRecording {
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
         let request = TagsRequest {
             host_cuts: args.host_cuts,
+            before_demander: false,
         };
 
         vec![InputDemand {
