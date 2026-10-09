@@ -1,6 +1,10 @@
+use std::fmt::Display;
+
 use av_denoise_core::{GrainChunk, SceneGrain, build_table};
 use av_toolbox_core::{Artefact, ArtefactData, ArtefactDecl, ArtefactPiece, StageError};
 use serde::{Deserialize, Serialize};
+
+use super::args::{AvdArgs, Nl4dArgs};
 
 /// The name `av-denoise/nl4d` hands its grain table over under.
 pub(crate) const GRAIN_TABLE: &str = "grain_table";
@@ -17,9 +21,9 @@ pub(crate) const ARTEFACTS: &[ArtefactDecl] = &[GRAIN_TABLE_DECL];
 /// A grain table with no entries, which encoders read as no grain.
 const EMPTY_TABLE: &str = "filmgrn1\n";
 
-const STAGE: &str = "av-denoise/nl4d";
+const STAGE: &str = Nl4dArgs::STAGE;
 
-fn unreadable_piece(error: impl std::fmt::Display) -> StageError {
+fn unreadable_piece(error: impl Display) -> StageError {
     let message = format!("{STAGE} could not read a piece of {GRAIN_TABLE}: {error}");
 
     StageError::msg(message)
@@ -36,6 +40,12 @@ fn mixed_rates(first: (u64, u64), second: (u64, u64)) -> StageError {
         "{STAGE} was handed {GRAIN_TABLE} pieces at {}/{} and {}/{} frames per second",
         first.0, first.1, second.0, second.1
     );
+
+    StageError::msg(message)
+}
+
+fn non_finite_statistics() -> StageError {
+    let message = format!("{STAGE} measured grain statistics that are not finite numbers");
 
     StageError::msg(message)
 }
@@ -109,6 +119,15 @@ impl From<ScenePiece> for SceneGrain {
     }
 }
 
+impl ChunkPiece {
+    fn is_finite(&self) -> bool {
+        let autocov_finite = self.autocov.iter().all(|value| value.is_finite());
+        let pixels_finite = self.pixels.iter().all(|value| value.is_finite());
+
+        autocov_finite && pixels_finite
+    }
+}
+
 /// What one NL4D stream hands over towards the grain table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct GrainPiece {
@@ -133,6 +152,13 @@ impl GrainPiece {
         serde_json::from_value(value).map_err(unreadable_piece)
     }
 
+    fn is_finite(&self) -> bool {
+        self.scenes
+            .iter()
+            .flat_map(|scene| &scene.chunks)
+            .all(ChunkPiece::is_finite)
+    }
+
     pub(crate) fn frame_rate(&self) -> (u64, u64) {
         self.frame_rate
     }
@@ -142,6 +168,10 @@ impl GrainPiece {
     }
 
     pub(crate) fn to_artefact(&self) -> Result<Artefact, StageError> {
+        if !self.is_finite() {
+            return Err(non_finite_statistics());
+        }
+
         let value = serde_json::to_value(self).map_err(unwritable_piece)?;
 
         Ok(Artefact {

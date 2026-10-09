@@ -183,3 +183,18 @@ fn a_restart_starts_a_new_scene_at_its_own_first_frame() {
 
     assert_eq!(first_frames, vec![0, 30]);
 }
+
+#[test]
+fn a_piece_with_a_non_finite_statistic_is_refused() {
+    let mut chunk = measured_chunk(24);
+    chunk.autocov[0] = f64::NAN;
+    let scenes = vec![SceneGrain {
+        first_frame: 0,
+        chunks: vec![chunk],
+    }];
+    let grain = GrainPiece::new((25, 1), &scenes);
+
+    let error = grain.to_artefact().expect_err("refused");
+
+    assert!(error.to_string().contains("not finite"), "{error}");
+}

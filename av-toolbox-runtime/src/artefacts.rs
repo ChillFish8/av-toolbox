@@ -189,6 +189,7 @@ impl ArtefactCollector {
                 .expect("only declared artefacts are collected");
             let combined = entry.declared.merge(name, pieces);
             let data = combined.map_err(|source| RunError::Stage { node, source })?;
+
             if !data.is_kind(declared.kind) {
                 return Err(merged_wrong_kind(node, name));
             }

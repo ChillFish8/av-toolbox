@@ -270,13 +270,27 @@ impl<R: Runtime> AvdFilter<R> {
 
         options.grain_export = true;
         let exporting = EngineOptions::Nl4d(options);
-        let geometry = self.engines[index].geometry;
+
+        // The original engine is dropped before the exporting one is built, so only one holds the GPU.
+        let PlaneEngine {
+            engine,
+            spec,
+            staging,
+            geometry,
+            ..
+        } = self.engines.remove(index);
+        drop(engine);
 
         let built = built_engine(&self.client, exporting, geometry);
-        let engine = built.map_err(|error| unbuildable(self.stage, &self.engines[index].spec, error))?;
-
-        self.engines[index].engine = engine;
-        self.engines[index].options = exporting;
+        let engine = built.map_err(|error| unbuildable(self.stage, &spec, error))?;
+        let exporting_engine = PlaneEngine {
+            engine,
+            spec,
+            staging,
+            options: exporting,
+            geometry,
+        };
+        self.engines.insert(index, exporting_engine);
 
         let numerator = u64::from(rate.numerator());
         let denominator = u64::from(rate.denominator());
