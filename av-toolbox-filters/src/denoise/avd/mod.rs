@@ -1,4 +1,5 @@
 mod args;
+mod grain;
 mod planes;
 mod runner;
 #[cfg(test)]
@@ -7,6 +8,9 @@ mod tests;
 use std::marker::PhantomData;
 
 use av_toolbox_core::{
+    ArtefactData,
+    ArtefactDecl,
+    ArtefactPiece,
     BoundInputs,
     Filter,
     FilterDefinition,
@@ -70,6 +74,14 @@ impl<A: AvdArgs> StageDefinition for Denoise<A> {
 
     fn tags() -> &'static [Tag] {
         &[Tag::Denoise]
+    }
+
+    fn artefacts() -> &'static [ArtefactDecl] {
+        A::artefacts()
+    }
+
+    fn merge_artefact(name: &'static str, pieces: Vec<ArtefactPiece>) -> Result<ArtefactData, StageError> {
+        A::merge_artefact(name, pieces)
     }
 
     // Denoising across a cut blends two scenes, so it restarts at every cut.

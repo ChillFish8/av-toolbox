@@ -15,13 +15,13 @@ av-toolbox-providers = { path = "../av-toolbox-providers" }
 cubecl = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 av-toolbox-filters = { path = ".", features = ["test-support"] }
 av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [features]

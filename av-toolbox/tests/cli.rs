@@ -178,6 +178,15 @@ fn list_stages_describes_one_type() {
 }
 
 #[test]
+fn list_stages_shows_the_nl4d_grain_table() {
+    let output = toolbox(&["list-stages", "av-denoise/nl4d"]);
+    let stdout = text(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.contains("grain_table  opaque  .tbl"), "{stdout}");
+}
+
+#[test]
 fn an_unknown_stage_type_exits_one_with_a_suggestion() {
     let output = toolbox(&["list-stages", "y4m/stdot"]);
     let stderr = text(&output.stderr);

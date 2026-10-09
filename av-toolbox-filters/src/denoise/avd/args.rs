@@ -18,11 +18,12 @@ use av_denoise_core::{
     nlmeans_temporal_radius_for,
     parse_prefilter,
 };
-use av_toolbox_core::StageError;
+use av_toolbox_core::{ArtefactData, ArtefactDecl, ArtefactPiece, StageError, merge_single};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use super::grain::{ARTEFACTS, GRAIN_TABLE, merge_grain_table};
 use crate::planes::ChannelName;
 
 /// How much quality a stage trades for speed, the way av-denoise's `--preset` does.
@@ -70,6 +71,16 @@ pub(crate) trait AvdArgs: DeserializeOwned + JsonSchema + Send + Sync + 'static 
 
     /// The settings of the engine that denoises `channels`, with that plane's overrides folded in.
     fn options(&self, channels: ChannelMode) -> Result<EngineOptions, StageError>;
+
+    /// The artefacts this stage can hand over at the end of a stream.
+    fn artefacts() -> &'static [ArtefactDecl] {
+        &[]
+    }
+
+    /// Merges the pieces of the artefact `name`, given in chunk order.
+    fn merge_artefact(name: &'static str, pieces: Vec<ArtefactPiece>) -> Result<ArtefactData, StageError> {
+        merge_single(name, pieces)
+    }
 }
 
 fn bad_prefilter(stage: &str, error: impl Display) -> StageError {
@@ -396,6 +407,18 @@ impl Nl4dArgs {
 impl AvdArgs for Nl4dArgs {
     const IDENTIFIER: &'static str = "nl4d";
     const STAGE: &'static str = "av-denoise/nl4d";
+
+    fn artefacts() -> &'static [ArtefactDecl] {
+        ARTEFACTS
+    }
+
+    fn merge_artefact(name: &'static str, pieces: Vec<ArtefactPiece>) -> Result<ArtefactData, StageError> {
+        if name == GRAIN_TABLE {
+            return merge_grain_table(pieces);
+        }
+
+        merge_single(name, pieces)
+    }
 
     fn planes(&self) -> Option<&[ChannelName]> {
         self.planes.as_deref()
