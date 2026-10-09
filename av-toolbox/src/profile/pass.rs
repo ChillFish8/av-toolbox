@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use av_toolbox_core::{Crossing, Granularity, PipelineRegistry, StageKind};
 use av_toolbox_gpu::Backend;
 use av_toolbox_graph::{CompiledGraph, NodeId, NodeRole, StageSpec};
-use av_toolbox_runtime::{Cancel, RunReport, Settings};
+use av_toolbox_runtime::{Cancel, Engine, RunReport, Settings};
 use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::execute::CANCELLED;
@@ -124,7 +124,7 @@ pub(super) fn run_pass(
         return PassEnd::Failed;
     };
 
-    let built = compiled.engine(settings);
+    let built = compiled.engine(settings).map(Engine::discarding_artefacts);
     let engine = match built {
         Ok(engine) => engine,
         Err(error) => {

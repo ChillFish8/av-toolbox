@@ -7,16 +7,17 @@ use super::file::stage_key;
 /// The sink every pass writes into, so nothing leaves the pipeline.
 const DISCARD: &str = "null/discard";
 
-/// Drops every artefact sink, since a profiling pass writes nothing out of the pipeline.
-pub(super) fn drop_artefact_sinks(specs: &mut Vec<StageSpec>, registry: &PipelineRegistry) {
-    specs.retain(|spec| !registry.is_artefact_sink(&spec.stage_type.value));
-}
-
-/// Replaces every sink with `null/discard`, keeping its inputs, and returns the replaced sinks' keys.
-pub(super) fn discard_sinks(specs: &mut [StageSpec]) -> Vec<String> {
+/// Replaces every frame sink with `null/discard`, keeping its inputs, and returns the replaced sinks' keys.
+///
+/// Artefact sinks are left as they are.
+pub(super) fn discard_sinks(specs: &mut [StageSpec], registry: &PipelineRegistry) -> Vec<String> {
     let mut replaced = Vec::new();
 
-    for spec in specs.iter_mut().filter(|spec| spec.kind == StageKind::Sink) {
+    let sinks = specs
+        .iter_mut()
+        .filter(|spec| spec.kind == StageKind::Sink)
+        .filter(|spec| !registry.is_artefact_sink(&spec.stage_type.value));
+    for spec in sinks {
         let key = stage_key(spec);
         replaced.push(key);
 
@@ -91,12 +92,13 @@ mod tests {
 
     #[test]
     fn sinks_become_discards_and_keep_their_inputs() {
+        let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
         let mut specs = vec![
             spec(StageKind::Filter, "blur", &["clip"]),
             spec(StageKind::Sink, "output", &["blur"]),
         ];
 
-        let replaced = discard_sinks(&mut specs);
+        let replaced = discard_sinks(&mut specs, &registry);
 
         assert_eq!(replaced, vec!["sink.output".to_string()]);
         assert_eq!(specs[1].stage_type.value, "null/discard");
@@ -106,16 +108,17 @@ mod tests {
     }
 
     #[test]
-    fn artefact_sinks_are_dropped_before_profiling() {
+    fn artefact_sinks_are_kept_as_they_are() {
         let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
         let mut files = spec(StageKind::Sink, "reports", &[]);
         files.stage_type = Spanned::unknown(String::from("artefacts/files"));
         let mut specs = vec![spec(StageKind::Sink, "output", &["blur"]), files];
 
-        drop_artefact_sinks(&mut specs, &registry);
-        let names: Vec<&str> = specs.iter().map(|spec| spec.name.value.as_str()).collect();
+        let replaced = discard_sinks(&mut specs, &registry);
 
-        assert_eq!(names, vec!["output"]);
+        assert_eq!(replaced, vec!["sink.output".to_string()]);
+        assert_eq!(specs[0].stage_type.value, "null/discard");
+        assert_eq!(specs[1].stage_type.value, "artefacts/files");
     }
 
     #[test]

@@ -1,0 +1,46 @@
+# Reads a video, denoises it with av-denoise's NL4D, writes it back, and writes an AV1 film grain table of the
+# grain NL4D removed.
+#
+# An encoder reading the table puts matching grain back over the clean video, such as aomenc with
+# --film-grain-table or SvtAv1EncApp with --fgs-table. The table is written to
+# <grain>/filter.denoise.grain_table.tbl once the whole clip has been denoised.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.y4m"
+
+[variable.preset]
+type = "string"
+description = "How much quality to trade for speed"
+default = "base"
+choices = ["veryfast", "fast", "base", "slow", "veryslow"]
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[variable.grain]
+type = "path"
+description = "The directory the grain table is written into"
+default = "grain"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+args.preset = "{{ preset }}"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["denoise"]
+args.path = "{{ output }}"
+
+[sink.grain]
+type = "artefacts/files"
+args.directory = "{{ grain }}"
+args.include = ["*.grain_table"]

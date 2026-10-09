@@ -43,6 +43,7 @@ fn every_example_explains_without_a_device() {
         "deblock-h264.toml",
         "deblock-qed.toml",
         "deblock-pp7.toml",
+        "nl4d-grain-table.toml",
     ];
 
     for name in names {
@@ -785,6 +786,132 @@ frames = 4
 
         assert!(run.output.status.success(), "{stderr}");
         assert!(run.stream.starts_with(b"YUV4MPEG2"));
+    }
+
+    /// Frames in each scene of the grainy stream.
+    const GRAINY_SCENE_LENGTH: usize = 20;
+
+    /// Repeatable noise from `seed`, one byte per sample.
+    fn pattern(seed: u32, samples: usize) -> Vec<u8> {
+        let mut state = seed.max(1);
+        let mut bytes = Vec::with_capacity(samples);
+
+        for _ in 0..samples {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            bytes.push((state & 0xff) as u8);
+        }
+
+        bytes
+    }
+
+    /// A 192x128 clip of three flat luma bands under fresh grain, swapping sides every scene.
+    fn grainy_y4m_stream(frames: usize) -> Vec<u8> {
+        let width = 192;
+        let height = 128;
+        let mut bytes = Vec::new();
+        let ratio = y4m::Ratio::new(25, 1);
+        let mut encoder = y4m::encode(width, height, ratio)
+            .with_colorspace(y4m::Colorspace::C420)
+            .write_header(&mut bytes)
+            .expect("writes the header");
+        let chroma = vec![128u8; width * height / 4];
+
+        for index in 0..frames {
+            let scene = index / GRAINY_SCENE_LENGTH;
+            let levels: [i16; 3] = if scene.is_multiple_of(2) {
+                [60, 120, 180]
+            } else {
+                [180, 120, 60]
+            };
+            let seed = index as u32 * 7919 + 12345;
+            let grain = pattern(seed, width * height);
+            let luma: Vec<u8> = grain
+                .iter()
+                .enumerate()
+                .map(|(pixel, sample)| {
+                    let band = (pixel % width) * 3 / width;
+                    let wobble = i16::from(*sample % 9) - 4;
+                    (levels[band] + wobble) as u8
+                })
+                .collect();
+            let frame = y4m::Frame::new([&luma, &chroma, &chroma], None);
+            encoder.write_frame(&frame).expect("writes a frame");
+        }
+
+        bytes
+    }
+
+    #[test]
+    fn executing_the_grain_table_example_writes_a_table() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let grain_path = directory.path().join("grain");
+        let grain_text = grain_path.to_str().expect("utf-8 path");
+        let grain_var = format!("grain={grain_text}");
+
+        let run = execute(
+            "nl4d-grain-table.toml",
+            &[&grain_var],
+            Some(grainy_y4m_stream(60)),
+        );
+        let stderr = text(&run.output.stderr);
+
+        assert!(run.output.status.success(), "{stderr}");
+
+        let table_path = grain_path.join("filter.denoise.grain_table.tbl");
+        let table = std::fs::read_to_string(table_path).expect("the table was written");
+
+        assert!(table.starts_with("filmgrn1\n"), "{table}");
+        assert!(table.contains("\nE "), "{table}");
+    }
+
+    #[test]
+    fn profiling_writes_no_artefacts() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let pipeline_path = directory.path().join("pipeline.toml");
+        let profile_path = directory.path().join("pipeline.profile.toml");
+        let grain_path = directory.path().join("grain");
+        let grain_text = grain_path.to_str().expect("utf-8 path");
+        let content = format!(
+            r##"
+[source.fill]
+type = "solid/fill"
+args.colour = "#202020"
+args.width = 64
+args.height = 64
+args.frames = 12
+args.frame_rate = [24, 1]
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["fill"]
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["denoise"]
+
+[sink.grain]
+type = "artefacts/files"
+args.directory = "{}"
+"##,
+            grain_text
+        );
+        std::fs::write(&pipeline_path, content).expect("writes the pipeline");
+        let pipeline_path = pipeline_path.to_str().expect("utf-8 path");
+        let profile_path = profile_path.to_str().expect("utf-8 path");
+
+        let profiled = Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+            .args(["--color", "never", "profile", pipeline_path])
+            .args(["--frames", "4", "--warmup", "2", "--output", profile_path])
+            .output()
+            .expect("the binary runs");
+        let stderr = text(&profiled.stderr);
+        let stdout = text(&profiled.stdout);
+
+        assert!(profiled.status.success(), "{stderr}");
+        assert!(stdout.contains("filter.denoise"), "{stdout}");
+        assert!(!grain_path.exists());
     }
 
     /// An example run, with the y4m stream it wrote to its `output` file.
