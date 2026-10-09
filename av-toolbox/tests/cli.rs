@@ -185,6 +185,7 @@ fn list_stages_shows_the_nl4d_grain_table() {
 
     assert!(output.status.success());
     assert!(stdout.contains("grain_table  opaque  .tbl"), "{stdout}");
+    assert!(stdout.contains("film grain table"), "{stdout}");
 }
 
 #[test]

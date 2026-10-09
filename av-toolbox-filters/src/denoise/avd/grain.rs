@@ -10,10 +10,13 @@ use super::args::{AvdArgs, Nl4dArgs};
 pub(crate) const GRAIN_TABLE: &str = "grain_table";
 
 /// An AV1 film grain table of the grain NL4D removed from luma.
-///
-/// Its entries follow the frame indices and frame rate NL4D sees, so a later stage that drops frames or changes
-/// the rate moves the encoder's timeline away from the table's.
-const GRAIN_TABLE_DECL: ArtefactDecl = ArtefactDecl::opaque(GRAIN_TABLE, "tbl");
+const GRAIN_TABLE_DECL: ArtefactDecl = ArtefactDecl::opaque(
+    GRAIN_TABLE,
+    "tbl",
+    "An AV1 film grain table of the grain removed from luma, for an encoder to add back. Its entries follow the \
+     frame numbers and frame rate this stage sees, so a later stage that drops frames or changes the rate shifts \
+     the table off the encoded video.",
+);
 
 /// The artefacts `av-denoise/nl4d` declares.
 pub(crate) const ARTEFACTS: &[ArtefactDecl] = &[GRAIN_TABLE_DECL];

@@ -190,11 +190,11 @@ impl StageDefinition for Artefacting {
 
     fn artefacts() -> &'static [ArtefactDecl] {
         const DECLARED: &[ArtefactDecl] = &[
-            ArtefactDecl::structured("frames"),
-            ArtefactDecl::structured("broken"),
-            ArtefactDecl::opaque("bytes", "bin"),
-            ArtefactDecl::opaque("table", "txt"),
-            ArtefactDecl::structured("mismerged"),
+            ArtefactDecl::structured("frames", "How many frames each stream held."),
+            ArtefactDecl::structured("broken", "A piece whose merge always fails."),
+            ArtefactDecl::opaque("bytes", "bin", "A few opaque bytes."),
+            ArtefactDecl::opaque("table", "txt", "Each stream's frame count, one per line."),
+            ArtefactDecl::structured("mismerged", "A piece whose merge answers with opaque data."),
         ];
         DECLARED
     }

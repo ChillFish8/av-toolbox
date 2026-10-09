@@ -105,13 +105,16 @@ struct NoArgs {}
 struct Declaring<const ARTEFACTS: usize>;
 
 const GOOD: &[ArtefactDecl] = &[
-    ArtefactDecl::opaque("table", "tbl"),
-    ArtefactDecl::structured("cuts"),
+    ArtefactDecl::opaque("table", "tbl", "A grain table."),
+    ArtefactDecl::structured("cuts", "Where each scene starts."),
 ];
-const REPEATED: &[ArtefactDecl] = &[ArtefactDecl::structured("cuts"), ArtefactDecl::structured("cuts")];
-const DOTTED: &[ArtefactDecl] = &[ArtefactDecl::structured("grain.table")];
-const EMPTY_NAME: &[ArtefactDecl] = &[ArtefactDecl::structured("")];
-const SLASHED: &[ArtefactDecl] = &[ArtefactDecl::structured("grain/table")];
+const REPEATED: &[ArtefactDecl] = &[
+    ArtefactDecl::structured("cuts", "Where each scene starts."),
+    ArtefactDecl::structured("cuts", "Where each scene starts."),
+];
+const DOTTED: &[ArtefactDecl] = &[ArtefactDecl::structured("grain.table", "A grain table.")];
+const EMPTY_NAME: &[ArtefactDecl] = &[ArtefactDecl::structured("", "Nothing in particular.")];
+const SLASHED: &[ArtefactDecl] = &[ArtefactDecl::structured("grain/table", "A grain table.")];
 
 impl<const ARTEFACTS: usize> StageDefinition for Declaring<ARTEFACTS> {
     type Args = NoArgs;

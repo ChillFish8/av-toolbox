@@ -50,20 +50,24 @@ impl ArtefactKind {
 pub struct ArtefactDecl {
     pub name: &'static str,
     pub kind: ArtefactKind,
+    /// What the artefact holds, shown to someone choosing which artefacts to write.
+    pub description: &'static str,
 }
 
 impl ArtefactDecl {
-    pub const fn structured(name: &'static str) -> Self {
+    pub const fn structured(name: &'static str, description: &'static str) -> Self {
         Self {
             name,
             kind: ArtefactKind::Structured,
+            description,
         }
     }
 
-    pub const fn opaque(name: &'static str, extension: &'static str) -> Self {
+    pub const fn opaque(name: &'static str, extension: &'static str, description: &'static str) -> Self {
         Self {
             name,
             kind: ArtefactKind::Opaque { extension },
+            description,
         }
     }
 }

@@ -172,8 +172,10 @@ fn describe_artefacts(declared: &[ArtefactDecl]) -> String {
         };
         let extension = decl.kind.extension();
         let line = format!("  {}  {kind}  .{extension}\n", decl.name);
+        let description = format!("    {}\n", decl.description);
 
         lines.push_str(&line);
+        lines.push_str(&description);
     }
 
     lines
@@ -336,15 +338,21 @@ mod tests {
     }
 
     #[test]
-    fn declared_artefacts_are_listed_with_their_kind() {
+    fn declared_artefacts_are_listed_with_their_kind_and_description() {
         let declared = [
-            ArtefactDecl::opaque("table", "tbl"),
-            ArtefactDecl::structured("cuts"),
+            ArtefactDecl::opaque("table", "tbl", "A grain table."),
+            ArtefactDecl::structured("cuts", "Where each scene starts."),
         ];
 
         let described = describe_artefacts(&declared);
+        let expected = concat!(
+            "  table  opaque  .tbl\n",
+            "    A grain table.\n",
+            "  cuts  structured  .json\n",
+            "    Where each scene starts.\n",
+        );
 
-        assert_eq!(described, "  table  opaque  .tbl\n  cuts  structured  .json\n");
+        assert_eq!(described, expected);
     }
 
     #[test]

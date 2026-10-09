@@ -64,8 +64,8 @@ impl StageDefinition for Grain {
 
     fn artefacts() -> &'static [ArtefactDecl] {
         const DECLARED: &[ArtefactDecl] = &[
-            ArtefactDecl::opaque("table", "tbl"),
-            ArtefactDecl::structured("cuts"),
+            ArtefactDecl::opaque("table", "tbl", "A grain table."),
+            ArtefactDecl::structured("cuts", "Where each scene starts."),
         ];
         DECLARED
     }
