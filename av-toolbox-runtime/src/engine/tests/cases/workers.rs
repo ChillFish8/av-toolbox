@@ -173,6 +173,7 @@ fn a_frame_routed_worker_closes_every_unit_it_is_given() {
     while let Ok(result) = result_receiver.recv_timeout(WATCHDOG) {
         match result {
             WorkResult::Item(_) => item_count += 1,
+            WorkResult::Record(record) => panic!("no stage in this region records, yet {record:?} arrived"),
             WorkResult::EndOfUnit(unit) => closed_units.push(unit),
             WorkResult::EndOfStream => {
                 saw_end_of_stream = true;

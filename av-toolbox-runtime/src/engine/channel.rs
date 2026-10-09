@@ -1,13 +1,14 @@
 use std::sync::mpsc::Sender;
 
-use av_toolbox_gpu::AnyItem;
+use av_toolbox_gpu::{AnyItem, MetaRecord};
 
-use crate::{Assignment, Routed, WorkItem};
+use crate::{Assignment, Flow, Routed, WorkItem};
 
 /// A message crossing the unbounded channel between two regions.
 #[derive(Clone)]
 pub(crate) enum ExitMessage {
     Item(AnyItem),
+    Record(MetaRecord),
     Done,
 }
 
@@ -35,9 +36,13 @@ fn send_to_all(downstream: &[DownstreamLink], message: ExitMessage) {
     }
 }
 
-pub(super) fn forward(downstream: &[DownstreamLink], items: Vec<AnyItem>) {
-    for item in items {
-        send_to_all(downstream, ExitMessage::Item(item));
+pub(super) fn forward(downstream: &[DownstreamLink], flows: Vec<Flow>) {
+    for flow in flows {
+        let message = match flow {
+            Flow::Item(item) => ExitMessage::Item(item),
+            Flow::Record(record) => ExitMessage::Record(record),
+        };
+        send_to_all(downstream, message);
     }
 }
 

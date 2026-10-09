@@ -13,7 +13,7 @@ use av_toolbox_gpu::{
 };
 
 use crate::tests::routes::{chunk_on, meta_in, route};
-use crate::{Aggregate, Dispatch, Disperse, RoundRobin, Routed, WorkItem, WorkResult};
+use crate::{Aggregate, Dispatch, Disperse, Flow, RoundRobin, Routed, WorkItem, WorkResult};
 
 fn format() -> FrameFormat {
     FrameFormat {
@@ -174,7 +174,7 @@ fn place_held_bundle<D: Dispatch>(disperse: &mut Disperse<D>, work_queues: &mut 
     let placed = disperse
         .place()
         .expect("every dispatch in these tests always has a free worker");
-    enqueue(work_queues, vec![placed.routed]);
+    enqueue(work_queues, placed.in_order());
 }
 
 fn new_queues<T>(workers: usize) -> Vec<VecDeque<T>> {
@@ -217,6 +217,11 @@ where
 
                 results.push_back(WorkResult::EndOfUnit(unit));
             },
+            WorkItem::Records(records) => {
+                for record in records {
+                    results.push_back(WorkResult::Record(record));
+                }
+            },
             WorkItem::EndOfChunk(chunk) => results.push_back(WorkResult::EndOfUnit(chunk)),
             WorkItem::EndOfStream => results.push_back(WorkResult::EndOfStream),
         }
@@ -235,7 +240,8 @@ fn drain_aggregate(mut aggregate: Aggregate, mut result_queues: Vec<VecDeque<Wor
         let emitted = aggregate
             .accept(worker, result)
             .expect("the driver only ever feeds the worker the aggregate asked for");
-        output.extend(emitted);
+        let items = emitted.into_iter().filter_map(Flow::into_item);
+        output.extend(items);
     }
 
     output

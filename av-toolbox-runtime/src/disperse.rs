@@ -1,4 +1,4 @@
-use av_toolbox_gpu::{AnyItem, ChunkRoute};
+use av_toolbox_gpu::{AnyItem, ChunkRoute, MetaRecord};
 
 use crate::chunks::chunk_in;
 use crate::{Assignment, ExchangeError, WorkItem};
@@ -52,9 +52,22 @@ pub struct Routed {
 }
 
 /// What placing a held bundle produced.
+///
+/// `records` holds any records the bundle carried, to send to the same worker ahead of `routed`.
 pub struct Placed {
     pub assignment: Assignment,
+    pub records: Option<Routed>,
     pub routed: Routed,
+}
+
+impl Placed {
+    /// Every message to send, records first.
+    pub fn in_order(self) -> Vec<Routed> {
+        let mut ordered: Vec<Routed> = self.records.into_iter().collect();
+        ordered.push(self.routed);
+
+        ordered
+    }
 }
 
 /// What `finish` produced, including anything the stream ending left unrouted.
@@ -81,10 +94,11 @@ struct Current {
     worker: usize,
 }
 
-/// A completed bundle waiting for `place` to give it a worker.
+/// A completed bundle waiting for `place` to give it a worker, with the records that go ahead of it.
 struct HeldBundle {
     unit: u64,
     bundle: Vec<Option<AnyItem>>,
+    records: Vec<MetaRecord>,
 }
 
 /// What a disperse needs to remember, which differs by how it routes.
@@ -109,6 +123,7 @@ pub struct Disperse<D> {
     route: Option<ChunkRoute>,
     dispatch: D,
     pending: Vec<Option<AnyItem>>,
+    pending_records: Vec<MetaRecord>,
     held: Option<HeldBundle>,
     assignments: Vec<Assignment>,
     finished: bool,
@@ -153,6 +168,7 @@ impl<D: Dispatch> Disperse<D> {
             route: None,
             dispatch,
             pending: vec![None; bound.len()],
+            pending_records: Vec::new(),
             held: None,
             assignments: Vec::new(),
             finished: false,
@@ -222,6 +238,11 @@ impl<D: Dispatch> Disperse<D> {
         self.route_bundle()
     }
 
+    /// Holds `records` until the next bundle is routed, then sends them to its worker ahead of it.
+    pub fn offer_records(&mut self, records: Vec<MetaRecord>) {
+        self.pending_records.extend(records);
+    }
+
     /// Gives the held bundle a worker, once one is free.
     ///
     /// Returns `None` when nothing is held, or when [Dispatch::choose] has no worker free yet. A
@@ -248,8 +269,11 @@ impl<D: Dispatch> Disperse<D> {
             RoutingState::ByFrame { .. } => WorkItem::Unit(held.unit, held.bundle),
         };
 
+        let records = records_for(worker, held.records);
+
         Some(Placed {
             assignment,
+            records,
             routed: Routed { worker, item },
         })
     }
@@ -266,6 +290,10 @@ impl<D: Dispatch> Disperse<D> {
     /// it emits as its stream ends arrives under an assignment its aggregate is still waiting on.
     /// A worker that was never given a bundle gets one too, since it was told its stream started
     /// and so has an end of its own to deliver.
+    ///
+    /// Records still waiting go ahead of the first close. Under chunk routing that is the chunk in
+    /// flight, and under frame routing it is the first worker's last unit. Under chunk routing with no
+    /// chunk in flight, as in a stream with no frames, no worker takes them and they are dropped.
     pub fn finish(&mut self) -> Finished {
         if self.finished {
             return Finished {
@@ -292,7 +320,13 @@ impl<D: Dispatch> Disperse<D> {
             _ => None,
         };
 
+        // Whichever close is sent first takes every leftover record, leaving none for the rest.
+        let mut leftover_records = std::mem::take(&mut self.pending_records);
+
         if let Some(current) = chunk_in_flight {
+            let records = std::mem::take(&mut leftover_records);
+            let ahead = records_for(current.worker, records);
+            routed.extend(ahead);
             routed.push(Routed {
                 worker: current.worker,
                 item: WorkItem::EndOfChunk(current.chunk),
@@ -305,6 +339,10 @@ impl<D: Dispatch> Disperse<D> {
                 *next_unit += 1;
 
                 assignments.push(Assignment { unit, worker });
+
+                let records = std::mem::take(&mut leftover_records);
+                let ahead = records_for(worker, records);
+                routed.extend(ahead);
                 routed.push(Routed {
                     worker,
                     item: WorkItem::EndOfChunk(unit),
@@ -361,13 +399,19 @@ impl<D: Dispatch> Disperse<D> {
                 let chunk = chunk_in(authoritative.meta(), self.route);
 
                 let bundle = std::mem::replace(&mut self.pending, vec![None; self.slots]);
+                let records = std::mem::take(&mut self.pending_records);
 
                 let Some(current) = *current else {
-                    self.held = Some(HeldBundle { unit: chunk, bundle });
+                    self.held = Some(HeldBundle {
+                        unit: chunk,
+                        bundle,
+                        records,
+                    });
                     return Ok(Vec::new());
                 };
 
                 if chunk < current.chunk {
+                    self.pending_records = records;
                     return Err(ExchangeError::ChunkWentBackwards {
                         previous: current.chunk,
                         found: chunk,
@@ -375,13 +419,20 @@ impl<D: Dispatch> Disperse<D> {
                 }
 
                 if chunk == current.chunk {
-                    return Ok(vec![Routed {
+                    let ahead = records_for(current.worker, records);
+                    let mut routed: Vec<Routed> = ahead.into_iter().collect();
+                    routed.push(Routed {
                         worker: current.worker,
                         item: WorkItem::Bundle(bundle),
-                    }]);
+                    });
+                    return Ok(routed);
                 }
 
-                self.held = Some(HeldBundle { unit: chunk, bundle });
+                self.held = Some(HeldBundle {
+                    unit: chunk,
+                    bundle,
+                    records,
+                });
 
                 Ok(vec![Routed {
                     worker: current.worker,
@@ -393,12 +444,28 @@ impl<D: Dispatch> Disperse<D> {
                 *next_unit += 1;
 
                 let bundle = std::mem::replace(&mut self.pending, vec![None; self.slots]);
-                self.held = Some(HeldBundle { unit, bundle });
+                let records = std::mem::take(&mut self.pending_records);
+                self.held = Some(HeldBundle {
+                    unit,
+                    bundle,
+                    records,
+                });
 
                 Ok(Vec::new())
             },
         }
     }
+}
+
+/// `records` as one message for `worker`, or nothing when there are none.
+fn records_for(worker: usize, records: Vec<MetaRecord>) -> Option<Routed> {
+    if records.is_empty() {
+        return None;
+    }
+
+    let item = WorkItem::Records(records);
+
+    Some(Routed { worker, item })
 }
 
 /// Checks every bound, filled slot in `pending` carries the same frame index.

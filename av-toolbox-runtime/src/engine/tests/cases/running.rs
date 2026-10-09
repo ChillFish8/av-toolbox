@@ -323,6 +323,7 @@ fn settings_and_reports_carry_the_derives_a_caller_needs() {
         artefacts: 0,
         cancelled: false,
         dropped: 0,
+        records: 0,
         wall: Duration::ZERO,
         counted_wall: Duration::ZERO,
         timings: Vec::new(),

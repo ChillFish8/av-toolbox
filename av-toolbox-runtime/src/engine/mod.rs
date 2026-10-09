@@ -100,6 +100,8 @@ pub struct RunReport {
     /// two of them. A run that was not cancelled never reports any, since losing items without
     /// being asked to stop fails the run instead.
     pub dropped: usize,
+    /// How many records the sinks received.
+    pub records: u64,
     /// How long the run took from start to finish.
     pub wall: Duration,
     /// How long the run took after [Settings::warmup] items had reached the sinks.
@@ -578,6 +580,7 @@ impl Engine {
             artefacts,
             cancelled,
             dropped,
+            records: tally.records(),
             wall,
             counted_wall,
             timings,

@@ -6,6 +6,7 @@ mod flushes;
 mod limits;
 mod profiling;
 mod progress;
+mod records;
 mod running;
 mod shapes;
 mod workers;

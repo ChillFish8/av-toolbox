@@ -12,6 +12,9 @@ use crate::{Flow, RunError, WorkItem, WorkResult};
 /// unit before it closing, so a worker whose stream ends on a unit close never leaves its
 /// stages holding a start they will never see the end of.
 ///
+/// Records the disperse hands over are held by the region whether or not it is started. They leave
+/// ahead of what the next bundle produces, or after the region's next end flush.
+///
 /// Nothing here reads the stop flag. Everything a worker waits on is a channel: its disperse
 /// closes the work channel when it winds down, and its aggregate dropping the other end closes
 /// the results one. Walking out part way through a unit instead would leave the aggregate
@@ -68,6 +71,7 @@ pub(crate) fn run_worker(worker: WorkerSlot) -> Result<(), RunError> {
                     break;
                 }
             },
+            Ok(WorkItem::Records(records)) => runner.offer_records(records),
             Ok(WorkItem::EndOfChunk(chunk)) => {
                 chunk_in_hand = Some(chunk);
 
@@ -115,10 +119,12 @@ fn named_chunk(error: RunError, chunk: Option<u64>) -> RunError {
 }
 
 fn send_results(result_sender: &SyncSender<WorkResult>, flows: Vec<Flow>) -> Result<(), ()> {
-    let items = flows.into_iter().filter_map(Flow::into_item);
-
-    for item in items {
-        result_sender.send(WorkResult::Item(item)).map_err(|_| ())?;
+    for flow in flows {
+        let result = match flow {
+            Flow::Item(item) => WorkResult::Item(item),
+            Flow::Record(record) => WorkResult::Record(record),
+        };
+        result_sender.send(result).map_err(|_| ())?;
     }
 
     Ok(())

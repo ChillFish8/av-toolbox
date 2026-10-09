@@ -1,4 +1,4 @@
-use av_toolbox_gpu::AnyItem;
+use av_toolbox_gpu::{AnyItem, MetaRecord};
 
 /// What a disperse sends one of its workers.
 #[derive(Debug)]
@@ -12,6 +12,8 @@ pub enum WorkItem {
     /// Frame routing sends these. The worker runs the bundle and closes the unit without
     /// flushing its region, since a frame mode stage has nothing to carry between frames.
     Unit(u64, Vec<Option<AnyItem>>),
+    /// Records for the worker's region, leaving ahead of its next bundle's output or after its next end flush.
+    Records(Vec<MetaRecord>),
     /// Every item of this chunk has been sent.
     EndOfChunk(u64),
     /// Every chunk has been sent.
@@ -22,6 +24,7 @@ pub enum WorkItem {
 #[derive(Debug)]
 pub enum WorkResult {
     Item(AnyItem),
+    Record(MetaRecord),
     /// Everything this worker had for the unit has been sent, which may be nothing.
     EndOfUnit(u64),
     EndOfStream,

@@ -1,13 +1,8 @@
-use std::sync::mpsc;
-
 use av_toolbox_graph::Routing;
 
 use crate::Settings;
 use crate::engine::FRAME_UNITS_IN_FLIGHT;
 use crate::engine::tests::{
-    GATE_HOLDS,
-    GATE_PROCESSED,
-    GATE_REACHED,
     NOTHING_MORE_COMING,
     WATCHDOG,
     achieved_width,
@@ -17,6 +12,7 @@ use crate::engine::tests::{
     clear_recorded,
     engine_from,
     filter_spec,
+    hold_workers,
     matched,
     matching_spec,
     planned_graph,
@@ -29,68 +25,6 @@ use crate::engine::tests::{
     source_spec,
     tracked_spec,
 };
-
-/// The channels a test uses to hold some of a region's workers inside their own stage.
-///
-/// A held worker is never drained, so it is never marked free, so the dispatch policy cannot
-/// choose it again. That is what turns an assertion about spreading from a hope that the
-/// scheduler cooperated into something the placement rules force.
-struct Held {
-    /// One signal per held worker, sent as it arrives at its gate.
-    arrivals: mpsc::Receiver<()>,
-    /// One release per held worker, in worker order.
-    releases: Vec<mpsc::Sender<()>>,
-    /// One signal per frame any worker of the gated stage finished.
-    processed: mpsc::Receiver<()>,
-}
-
-/// Holds the first `workers` workers of the gated stage inside their own first `process` call.
-fn hold_workers(workers: usize) -> Held {
-    let (arrived_sender, arrivals) = mpsc::channel();
-    let (processed_sender, processed) = mpsc::channel();
-    let mut releases = Vec::with_capacity(workers);
-
-    for worker in 0..workers {
-        let (release_sender, release_receiver) = mpsc::channel();
-
-        *GATE_REACHED[worker].lock().expect("not poisoned") = Some(arrived_sender.clone());
-        *GATE_HOLDS[worker].lock().expect("not poisoned") = Some(release_receiver);
-        releases.push(release_sender);
-    }
-
-    *GATE_PROCESSED.lock().expect("not poisoned") = Some(processed_sender);
-
-    Held {
-        arrivals,
-        releases,
-        processed,
-    }
-}
-
-impl Held {
-    /// Waits for every held worker to be given a frame, then lets them all go.
-    ///
-    /// Answers how many arrived rather than asserting, so the caller can say what a shortfall
-    /// means, and so a run that only ever reaches one worker costs one watchdog rather than one
-    /// per worker that never came.
-    fn release_once_all_arrived(&self) -> usize {
-        let mut arrived = 0;
-
-        while arrived < self.releases.len() && self.arrivals.recv_timeout(WATCHDOG).is_ok() {
-            arrived += 1;
-        }
-
-        self.release();
-
-        arrived
-    }
-
-    fn release(&self) {
-        for release in &self.releases {
-            release.send(()).ok();
-        }
-    }
-}
 
 /// Eight frames, every one of them in chunk zero, through a frame mode stage four workers wide,
 /// with all four held inside their own stage at once.

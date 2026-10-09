@@ -260,6 +260,29 @@ pub(crate) fn collecting_spec(name: &str, include: &[&str]) -> StageSpec {
     collecting
 }
 
+/// A filter recording a `mark` for every frame and a `chunk` as each stream ends, at `workers` of them.
+pub(crate) fn marking_spec(name: &str, input: &str, workers: usize, per_chunk: bool) -> StageSpec {
+    let mut marking = spec(StageKind::Filter, name, "test/marking");
+    marking.inputs = vec![positional(input)];
+    marking.args = Spanned::unknown(json!({ "per_chunk": per_chunk }));
+    marking.workers = Some(workers);
+    marking
+}
+
+/// A metadata-only sink writing every frame and record it is handed into `FLOWS`.
+pub(crate) fn flow_recording_spec(name: &str, input: &str) -> StageSpec {
+    let mut sink = spec(StageKind::Sink, name, "test/flow-recording");
+    sink.inputs = vec![positional(input)];
+    sink
+}
+
+/// The same as [flow_recording_spec], declared frame by frame so it can share a widened region.
+pub(crate) fn per_frame_flow_recording_spec(name: &str, input: &str) -> StageSpec {
+    let mut sink = flow_recording_spec(name, input);
+    sink.args = Spanned::unknown(json!({ "per_frame": true }));
+    sink
+}
+
 pub(crate) fn sink_spec(name: &str, input: &str) -> StageSpec {
     let mut sink = spec(StageKind::Sink, name, "test/recording");
     sink.inputs = vec![positional(input)];

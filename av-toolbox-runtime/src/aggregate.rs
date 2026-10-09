@@ -1,11 +1,10 @@
-use av_toolbox_gpu::AnyItem;
-
-use crate::{Assignment, ExchangeError, WorkResult};
+use crate::{Assignment, ExchangeError, Flow, WorkResult};
 
 /// Merges workers' outputs back into one stream, in the order the disperse sent them out.
 ///
 /// It reads from the specific worker holding the next unit, never whichever speaks first, and
-/// renumbers every item it emits densely from zero as it goes.
+/// renumbers every item it emits densely from zero as it goes. Records carry no frame index, so they
+/// are passed on as they are.
 pub struct Aggregate {
     assignments: Vec<Assignment>,
     position: usize,
@@ -50,19 +49,23 @@ impl Aggregate {
 
     /// Takes one message from `worker` and returns whatever is now ready to emit.
     ///
-    /// Only the worker holding the current unit may answer with an item or close it. A unit
+    /// Only the worker holding the current unit may answer with an item or record, or close it. A unit
     /// that produced nothing still moves the aggregate on to the next assignment once its
     /// `EndOfUnit` arrives. A worker's `EndOfStream` means that worker has nothing left to send,
     /// not that the merged stream itself is over, so it neither emits anything nor moves the
     /// aggregate on to the next assignment, unless it is the worker holding the current, undrained
     /// unit, which means it ended without ever sending that unit's close.
-    pub fn accept(&mut self, worker: usize, result: WorkResult) -> Result<Vec<AnyItem>, ExchangeError> {
+    pub fn accept(&mut self, worker: usize, result: WorkResult) -> Result<Vec<Flow>, ExchangeError> {
         match result {
             WorkResult::Item(mut item) => {
                 self.check_worker(worker)?;
                 item.set_index(self.next_index);
                 self.next_index += 1;
-                Ok(vec![item])
+                Ok(vec![Flow::Item(item)])
+            },
+            WorkResult::Record(record) => {
+                self.check_worker(worker)?;
+                Ok(vec![Flow::Record(record)])
             },
             WorkResult::EndOfUnit(unit) => {
                 let current = self.check_worker(worker)?;
@@ -120,9 +123,11 @@ impl Default for Aggregate {
 #[cfg(test)]
 mod tests {
     use av_toolbox_gpu::{
+        AnyItem,
         ColourInfo,
         FrameFormat,
         FrameLayout,
+        MetaRecord,
         SampleFormat,
         StreamItem,
         Subsampling,
@@ -152,6 +157,14 @@ mod tests {
         StreamItem::Frame(context.alloc_frame(&format(), meta)).into()
     }
 
+    fn item_of(flow: &Flow) -> &AnyItem {
+        flow.item().expect("an item")
+    }
+
+    fn index_of(flow: &Flow) -> u64 {
+        item_of(flow).meta().index
+    }
+
     #[test]
     fn it_reads_the_worker_the_assignment_names() {
         let mut aggregate = Aggregate::new();
@@ -179,8 +192,8 @@ mod tests {
             .accept(0, WorkResult::Item(item(41, 7)))
             .expect("should accept");
 
-        assert_eq!(first[0].meta().index, 0);
-        assert_eq!(second[0].meta().index, 1);
+        assert_eq!(index_of(&first[0]), 0);
+        assert_eq!(index_of(&second[0]), 1);
     }
 
     #[test]
@@ -192,7 +205,7 @@ mod tests {
             .accept(0, WorkResult::Item(item(40, 7)))
             .expect("should accept");
 
-        assert_eq!(chunk_on(emitted[0].meta(), 0), 7);
+        assert_eq!(chunk_on(item_of(&emitted[0]).meta(), 0), 7);
     }
 
     #[test]
@@ -225,7 +238,52 @@ mod tests {
             .accept(1, WorkResult::Item(item(90, 8)))
             .expect("should accept");
 
-        assert_eq!(emitted[0].meta().index, 1);
+        assert_eq!(index_of(&emitted[0]), 1);
+    }
+
+    #[test]
+    fn a_record_keeps_its_place_in_its_unit_without_taking_an_index() {
+        let mut aggregate = Aggregate::new();
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
+        let record = MetaRecord::new("mark");
+        let id = record.id();
+
+        let first = aggregate
+            .accept(0, WorkResult::Item(item(40, 7)))
+            .expect("should accept");
+        let marked = aggregate
+            .accept(0, WorkResult::Record(record))
+            .expect("should accept");
+        let second = aggregate
+            .accept(0, WorkResult::Item(item(41, 7)))
+            .expect("should accept");
+
+        let Flow::Record(passed) = &marked[0] else {
+            panic!("the record should pass through as a record");
+        };
+
+        assert_eq!(marked.len(), 1);
+        assert_eq!(passed.id(), id);
+        assert_eq!(index_of(&first[0]), 0);
+        assert_eq!(index_of(&second[0]), 1);
+    }
+
+    #[test]
+    fn a_record_from_a_worker_speaking_out_of_turn_is_an_error() {
+        let mut aggregate = Aggregate::new();
+        aggregate.assign(Assignment { unit: 7, worker: 0 });
+
+        let record = MetaRecord::new("mark");
+        let result = aggregate.accept(1, WorkResult::Record(record));
+
+        assert_eq!(
+            result.expect_err("worker 1 does not hold unit 7"),
+            ExchangeError::WrongWorker {
+                unit: 7,
+                expected: 0,
+                found: 1,
+            }
+        );
     }
 
     #[test]

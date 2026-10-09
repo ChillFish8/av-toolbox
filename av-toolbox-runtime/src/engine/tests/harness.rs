@@ -62,6 +62,12 @@ use crate::engine::tests::fixtures::gated::{
     TrackedInstance,
 };
 use crate::engine::tests::fixtures::joins::{Join, JoinInstance, Referring, ReferringInstance};
+use crate::engine::tests::fixtures::records::{
+    FlowRecording,
+    FlowRecordingInstance,
+    Marking,
+    MarkingInstance,
+};
 use crate::engine::tests::fixtures::shaping::{Masking, MaskingInstance, Multiplying, MultiplyingInstance};
 use crate::engine::tests::fixtures::sinks::{
     Gated,
@@ -114,6 +120,7 @@ fn registry() -> PipelineRegistry {
     registry
         .register_filter::<Artefacting>()
         .expect("should register");
+    registry.register_filter::<Marking>().expect("should register");
     registry.register_sink::<Recording>().expect("should register");
     registry
         .register_sink::<HostRecording>()
@@ -123,6 +130,9 @@ fn registry() -> PipelineRegistry {
     registry.register_sink::<Gated>().expect("should register");
     registry
         .register_meta_sink::<MetaRecording>()
+        .expect("should register");
+    registry
+        .register_meta_sink::<FlowRecording>()
         .expect("should register");
     registry.register_provider::<Stamping>().expect("should register");
     registry
@@ -180,6 +190,7 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
                 serde_json::from_value(node.args().clone()).expect("valid artefacting args");
             StageBox::Filter(Box::new(ArtefactingInstance::from_args(args)))
         },
+        "test/marking" => StageBox::Filter(Box::new(MarkingInstance::new())),
         "test/masking" => StageBox::Mask(Box::new(MaskingInstance::new())),
         "test/multiplying" => StageBox::Filter(Box::new(MultiplyingInstance::new())),
         "test/join" => StageBox::Filter(Box::new(JoinInstance::new())),
@@ -199,6 +210,7 @@ fn build_stage(graph: &CompiledGraph, id: NodeId, worker: usize) -> (NodeId, Sta
         "test/pairing" => StageBox::Sink(Box::new(PairingInstance::new())),
         "test/gated" => StageBox::Sink(Box::new(GatedInstance::new())),
         "test/meta-recording" => StageBox::MetaSink(Box::new(MetaRecordingInstance::new())),
+        "test/flow-recording" => StageBox::MetaSink(Box::new(FlowRecordingInstance::new())),
         "test/stamping" => {
             let args: Vec<LayerDemand> =
                 serde_json::from_value(node.args().clone()).expect("valid stamping args");

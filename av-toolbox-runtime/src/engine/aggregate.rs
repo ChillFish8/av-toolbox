@@ -3,7 +3,7 @@ use std::sync::mpsc::Receiver;
 use super::channel::{AggregateSignal, DownstreamLink, forward, send_done};
 use super::freedom::WorkerFreedom;
 use super::region::AggregateSide;
-use crate::{Cancel, ExchangeError, RunError, WorkResult};
+use crate::{Cancel, ExchangeError, Flow, RunError, WorkResult};
 
 /// Carries one worker's output straight downstream, for a region with no aggregate.
 ///
@@ -22,7 +22,8 @@ pub(super) fn run_relay(
 
     while let Ok(result) = results.recv() {
         match result {
-            WorkResult::Item(item) => forward(&downstream, vec![item]),
+            WorkResult::Item(item) => forward(&downstream, vec![Flow::Item(item)]),
+            WorkResult::Record(record) => forward(&downstream, vec![Flow::Record(record)]),
             WorkResult::EndOfUnit(_) => freedom.mark_free(0),
             WorkResult::EndOfStream => break,
         }

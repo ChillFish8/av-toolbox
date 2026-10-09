@@ -69,6 +69,7 @@ impl<S: Side> Source<S> for WatchedSource<S> {
 /// What reached the sinks, and when the counted part of the run began.
 pub(super) struct SinkTally {
     frames: AtomicU64,
+    records: AtomicU64,
     warmup: u64,
     counted_from: OnceLock<Instant>,
 }
@@ -77,6 +78,7 @@ impl SinkTally {
     pub(super) fn new(warmup: u64) -> Self {
         Self {
             frames: AtomicU64::new(0),
+            records: AtomicU64::new(0),
             warmup,
             counted_from: OnceLock::new(),
         }
@@ -95,6 +97,14 @@ impl SinkTally {
 
     pub(super) fn frames(&self) -> u64 {
         self.frames.load(Ordering::SeqCst)
+    }
+
+    fn add_record(&self) {
+        self.records.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(super) fn records(&self) -> u64 {
+        self.records.load(Ordering::SeqCst)
     }
 
     /// How long the run took after its warmup, given when it started and ended.
@@ -193,7 +203,10 @@ impl MetaSink for CountingMetaSink {
     }
 
     fn consume_record(&mut self, context: &mut FrameContext, record: &MetaRecord) -> Result<(), StageError> {
-        self.inner.consume_record(context, record)
+        self.inner.consume_record(context, record)?;
+        self.tally.add_record();
+
+        Ok(())
     }
 
     fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
@@ -427,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wrapped_meta_sink_forwards_records_without_counting_them() {
+    fn a_wrapped_meta_sink_forwards_records_and_counts_them_apart_from_frames() {
         let kinds = Arc::new(Mutex::new(Vec::new()));
         let inner = RecordingMeta { kinds: kinds.clone() };
         let id = NodeId::new(0);
@@ -446,5 +459,6 @@ mod tests {
 
         assert_eq!(*kinds.lock().expect("unpoisoned"), vec![String::from("chunk")]);
         assert_eq!(tally.frames(), 0);
+        assert_eq!(tally.records(), 1);
     }
 }

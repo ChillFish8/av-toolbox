@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
-use av_toolbox_gpu::AnyItem;
+use av_toolbox_gpu::{MetaRecord, RecordId};
 
 use super::channel::{AggregateSignal, ExitMessage, send_routed};
 use super::freedom::{FirstIdle, WorkerFreedom};
 use super::region::DisperseSide;
 use crate::disperse::Dropped;
-use crate::{Cancel, Disperse, ExchangeError, RunError, WorkItem};
+use crate::{Cancel, Disperse, ExchangeError, Flow, RunError, WorkItem};
 
 /// Drives a region's disperse from its one merged, slot-tagged upstream channel.
 ///
@@ -22,6 +22,12 @@ use crate::{Cancel, Disperse, ExchangeError, RunError, WorkItem};
 /// returns and retrying when it answers `None`. A fast slot's queue simply grows rather than
 /// panicking, so how far it may run ahead of a slow one is bounded by the frame budget rather
 /// than capped at one item.
+///
+/// Records never join a bundle. Every record at the front of a slot's queue is handed to the disperse
+/// before the next bundle forms, so it goes to that bundle's worker ahead of it, and a bundle only
+/// forms once every slot's front is an item. A record reaching this by more than one slot is handed
+/// over once. Whatever records are left when the stream ends are handed over before the disperse
+/// finishes.
 ///
 /// Owning the disperse outright, on one thread, is what keeps the state machine's own
 /// lock-step assumption true: `Disperse` assumes whoever calls `offer` and `place` does so in
@@ -46,22 +52,32 @@ pub(super) fn drive_disperse(
         assignment_sender,
     } = side;
 
-    let mut queues: HashMap<usize, VecDeque<AnyItem>> =
+    let mut queues: HashMap<usize, VecDeque<Flow>> =
         slots.iter().map(|&slot| (slot, VecDeque::new())).collect();
     let mut done: HashSet<usize> = HashSet::new();
+    let mut seen: HashSet<RecordId> = HashSet::new();
 
     'routing: loop {
         if cancel.is_stopped() {
             break;
         }
 
-        while slots.iter().all(|slot| !queues[slot].is_empty()) {
+        loop {
+            let records = take_front_records(&slots, &mut queues, &mut seen);
+            disperse.offer_records(records);
+
+            let ready = slots.iter().all(|slot| front_is_item(&queues[slot]));
+            if !ready {
+                break;
+            }
+
             for &slot in &slots {
                 let item = queues
                     .get_mut(&slot)
                     .expect("every bound slot keeps its own queue")
                     .pop_front()
-                    .expect("this slot's queue was just confirmed non-empty");
+                    .and_then(Flow::into_item)
+                    .expect("this slot's front was just confirmed an item");
 
                 let offered = disperse.offer(slot, item);
                 let routed = offered.map_err(refused_offer)?;
@@ -84,7 +100,13 @@ pub(super) fn drive_disperse(
                 queues
                     .get_mut(&slot)
                     .expect("every bound slot keeps its own queue")
-                    .push_back(item);
+                    .push_back(Flow::Item(item));
+            },
+            Ok((slot, ExitMessage::Record(record))) => {
+                queues
+                    .get_mut(&slot)
+                    .expect("every bound slot keeps its own queue")
+                    .push_back(Flow::Record(record));
             },
             Ok((slot, ExitMessage::Done)) => {
                 done.insert(slot);
@@ -92,6 +114,9 @@ pub(super) fn drive_disperse(
             Err(_) => break,
         }
     }
+
+    let leftover_records = take_every_record(&slots, &mut queues, &mut seen);
+    disperse.offer_records(leftover_records);
 
     let finished = disperse.finish();
     for assignment in finished.assignments {
@@ -107,6 +132,70 @@ pub(super) fn drive_disperse(
     dropped.fetch_add(queued + dropped_items(finished.dropped), Ordering::SeqCst);
 
     Ok(())
+}
+
+/// Takes every record at the front of each slot's queue, in slot order, leaving out any already seen.
+fn take_front_records(
+    slots: &[usize],
+    queues: &mut HashMap<usize, VecDeque<Flow>>,
+    seen: &mut HashSet<RecordId>,
+) -> Vec<MetaRecord> {
+    let mut records = Vec::new();
+
+    for slot in slots {
+        let queue = queues
+            .get_mut(slot)
+            .expect("every bound slot keeps its own queue");
+
+        while let Some(flow) = queue.pop_front() {
+            let Flow::Record(record) = flow else {
+                queue.push_front(flow);
+                break;
+            };
+
+            keep_first_sighting(record, seen, &mut records);
+        }
+    }
+
+    records
+}
+
+/// Takes every record still queued on any slot, in slot order, leaving the items behind.
+fn take_every_record(
+    slots: &[usize],
+    queues: &mut HashMap<usize, VecDeque<Flow>>,
+    seen: &mut HashSet<RecordId>,
+) -> Vec<MetaRecord> {
+    let mut records = Vec::new();
+
+    for slot in slots {
+        let queue = queues
+            .get_mut(slot)
+            .expect("every bound slot keeps its own queue");
+        let mut items = VecDeque::with_capacity(queue.len());
+
+        for flow in queue.drain(..) {
+            match flow {
+                Flow::Item(item) => items.push_back(Flow::Item(item)),
+                Flow::Record(record) => keep_first_sighting(record, seen, &mut records),
+            }
+        }
+
+        *queue = items;
+    }
+
+    records
+}
+
+fn keep_first_sighting(record: MetaRecord, seen: &mut HashSet<RecordId>, records: &mut Vec<MetaRecord>) {
+    let first_sighting = seen.insert(record.id());
+    if first_sighting {
+        records.push(record);
+    }
+}
+
+fn front_is_item(queue: &VecDeque<Flow>) -> bool {
+    matches!(queue.front(), Some(Flow::Item(_)))
 }
 
 /// What a refused offer means for the run.
@@ -156,11 +245,78 @@ fn drain_holding(
                 assignment_sender
                     .send(AggregateSignal::Assignment(placed.assignment))
                     .ok();
-                send_routed(work_senders, vec![placed.routed]);
+                send_routed(work_senders, placed.in_order());
             },
             None => freedom.wait_for_a_free_worker(cancel),
         }
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use av_toolbox_gpu::{AnyItem, FrameMeta, StreamItem, testing_context};
+
+    use super::*;
+    use crate::engine::tests::format;
+
+    fn item(index: u64) -> Flow {
+        let context = testing_context();
+        let meta = FrameMeta::at(index);
+        let frame = context.alloc_frame(&format(), meta);
+        let item: AnyItem = StreamItem::Frame(frame).into();
+
+        Flow::Item(item)
+    }
+
+    fn take_bundle(slots: &[usize], queues: &mut HashMap<usize, VecDeque<Flow>>) {
+        for slot in slots {
+            let front = queues.get_mut(slot).expect("every slot has a queue").pop_front();
+            assert!(matches!(front, Some(Flow::Item(_))));
+        }
+    }
+
+    /// The second slot is fed through a stage holding one frame back, so it passes the record on
+    /// ahead of frame 0 while the first slot carries it behind frame 0.
+    #[test]
+    fn a_record_on_a_lagging_slot_is_taken_once_across_two_bundles() {
+        let slots = [0, 1];
+        let record = MetaRecord::new("mark");
+        let mut queues: HashMap<usize, VecDeque<Flow>> = HashMap::new();
+        let first_slot = VecDeque::from([item(0), Flow::Record(record.clone()), item(1)]);
+        let second_slot = VecDeque::from([Flow::Record(record.clone()), item(0)]);
+        queues.insert(0, first_slot);
+        queues.insert(1, second_slot);
+        let mut seen = HashSet::new();
+
+        let before_first = take_front_records(&slots, &mut queues, &mut seen);
+        take_bundle(&slots, &mut queues);
+        let before_second = take_front_records(&slots, &mut queues, &mut seen);
+
+        let ids: Vec<RecordId> = before_first.iter().map(MetaRecord::id).collect();
+        assert_eq!(ids, vec![record.id()]);
+        assert!(before_second.is_empty());
+        assert!(front_is_item(&queues[&0]));
+    }
+
+    #[test]
+    fn records_left_at_the_end_leave_out_those_already_taken() {
+        let slots = [0, 1];
+        let taken = MetaRecord::new("mark");
+        let fresh = MetaRecord::new("chunk");
+        let mut queues: HashMap<usize, VecDeque<Flow>> = HashMap::new();
+        let first_slot = VecDeque::from([item(0), Flow::Record(taken.clone())]);
+        let second_slot = VecDeque::from([Flow::Record(fresh.clone()), Flow::Record(taken.clone())]);
+        queues.insert(0, first_slot);
+        queues.insert(1, second_slot);
+        let mut seen = HashSet::from([taken.id()]);
+
+        let leftover = take_every_record(&slots, &mut queues, &mut seen);
+
+        let ids: Vec<RecordId> = leftover.iter().map(MetaRecord::id).collect();
+        assert_eq!(ids, vec![fresh.id()]);
+        assert_eq!(queues[&0].len(), 1);
+        assert!(queues[&1].is_empty());
+    }
 }
