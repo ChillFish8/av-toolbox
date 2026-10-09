@@ -13,10 +13,10 @@ pub use self::direct::{DirectVariant, WeightStaging};
 use self::direct::{check_variant, run_direct};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::direct::{direct_variants, offered_plane_width};
-#[cfg(any(test, feature = "test-support"))]
-pub use self::tune::fixed_candidate;
 pub(crate) use self::tune::takes_tuner;
-pub use self::tune::{Epilogue, Kernels, TunedRun, offered_candidates, run_tuned};
+pub use self::tune::{Epilogue, Kernels, offered_candidates, run_tuned};
+#[cfg(any(test, feature = "test-support"))]
+pub use self::tune::{TunedRun, fixed_candidate};
 pub use self::winograd::WinogradVariant;
 pub(crate) use self::winograd::transform_values;
 use self::winograd::{POSITIONS, run_winograd};
