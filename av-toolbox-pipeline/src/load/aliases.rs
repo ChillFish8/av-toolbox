@@ -30,13 +30,26 @@ pub(super) fn follow(
     Some(current)
 }
 
+/// Whether `spec` is an artefact sink, the only sink that reads no input.
+fn is_artefact_sink(spec: &StageSpec) -> bool {
+    spec.kind == StageKind::Sink && spec.inputs.is_empty()
+}
+
 /// Removes stages from called files whose frames only reach outputs nothing reads.
+///
+/// Keeps every stage when the pipeline has an artefact sink, since it may select the artefacts of a stage whose
+/// frames nobody reads.
 pub(super) fn drop_unread(
     specs: &mut Vec<StageSpec>,
     aliases: &HashMap<String, String>,
     outputs: &HashSet<String>,
     read_outputs: &HashSet<String>,
 ) {
+    let has_artefact_sink = specs.iter().any(is_artefact_sink);
+    if has_artefact_sink {
+        return;
+    }
+
     let mut ignored = HashSet::new();
     let mut read_targets = Vec::new();
     let mut unread_targets = Vec::new();

@@ -371,6 +371,32 @@ inputs = ["spare"]
 }
 
 #[test]
+fn an_unread_output_keeps_its_stages_beside_an_artefact_sink() {
+    let extra = r#"
+[filter.spare]
+type = "test/denoise"
+inputs = ["clip"]
+
+[output.extra]
+inputs = ["spare"]
+"#;
+    let reports = r#"
+[sink.reports]
+type = "artefacts/files"
+args.directory = "reports"
+"#;
+    let part = format!("{PART}{extra}");
+    let read_clean = MAIN.replace("inputs = [\"denoised\"]", "inputs = [\"denoised.clean\"]");
+    let main = format!("{read_clean}{reports}");
+
+    let loaded = loaded(&files(&main, &part), "/work/main.toml", &Supplied::new());
+    let names: Vec<&str> = loaded.specs.iter().map(|spec| spec.name.value.as_str()).collect();
+
+    assert!(names.contains(&"denoised.spare"));
+    assert!(names.contains(&"denoised.denoise"));
+}
+
+#[test]
 fn a_called_stage_reaching_nothing_is_kept() {
     let part = format!("{PART}\n[filter.lost]\ntype = \"test/denoise\"\ninputs = [\"clip\"]\n");
 

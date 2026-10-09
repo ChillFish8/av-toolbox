@@ -1,6 +1,6 @@
 use crate::diagnostic::stage_path;
 use crate::graph::{CompiledGraph, Node, NodeId};
-use crate::{Diagnostic, DiagnosticCode, Diagnostics};
+use crate::{Diagnostic, DiagnosticCode, Diagnostics, FileId};
 
 /// How far a depth first walk has got with a node.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -94,7 +94,7 @@ fn report_cycle(nodes: &[Node], repeated: NodeId, stack: &[NodeId], diagnostics:
     diagnostics.push(diagnostic);
 }
 
-/// Warns about every stage no sink transitively depends on, frame or artefact.
+/// Warns about every stage in the root file that no sink depends on, frame or artefact.
 pub(crate) fn report_unused(graph: &CompiledGraph, diagnostics: &mut Diagnostics) {
     let mut reachable = vec![false; graph.len()];
     let producers = graph.artefact_producers();
@@ -113,7 +113,9 @@ pub(crate) fn report_unused(graph: &CompiledGraph, diagnostics: &mut Diagnostics
     }
 
     for node in graph.nodes() {
-        if reachable[node.id().index()] {
+        // A caller is not responsible for what a called file holds.
+        let called = node.span().file != FileId::ROOT;
+        if reachable[node.id().index()] || called {
             continue;
         }
 
@@ -133,9 +135,29 @@ mod tests {
 
     use super::*;
     use crate::graph::{Edge, NodeParts};
-    use crate::{ArgSpans, DiagnosticCode, Severity, Span};
+    use crate::{ArgSpans, DiagnosticCode, FileId, Severity, Span};
+
+    #[test]
+    fn a_called_stage_no_sink_depends_on_is_not_a_warning() {
+        let called_span = Span::in_file(FileId::new(1), 4, 9);
+        let nodes = vec![
+            node(0, "source", StageKind::Source, &[]),
+            node_at(1, "denoised.spare", StageKind::Filter, &[0], called_span),
+            node(2, "sink", StageKind::Sink, &[0]),
+        ];
+        let graph = CompiledGraph::new(nodes);
+        let mut diagnostics = Diagnostics::new();
+
+        report_unused(&graph, &mut diagnostics);
+
+        assert!(diagnostics.is_empty());
+    }
 
     fn node(index: usize, name: &str, kind: StageKind, inputs: &[usize]) -> Node {
+        node_at(index, name, kind, inputs, Span::unknown())
+    }
+
+    fn node_at(index: usize, name: &str, kind: StageKind, inputs: &[usize], span: Span) -> Node {
         let edges = inputs
             .iter()
             .enumerate()
@@ -152,7 +174,7 @@ mod tests {
             arg_spans: ArgSpans::default(),
             inputs: edges,
             workers: None,
-            span: Span::unknown(),
+            span,
             artefacts: StageArtefacts::NONE,
         })
     }
