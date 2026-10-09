@@ -1,6 +1,6 @@
 use std::fmt;
 
-use av_toolbox_gpu::{AnyItem, FrameContext, FrameMeta, StreamFormat};
+use av_toolbox_gpu::{AnyItem, FrameContext, FrameMeta, MetaRecord, StreamFormat};
 
 use crate::{StageError, StageInstance};
 
@@ -89,6 +89,15 @@ pub trait MetaSink: StageInstance {
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         Ok(())
     }
+
+    /// Called with each record that reaches this sink, in its place in the stream.
+    fn consume_record(
+        &mut self,
+        _context: &mut FrameContext,
+        _record: &MetaRecord,
+    ) -> Result<(), StageError> {
+        Ok(())
+    }
 }
 
 pub fn run_meta_sink(
@@ -103,6 +112,14 @@ pub fn run_meta_sink(
 
 pub fn end_meta_sink(sink: &mut dyn MetaSink, context: &mut FrameContext) -> Result<(), StageError> {
     sink.end_of_stream(context)
+}
+
+pub fn record_meta_sink(
+    sink: &mut dyn MetaSink,
+    context: &mut FrameContext,
+    record: &MetaRecord,
+) -> Result<(), StageError> {
+    sink.consume_record(context, record)
 }
 
 #[cfg(test)]
@@ -133,6 +150,7 @@ mod tests {
 
     struct Counting {
         seen: Vec<u64>,
+        records: Vec<String>,
         ended: bool,
     }
 
@@ -142,6 +160,16 @@ mod tests {
         fn consume(&mut self, _context: &mut FrameContext, mut inputs: MetaInputs) -> Result<(), StageError> {
             let item = inputs.take(0).expect("an item");
             self.seen.push(item.meta().index);
+
+            Ok(())
+        }
+
+        fn consume_record(
+            &mut self,
+            _context: &mut FrameContext,
+            record: &MetaRecord,
+        ) -> Result<(), StageError> {
+            self.records.push(record.kind().to_string());
 
             Ok(())
         }
@@ -158,6 +186,7 @@ mod tests {
         let context = testing_context();
         let mut sink = Counting {
             seen: Vec::new(),
+            records: Vec::new(),
             ended: false,
         };
         let device_frame = context.alloc_frame(&format(), FrameMeta::at(0));
@@ -172,6 +201,22 @@ mod tests {
 
         assert_eq!(sink.seen, vec![0, 1]);
         assert!(sink.ended);
+    }
+
+    #[test]
+    fn a_meta_sink_is_handed_records_apart_from_items() {
+        let mut sink = Counting {
+            seen: Vec::new(),
+            records: Vec::new(),
+            ended: false,
+        };
+        let mut stage_context = testing_context();
+        let record = MetaRecord::new("chunk");
+
+        record_meta_sink(&mut sink, &mut stage_context, &record).expect("consumes");
+
+        assert_eq!(sink.records, vec![String::from("chunk")]);
+        assert!(sink.seen.is_empty());
     }
 
     #[test]

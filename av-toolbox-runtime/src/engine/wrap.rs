@@ -13,7 +13,7 @@ use av_toolbox_core::{
     StageInstance,
     WantedArtefacts,
 };
-use av_toolbox_gpu::{FrameContext, Side};
+use av_toolbox_gpu::{FrameContext, MetaRecord, Side};
 use av_toolbox_graph::{NodeId, StageBox};
 
 use crate::Progress;
@@ -190,6 +190,10 @@ impl MetaSink for CountingMetaSink {
         }
 
         self.inner.consume(context, inputs)
+    }
+
+    fn consume_record(&mut self, context: &mut FrameContext, record: &MetaRecord) -> Result<(), StageError> {
+        self.inner.consume_record(context, record)
     }
 
     fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
@@ -395,5 +399,52 @@ mod tests {
         let (stage, wanted) = handing();
 
         assert_forwards_artefacts(StageBox::MetaSink(Box::new(stage)), &wanted);
+    }
+
+    struct RecordingMeta {
+        kinds: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl StageInstance for RecordingMeta {}
+
+    impl MetaSink for RecordingMeta {
+        fn consume(&mut self, _context: &mut FrameContext, _inputs: MetaInputs) -> Result<(), StageError> {
+            Ok(())
+        }
+
+        fn consume_record(
+            &mut self,
+            _context: &mut FrameContext,
+            record: &MetaRecord,
+        ) -> Result<(), StageError> {
+            self.kinds
+                .lock()
+                .expect("unpoisoned")
+                .push(record.kind().to_string());
+
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_wrapped_meta_sink_forwards_records_without_counting_them() {
+        let kinds = Arc::new(Mutex::new(Vec::new()));
+        let inner = RecordingMeta { kinds: kinds.clone() };
+        let id = NodeId::new(0);
+        let progress = Progress::new([id]);
+        let tally = Arc::new(SinkTally::new(0));
+        let stage = StageBox::MetaSink(Box::new(inner));
+        let mut counted = wrap_sinks(vec![(id, stage)], tally.clone(), &progress);
+        let (_, stage) = counted.pop().expect("one node");
+        let StageBox::MetaSink(mut sink) = stage else {
+            panic!("a meta sink");
+        };
+        let mut context = testing_context();
+        let record = MetaRecord::new("chunk");
+
+        sink.consume_record(&mut context, &record).expect("consumes");
+
+        assert_eq!(*kinds.lock().expect("unpoisoned"), vec![String::from("chunk")]);
+        assert_eq!(tally.frames(), 0);
     }
 }

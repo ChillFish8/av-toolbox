@@ -99,7 +99,7 @@ pub use self::inputs::{
 };
 pub use self::key_filter::{KeyFilter, Pattern};
 pub use self::mask::Mask;
-pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, run_meta_sink};
+pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, record_meta_sink, run_meta_sink};
 pub use self::open::OpenSlot;
 pub use self::parallelism::{ChunkRequest, Granularity, Parallelism};
 pub use self::placement::{PathEdge, PathNode, PathView, PlaceError, PlaceFn};
