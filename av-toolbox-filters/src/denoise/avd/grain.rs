@@ -25,7 +25,6 @@ fn unreadable_piece(error: impl std::fmt::Display) -> StageError {
     StageError::msg(message)
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the NL4D runner"))]
 fn unwritable_piece(error: serde_json::Error) -> StageError {
     let message = format!("{STAGE} could not write a piece of {GRAIN_TABLE}: {error}");
 
@@ -119,7 +118,6 @@ pub(crate) struct GrainPiece {
 }
 
 impl GrainPiece {
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the NL4D runner"))]
     pub(crate) fn new(frame_rate: (u64, u64), scenes: &[SceneGrain]) -> Self {
         let scenes = scenes.iter().map(ScenePiece::from).collect();
 
@@ -143,7 +141,6 @@ impl GrainPiece {
         self.scenes.into_iter().map(SceneGrain::from).collect()
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the NL4D runner"))]
     pub(crate) fn to_artefact(&self) -> Result<Artefact, StageError> {
         let value = serde_json::to_value(self).map_err(unwritable_piece)?;
 
@@ -194,10 +191,8 @@ pub(crate) fn merge_grain_table(pieces: Vec<ArtefactPiece>) -> Result<ArtefactDa
 }
 
 /// The grain one NL4D instance measured since it last handed a piece over.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the NL4D runner"))]
 pub(crate) struct GrainLog {
     /// The engine measuring grain, which is the one covering luma.
-    #[cfg_attr(test, expect(dead_code, reason = "used by the NL4D runner"))]
     engine: usize,
     /// Frames per second as `(numerator, denominator)`.
     frame_rate: (u64, u64),
@@ -206,7 +201,6 @@ pub(crate) struct GrainLog {
     scenes: Vec<SceneGrain>,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the NL4D runner"))]
 impl GrainLog {
     pub(crate) fn new(engine: usize, frame_rate: (u64, u64)) -> Self {
         Self {
@@ -217,7 +211,6 @@ impl GrainLog {
         }
     }
 
-    #[expect(dead_code, reason = "used by the NL4D runner")]
     pub(crate) fn engine(&self) -> usize {
         self.engine
     }

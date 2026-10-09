@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
-use av_denoise_core::{Engine, Geometry, Nl4d, Nlmeans};
-use av_toolbox_core::{Filter, Inputs, StageError, StageInstance};
+use av_denoise_core::{ChannelMode, Engine, Geometry, Nl4d, Nlmeans};
+use av_toolbox_core::{Artefact, Filter, Inputs, StageError, StageInstance, WantedArtefacts};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::values::offset;
 use av_toolbox_cubek::words::copy_plane;
@@ -23,6 +23,7 @@ use av_toolbox_gpu::{
 use cubecl::server::Handle;
 
 use super::args::{AvdArgs, EngineOptions};
+use super::grain::{GRAIN_TABLE, GrainLog};
 use super::planes::{EngineSpec, engine_sample, engine_specs, needs_padding};
 use crate::masked::INPUT;
 use crate::sizing::Sizing;
@@ -71,6 +72,24 @@ fn nothing_held(stage: &str) -> StageError {
 
 fn left_over(stage: &str, frames: usize) -> StageError {
     let message = format!("{stage} ended its stream still holding {frames} frames");
+
+    StageError::msg(message)
+}
+
+fn no_luma(stage: &str) -> StageError {
+    let message = format!("{stage} measures grain on luma, and its planes leave luma out");
+
+    StageError::msg(message)
+}
+
+fn no_frame_rate(stage: &str) -> StageError {
+    let message = format!("{stage} needs the stream's frame rate to time a grain table");
+
+    StageError::msg(message)
+}
+
+fn no_grain_export(stage: &str) -> StageError {
+    let message = format!("{stage} has no engine that measures grain");
 
     StageError::msg(message)
 }
@@ -149,6 +168,10 @@ struct PlaneEngine {
     spec: EngineSpec,
     /// How each of its planes is staged, in the engine's plane order.
     staging: Vec<Staging>,
+    /// The settings the engine was built with, kept to rebuild it.
+    options: EngineOptions,
+    /// The size and samples the engine was built with, kept to rebuild it.
+    geometry: Geometry,
 }
 
 impl PlaneEngine {
@@ -169,6 +192,8 @@ pub(crate) struct AvdFilter<R: Runtime> {
     engines: Vec<PlaneEngine>,
     /// Input frames waiting for their output, oldest first.
     held: VecDeque<Frame>,
+    /// What the engine covering luma measured, when a grain table is wanted.
+    grain: Option<GrainLog>,
 }
 
 impl<R: Runtime> AvdFilter<R> {
@@ -207,6 +232,8 @@ impl<R: Runtime> AvdFilter<R> {
                 engine,
                 spec,
                 staging,
+                options,
+                geometry,
             });
         }
 
@@ -216,7 +243,62 @@ impl<R: Runtime> AvdFilter<R> {
             format: input,
             engines,
             held: VecDeque::new(),
+            grain: None,
         })
+    }
+
+    /// The engine covering luma, which is the only one av-denoise measures grain with.
+    fn luma_engine(&self) -> Option<usize> {
+        self.engines
+            .iter()
+            .position(|engine| engine.spec.channels != ChannelMode::Chroma)
+    }
+
+    /// Rebuilds the engine covering luma to measure grain, and starts keeping what it measures.
+    fn export_grain(&mut self) -> Result<(), StageError> {
+        let Some(index) = self.luma_engine() else {
+            return Err(no_luma(self.stage));
+        };
+
+        let Some(rate) = self.format.frame_rate else {
+            return Err(no_frame_rate(self.stage));
+        };
+
+        let EngineOptions::Nl4d(mut options) = self.engines[index].options else {
+            return Err(no_grain_export(self.stage));
+        };
+
+        options.grain_export = true;
+        let exporting = EngineOptions::Nl4d(options);
+        let geometry = self.engines[index].geometry;
+
+        let built = built_engine(&self.client, exporting, geometry);
+        let engine = built.map_err(|error| unbuildable(self.stage, &self.engines[index].spec, error))?;
+
+        self.engines[index].engine = engine;
+        self.engines[index].options = exporting;
+
+        let numerator = u64::from(rate.numerator());
+        let denominator = u64::from(rate.denominator());
+        self.grain = Some(GrainLog::new(index, (numerator, denominator)));
+
+        Ok(())
+    }
+
+    /// Keeps the grain the exporting engine measured over the stream that just ended.
+    fn keep_grain(&mut self) -> Result<(), StageError> {
+        let Some(grain) = self.grain.as_mut() else {
+            return Ok(());
+        };
+
+        let stage = self.stage;
+        let engine = &mut self.engines[grain.engine()].engine;
+        let drained = engine.drain_grain_chunks();
+        let chunks = drained.map_err(|error| refused(stage, error))?;
+
+        grain.keep(chunks);
+
+        Ok(())
     }
 
     fn plane_of<'a>(&self, frame: &'a Frame, index: usize) -> Result<&'a Plane, StageError> {
@@ -523,7 +605,29 @@ impl<R: Runtime> StageInstance for AvdFilter<R> {
 
         self.held.clear();
 
+        if let Some(grain) = self.grain.as_mut() {
+            grain.restart();
+        }
+
         Ok(())
+    }
+
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) -> Result<(), StageError> {
+        if !wanted.contains(GRAIN_TABLE) {
+            return Ok(());
+        }
+
+        self.export_grain()
+    }
+
+    fn take_artefacts(&mut self, _context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
+        let Some(grain) = self.grain.as_mut() else {
+            return Ok(Vec::new());
+        };
+
+        let piece = grain.take_piece()?;
+
+        Ok(vec![piece])
     }
 }
 
@@ -532,6 +636,10 @@ impl<R: Runtime> Filter for AvdFilter<R> {
         let Some(frame) = inputs.take_frame(INPUT) else {
             return Err(missing_frame(self.stage));
         };
+
+        if let Some(grain) = self.grain.as_mut() {
+            grain.saw(frame.meta().index);
+        }
 
         let ready = self.push(context, &frame)?;
         self.held.push_back(frame);
@@ -558,6 +666,8 @@ impl<R: Runtime> Filter for AvdFilter<R> {
         if !self.held.is_empty() {
             return Err(left_over(self.stage, self.held.len()));
         }
+
+        self.keep_grain()?;
 
         Ok(frames)
     }

@@ -1,3 +1,4 @@
+mod grain;
 mod parity;
 mod quality;
 mod stream;
