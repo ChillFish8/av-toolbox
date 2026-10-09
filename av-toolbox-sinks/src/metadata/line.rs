@@ -2,7 +2,7 @@ use std::io;
 use std::io::Write;
 
 use av_toolbox_core::KeyFilter;
-use av_toolbox_gpu::{FrameMeta, MetaValue};
+use av_toolbox_gpu::{FrameMeta, MetaRecord, MetaValue};
 use av_toolbox_providers::SceneScore;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
@@ -29,6 +29,55 @@ pub(crate) fn write_line<W: Write>(
     output.write_all(b"\n")
 }
 
+/// Writes one record as a JSON object followed by a newline.
+///
+/// `after` is the index of the last frame written, and is `null` before any.
+/// `chunk` is the scene chunk of that frame, and is left out unless scenes were asked for.
+pub(crate) fn write_record_line<W: Write>(
+    output: &mut W,
+    record: &MetaRecord,
+    after: Option<u64>,
+    chunk: Option<Option<u64>>,
+    filter: &KeyFilter,
+) -> io::Result<()> {
+    let line = RecordLine {
+        record,
+        after,
+        chunk,
+        filter,
+    };
+    serde_json::to_writer(&mut *output, &line)?;
+
+    output.write_all(b"\n")
+}
+
+/// One record, written with its keys in a fixed order.
+struct RecordLine<'a> {
+    record: &'a MetaRecord,
+    after: Option<u64>,
+    chunk: Option<Option<u64>>,
+    filter: &'a KeyFilter,
+}
+
+impl Serialize for RecordLine<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("kind", self.record.kind())?;
+        entry(self.filter, &mut map, "after", &self.after)?;
+
+        if let Some(chunk) = self.chunk {
+            entry(self.filter, &mut map, "chunk", &chunk)?;
+        }
+
+        for (path, values) in self.record.attachments().stages() {
+            let values = StageValues(values);
+            entry(self.filter, &mut map, path, &values)?;
+        }
+
+        map.end()
+    }
+}
+
 /// One frame's metadata, written with its keys in a fixed order.
 struct Line<'a> {
     meta: &'a FrameMeta,
@@ -43,6 +92,7 @@ impl Serialize for Line<'_> {
         let scene_score = self.score.map(SceneScore::get);
 
         let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("kind", "frame")?;
         self.entry(&mut map, "index", &self.meta.index)?;
 
         if let Some(chunk) = self.chunk {
@@ -68,12 +118,21 @@ impl Line<'_> {
         key: &str,
         value: &V,
     ) -> Result<(), M::Error> {
-        if !self.filter.keeps(key) {
-            return Ok(());
-        }
-
-        map.serialize_entry(key, value)
+        entry(self.filter, map, key, value)
     }
+}
+
+fn entry<M: SerializeMap, V: Serialize>(
+    filter: &KeyFilter,
+    map: &mut M,
+    key: &str,
+    value: &V,
+) -> Result<(), M::Error> {
+    if !filter.keeps(key) {
+        return Ok(());
+    }
+
+    map.serialize_entry(key, value)
 }
 
 /// One stage's values as an object, in the order they were attached.
@@ -110,7 +169,7 @@ mod tests {
     use std::time::Duration;
 
     use av_toolbox_core::{KeyFilter, Pattern};
-    use av_toolbox_gpu::{FrameMeta, MetaValue};
+    use av_toolbox_gpu::{FrameMeta, MetaRecord, MetaValue};
     use serde_json::json;
 
     use super::*;
@@ -123,6 +182,18 @@ mod tests {
     ) -> String {
         let mut output = Vec::new();
         write_line(&mut output, meta, chunk, score, filter).expect("writes");
+
+        String::from_utf8(output).expect("utf-8")
+    }
+
+    fn record_line_of(
+        record: &MetaRecord,
+        after: Option<u64>,
+        chunk: Option<Option<u64>>,
+        filter: &KeyFilter,
+    ) -> String {
+        let mut output = Vec::new();
+        write_record_line(&mut output, record, after, chunk, filter).expect("writes");
 
         String::from_utf8(output).expect("utf-8")
     }
@@ -157,7 +228,7 @@ mod tests {
         let line = line_of(&meta, Some(4), score, &filter);
 
         let expected = concat!(
-            r#"{"index":12,"chunk":4,"timestamp":0.5,"scene_score":2.5,"#,
+            r#"{"kind":"frame","index":12,"chunk":4,"timestamp":0.5,"scene_score":2.5,"#,
             r#""filter.convert_colour":{"attr1":123,"clipped":false},"#,
             r#""filter.scenes.detect":{"cut":true}}"#,
             "\n",
@@ -173,7 +244,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "{\"index\":0,\"chunk\":0,\"timestamp\":null,\"scene_score\":null}\n"
+            "{\"kind\":\"frame\",\"index\":0,\"chunk\":0,\"timestamp\":null,\"scene_score\":null}\n"
         );
     }
 
@@ -183,7 +254,10 @@ mod tests {
         let filter = KeyFilter::default();
         let line = line_of(&meta, None, None, &filter);
 
-        assert_eq!(line, "{\"index\":0,\"timestamp\":null,\"scene_score\":null}\n");
+        assert_eq!(
+            line,
+            "{\"kind\":\"frame\",\"index\":0,\"timestamp\":null,\"scene_score\":null}\n"
+        );
     }
 
     #[test]
@@ -226,6 +300,59 @@ mod tests {
         let meta = stamped_meta();
         let line = line_of(&meta, None, None, &filter);
 
-        assert_eq!(line, "{\"index\":12,\"filter.scenes.detect\":{\"cut\":true}}\n");
+        assert_eq!(
+            line,
+            "{\"kind\":\"frame\",\"index\":12,\"filter.scenes.detect\":{\"cut\":true}}\n"
+        );
+    }
+
+    #[test]
+    fn a_frame_line_leads_with_its_kind() {
+        let meta = stamped_meta();
+
+        let line = line_of(&meta, Some(4), None, &KeyFilter::default());
+
+        assert!(line.starts_with("{\"kind\":\"frame\",\"index\":12,"));
+    }
+
+    #[test]
+    fn the_kind_survives_an_include_that_would_drop_it() {
+        let meta = stamped_meta();
+        let filter = KeyFilter::new(Some(patterns(&["index"])), None);
+
+        let line = line_of(&meta, None, None, &filter);
+
+        assert_eq!(line, "{\"kind\":\"frame\",\"index\":12}\n");
+    }
+
+    #[test]
+    fn a_record_line_holds_kind_after_chunk_then_its_stages() {
+        let mut record = MetaRecord::new("chunk");
+        record.attachments_mut().attach("frames", MetaValue::Int(24));
+        record.attachments_mut().stamp("filter.stats");
+
+        let line = record_line_of(&record, Some(47), Some(Some(3)), &KeyFilter::default());
+
+        let expected = "{\"kind\":\"chunk\",\"after\":47,\"chunk\":3,\"filter.stats\":{\"frames\":24}}\n";
+        assert_eq!(line, expected);
+    }
+
+    #[test]
+    fn a_record_before_any_frame_is_after_null() {
+        let record = MetaRecord::new("start");
+
+        let line = record_line_of(&record, None, None, &KeyFilter::default());
+
+        assert_eq!(line, "{\"kind\":\"start\",\"after\":null}\n");
+    }
+
+    #[test]
+    fn a_record_line_is_filtered_but_keeps_its_kind() {
+        let record = MetaRecord::new("start");
+        let filter = KeyFilter::new(Some(patterns(&["chunk"])), None);
+
+        let line = record_line_of(&record, Some(1), Some(Some(2)), &filter);
+
+        assert_eq!(line, "{\"kind\":\"start\",\"chunk\":2}\n");
     }
 }

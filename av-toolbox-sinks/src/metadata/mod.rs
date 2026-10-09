@@ -1,3 +1,4 @@
+mod kinds;
 mod line;
 
 use std::io;
@@ -24,6 +25,7 @@ use av_toolbox_gpu::{
     Capabilities,
     FormatSet,
     FrameContext,
+    MetaRecord,
     Offered,
     ResolvedFormats,
     Runtime,
@@ -33,7 +35,8 @@ use av_toolbox_providers::{SceneRequest, SceneScores, Scenes, ScoreRequest};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use self::line::write_line;
+use self::kinds::Kinds;
+use self::line::{write_line, write_record_line};
 use crate::shared::{INPUTS, open_target};
 
 const STAGE: &str = "metadata/ndjson";
@@ -52,6 +55,9 @@ pub(crate) struct NdjsonArgs {
     /// Scene breaks to write each frame's chunk in, as its `chunk`, along with its `scene_score`.
     #[serde(default)]
     pub(crate) scenes: Option<SceneRequest>,
+    /// The kinds of line to write, such as `frame` or `chunk`. Every kind is written when unset.
+    #[serde(default)]
+    pub(crate) kinds: Option<Kinds>,
 }
 
 pub(crate) struct Ndjson;
@@ -125,7 +131,7 @@ impl MetaSinkDefinition for Ndjson {
         let file = open_target(STAGE, args.fd, path)?;
         let filter = KeyFilter::new(args.include, args.exclude);
         let scenes = SceneProvisions::of(&inputs);
-        let sink = NdjsonSink::new(file, filter, scenes);
+        let sink = NdjsonSink::new(file, filter, scenes).with_kinds(args.kinds);
 
         Ok(Box::new(sink))
     }
@@ -164,6 +170,9 @@ pub(crate) struct NdjsonSink<W: Write> {
     output: BufWriter<W>,
     filter: KeyFilter,
     scenes: Option<SceneProvisions>,
+    kinds: Option<Kinds>,
+    last_index: Option<u64>,
+    last_chunk: Option<u64>,
 }
 
 impl<W: Write> NdjsonSink<W> {
@@ -172,7 +181,21 @@ impl<W: Write> NdjsonSink<W> {
             output: BufWriter::new(output),
             filter,
             scenes,
+            kinds: None,
+            last_index: None,
+            last_chunk: None,
         }
+    }
+
+    /// Writes only the lines of the given kinds, or every kind when `None`.
+    pub(crate) fn with_kinds(mut self, kinds: Option<Kinds>) -> Self {
+        self.kinds = kinds;
+
+        self
+    }
+
+    fn keeps(&self, kind: &str) -> bool {
+        self.kinds.as_ref().is_none_or(|kinds| kinds.keeps(kind))
     }
 }
 
@@ -193,10 +216,31 @@ impl<W: Write + Send + 'static> MetaSink for NdjsonSink<W> {
             .scenes
             .and_then(|scenes| scenes.scores.get(meta))
             .and_then(|cut| cut.score);
+        self.last_index = Some(meta.index);
+        self.last_chunk = chunk;
+        if !self.keeps("frame") {
+            return Ok(());
+        }
+
         let written = write_line(&mut self.output, meta, chunk, score, &self.filter);
 
         written.map_err(|error| {
             let position = format!("frame {}", meta.index);
+
+            write_error(&position, &error)
+        })
+    }
+
+    fn consume_record(&mut self, _context: &mut FrameContext, record: &MetaRecord) -> Result<(), StageError> {
+        if !self.keeps(record.kind()) {
+            return Ok(());
+        }
+
+        let chunk = self.scenes.map(|_| self.last_chunk);
+        let written = write_record_line(&mut self.output, record, self.last_index, chunk, &self.filter);
+
+        written.map_err(|error| {
+            let position = format!("the {} record", record.kind());
 
             write_error(&position, &error)
         })
@@ -243,6 +287,7 @@ mod tests {
         StreamType,
         bind_inputs,
         end_meta_sink,
+        record_meta_sink,
         run_meta_sink,
     };
     use av_toolbox_gpu::{
@@ -250,6 +295,7 @@ mod tests {
         HostStreamItem,
         LayerId,
         MaskFormat,
+        MetaRecord,
         MetaValue,
         SampleFormat,
         default_accelerators,
@@ -270,6 +316,16 @@ mod tests {
         }
 
         AnyItem::Host(HostStreamItem::from(frame))
+    }
+
+    fn run_frames<W: Write + Send + 'static>(
+        sink: &mut NdjsonSink<W>,
+        context: &mut FrameContext,
+        items: Vec<AnyItem>,
+    ) {
+        for item in items {
+            run_meta_sink(sink, context, vec![Some(item)]).expect("consumes");
+        }
     }
 
     fn run<W: Write + Send + 'static>(
@@ -295,9 +351,9 @@ mod tests {
         let text = String::from_utf8(buffer.contents()).expect("utf-8");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("{\"index\":0,"));
+        assert!(lines[0].starts_with("{\"kind\":\"frame\",\"index\":0,"));
         assert!(lines[0].ends_with("\"filter.tag\":{\"seen\":true}}"));
-        assert!(lines[1].starts_with("{\"index\":1,"));
+        assert!(lines[1].starts_with("{\"kind\":\"frame\",\"index\":1,"));
     }
 
     #[test]
@@ -508,6 +564,7 @@ mod tests {
             include: None,
             exclude: None,
             scenes: Some(SceneRequest::limited_to_seconds(f64::INFINITY)),
+            kinds: None,
         };
         let format = yuv420(4, 2, SampleFormat::U8, None);
         let offered = StreamFormat::Frames(format);
@@ -546,5 +603,107 @@ mod tests {
 
         assert_eq!(args.include.map(|patterns| patterns.len()), Some(2));
         assert_eq!(args.exclude.map(|patterns| patterns.len()), Some(1));
+    }
+
+    fn a_record() -> MetaRecord {
+        let mut record = MetaRecord::new("chunk");
+        record.attachments_mut().attach("frames", MetaValue::Int(24));
+        record.attachments_mut().stamp("filter.stats");
+
+        record
+    }
+
+    #[test]
+    fn a_record_line_names_the_last_frame_received() {
+        let buffer = SharedBuffer::default();
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None);
+        let mut context = testing_context();
+
+        run_frames(
+            &mut sink,
+            &mut context,
+            vec![frame_item(0, false), frame_item(1, false)],
+        );
+        record_meta_sink(&mut sink, &mut context, &a_record()).expect("records");
+        end_meta_sink(&mut sink, &mut context).expect("ends");
+
+        let lines = written_lines(&buffer);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[2]["kind"], "chunk");
+        assert_eq!(lines[2]["after"], 1);
+        assert!(lines[2].get("chunk").is_none(), "{lines:?}");
+        assert_eq!(lines[2]["filter.stats"]["frames"], 24);
+    }
+
+    #[test]
+    fn a_record_line_carries_the_last_chunk_with_scenes() {
+        let buffer = SharedBuffer::default();
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), Some(scenes_provision()));
+        let mut context = testing_context();
+
+        run_frames(
+            &mut sink,
+            &mut context,
+            vec![chunked_item(0, 0), chunked_item(1, 2)],
+        );
+        record_meta_sink(&mut sink, &mut context, &a_record()).expect("records");
+        end_meta_sink(&mut sink, &mut context).expect("ends");
+
+        let lines = written_lines(&buffer);
+        assert_eq!(lines[2]["chunk"], 2);
+    }
+
+    #[test]
+    fn kinds_keeps_only_the_named_kinds() {
+        let buffer = SharedBuffer::default();
+        let kinds: Kinds = serde_json::from_value(serde_json::json!(["chunk"])).expect("parses");
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), None).with_kinds(Some(kinds));
+        let mut context = testing_context();
+
+        run_frames(
+            &mut sink,
+            &mut context,
+            vec![frame_item(0, false), frame_item(1, false)],
+        );
+        record_meta_sink(&mut sink, &mut context, &a_record()).expect("records");
+        end_meta_sink(&mut sink, &mut context).expect("ends");
+
+        let lines = written_lines(&buffer);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["kind"], "chunk");
+        assert_eq!(lines[0]["after"], 1);
+    }
+
+    #[test]
+    fn an_empty_kinds_list_fails_to_deserialize() {
+        let value = serde_json::json!({ "path": "out.ndjson", "kinds": [] });
+
+        let error = serde_json::from_value::<NdjsonArgs>(value).expect_err("empty");
+
+        assert!(error.to_string().contains("expected a list such as"), "{error}");
+    }
+
+    #[test]
+    fn an_empty_kind_name_fails_to_deserialize() {
+        let value = serde_json::json!({ "path": "out.ndjson", "kinds": [""] });
+
+        let error = serde_json::from_value::<NdjsonArgs>(value).expect_err("empty");
+
+        assert!(error.to_string().contains("expected a name such as"), "{error}");
+    }
+
+    #[test]
+    fn a_record_before_any_frame_has_a_null_chunk_with_scenes() {
+        let buffer = SharedBuffer::default();
+        let mut sink = NdjsonSink::new(buffer.clone(), KeyFilter::default(), Some(scenes_provision()));
+        let mut context = testing_context();
+
+        record_meta_sink(&mut sink, &mut context, &a_record()).expect("records");
+        end_meta_sink(&mut sink, &mut context).expect("ends");
+
+        let lines = written_lines(&buffer);
+        assert!(lines[0]["after"].is_null(), "{lines:?}");
+        assert!(lines[0]["chunk"].is_null(), "{lines:?}");
+        assert!(lines[0].get("chunk").is_some(), "{lines:?}");
     }
 }
