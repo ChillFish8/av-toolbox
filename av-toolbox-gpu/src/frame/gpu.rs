@@ -4,11 +4,11 @@ use std::time::Duration;
 use cubecl::prelude::{ArrayArg, CubePrimitive, Runtime};
 use cubecl::server::Handle;
 
-use crate::frame::attachments::{Attachments, MetaValue};
 use crate::frame::format::{ColourInfo, FrameFormat, MaskChroma, MaskFormat, StreamFormat};
 use crate::frame::layout::{Channel, FrameLayout};
 use crate::frame::provided::{LayerId, Provided, ProvidedValue};
 use crate::memory::FrameBudget;
+use crate::meta::{Attachments, MetaValue};
 
 /// Where a plane's memory goes when its last holder drops it.
 pub(crate) trait Recycle: Send + Sync {

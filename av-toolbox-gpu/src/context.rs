@@ -23,7 +23,7 @@ use crate::frame::{
     StreamItem,
 };
 use crate::memory::{BufferPool, FrameBudget, HostPool, Ring, RingSpec, RuntimeError};
-use crate::{Capabilities, StreamPolicy};
+use crate::{Attachments, Capabilities, MetaRecord, StreamPolicy};
 
 /// One item to put on the device.
 ///
@@ -50,6 +50,7 @@ pub struct FrameContext {
     pool: BufferPool,
     host: HostPool,
     capabilities: Capabilities,
+    records: Vec<MetaRecord>,
 }
 
 impl FrameContext {
@@ -58,7 +59,32 @@ impl FrameContext {
             pool,
             host: HostPool::new(),
             capabilities,
+            records: Vec::new(),
         }
+    }
+
+    /// Starts a record of `kind`, placed in the stream after the frames this call returns.
+    ///
+    /// `kind` must be non-empty, use only lowercase letters, digits and underscores, and not be `frame`.
+    pub fn record(&mut self, kind: &str) -> &mut Attachments {
+        debug_assert!(
+            MetaRecord::check_kind(kind).is_ok(),
+            "a record kind must be well formed"
+        );
+
+        let record = MetaRecord::new(kind);
+        self.records.push(record);
+
+        let started = self.records.last_mut().expect("a record was just pushed");
+
+        started.attachments_mut()
+    }
+
+    /// Hands back every record started since the last call, in the order they were started.
+    ///
+    /// This is for the runtime, which places the records in the stream after the call that made them.
+    pub fn take_records(&mut self) -> Vec<MetaRecord> {
+        std::mem::take(&mut self.records)
     }
 
     /// A context over a fake allocator, for tests that need no device.
@@ -340,6 +366,7 @@ mod tests {
         FrameLayout,
         HostStreamItem,
         LayerId,
+        MetaRecord,
         MetaValue,
         Provided,
         SampleFormat,
@@ -1060,5 +1087,19 @@ mod tests {
 
         assert_eq!(allocator.uploads(), vec![vec![3; 35], vec![8; 12]]);
         assert_eq!(loaded.format(), StreamFormat::Mask(format));
+    }
+
+    #[test]
+    fn a_context_hands_back_its_records_once_in_order() {
+        let mut context = FrameContext::for_testing(Arc::new(CountingAllocator::new(64)), capabilities());
+        context.record("first").attach("value", MetaValue::Int(1));
+        context.record("second");
+
+        let records = context.take_records();
+        let kinds: Vec<&str> = records.iter().map(MetaRecord::kind).collect();
+        let again = context.take_records();
+
+        assert_eq!(kinds, vec!["first", "second"]);
+        assert!(again.is_empty());
     }
 }

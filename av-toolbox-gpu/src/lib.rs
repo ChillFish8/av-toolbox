@@ -27,6 +27,7 @@ mod device;
 mod enumerate;
 mod frame;
 mod memory;
+mod meta;
 mod negotiate;
 mod probe;
 #[cfg(any(feature = "vulkan", feature = "metal"))]
@@ -63,7 +64,6 @@ pub use self::context::{FrameContext, LoadItem};
 pub use self::device::{Device, DeviceError, ParseDeviceError};
 pub use self::enumerate::{BackendDevices, enumerate_devices};
 pub use self::frame::{
-    Attachments,
     Channel,
     ChromaLocation,
     ChunkKeyFn,
@@ -93,7 +93,6 @@ pub use self::frame::{
     MaskChroma,
     MaskFormat,
     Matrix,
-    MetaValue,
     Plane,
     PlaneBuffer,
     Primaries,
@@ -120,6 +119,7 @@ pub use self::memory::{
     Room,
     RuntimeError,
 };
+pub use self::meta::{Attachments, MetaRecord, MetaValue, RecordId};
 pub use self::negotiate::{FormatSet, Offered, OutputFormats, ResolvedFormats, StreamTemplate};
 pub use self::side::{AnyItem, DeviceSide, HostSide, Side};
 pub use self::sniff::{auto_select_accelerator, sniff_best_accelerator};

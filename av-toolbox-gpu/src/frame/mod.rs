@@ -7,7 +7,6 @@
 //!
 //! Planes are flat, with one sample per pixel per row and no padding between rows.
 
-mod attachments;
 mod format;
 pub(crate) mod gpu;
 mod host;
@@ -19,7 +18,6 @@ mod sample;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use self::attachments::{Attachments, MetaValue};
 pub use self::format::{
     ChromaLocation,
     ColourInfo,
