@@ -1,4 +1,4 @@
-use av_toolbox_graph::{Routing, Spanned};
+use av_toolbox_graph::{DiagnosticCode, Routing, Spanned};
 use serde_json::json;
 
 use crate::engine::tests::harness::share_a_region;
@@ -10,6 +10,7 @@ use crate::engine::tests::{
     build_engine,
     collecting_spec,
     engine_from,
+    engine_result_from,
     planned_graph,
     planned_width,
     routing_of,
@@ -183,4 +184,65 @@ fn a_failing_artefact_sink_fails_the_run_naming_it() {
     let result = run_result_with_watchdog(engine, property);
 
     assert!(matches!(result, Err(RunError::ArtefactSink { ref sink, .. }) if sink == "sink.files"));
+}
+
+#[test]
+fn a_stage_refusing_what_is_wanted_fails_the_build_once_naming_it() {
+    let specs = vec![
+        source_spec("input", &[0, 0, 1, 1], 0),
+        artefacting_spec("count", "input", 2, true, "refusing"),
+        sink_spec("out", "count"),
+        collecting_spec("files", &["filter.count.frames"]),
+    ];
+    let (graph, solved) = planned_graph(&specs);
+
+    assert_eq!(planned_width(&graph, "count"), 2);
+
+    let built = engine_result_from(&graph, &solved, Settings::default());
+    let Err(diagnostics) = built else {
+        panic!("a refusing stage should fail the build");
+    };
+    let found = diagnostics.into_inner();
+
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].code(), DiagnosticCode::StageBuildFailed);
+    assert_eq!(found[0].path(), "filter.count");
+    assert!(
+        found[0].to_string().contains("cannot produce frames"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_discarding_engine_writes_nothing() {
+    let property = "a_discarding_engine_writes_nothing";
+    let specs = vec![
+        source_spec("input", &[0, 0, 0], 0),
+        artefacting_spec("count", "input", 1, false, "counting"),
+        sink_spec("out", "count"),
+        collecting_spec("files", &["filter.count.frames"]),
+    ];
+
+    let engine = build_engine(&specs, Settings::default()).discarding_artefacts();
+    let report = run_with_watchdog(engine, property);
+
+    assert_eq!(report.artefacts, 0);
+    assert!(collected().is_empty());
+    assert_every_thread_exited(property);
+}
+
+#[test]
+fn a_discarding_engine_still_fails_a_broken_merge() {
+    let property = "a_discarding_engine_still_fails_a_broken_merge";
+    let specs = vec![
+        source_spec("input", &[0, 0], 0),
+        artefacting_spec("count", "input", 1, false, "broken"),
+        sink_spec("out", "count"),
+        collecting_spec("files", &["filter.count.broken"]),
+    ];
+
+    let engine = build_engine(&specs, Settings::default()).discarding_artefacts();
+    let result = run_result_with_watchdog(engine, property);
+
+    assert!(matches!(result, Err(RunError::Stage { .. })));
 }

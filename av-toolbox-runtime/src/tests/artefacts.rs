@@ -47,7 +47,7 @@ fn a_node_is_told_what_is_wanted_of_it() {
     let collector = ArtefactCollector::new(&graph);
     let mut stage = instance("counting");
 
-    collector.announce(count, &mut stage);
+    collector.announce(count, &mut stage).expect("accepts");
 
     assert_eq!(*WANTED.lock().expect("unpoisoned"), vec![true]);
 }
@@ -58,7 +58,7 @@ fn a_node_wanted_for_nothing_is_still_told() {
     let collector = ArtefactCollector::new(&graph);
     let mut stage = instance("counting");
 
-    collector.announce(count, &mut stage);
+    collector.announce(count, &mut stage).expect("accepts");
 
     assert_eq!(*WANTED.lock().expect("unpoisoned"), vec![false]);
 }
@@ -111,17 +111,19 @@ fn an_undeclared_artefact_fails_naming_its_node() {
 }
 
 #[test]
-fn data_of_the_wrong_kind_fails_naming_its_node() {
-    let (graph, count) = graph_with("wrong_kind", &["filter.count.frames"]);
+fn a_piece_of_the_wrong_kind_fails_at_the_merge_naming_its_node() {
+    let (graph, count) = graph_with("wrong_kind", &["filter.count.bytes"]);
     let collector = ArtefactCollector::new(&graph);
     let mut stage = instance("wrong_kind");
     let mut context = testing_context();
 
-    let error = collector
+    collector
         .take(count, None, &mut stage, &mut context)
-        .expect_err("refused");
+        .expect("takes");
+    let error = collector.merge().expect_err("refused");
 
     assert!(matches!(error, RunError::Stage { node, .. } if node == count));
+    assert!(error.to_string().contains("bytes"));
 }
 
 #[test]
@@ -155,10 +157,10 @@ fn a_discarded_piece_is_never_merged() {
 }
 
 #[test]
-fn a_discarded_piece_of_the_wrong_kind_still_fails_naming_its_node() {
-    let (graph, count) = graph_with("wrong_kind", &["filter.count.frames"]);
+fn a_discarded_undeclared_artefact_still_fails_naming_its_node() {
+    let (graph, count) = graph_with("undeclared", &["filter.count.frames"]);
     let collector = ArtefactCollector::new(&graph);
-    let mut stage = instance("wrong_kind");
+    let mut stage = instance("undeclared");
     let mut context = testing_context();
 
     let error = collector
@@ -166,4 +168,56 @@ fn a_discarded_piece_of_the_wrong_kind_still_fails_naming_its_node() {
         .expect_err("refused");
 
     assert!(matches!(error, RunError::Stage { node, .. } if node == count));
+}
+
+#[test]
+fn a_structured_piece_merges_into_an_opaque_artefact() {
+    let (graph, count) = graph_with("tabled", &["filter.count.table"]);
+    let collector = ArtefactCollector::new(&graph);
+    let mut stage = instance("tabled");
+    let mut context = testing_context();
+
+    collector
+        .take(count, Some(0), &mut stage, &mut context)
+        .expect("takes");
+    let merged = collector.merge().expect("merges");
+    let artefact = &merged[&(count, "table")];
+
+    assert_eq!(artefact.data, ArtefactData::Opaque(b"0\n".to_vec()));
+}
+
+#[test]
+fn a_merge_of_the_wrong_kind_fails_naming_its_node() {
+    let (graph, count) = graph_with("mismerged", &["filter.count.mismerged"]);
+    let collector = ArtefactCollector::new(&graph);
+    let mut stage = instance("mismerged");
+    let mut context = testing_context();
+
+    collector
+        .take(count, None, &mut stage, &mut context)
+        .expect("takes");
+    let error = collector.merge().expect_err("refused");
+
+    assert!(matches!(error, RunError::Stage { node, .. } if node == count));
+    assert!(error.to_string().contains("mismerged"));
+}
+
+#[test]
+fn a_refusal_is_handed_back() {
+    let (graph, count) = graph_with("refusing", &["filter.count.frames"]);
+    let collector = ArtefactCollector::new(&graph);
+    let mut stage = instance("refusing");
+
+    let error = collector.announce(count, &mut stage).expect_err("refused");
+
+    assert!(error.to_string().contains("cannot produce frames"));
+}
+
+#[test]
+fn a_stage_wanted_for_nothing_it_refuses_accepts() {
+    let (graph, count) = graph_with("refusing", &["filter.count.broken"]);
+    let collector = ArtefactCollector::new(&graph);
+    let mut stage = instance("refusing");
+
+    collector.announce(count, &mut stage).expect("accepts");
 }

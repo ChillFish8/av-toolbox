@@ -90,8 +90,10 @@ pub trait StageInstance: Send + 'static {
 
     /// Called once after the stage is built and before its first stream, with the artefacts some sink will write.
     ///
-    /// A stage skips the work behind any artefact not named here.
-    fn wants_artefacts(&mut self, _wanted: &WantedArtefacts) {}
+    /// A stage skips the work behind any artefact not named here, and refuses when it cannot produce one that is.
+    fn wants_artefacts(&mut self, _wanted: &WantedArtefacts) -> Result<(), StageError> {
+        Ok(())
+    }
 
     /// Hands over the artefacts built since the last call.
     ///
@@ -272,7 +274,8 @@ pub trait StageDefinition: 'static {
     /// Merges the pieces of the artefact `name` into one, given in chunk order.
     ///
     /// A stage run as more than one instance, or given one chunk at a time, hands over a piece per instance and
-    /// chunk, as does a stage sharing a region routed by chunk. The default accepts a lone piece and refuses more.
+    /// chunk, as does a stage sharing a region routed by chunk. The result must hold the kind of data the artefact
+    /// is declared with. The default accepts a lone piece and refuses more.
     fn merge_artefact(name: &'static str, pieces: Vec<ArtefactPiece>) -> Result<ArtefactData, StageError> {
         merge_single(name, pieces)
     }

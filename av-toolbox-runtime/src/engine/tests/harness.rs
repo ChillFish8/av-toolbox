@@ -276,6 +276,17 @@ pub(crate) fn build_engine(specs: &[StageSpec], settings: Settings) -> Engine {
 
 /// The same, for a test that needs the graph itself as well, to name the node it asserts on.
 pub(crate) fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, settings: Settings) -> Engine {
+    let built = engine_result_from(graph, solved, settings);
+
+    built.expect("should build the engine")
+}
+
+/// The same as [engine_from], handing back whatever building answered with, for a test about a build that fails.
+pub(crate) fn engine_result_from(
+    graph: &CompiledGraph,
+    solved: &SolvedFormats,
+    settings: Settings,
+) -> Result<Engine, Diagnostics> {
     let registry = registry();
     let held = graph
         .held_frames(&registry, solved)
@@ -284,16 +295,16 @@ pub(crate) fn engine_from(graph: &CompiledGraph, solved: &SolvedFormats, setting
         .build_artefact_sinks(&registry)
         .expect("every fixture artefact sink builds");
 
-    Engine::build_with(
+    let engine = Engine::build_with(
         graph,
         solved,
         &held,
         settings,
         |region, worker| instantiate(graph, region, worker),
         testing_context,
-    )
-    .expect("should build the engine")
-    .writing_artefacts_to(writers)
+    )?;
+
+    Ok(engine.writing_artefacts_to(writers))
 }
 
 /// The frames each node declares it holds, read the way [engine_from] reads them.

@@ -59,12 +59,18 @@ pub(crate) enum ArtefactingMode {
     Counting,
     /// An artefact it never declared.
     Undeclared,
-    /// `frames` as opaque bytes, though it is declared structured.
+    /// `bytes` as structured data, though it is declared opaque.
     WrongKind,
     /// A `broken` piece, whose merge always fails.
     Broken,
     /// A `bytes` piece of opaque data.
     Opaque,
+    /// A `frames` piece, refusing in `wants_artefacts` whenever `frames` is wanted.
+    Refusing,
+    /// A structured `table` piece, merged into opaque text.
+    Tabled,
+    /// A structured `mismerged` piece, whose merge answers with opaque data.
+    Mismerged,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -94,16 +100,25 @@ impl ArtefactingInstance {
 }
 
 impl StageInstance for ArtefactingInstance {
-    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
-        let mut seen = WANTED.lock().expect("no test panics holding WANTED");
-        seen.push(wanted.contains("frames"));
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) -> Result<(), StageError> {
+        {
+            let mut seen = WANTED.lock().expect("no test panics holding WANTED");
+            seen.push(wanted.contains("frames"));
+        }
+
+        let refuses = matches!(self.mode, ArtefactingMode::Refusing) && wanted.contains("frames");
+        if refuses {
+            return Err(StageError::msg("the refusing stage cannot produce frames"));
+        }
+
+        Ok(())
     }
 
     fn take_artefacts(&mut self, _context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
         let frames = std::mem::take(&mut self.frames);
 
         let artefact = match self.mode {
-            ArtefactingMode::Counting => Artefact {
+            ArtefactingMode::Counting | ArtefactingMode::Refusing => Artefact {
                 name: "frames",
                 data: ArtefactData::Structured(json!(frames)),
             },
@@ -112,8 +127,8 @@ impl StageInstance for ArtefactingInstance {
                 data: ArtefactData::Structured(json!(frames)),
             },
             ArtefactingMode::WrongKind => Artefact {
-                name: "frames",
-                data: ArtefactData::Opaque(vec![1, 2, 3]),
+                name: "bytes",
+                data: ArtefactData::Structured(json!(frames)),
             },
             ArtefactingMode::Broken => Artefact {
                 name: "broken",
@@ -122,6 +137,14 @@ impl StageInstance for ArtefactingInstance {
             ArtefactingMode::Opaque => Artefact {
                 name: "bytes",
                 data: ArtefactData::Opaque(vec![1, 2, 3]),
+            },
+            ArtefactingMode::Tabled => Artefact {
+                name: "table",
+                data: ArtefactData::Structured(json!(frames)),
+            },
+            ArtefactingMode::Mismerged => Artefact {
+                name: "mismerged",
+                data: ArtefactData::Structured(json!(frames)),
             },
         };
 
@@ -170,11 +193,14 @@ impl StageDefinition for Artefacting {
             ArtefactDecl::structured("frames"),
             ArtefactDecl::structured("broken"),
             ArtefactDecl::opaque("bytes", "bin"),
+            ArtefactDecl::opaque("table", "txt"),
+            ArtefactDecl::structured("mismerged"),
         ];
         DECLARED
     }
 
-    /// Lists each chunk's count of `frames` as `[chunk, frames]`, fails for `broken`, and keeps a lone `bytes`.
+    /// Lists each chunk's count of `frames` as `[chunk, frames]`, fails for `broken`, keeps a lone `bytes`, writes
+    /// `table` as one count per line and answers `mismerged` with opaque data.
     fn merge_artefact(name: &'static str, pieces: Vec<ArtefactPiece>) -> Result<ArtefactData, StageError> {
         if name == "broken" {
             return Err(StageError::msg("the broken artefact never merges"));
@@ -182,6 +208,15 @@ impl StageDefinition for Artefacting {
 
         if name == "bytes" {
             return merge_single(name, pieces);
+        }
+
+        if name == "table" {
+            let text = tabled_text(pieces);
+            return Ok(ArtefactData::Opaque(text.into_bytes()));
+        }
+
+        if name == "mismerged" {
+            return Ok(ArtefactData::Opaque(vec![0]));
         }
 
         let listed: Vec<serde_json::Value> = pieces.into_iter().map(listed_piece).collect();
@@ -202,6 +237,20 @@ fn listed_piece(piece: ArtefactPiece) -> serde_json::Value {
     };
 
     json!([piece.chunk, frames])
+}
+
+fn tabled_text(pieces: Vec<ArtefactPiece>) -> String {
+    let mut text = String::new();
+
+    for piece in pieces {
+        let ArtefactData::Structured(frames) = piece.data else {
+            continue;
+        };
+
+        text.push_str(&format!("{frames}\n"));
+    }
+
+    text
 }
 
 impl FilterDefinition for Artefacting {

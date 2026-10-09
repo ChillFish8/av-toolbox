@@ -71,17 +71,18 @@ impl ArtefactCollector {
         }
     }
 
-    /// Tells `stage` which of its artefacts some sink will write.
-    pub(crate) fn announce(&self, node: NodeId, stage: &mut StageBox) {
+    /// Tells `stage` which of its artefacts some sink will write, handing back its refusal.
+    pub(crate) fn announce(&self, node: NodeId, stage: &mut StageBox) -> Result<(), StageError> {
         let Some(instance) = stage.instance_mut() else {
-            return;
+            return Ok(());
         };
 
         let wanted = match self.nodes.get(&node) {
             Some(entry) => entry.wanted.clone(),
             None => WantedArtefacts::default(),
         };
-        instance.wants_artefacts(&wanted);
+
+        instance.wants_artefacts(&wanted)
     }
 
     /// Takes whatever `stage` built since it last handed artefacts over, filed under `chunk`.
@@ -128,7 +129,7 @@ impl ArtefactCollector {
 
     /// Takes whatever `stage` built since it last handed artefacts over, and keeps none of it.
     ///
-    /// The artefacts are still checked against what the node declared, so a bad one fails the run.
+    /// The artefacts' names are still checked against what the node declared, so a bad one fails the run.
     pub(crate) fn discard(
         &self,
         node: NodeId,
@@ -155,7 +156,7 @@ impl ArtefactCollector {
 
         let entry = self.nodes.get(&node);
         for artefact in &artefacts {
-            check_declared(node, entry, artefact)?;
+            check_named(node, entry, artefact)?;
         }
 
         Ok(artefacts)
@@ -188,6 +189,9 @@ impl ArtefactCollector {
                 .expect("only declared artefacts are collected");
             let combined = entry.declared.merge(name, pieces);
             let data = combined.map_err(|source| RunError::Stage { node, source })?;
+            if !data.is_kind(declared.kind) {
+                return Err(merged_wrong_kind(node, name));
+            }
 
             let artefact = MergedArtefact {
                 stage: entry.path.clone(),
@@ -202,24 +206,15 @@ impl ArtefactCollector {
     }
 }
 
-/// Fails the run when `artefact` is not one `node` declared, or holds data of another kind.
-fn check_declared(node: NodeId, entry: Option<&NodeArtefacts>, artefact: &Artefact) -> Result<(), RunError> {
-    let declared = entry.and_then(|entry| entry.declared.find(artefact.name));
-    let Some(declared) = declared else {
-        let message = format!(
-            "the stage handed over an artefact named {} that it never declared",
-            artefact.name
-        );
-        let source = StageError::msg(message);
-        return Err(RunError::Stage { node, source });
-    };
-
-    if artefact.data.is_kind(declared.kind) {
+/// Fails the run when `artefact` is not one `node` declared.
+fn check_named(node: NodeId, entry: Option<&NodeArtefacts>, artefact: &Artefact) -> Result<(), RunError> {
+    let declared = entry.is_some_and(|entry| entry.declared.find(artefact.name).is_some());
+    if declared {
         return Ok(());
     }
 
     let message = format!(
-        "the stage handed over artefact {} holding another kind of data than it declared",
+        "the stage handed over an artefact named {} that it never declared",
         artefact.name
     );
     let source = StageError::msg(message);
@@ -227,18 +222,22 @@ fn check_declared(node: NodeId, entry: Option<&NodeArtefacts>, artefact: &Artefa
     Err(RunError::Stage { node, source })
 }
 
+fn merged_wrong_kind(node: NodeId, name: &str) -> RunError {
+    let message = format!("the stage merged artefact {name} into another kind of data than it declared");
+    let source = StageError::msg(message);
+
+    RunError::Stage { node, source }
+}
+
 /// Merges what was collected and hands each artefact sink what it selected, answering with the files written.
 ///
-/// `writers` lines up with `sinks`. A sink whose selected artefacts were never handed over is given none.
+/// `writers` lines up with `sinks`, or is empty when the run discards its artefacts. Merging happens either way, so
+/// a merge that fails still fails the run. A sink whose selected artefacts were never handed over is given none.
 pub(crate) fn write_artefacts(
     collector: &ArtefactCollector,
     sinks: &[ArtefactSinkNode],
     writers: Vec<Box<dyn ArtefactSink>>,
 ) -> Result<usize, RunError> {
-    if writers.is_empty() {
-        return Ok(0);
-    }
-
     let merged = collector.merge()?;
     let mut written = 0;
 

@@ -24,6 +24,8 @@ use av_toolbox_gpu::{Backend, FrameBudget, FrameContext};
 use av_toolbox_graph::{
     ArtefactSinkNode,
     CompiledGraph,
+    Diagnostic,
+    DiagnosticCode,
     Diagnostics,
     NodeId,
     Region,
@@ -219,10 +221,18 @@ impl Engine {
 
             let width = if region.has_disperse() { region.width() } else { 1 };
             let mut workers = Vec::with_capacity(width);
+            let mut refused = false;
 
             for worker in 0..width {
                 match instantiate(region, worker) {
-                    Ok(nodes) => workers.push(nodes),
+                    Ok(mut nodes) => {
+                        // Every worker refuses alike, so the first refusal is reported alone.
+                        if !refused {
+                            refused = !announce_wanted(graph, &artefacts, &mut nodes, &mut diagnostics);
+                        }
+
+                        workers.push(nodes);
+                    },
                     Err(region_diagnostics) => {
                         for diagnostic in region_diagnostics.into_inner() {
                             diagnostics.push(diagnostic);
@@ -482,6 +492,12 @@ impl Engine {
         self
     }
 
+    /// The same engine, collecting and merging artefacts as usual but writing none of them.
+    pub fn discarding_artefacts(mut self) -> Self {
+        self.artefact_writers = Vec::new();
+        self
+    }
+
     /// The signal that stops this run, wherever its threads have got to.
     ///
     /// Stopping is not an error. The run winds down, every thread joins, and
@@ -588,4 +604,32 @@ impl Engine {
             timings,
         })
     }
+}
+
+/// Tells each of a worker's nodes what is wanted of it, reporting every node that refuses.
+///
+/// Answers whether every node accepted.
+fn announce_wanted(
+    graph: &CompiledGraph,
+    artefacts: &ArtefactCollector,
+    nodes: &mut [(NodeId, StageBox)],
+    diagnostics: &mut Diagnostics,
+) -> bool {
+    let mut accepted = true;
+
+    for (id, stage) in nodes.iter_mut() {
+        let Err(error) = artefacts.announce(*id, stage) else {
+            continue;
+        };
+
+        let node = graph.node(*id);
+        let path = node.path();
+        let message = format!("{path} cannot produce the artefacts wanted of it: {error}");
+        let diagnostic = Diagnostic::error(DiagnosticCode::StageBuildFailed, path, node.span(), message);
+
+        diagnostics.push(diagnostic);
+        accepted = false;
+    }
+
+    accepted
 }

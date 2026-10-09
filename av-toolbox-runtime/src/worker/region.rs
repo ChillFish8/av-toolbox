@@ -161,12 +161,8 @@ impl RegionRunner {
         self
     }
 
-    /// The same runner, telling its nodes what is wanted of them and handing what they build to `artefacts`.
+    /// The same runner, handing what its nodes build to `artefacts`.
     pub(crate) fn collecting(mut self, artefacts: Arc<ArtefactCollector>) -> Self {
-        for (id, stage) in &mut self.nodes {
-            artefacts.announce(*id, stage);
-        }
-
         self.artefacts = Some(artefacts);
         self
     }

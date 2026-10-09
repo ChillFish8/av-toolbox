@@ -70,6 +70,7 @@ impl ArtefactDecl {
 
 /// The part of an artefact one instance produced for one chunk.
 ///
+/// A piece holds whatever its stage's merge reads, which need not be the kind the artefact is declared with.
 /// `chunk` is `None` for a stage that is not given one chunk at a time in a region routed by frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArtefactPiece {

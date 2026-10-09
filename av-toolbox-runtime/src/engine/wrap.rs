@@ -36,8 +36,8 @@ impl<S: Side> StageInstance for WatchedSource<S> {
         self.inner.start_of_stream(context)
     }
 
-    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
-        self.inner.wants_artefacts(wanted);
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) -> Result<(), StageError> {
+        self.inner.wants_artefacts(wanted)
     }
 
     fn take_artefacts(&mut self, context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
@@ -134,8 +134,8 @@ impl<S: Side> StageInstance for CountingSink<S> {
         self.inner.start_of_stream(context)
     }
 
-    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
-        self.inner.wants_artefacts(wanted);
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) -> Result<(), StageError> {
+        self.inner.wants_artefacts(wanted)
     }
 
     fn take_artefacts(&mut self, context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
@@ -182,8 +182,8 @@ impl StageInstance for CountingMetaSink {
         self.inner.start_of_stream(context)
     }
 
-    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
-        self.inner.wants_artefacts(wanted);
+    fn wants_artefacts(&mut self, wanted: &WantedArtefacts) -> Result<(), StageError> {
+        self.inner.wants_artefacts(wanted)
     }
 
     fn take_artefacts(&mut self, context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
@@ -322,9 +322,11 @@ mod tests {
     }
 
     impl StageInstance for Handing {
-        fn wants_artefacts(&mut self, wanted: &WantedArtefacts) {
+        fn wants_artefacts(&mut self, wanted: &WantedArtefacts) -> Result<(), StageError> {
             let mut seen = self.wanted.lock().expect("unpoisoned");
             *seen = Some(wanted.contains("frames"));
+
+            Ok(())
         }
 
         fn take_artefacts(&mut self, _context: &mut FrameContext) -> Result<Vec<Artefact>, StageError> {
@@ -385,7 +387,7 @@ mod tests {
         let mut context = testing_context();
 
         let wanting = WantedArtefacts::new(vec!["frames"]);
-        instance.wants_artefacts(&wanting);
+        instance.wants_artefacts(&wanting).expect("accepts");
         let taken = instance.take_artefacts(&mut context).expect("takes");
 
         assert_eq!(*wanted.lock().expect("unpoisoned"), Some(true));

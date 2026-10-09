@@ -20,6 +20,7 @@ pub(crate) use self::harness::{
     clear_matched,
     clear_recorded,
     engine_from,
+    engine_result_from,
     matched,
     planned_graph,
     planned_width,
