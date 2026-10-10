@@ -173,7 +173,7 @@ def build(identifiers: list[str], repository: Path, check: bool) -> int:
 
     chosen = [dependency for dependency in available if not identifiers or dependency.identifier in identifiers]
     target = repository / "target" / "dependencies"
-    lock_path = dependencies_root / "dependencies.lock"
+    lock_path = repository / "av-toolbox-models" / "dependencies.lock"
     builtin_root = repository / "av-toolbox-models" / "builtin"
     builtin_files: dict[str, bytes] = {}
 
@@ -211,8 +211,8 @@ def build(identifiers: list[str], repository: Path, check: bool) -> int:
     if check:
         return report_differences(lock_path, rendered, builtin_root, builtin_files)
 
-    lock_path.write_text(rendered)
     builtin_root.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(rendered)
 
     for name, content in builtin_files.items():
         builtin_path = builtin_root / name

@@ -8,12 +8,12 @@ use crate::{DevicePlane, Dispatch, reflect};
 /// The widest radius a blur reaches, in samples either side of its centre.
 pub const MAX_RADIUS: u32 = 4096;
 
-/// The widest deviation a blur takes, whose radius is exactly [MAX_RADIUS](crate::blur::MAX_RADIUS).
+/// The widest deviation a blur takes, whose radius is exactly [MAX_RADIUS].
 pub const MAX_SIGMA: f32 = MAX_RADIUS as f32 / 4.0;
 
 /// The radius a blur of `sigma` reaches, four standard deviations out.
 ///
-/// `sigma` has to be finite and at most [MAX_SIGMA](crate::blur::MAX_SIGMA), so the radius fits
+/// `sigma` has to be finite and at most [MAX_SIGMA], so the radius fits
 /// the kernels' arithmetic.
 pub fn radius_for(sigma: f32) -> u32 {
     let reach = (4.0 * sigma).ceil() as u32;

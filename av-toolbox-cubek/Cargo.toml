@@ -3,6 +3,7 @@ name = "av-toolbox-cubek"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
 description = "Shared CubeCL kernels that can be used within av-toolbox video filters."
 
 [dependencies]
@@ -17,7 +18,7 @@ thiserror = { workspace = true }
 [dev-dependencies]
 av-toolbox-cubek = { path = ".", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
-av-toolbox-models = { path = "../av-toolbox-models" }
+av-toolbox-models = { workspace = true }
 
 [features]
 vulkan = ["cubecl/vulkan", "av-toolbox-gpu/vulkan"]
@@ -27,3 +28,7 @@ rocm = ["cubecl/hip", "av-toolbox-gpu/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
 # Exposes CPU references of the kernels for tests in this crate and the crates above it.
 test-support = []
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

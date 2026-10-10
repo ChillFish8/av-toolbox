@@ -3,13 +3,15 @@ name = "av-toolbox-providers"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "Providers that supply what av-toolbox stages demand."
 
 [dependencies]
 schemars = { workspace = true }
 serde = { workspace = true }
 v_frame = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-core = { workspace = true }
 av-toolbox-gpu = { workspace = true }
 av-scenechange = { workspace = true }
 
@@ -18,9 +20,9 @@ serde_json = { workspace = true }
 y4m = { workspace = true }
 
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
-av-toolbox-graph = { path = "../av-toolbox-graph" }
-av-toolbox-runtime = { path = "../av-toolbox-runtime" }
-av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
+av-toolbox-graph = { workspace = true }
+av-toolbox-runtime = { workspace = true }
+av-toolbox-sources = { workspace = true }
 
 [features]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan"]
@@ -28,3 +30,7 @@ metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal"]
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda"]
 rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

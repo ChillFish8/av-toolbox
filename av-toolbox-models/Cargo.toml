@@ -3,6 +3,7 @@ name = "av-toolbox-models"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
 description = "Finds, installs and prunes the weight files av-toolbox stages load."
 
 [dependencies]

@@ -282,7 +282,7 @@ impl<D: Dispatch> Disperse<D> {
     ///
     /// A second call is a no-op, since the first already closed everything. Whatever the stream
     /// ended in the middle of, a partially gathered bundle or a complete one still waiting for
-    /// `place`, is reported as [Dropped] rather than silently discarded. Under chunk routing, a
+    /// `place`, is reported as `Dropped` rather than silently discarded. Under chunk routing, a
     /// chunk whose close was already sent when a held bundle arrived is not closed a second time.
     ///
     /// Frame routing has no chunk in flight to close, since every bundle already closed its own

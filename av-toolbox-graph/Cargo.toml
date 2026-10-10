@@ -3,19 +3,21 @@ name = "av-toolbox-graph"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "Compiles av-toolbox stage definitions into a pipeline graph."
 
 [dependencies]
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-core = { workspace = true }
 av-toolbox-gpu = { workspace = true }
 
 [dev-dependencies]
 schemars = { workspace = true }
 serde = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core", features = ["test-support"] }
+av-toolbox-core = { workspace = true, features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 
 [features]
@@ -24,3 +26,7 @@ metal = ["av-toolbox-gpu/metal"]
 cuda = ["av-toolbox-gpu/cuda"]
 rocm = ["av-toolbox-gpu/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

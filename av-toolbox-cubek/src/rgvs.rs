@@ -89,7 +89,7 @@ pub enum GrainBorder {
     /// Keeps the first and last row and column unchanged, as rgvs does.
     Copy,
     /// Filters the first and last row and column too, reading past the edge through
-    /// [reflect](crate::reflect).
+    /// [reflect](fn@crate::reflect).
     Reflect,
 }
 
@@ -433,10 +433,10 @@ pub fn repair<R: Runtime>(
 
 /// Runs RemoveGrain's `mode` on `planes.input` into `planes.output`.
 ///
-/// With [GrainBorder::Copy](crate::rgvs::GrainBorder::Copy), the first and last row and column of
+/// With [GrainBorder::Copy], the first and last row and column of
 /// the plane are copied unchanged, as rgvs does. With
-/// [GrainBorder::Reflect](crate::rgvs::GrainBorder::Reflect), they are filtered too, reading past
-/// the edge through [reflect](crate::reflect).
+/// [GrainBorder::Reflect], they are filtered too, reading past
+/// the edge through [reflect](fn@crate::reflect).
 pub fn remove_grain<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,

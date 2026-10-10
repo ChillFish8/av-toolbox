@@ -3,21 +3,23 @@ name = "av-toolbox-pipeline"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "Builds and runs av-toolbox pipelines."
 
 [dependencies]
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
-av-toolbox-filters = { path = "../av-toolbox-filters" }
+av-toolbox-core = { workspace = true }
+av-toolbox-filters = { workspace = true }
 av-toolbox-gpu = { workspace = true }
-av-toolbox-graph = { path = "../av-toolbox-graph" }
-av-toolbox-masks = { path = "../av-toolbox-masks" }
-av-toolbox-providers = { path = "../av-toolbox-providers" }
-av-toolbox-runtime = { path = "../av-toolbox-runtime" }
-av-toolbox-sinks = { path = "../av-toolbox-sinks" }
-av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
+av-toolbox-graph = { workspace = true }
+av-toolbox-masks = { workspace = true }
+av-toolbox-providers = { workspace = true }
+av-toolbox-runtime = { workspace = true }
+av-toolbox-sinks = { workspace = true }
+av-toolbox-sources = { workspace = true }
 
 [dev-dependencies]
 schemars = { workspace = true }
@@ -25,9 +27,9 @@ serde = { workspace = true }
 tempfile = { workspace = true }
 y4m = { workspace = true }
 
-av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
+av-toolbox-cubek = { workspace = true, features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
-av-toolbox-models = { path = "../av-toolbox-models" }
+av-toolbox-models = { workspace = true }
 
 [features]
 default = ["ffms2"]
@@ -78,3 +80,8 @@ rocm = [
     "av-toolbox-providers/rocm",
 ]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

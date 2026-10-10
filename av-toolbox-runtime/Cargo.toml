@@ -3,21 +3,22 @@ name = "av-toolbox-runtime"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
 description = "The av-toolbox filter graph runtime."
 
 [dependencies]
 thiserror = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-core = { workspace = true }
 av-toolbox-gpu = { workspace = true }
-av-toolbox-graph = { path = "../av-toolbox-graph" }
+av-toolbox-graph = { workspace = true }
 
 [dev-dependencies]
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core", features = ["test-support"] }
+av-toolbox-core = { workspace = true, features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 
 [features]
@@ -26,3 +27,7 @@ metal = ["av-toolbox-gpu/metal", "av-toolbox-graph/metal"]
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-graph/cuda"]
 rocm = ["av-toolbox-gpu/rocm", "av-toolbox-graph/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

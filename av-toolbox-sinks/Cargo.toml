@@ -3,24 +3,26 @@ name = "av-toolbox-sinks"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "Sinks that write the finished stream and its artefacts out of av-toolbox pipelines."
 
 [dependencies]
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-core = { workspace = true }
 av-toolbox-gpu = { workspace = true }
-av-toolbox-providers = { path = "../av-toolbox-providers" }
+av-toolbox-providers = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 y4m = { workspace = true }
 
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
-av-toolbox-graph = { path = "../av-toolbox-graph" }
-av-toolbox-runtime = { path = "../av-toolbox-runtime" }
-av-toolbox-sources = { path = "../av-toolbox-sources", default-features = false }
+av-toolbox-graph = { workspace = true }
+av-toolbox-runtime = { workspace = true }
+av-toolbox-sources = { workspace = true }
 
 [features]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-providers/vulkan"]
@@ -28,3 +30,7 @@ metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-providers/
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda", "av-toolbox-providers/cuda"]
 rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-providers/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

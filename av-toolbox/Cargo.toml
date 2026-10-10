@@ -3,6 +3,8 @@ name = "av-toolbox"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "A command line tool for building and running GPU video processing pipelines."
 
 [dependencies]
 bytesize = { workspace = true }
@@ -23,12 +25,12 @@ ureq = { workspace = true }
 
 toml = { workspace = true, features = ["serde", "display"] }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
+av-toolbox-core = { workspace = true }
 av-toolbox-gpu = { workspace = true }
-av-toolbox-graph = { path = "../av-toolbox-graph" }
-av-toolbox-models = { path = "../av-toolbox-models" }
-av-toolbox-pipeline = { path = "../av-toolbox-pipeline", default-features = false }
-av-toolbox-runtime = { path = "../av-toolbox-runtime" }
+av-toolbox-graph = { workspace = true }
+av-toolbox-models = { workspace = true }
+av-toolbox-pipeline = { workspace = true }
+av-toolbox-runtime = { workspace = true }
 
 [dev-dependencies]
 image = { workspace = true }
@@ -48,3 +50,8 @@ metal = ["av-toolbox-pipeline/metal", "av-toolbox-gpu/metal"]
 cuda = ["av-toolbox-pipeline/cuda", "av-toolbox-gpu/cuda"]
 rocm = ["av-toolbox-pipeline/rocm", "av-toolbox-gpu/rocm"]
 gpu-tests = ["av-toolbox-pipeline/gpu-tests"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

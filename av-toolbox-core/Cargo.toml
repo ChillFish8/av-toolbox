@@ -3,6 +3,8 @@ name = "av-toolbox-core"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "Core interfaces for building av-toolbox video processing pipelines."
 
 [dependencies]
 cubecl = { workspace = true }
@@ -12,11 +14,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
-av-toolbox-cubek = { path = "../av-toolbox-cubek" }
+av-toolbox-cubek = { workspace = true }
 av-toolbox-gpu = { workspace = true }
 
 [dev-dependencies]
-av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
+av-toolbox-cubek = { workspace = true, features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 
 [features]
@@ -27,3 +29,7 @@ rocm = ["av-toolbox-cubek/rocm", "av-toolbox-gpu/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
 # Exposes the demand kinds other crates' test fixtures use.
 test-support = []
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

@@ -3,6 +3,7 @@ name = "av-toolbox-masks"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
 description = "Masks that select pixels in av-toolbox pipelines."
 
 [dependencies]
@@ -11,14 +12,14 @@ schemars = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
-av-toolbox-cubek = { path = "../av-toolbox-cubek" }
+av-toolbox-core = { workspace = true }
+av-toolbox-cubek = { workspace = true }
 av-toolbox-gpu = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 
-av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
+av-toolbox-cubek = { workspace = true, features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 av-toolbox-masks = { path = ".", features = ["test-support"] }
 
@@ -30,3 +31,7 @@ rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-cubek/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
 # Exposes internals for tests in this crate's tests/device suite.
 test-support = []
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

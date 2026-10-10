@@ -66,7 +66,7 @@ def add_dependency(
 
 
 def lock_path(repository: Path) -> Path:
-    return repository / "dependencies" / "dependencies.lock"
+    return repository / "av-toolbox-models" / "dependencies.lock"
 
 
 def reversed_hash(content: bytes = b"weights") -> str:

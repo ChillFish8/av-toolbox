@@ -3,6 +3,8 @@ name = "av-toolbox-sources"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "Sources that bring video into av-toolbox pipelines."
 
 [dependencies]
 image = { workspace = true }
@@ -13,8 +15,8 @@ y4m = { workspace = true }
 
 ffms2-sys = { workspace = true, optional = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
-av-toolbox-cubek = { path = "../av-toolbox-cubek" }
+av-toolbox-core = { workspace = true }
+av-toolbox-cubek = { workspace = true }
 av-toolbox-gpu = { workspace = true }
 
 [dev-dependencies]
@@ -22,8 +24,8 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
-av-toolbox-graph = { path = "../av-toolbox-graph" }
-av-toolbox-runtime = { path = "../av-toolbox-runtime" }
+av-toolbox-graph = { workspace = true }
+av-toolbox-runtime = { workspace = true }
 
 [features]
 default = ["ffms2"]
@@ -35,3 +37,8 @@ metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-cubek/meta
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda", "av-toolbox-cubek/cuda"]
 rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-cubek/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

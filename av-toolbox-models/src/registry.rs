@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use sha2::{Digest, Sha256};
 
 /// The lock `tools/dependencies/build.py` writes, listing every pack's files and their sha256.
-const LOCK: &str = include_str!("../../dependencies/dependencies.lock");
+const LOCK: &str = include_str!("../dependencies.lock");
 
 static REGISTRY: OnceLock<Registry> = OnceLock::new();
 

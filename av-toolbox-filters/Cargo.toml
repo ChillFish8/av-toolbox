@@ -3,6 +3,7 @@ name = "av-toolbox-filters"
 version.workspace = true
 edition = "2024"
 license.workspace = true
+repository.workspace = true
 description = "Filters that change the frames of av-toolbox pipelines."
 
 [dependencies]
@@ -12,17 +13,17 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
-av-toolbox-core = { path = "../av-toolbox-core" }
-av-toolbox-cubek = { path = "../av-toolbox-cubek" }
+av-toolbox-core = { workspace = true }
+av-toolbox-cubek = { workspace = true }
 av-toolbox-gpu = { workspace = true }
-av-toolbox-models = { path = "../av-toolbox-models" }
-av-toolbox-providers = { path = "../av-toolbox-providers" }
+av-toolbox-models = { workspace = true }
+av-toolbox-providers = { workspace = true }
 av-denoise-core = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 
-av-toolbox-cubek = { path = "../av-toolbox-cubek", features = ["test-support"] }
+av-toolbox-cubek = { workspace = true, features = ["test-support"] }
 av-toolbox-filters = { path = ".", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 
@@ -34,3 +35,7 @@ rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-providers/roc
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
 # Exposes internals for tests in this crate's tests/device suite.
 test-support = []
+
+[package.metadata.docs.rs]
+features = ["vulkan"]
+targets = ["x86_64-unknown-linux-gnu"]

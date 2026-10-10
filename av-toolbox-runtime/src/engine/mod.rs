@@ -136,7 +136,7 @@ impl Engine {
     /// Instantiates every worker a planned graph needs, against a real backend, and wires
     /// them together.
     ///
-    /// This is [Engine::build_with] with the one closure a real run always wants: build a
+    /// This is `Engine::build_with` with the one closure a real run always wants: build a
     /// worker's stages by asking `registry` and `backend` to instantiate the region for real.
     pub fn build(
         graph: &CompiledGraph,
