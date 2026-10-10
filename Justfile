@@ -7,6 +7,12 @@ backend_features := "av-toolbox-gpu/" + test_backend + ",av-toolbox-core/" + tes
 # The above plus the device tests those crates gate behind gpu-tests.
 device_features := backend_features + ",av-toolbox-gpu/gpu-tests,av-toolbox-core/gpu-tests,av-toolbox-graph/gpu-tests,av-toolbox-runtime/gpu-tests,av-toolbox-sources/gpu-tests,av-toolbox-providers/gpu-tests,av-toolbox-sinks/gpu-tests,av-toolbox-pipeline/gpu-tests,av-toolbox/gpu-tests,av-toolbox-masks/gpu-tests,av-toolbox-filters/gpu-tests,av-toolbox-cubek/gpu-tests"
 
+# The vcpkg triplet `static-deps` installs for. Override on Intel macOS.
+vcpkg_triplet := env("AVTB_VCPKG_TRIPLET", if os() == "macos" { "arm64-osx-release" } else { "x64-linux-release" })
+
+# The backend `build-static` builds when none is given.
+static_features := if os() == "macos" { "metal" } else { "vulkan" }
+
 # Formats the whole workspace.
 format:
     cargo +nightly fmt --all
@@ -35,6 +41,31 @@ check-backends:
     cargo clippy -p av-toolbox-gpu --features cuda,rocm,vulkan,gpu-tests --all-targets -- -D warnings
     cargo check -p av-toolbox-gpu 2>&1 | grep -q "at least one accelerator backend"
     cargo check -p av-toolbox-gpu --features vulkan,metal 2>&1 | grep -q "cannot both be enabled"
+
+# Builds the static ffms2 and FFmpeg tree from vcpkg.json into vcpkg_installed/.
+static-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d .vcpkg ]; then
+        git clone https://github.com/microsoft/vcpkg.git .vcpkg
+    fi
+    git -C .vcpkg fetch --quiet origin
+    baseline="$(jq -r '."builtin-baseline"' vcpkg.json)"
+    git -C .vcpkg checkout --quiet "$baseline"
+    if [ ! -x .vcpkg/vcpkg ]; then
+        .vcpkg/bootstrap-vcpkg.sh -disableMetrics
+    fi
+    .vcpkg/vcpkg install --triplet {{vcpkg_triplet}} --host-triplet {{vcpkg_triplet}}
+
+# Builds a release CLI with ffms2 and FFmpeg linked statically. Run `static-deps` first.
+build-static features=static_features:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="$PWD/vcpkg_installed/{{vcpkg_triplet}}"
+    export FFMS_INCLUDE_DIR="$prefix/include"
+    export FFMS_LIB_DIR="$prefix/lib"
+    export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
+    cargo build --release -p av-toolbox --features {{features}},static-ffms2
 
 # Builds the optional dependencies under dependencies/, or only the ones named.
 dependencies *IDENTIFIERS:

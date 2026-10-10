@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 *.profile.toml
 *.html
+/.vcpkg
+/vcpkg_installed
