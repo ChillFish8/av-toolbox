@@ -86,7 +86,7 @@ impl Default for DirectVariant {
 
 /// The block shapes, plane grids and weight staging the direct convolution is offered in, before the plane
 /// width is chosen.
-const LAYOUTS: [DirectVariant; 8] = [
+const LAYOUTS: [DirectVariant; 9] = [
     layout(4, 16, 1, 2, WeightStaging::Global),
     layout(8, 16, 2, 2, WeightStaging::Global),
     layout(2, 32, 1, 2, WeightStaging::Global),
@@ -95,6 +95,7 @@ const LAYOUTS: [DirectVariant; 8] = [
     layout(6, 16, 1, 2, WeightStaging::Global),
     layout(8, 16, 4, 2, WeightStaging::Single),
     layout(8, 16, 4, 2, WeightStaging::Double),
+    layout(1, 16, 1, 4, WeightStaging::Global),
 ];
 
 /// The plane widths the layouts are offered at.

@@ -5,7 +5,14 @@ use cubek_matmul::definition::MatmulElems;
 use cubek_matmul::launch::Strategy as MatmulStrategy;
 use cubek_std::InputBinding;
 
-use crate::cnn::convolution::{contiguous, matmul_failed, storage_type, tensor, uniform_globals};
+use crate::cnn::convolution::{
+    contiguous,
+    matmul_failed,
+    offers_cmma_16,
+    storage_type,
+    tensor,
+    uniform_globals,
+};
 use crate::cnn::{
     BodyPath,
     CnnError,
@@ -513,6 +520,15 @@ pub fn gather<R: Runtime>(
     }
 }
 
+/// The matmul a down or up layer's product runs on.
+pub(super) fn product_strategy(precision: Precision, offers_matrix: bool) -> MatmulStrategy {
+    if precision == Precision::F16 && offers_matrix {
+        return MatmulStrategy::SimpleCyclicCmma(Default::default());
+    }
+
+    MatmulStrategy::SimpleUnit(Default::default())
+}
+
 /// Multiplies the `rows` by `depth` matrix in `lhs` by the `depth` by `columns` matrix in `rhs` into the
 /// `rows` by `columns` matrix in `output`, each held contiguously in `precision`'s type.
 #[expect(
@@ -551,7 +567,8 @@ pub fn matrix_product<R: Runtime>(
     let rhs_binding = InputBinding::new(rhs_tensor, dtype);
     let globals = uniform_globals(dtype);
     let mut dtypes = MatmulElems::from_globals(&globals);
-    let strategy = MatmulStrategy::SimpleUnit(Default::default());
+    let offers_matrix = offers_cmma_16(client);
+    let strategy = product_strategy(precision, offers_matrix);
     let launched = cubek_matmul::launch::launch_ref(
         &strategy,
         client,

@@ -134,7 +134,8 @@ pub enum Kernels {
     /// later runs on a device with the same runtime and limits skip the benchmarks.
     #[default]
     Tuned,
-    /// The default direct variant wherever the device offers it, and the fused cubek convolution elsewhere.
+    /// The default direct variant wherever the device offers it, then the first direct variant it offers, then
+    /// the fused cubek convolution.
     ///
     /// Nothing is benchmarked, so the output is the same on every device that offers the variant.
     Fixed,
@@ -308,8 +309,8 @@ pub fn offered_candidates(properties: &DeviceProperties, features: u32, winograd
 /// The candidate [Kernels::Fixed](crate::cnn::Kernels::Fixed) runs on a device with `properties`, for maps
 /// of `features` channels.
 ///
-/// That is the default direct variant at the device's widest subgroup where the device offers it, and the
-/// fused cubek convolution elsewhere.
+/// That is the default direct variant at the device's widest subgroup where the device offers it, then the first
+/// direct variant it offers, then the fused cubek convolution.
 pub fn fixed_candidate(properties: &DeviceProperties, features: u32) -> Candidate {
     let plane_width = properties.hardware.plane_size_max;
     let variant = DirectVariant {
@@ -322,7 +323,10 @@ pub fn fixed_candidate(properties: &DeviceProperties, features: u32) -> Candidat
         return Candidate::Direct(variant);
     }
 
-    Candidate::FusedCubek
+    match offered.first() {
+        Some(first) => Candidate::Direct(*first),
+        None => Candidate::FusedCubek,
+    }
 }
 
 /// What a plan is kept under: the runtime and device facts it was worked out from, whether Winograd is

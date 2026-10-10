@@ -254,13 +254,18 @@ fn a_shape_without_a_bias_declares_the_same_shared_memory() {
 }
 
 #[test]
-fn the_r9700_offers_the_default_variant_at_128_features_and_none_at_512() {
+fn the_r9700_offers_the_default_variant_at_128_features_and_one_row_blocks_at_512() {
     let properties = R9700.properties();
     let default_variant = DirectVariant::default();
+    let one_row = DirectVariant {
+        rows: 1,
+        planes_n: 4,
+        ..DirectVariant::default()
+    };
 
     let at_128 = direct_variants(&properties, 128);
     let at_512 = direct_variants(&properties, 512);
 
     assert!(at_128.contains(&default_variant), "{at_128:?}");
-    assert!(at_512.is_empty(), "{at_512:?}");
+    assert_eq!(at_512, vec![one_row]);
 }

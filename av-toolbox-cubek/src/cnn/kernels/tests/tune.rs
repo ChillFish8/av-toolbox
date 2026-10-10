@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use super::{R9700, TestDevice};
 use crate::artcnn::{Model, offered_candidates};
-use crate::cnn::kernels::tune::{Choice, SizeBucket, choose};
-use crate::cnn::{Candidate, Kernels, direct_variants};
+use crate::cnn::kernels::tune::{Choice, SizeBucket, choose, fixed_candidate};
+use crate::cnn::{Candidate, DirectVariant, Kernels, direct_variants};
 
 #[test]
 fn sizes_fall_into_their_buckets_at_the_boundaries() {
@@ -59,4 +59,20 @@ fn a_device_offering_winograd_but_no_direct_variant_runs_the_fused_cubek_convolu
     assert!(direct.is_empty(), "{direct:?}");
     assert!(holds_winograd, "{candidates:?}");
     assert_eq!(choice, Choice::Once(Candidate::FusedCubek));
+}
+
+#[test]
+fn the_fixed_candidate_takes_the_first_offered_layout_where_the_default_does_not_fit() {
+    let properties = R9700.properties();
+    let one_row = DirectVariant {
+        rows: 1,
+        planes_n: 4,
+        ..DirectVariant::default()
+    };
+
+    let at_64 = fixed_candidate(&properties, 64);
+    let at_512 = fixed_candidate(&properties, 512);
+
+    assert_eq!(at_64, Candidate::Direct(DirectVariant::default()));
+    assert_eq!(at_512, Candidate::Direct(one_row));
 }
