@@ -158,3 +158,38 @@ fn the_strided_up_kernel_matches_the_reference_and_the_scatter() {
         }
     }
 }
+
+struct InputIsOutput;
+
+impl BuildTask for InputIsOutput {
+    type Output = ();
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let channels = 64;
+        let variant = strided_variant(client.properties(), Stride::Down, channels).expect("a strided kernel");
+        let maps = upload_maps(client, &vec![0.0; 4 * 4 * channels as usize], Precision::F16);
+        let weights = upload_maps(
+            client,
+            &vec![0.0; 16 * channels as usize * 2 * channels as usize],
+            Precision::F16,
+        );
+        let layer = StridedLayer {
+            input: &maps,
+            weights: &weights,
+            output: &maps,
+            width: 4,
+            height: 4,
+            channels,
+            stride: Stride::Down,
+        };
+
+        let _ = run_strided(client, variant, &layer);
+    }
+}
+
+#[test]
+#[should_panic(expected = "the output is the input")]
+fn a_strided_layer_whose_output_is_its_input_is_refused() {
+    backend().build(InputIsOutput);
+}

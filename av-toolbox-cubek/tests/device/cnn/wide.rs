@@ -73,13 +73,6 @@ enum Runner {
     InferredFused,
 }
 
-impl Runner {
-    /// Whether the runner rounds the value to the maps' type before it adds the skip.
-    fn rounds_before_skip(self) -> bool {
-        matches!(self, Self::Candidate(Candidate::FusedCubek) | Self::InferredFused)
-    }
-}
-
 /// One synthetic layer run over edged maps of a `width` by `height` region.
 struct WideLayer {
     features: u32,
@@ -153,7 +146,7 @@ impl BuildTask for WideLayer {
             skip: self.ending.adds_skip().then_some(&skip),
         };
 
-        match self.runner {
+        let rounds_to_type = match self.runner {
             Runner::Path(path) => {
                 let layer_maps = LayerMaps {
                     input: &input,
@@ -171,12 +164,16 @@ impl BuildTask for WideLayer {
                     finish,
                     self.ending.epilogue(),
                 );
-                ran.expect("the layer runs");
+                let run = ran.expect("the layer runs");
+
+                run.candidate == Some(Candidate::FusedCubek)
             },
             Runner::Candidate(candidate) => {
                 let convolution = BodyConvolution::of_conv(&layer, &input, &output, frame, finish);
                 let ran = run_candidate(client, candidate, &convolution);
                 ran.expect("the candidate runs");
+
+                candidate == Candidate::FusedCubek
             },
             Runner::InferredFused => {
                 let path = BodyPath::Convolution;
@@ -184,8 +181,10 @@ impl BuildTask for WideLayer {
                     client, &sizing, &layer, path, &input, &output, frame, finish, false,
                 );
                 ran.expect("the layer runs");
+
+                true
             },
-        }
+        };
 
         synced(client);
 
@@ -206,7 +205,7 @@ impl BuildTask for WideLayer {
         let activation = self.ending.activation();
         let expected = reference_layer(&synthetic, &input_values, width, height, activation, added);
         let convolved = reference_layer(&synthetic, &input_values, width, height, Activation::None, None);
-        let rounds_before_skip = self.ending.adds_skip() && self.runner.rounds_before_skip();
+        let rounds_before_skip = self.ending.adds_skip() && rounds_to_type;
         let before_skip = rounds_before_skip.then(|| {
             expected
                 .iter()

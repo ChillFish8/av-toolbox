@@ -19,6 +19,7 @@ use super::direct::{
     fragment,
     offered_plane_width,
 };
+use super::same_buffer;
 use crate::cnn::CnnError;
 
 /// The output columns a down block spans, one pixel tile.
@@ -546,6 +547,7 @@ pub fn run_strided<R: Runtime>(
     let even = layer.stride == Stride::Up || splits;
     assert!(even, "a down layer's map does not split into 2x2 blocks");
     assert!(layer.width > 0 && layer.height > 0, "the map is empty");
+    assert!(!same_buffer(layer.input, layer.output), "the output is the input");
     assert!(
         layer.input.size_in_used() >= input_values as u64 * half,
         "the input is smaller than the map"

@@ -16,11 +16,13 @@ use cubecl::prelude::Runtime;
 use crate::artcnn::{edged_maps, f16_step, read_maps, region, synced, upload_maps};
 use crate::support::{backend, empty};
 
-/// The absolute difference that summing the products in another order may add in f32, before the f16 rounding.
+/// The absolute difference that summing the products in another order may add in f32, before the f16
+/// rounding.
 const REORDERED_SUM: f32 = 1e-4;
 
-/// The outputs of a chunked direct variant and the same layout staging every channel, or `None` where the device
-/// offers either not.
+/// A chunked direct variant and the whole-width variant of the same layout, run over one layer.
+///
+/// The output is `None` where the device lacks either variant.
 struct ChunkedPair {
     features: u32,
     whole: DirectVariant,
