@@ -1,6 +1,7 @@
 mod cli;
 mod execute;
 mod explain;
+mod inspect;
 mod list_devices;
 mod list_stages;
 mod load;
