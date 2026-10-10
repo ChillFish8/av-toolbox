@@ -454,6 +454,7 @@ impl BuildTask for OneLayer {
         let finish = Finish {
             activation: Activation::Silu,
             residual: None,
+            skip: None,
         };
 
         let input = upload_maps(client, &maps, precision);

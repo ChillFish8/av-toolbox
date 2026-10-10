@@ -129,10 +129,12 @@ fn finish_for(epilogue: Epilogue, residual: &Handle) -> Finish<'_> {
         Epilogue::Silu => Finish {
             activation: Activation::Silu,
             residual: None,
+            skip: None,
         },
         Epilogue::Residual => Finish {
             activation: Activation::None,
             residual: Some(residual),
+            skip: None,
         },
     }
 }

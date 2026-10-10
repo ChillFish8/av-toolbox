@@ -1,3 +1,4 @@
+mod add;
 mod direct;
 mod tune;
 mod winograd;

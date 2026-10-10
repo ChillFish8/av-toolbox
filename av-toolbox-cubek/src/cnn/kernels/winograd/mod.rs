@@ -203,6 +203,7 @@ impl WinogradVariant {
             plane_width: self.plane_width,
             activation,
             residual,
+            skip: false,
             bias: true,
         })
     }
@@ -222,6 +223,7 @@ pub(crate) struct WinogradShape {
     plane_width: u32,
     activation: Activation,
     residual: bool,
+    skip: bool,
     bias: bool,
 }
 
@@ -229,6 +231,11 @@ impl WinogradShape {
     /// The same shape for a layer without a bias, whose sums start at zero.
     pub(crate) fn without_bias(self) -> Self {
         Self { bias: false, ..self }
+    }
+
+    /// The same shape for a layer that adds a skip after its residual.
+    pub(crate) fn with_skip(self) -> Self {
+        Self { skip: true, ..self }
     }
 
     fn planes(&self) -> u32 {
@@ -365,6 +372,10 @@ pub(crate) fn run_winograd<R: Runtime>(
         true => shape,
         false => shape.without_bias(),
     };
+    let shape = match convolution.skip.is_some() {
+        true => shape.with_skip(),
+        false => shape,
+    };
     let fits = check_device(properties, &variant, &shape);
     fits.map_err(CnnError::Convolution)?;
 
@@ -383,16 +394,18 @@ pub(crate) fn run_winograd<R: Runtime>(
     let unit = CubeDim::new_2d(variant.plane_width, variant.planes());
     // Without a residual the input stands in for it, and is never read through it.
     let residual = convolution.residual.unwrap_or(convolution.input);
+    // Without a skip the input stands in for it, and is never read through it.
+    let skip = convolution.skip.unwrap_or(convolution.input);
     // Without a bias the input stands in for it, and is never read through it.
     let bias = convolution.bias.unwrap_or(convolution.input);
     let quad = WRITE_WIDTH as usize;
     let load = LOAD_WIDTH as usize;
 
-    // Safety: `check` asserts the input, output and residual hold `width * height * F` halves, the
+    // Safety: `check` asserts the input, output, residual and skip hold `width * height * F` halves, the
     // transformed weights `16 * F * F` and the bias `F`, and the assert above keeps every map index inside a
     // u32. Without a bias the kernel never reads the bias argument.
-    // - Input reads are guarded to samples inside the frame. Output writes and residual reads are guarded to
-    //   samples inside the frame, at a channel below `F`.
+    // - Input reads are guarded to samples inside the frame. Output writes, residual reads and skip reads are
+    //   guarded to samples inside the frame, at a channel below `F`.
     // - A weight fragment's last value is at `position * F * F + (channel + 15) * F + chunk * 16 + 15`, below
     //   `16 * F * F`, and its slice ends at most at the weights' end.
     // - Shared-memory indices stay inside the transformed tiles and scratch tiles that `shape` sizes, and
@@ -402,10 +415,11 @@ pub(crate) fn run_winograd<R: Runtime>(
         let weights = ArrayArg::from_raw_parts(transformed.clone(), weight_values / load);
         let bias = ArrayArg::from_raw_parts(bias.clone(), features as usize / quad);
         let residual = ArrayArg::from_raw_parts(residual.clone(), map_values / quad);
+        let skip = ArrayArg::from_raw_parts(skip.clone(), map_values / quad);
         let output = ArrayArg::from_raw_parts(convolution.output.clone(), map_values / quad);
 
         winograd_kernel::launch_unchecked::<R>(
-            client, cubes, unit, input, weights, bias, residual, output, width, height, shape,
+            client, cubes, unit, input, weights, bias, residual, skip, output, width, height, shape,
         );
     }
 

@@ -364,6 +364,7 @@ fn run_region_on<R: Runtime>(
     let activated = Finish {
         activation: Activation::Silu,
         residual: None,
+        skip: None,
     };
 
     for _ in 0..network.blocks() {
@@ -371,6 +372,7 @@ fn run_region_on<R: Runtime>(
         let joined = Finish {
             activation: Activation::None,
             residual: Some(state),
+            skip: None,
         };
 
         let first_run = run_body_layer(
@@ -419,6 +421,7 @@ fn run_region_on<R: Runtime>(
     let skipped = Finish {
         activation: Activation::None,
         residual: Some(maps.conv0),
+        skip: None,
     };
     let join_run = run_body_layer(
         client,

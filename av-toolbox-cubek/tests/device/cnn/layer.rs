@@ -261,6 +261,7 @@ impl BuildTask for TunedAfterWinograd {
         let finish = Finish {
             activation: Activation::Silu,
             residual: None,
+            skip: None,
         };
 
         let first = BodyConvolution::of_conv(&with_winograd, &input, &output, frame, finish);
@@ -335,6 +336,7 @@ impl BuildTask for ShortHandle {
         let finish = Finish {
             activation: Activation::Silu,
             residual: None,
+            skip: None,
         };
 
         let dispatch = Sizing(build.frame_context());

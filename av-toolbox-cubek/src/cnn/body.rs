@@ -66,11 +66,13 @@ fn epilogue_kernel<F: Float>(
     values: &mut Array<F>,
     bias: &Array<F>,
     residual: &Array<F>,
+    skip: &Array<F>,
     features: u32,
     add_bias: u32,
     silu: u32,
     relu: u32,
     add_residual: u32,
+    add_skip: u32,
 ) {
     if ABSOLUTE_POS >= values.len() {
         terminate!();
@@ -95,6 +97,10 @@ fn epilogue_kernel<F: Float>(
         value += f32::cast_from(residual[ABSOLUTE_POS]);
     }
 
+    if add_skip == 1 {
+        value += f32::cast_from(skip[ABSOLUTE_POS]);
+    }
+
     values[ABSOLUTE_POS] = F::cast_from(value);
 }
 
@@ -113,12 +119,12 @@ pub fn epilogue<R: Runtime>(
     residual: Option<&Handle>,
 ) {
     run_epilogue(
-        client, dispatch, layer, values, samples, activation, residual, true,
+        client, dispatch, layer, values, samples, activation, residual, None, true,
     );
 }
 
 /// Adds `layer`'s bias to the NHWC maps in `values` if `add_bias` is set, then applies `activation`, then
-/// adds `residual` if given.
+/// adds `residual` and `skip` if given.
 ///
 /// The maps hold `samples` samples of the layer's features, and are updated in place.
 #[expect(
@@ -133,12 +139,14 @@ pub(crate) fn run_epilogue<R: Runtime>(
     samples: u32,
     activation: Activation,
     residual: Option<&Handle>,
+    skip: Option<&Handle>,
     add_bias: bool,
 ) {
     let features = layer.features;
     let units = samples as usize * features as usize;
     let bytes = (units * layer.precision.bytes()) as u64;
     let residual_handle = residual.unwrap_or(values);
+    let skip_handle = skip.unwrap_or(values);
     // Without a bias the values stand in for it, and are never read through it.
     let bias_handle = layer.bias.as_ref().unwrap_or(values);
     let adds_bias = add_bias && layer.bias.is_some();
@@ -149,6 +157,10 @@ pub(crate) fn run_epilogue<R: Runtime>(
     assert!(
         residual_handle.size_in_used() >= bytes,
         "the residual is smaller than the values"
+    );
+    assert!(
+        skip_handle.size_in_used() >= bytes,
+        "the skip is smaller than the values"
     );
 
     if let Some(bias) = layer.bias.as_ref() {
@@ -163,16 +175,18 @@ pub(crate) fn run_epilogue<R: Runtime>(
     let silu = u32::from(activation == Activation::Silu);
     let relu = u32::from(activation == Activation::Relu);
     let add_residual = u32::from(residual.is_some());
+    let add_skip = u32::from(skip.is_some());
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
-    // Safety: the asserts above show the values and the residual hold `samples * F` values and the bias, when
-    // there is one, `F`. Without a residual or a bias, the values are bound in its place and never read
-    // through it.
+    // Safety: the asserts above show the values, the residual and the skip hold `samples * F` values and the
+    // bias, when there is one, `F`. Without a residual, a skip or a bias, the values are bound in its place
+    // and never read through it.
     unsafe {
         let values_array = ArrayArg::from_raw_parts(values.clone(), units);
         let bias = ArrayArg::from_raw_parts(bias_handle.clone(), features as usize);
         let residual_array = ArrayArg::from_raw_parts(residual_handle.clone(), units);
+        let skip_array = ArrayArg::from_raw_parts(skip_handle.clone(), units);
 
         match layer.precision {
             Precision::F16 => epilogue_kernel::launch_unchecked::<half::f16, R>(
@@ -182,11 +196,13 @@ pub(crate) fn run_epilogue<R: Runtime>(
                 values_array,
                 bias,
                 residual_array,
+                skip_array,
                 features,
                 bias_flag,
                 silu,
                 relu,
                 add_residual,
+                add_skip,
             ),
             Precision::F32 => epilogue_kernel::launch_unchecked::<f32, R>(
                 client,
@@ -195,11 +211,13 @@ pub(crate) fn run_epilogue<R: Runtime>(
                 values_array,
                 bias,
                 residual_array,
+                skip_array,
                 features,
                 bias_flag,
                 silu,
                 relu,
                 add_residual,
+                add_skip,
             ),
         }
     }
@@ -348,12 +366,18 @@ pub(crate) fn body_operands(layer: &ConvLayer, with_bias: bool) -> Operands<'_> 
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights and bias on
-/// cooperative-matrix tiles into `output`, applying `finish` as each value is written.
+/// cooperative-matrix tiles into `output`, applying `finish`'s activation and residual as each value is
+/// written and its skip in a separate pass.
 ///
 /// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
 /// `cubek-convolution` infers one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the layer"
+)]
 fn convolve_fused<R: Runtime>(
     client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
     layer: &ConvLayer,
     input: &Handle,
     output: &Handle,
@@ -364,7 +388,31 @@ fn convolve_fused<R: Runtime>(
     check_layer_maps(layer, input, output, region);
 
     let operands = body_operands(layer, true);
-    let forced = launch_fused_convolution(client, &operands, input, output, region, finish, allow_forced)?;
+    let fused_finish = Finish { skip: None, ..finish };
+    let forced = launch_fused_convolution(
+        client,
+        &operands,
+        input,
+        output,
+        region,
+        fused_finish,
+        allow_forced,
+    )?;
+
+    if let Some(skip) = finish.skip {
+        let samples = region.samples();
+        run_epilogue(
+            client,
+            dispatch,
+            layer,
+            output,
+            samples,
+            Activation::None,
+            None,
+            Some(skip),
+            false,
+        );
+    }
 
     Ok(LayerRun {
         forced,
@@ -405,8 +453,10 @@ impl LayerRun {
 #[derive(Debug, Clone, Copy)]
 pub struct Finish<'a> {
     pub activation: Activation,
-    /// The maps added last, laid out as the layer's output.
+    /// The maps added after the activation, laid out as the layer's output.
     pub residual: Option<&'a Handle>,
+    /// The maps added after the residual, laid out as the layer's output.
+    pub skip: Option<&'a Handle>,
 }
 
 /// Runs `layer` over the NHWC maps of `region` in `input` on `path`, into `output`. That is its convolution
@@ -430,7 +480,7 @@ pub(crate) fn body_layer<R: Runtime>(
     finish: Finish<'_>,
 ) -> Result<LayerRun, CnnError> {
     if path == BodyPath::Convolution {
-        return convolve_fused(client, layer, input, output, region, finish, true);
+        return convolve_fused(client, dispatch, layer, input, output, region, finish, true);
     }
 
     let forced = convolve(client, dispatch, path, layer, input, output, columns, region)?;
@@ -526,7 +576,7 @@ pub fn body_layer_with_blueprint<R: Runtime>(
     }
 
     if path == BodyPath::Convolution {
-        return convolve_fused(client, layer, input, output, region, finish, false);
+        return convolve_fused(client, dispatch, layer, input, output, region, finish, false);
     }
 
     convolve_with_blueprint(client, dispatch, layer, input, output, region, false)?;
@@ -561,6 +611,7 @@ fn finish_separately<R: Runtime>(
         samples,
         finish.activation,
         finish.residual,
+        finish.skip,
         add_bias,
     );
 }

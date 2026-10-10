@@ -24,7 +24,6 @@ use crate::dpir::{
     Variant,
     WIDTHS,
     Weights,
-    add_in_place,
     gather,
     head,
     matrix_product,
@@ -223,18 +222,19 @@ pub fn run_region<R: Runtime>(
     let mut state = first_skip;
 
     for level in 0..DEEPEST {
-        state = pass.blocks(level, state)?;
+        state = pass.blocks(level, state, None)?;
         state = pass.down(level, state)?;
     }
 
-    state = pass.blocks(DEEPEST, state)?;
+    let [deepest_skip, ..] = maps.levels[DEEPEST];
+    state = pass.blocks(DEEPEST, state, Some(deepest_skip))?;
 
     for level in (0..DEEPEST).rev() {
         state = pass.up(level, state)?;
-        state = pass.blocks(level, state)?;
-    }
 
-    pass.add_skip(0, state);
+        let [level_skip, ..] = maps.levels[level];
+        state = pass.blocks(level, state, Some(level_skip))?;
+    }
 
     // The first level's spare map is free once the last ResBlock has run, so the tail writes into it.
     tail(client, dispatch, &dpir.tail, path, state, region, first_spare)?;
@@ -313,12 +313,20 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         }
     }
 
-    /// Runs the four ResBlocks of `level` from `state`, giving the map the last one wrote.
-    fn blocks(&mut self, level: usize, state: &'a Handle) -> Result<&'a Handle, CnnError> {
+    /// Runs the four ResBlocks of `level` from `state`, giving the map the last one wrote. The last one also
+    /// adds `skip`, if given.
+    fn blocks(
+        &mut self,
+        level: usize,
+        state: &'a Handle,
+        skip: Option<&'a Handle>,
+    ) -> Result<&'a Handle, CnnError> {
         let mut state = state;
 
-        for _ in 0..BLOCKS {
-            state = self.block(level, state)?;
+        for block in 0..BLOCKS {
+            let last = block + 1 == BLOCKS;
+            let block_skip = skip.filter(|_| last);
+            state = self.block(level, state, block_skip)?;
         }
 
         Ok(state)
@@ -327,8 +335,13 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
     /// Runs one ResBlock of `level` from `state`, giving the map it wrote.
     ///
     /// The first convolution writes the level's spare map with a ReLU. The second writes whichever of the
-    /// other two maps is not `state`, adding `state`.
-    fn block(&mut self, level: usize, state: &'a Handle) -> Result<&'a Handle, CnnError> {
+    /// other two maps is not `state`, adding `state` and then `skip`, if given.
+    fn block(
+        &mut self,
+        level: usize,
+        state: &'a Handle,
+        skip: Option<&'a Handle>,
+    ) -> Result<&'a Handle, CnnError> {
         let [_, spare, first_choice, second_choice] = self.levels[level];
         let output = if std::ptr::eq(state, first_choice) {
             second_choice
@@ -338,14 +351,20 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         let activated = Finish {
             activation: Activation::Relu,
             residual: None,
+            skip: None,
         };
         let joined = Finish {
             activation: Activation::None,
             residual: Some(state),
+            skip,
+        };
+        let joined_epilogue = match skip {
+            Some(_) => Epilogue::ResidualSkip,
+            None => Epilogue::Residual,
         };
 
         self.convolve(level, state, spare, activated, Epilogue::Relu)?;
-        self.convolve(level, spare, output, joined, Epilogue::Residual)?;
+        self.convolve(level, spare, output, joined, joined_epilogue)?;
 
         Ok(output)
     }
@@ -419,7 +438,7 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         Ok(next_skip)
     }
 
-    /// Adds the next level's skip into its `state`, then doubles it into a map of `level`, giving that map.
+    /// Doubles `state` of the next level into a map of `level`, giving that map.
     fn up(&mut self, level: usize, state: &'a Handle) -> Result<&'a Handle, CnnError> {
         let deeper = level + 1;
         let [_, spare, output, _] = self.levels[level];
@@ -427,8 +446,6 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         let precision = self.dpir.precision;
         // The up layers run deepest first.
         let matrix = &self.dpir.ups[DEEPEST - deeper];
-
-        self.add_skip(deeper, state);
 
         let rows = deeper_region.samples() as usize;
         let depth = WIDTHS[deeper] as usize;
@@ -447,21 +464,5 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         );
 
         Ok(output)
-    }
-
-    /// Adds the skip map of `level` into `state`.
-    fn add_skip(&self, level: usize, state: &Handle) {
-        let [skip, ..] = self.levels[level];
-        let region = self.level_region(level);
-        let count = region.samples() as usize * WIDTHS[level] as usize;
-
-        add_in_place(
-            self.client,
-            self.dispatch,
-            state,
-            skip,
-            count,
-            self.dpir.precision,
-        );
     }
 }

@@ -185,6 +185,7 @@ impl DirectVariant {
             plane_width: self.plane_width,
             activation,
             residual,
+            skip: false,
             bias: true,
         })
     }
@@ -203,6 +204,7 @@ pub(crate) struct DirectShape {
     plane_width: u32,
     activation: Activation,
     residual: bool,
+    skip: bool,
     bias: bool,
 }
 
@@ -210,6 +212,11 @@ impl DirectShape {
     /// The same shape for a layer without a bias, whose accumulators start at zero.
     pub(crate) fn without_bias(self) -> Self {
         Self { bias: false, ..self }
+    }
+
+    /// The same shape for a layer that adds a skip after its residual.
+    pub(crate) fn with_skip(self) -> Self {
+        Self { skip: true, ..self }
     }
 
     fn planes(&self) -> u32 {
@@ -445,8 +452,8 @@ fn start_accumulators(
     accumulators
 }
 
-/// Convolves one block of a body layer on cooperative matrices, with the bias, the activation and the
-/// residual applied as it writes.
+/// Convolves one block of a body layer on cooperative matrices, with the bias, the activation, the residual
+/// and the skip applied as it writes.
 ///
 /// Each workgroup reads its block with the one-sample border into shared memory once, and reuses it for all
 /// nine taps. Each plane keeps its accumulators in f32 from the bias to the write.
@@ -456,6 +463,7 @@ fn direct_kernel(
     weights: &Array<Load>,
     bias: &Array<Quad>,
     residual: &Array<Quad>,
+    skip: &Array<Quad>,
     output: &mut Array<Quad>,
     width: u32,
     height: u32,
@@ -490,6 +498,7 @@ fn direct_kernel(
         &accumulators,
         &mut scratch,
         residual,
+        skip,
         output,
         spot,
         block_x,
@@ -589,7 +598,8 @@ fn multiply_taps(
     }
 }
 
-/// Applies the activation and the residual to the plane's accumulators, and writes them to `output` in f16.
+/// Applies the activation, the residual and the skip to the plane's accumulators, and writes them to
+/// `output` in f16.
 ///
 /// Each accumulator passes through the plane's scratch tile. Samples outside the frame are not written.
 #[cube]
@@ -597,6 +607,7 @@ fn write_out(
     accumulators: &Sequence<cmma::Matrix<f32>>,
     scratch: &mut SharedMemory<Sums>,
     residual: &Array<Quad>,
+    skip: &Array<Quad>,
     output: &mut Array<Quad>,
     spot: PlaneSpot,
     block_x: u32,
@@ -644,7 +655,15 @@ fn write_out(
                 if row < height && column < width {
                     let position = (row * width + column) * sample_quads + tile_channel / WRITE_WIDTH + quad;
                     let sum = scratch[(spot.scratch + index) as usize];
-                    let finished = finish_sums(sum, residual, position, shape.activation, shape.residual);
+                    let finished = finish_sums(
+                        sum,
+                        residual,
+                        skip,
+                        position,
+                        shape.activation,
+                        shape.residual,
+                        shape.skip,
+                    );
 
                     output[position as usize] = Quad::cast_from(finished);
                 }
@@ -655,14 +674,17 @@ fn write_out(
     }
 }
 
-/// `sum` through `activation`, plus the residual quad at `position` when `residual_added` is set.
+/// `sum` through `activation`, plus the residual quad at `position` when `residual_added` is set, plus the
+/// skip quad there when `skip_added` is set.
 #[cube]
 pub(super) fn finish_sums(
     sum: Sums,
     residual: &Array<Quad>,
+    skip: &Array<Quad>,
     position: u32,
     #[comptime] activation: Activation,
     #[comptime] residual_added: bool,
+    #[comptime] skip_added: bool,
 ) -> Sums {
     let one = Sums::new(1.0);
     let mut finished = sum;
@@ -679,6 +701,10 @@ pub(super) fn finish_sums(
 
     if comptime!(residual_added) {
         finished += Sums::cast_from(residual[position as usize]);
+    }
+
+    if comptime!(skip_added) {
+        finished += Sums::cast_from(skip[position as usize]);
     }
 
     finished
@@ -800,6 +826,10 @@ pub(crate) fn run_direct<R: Runtime>(
         true => shape,
         false => shape.without_bias(),
     };
+    let shape = match convolution.skip.is_some() {
+        true => shape.with_skip(),
+        false => shape,
+    };
     let fits = check_device(properties, &variant, &shape);
     fits.map_err(CnnError::Convolution)?;
 
@@ -819,15 +849,17 @@ pub(crate) fn run_direct<R: Runtime>(
     let unit = CubeDim::new_2d(variant.plane_width, variant.planes());
     // Without a residual the input stands in for it, and is never read through it.
     let residual = convolution.residual.unwrap_or(convolution.input);
+    // Without a skip the input stands in for it, and is never read through it.
+    let skip = convolution.skip.unwrap_or(convolution.input);
     // Without a bias the input stands in for it, and is never read through it.
     let bias = convolution.bias.unwrap_or(convolution.input);
 
-    // Safety: `check` asserts the input, output and residual hold `width * height * F` halves, the weights
-    // `F * 9 * F` and the bias `F`, and the assert above keeps every map index inside a u32. Without a bias
-    // the kernel never reads the bias argument.
+    // Safety: `check` asserts the input, output, residual and skip hold `width * height * F` halves, the
+    // weights `F * 9 * F` and the bias `F`, and the assert above keeps every map index inside a u32. Without
+    // a bias the kernel never reads the bias argument.
     // - Input reads are clamped to samples inside the frame, which holds at least one sample whenever a
-    //   workgroup runs, since the grid is empty when `width` or `height` is 0. Output writes and residual
-    //   reads are guarded to samples inside the frame, at a channel below `F`.
+    //   workgroup runs, since the grid is empty when `width` or `height` is 0. Output writes, residual reads
+    //   and skip reads are guarded to samples inside the frame, at a channel below `F`.
     // - Bias reads take the workgroup's channels, which `shape` keeps below `F`.
     // - A weight fragment's last value is at `((channel + 15) * 9 + tap) * F + chunk * 16 + 15`, below
     //   `9 * F * F`, and its slice ends at most at the weights' end.
@@ -839,10 +871,11 @@ pub(crate) fn run_direct<R: Runtime>(
             ArrayArg::from_raw_parts(convolution.weights.clone(), weight_values / LOAD_WIDTH as usize);
         let bias = ArrayArg::from_raw_parts(bias.clone(), (features / WRITE_WIDTH) as usize);
         let residual = ArrayArg::from_raw_parts(residual.clone(), map_values / WRITE_WIDTH as usize);
+        let skip = ArrayArg::from_raw_parts(skip.clone(), map_values / WRITE_WIDTH as usize);
         let output = ArrayArg::from_raw_parts(convolution.output.clone(), map_values / WRITE_WIDTH as usize);
 
         direct_kernel::launch_unchecked::<R>(
-            client, cubes, unit, input, weights, bias, residual, output, width, height, shape,
+            client, cubes, unit, input, weights, bias, residual, skip, output, width, height, shape,
         );
     }
 

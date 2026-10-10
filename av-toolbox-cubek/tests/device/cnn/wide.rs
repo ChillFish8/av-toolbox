@@ -9,6 +9,7 @@ use av_toolbox_cubek::cnn::{
     Kernels,
     LayerMaps,
     Precision,
+    body_layer_with_blueprint,
     offered_candidates,
     offers_cmma_16,
     run_candidate,
@@ -32,15 +33,17 @@ enum Ending {
     Relu,
     /// The second convolution of a ResBlock, adding the block's input.
     Residual,
+    /// The last convolution before an up layer or the tail, adding the block's input and the level's skip.
+    ResidualSkip,
 }
 
-const ENDINGS: [Ending; 2] = [Ending::Relu, Ending::Residual];
+const ENDINGS: [Ending; 3] = [Ending::Relu, Ending::Residual, Ending::ResidualSkip];
 
 impl Ending {
     fn activation(self) -> Activation {
         match self {
             Self::Relu => Activation::Relu,
-            Self::Residual => Activation::None,
+            Self::Residual | Self::ResidualSkip => Activation::None,
         }
     }
 
@@ -48,11 +51,16 @@ impl Ending {
         match self {
             Self::Relu => Epilogue::Relu,
             Self::Residual => Epilogue::Residual,
+            Self::ResidualSkip => Epilogue::ResidualSkip,
         }
     }
 
     fn adds_residual(self) -> bool {
-        matches!(self, Self::Residual)
+        matches!(self, Self::Residual | Self::ResidualSkip)
+    }
+
+    fn adds_skip(self) -> bool {
+        matches!(self, Self::ResidualSkip)
     }
 }
 
@@ -61,6 +69,15 @@ impl Ending {
 enum Runner {
     Path(BodyPath),
     Candidate(Candidate),
+    /// The fused convolution path with the blueprint `cubek-convolution` infers, bypassing the tuner.
+    InferredFused,
+}
+
+impl Runner {
+    /// Whether the runner rounds the value to the maps' type before it adds the skip.
+    fn rounds_before_skip(self) -> bool {
+        matches!(self, Self::Candidate(Candidate::FusedCubek) | Self::InferredFused)
+    }
 }
 
 /// One synthetic layer run over edged maps of a `width` by `height` region.
@@ -80,6 +97,8 @@ struct WideOutputs {
     expected: Vec<f64>,
     /// The convolution and bias alone, before the activation and the residual.
     convolved: Vec<f64>,
+    /// The value before the skip is added, for a runner that rounds it before adding the skip.
+    before_skip: Option<Vec<f64>>,
 }
 
 /// `values` as the maps' type holds them.
@@ -120,14 +139,18 @@ impl BuildTask for WideLayer {
         let maps = as_stored(&edged, self.precision);
         let waves: Vec<f32> = (0..values).map(|index| (index as f32 * 0.11).cos()).collect();
         let residual_maps = as_stored(&waves, self.precision);
+        let ripples: Vec<f32> = (0..values).map(|index| (index as f32 * 0.07).sin()).collect();
+        let skip_maps = as_stored(&ripples, self.precision);
 
         let input = upload_maps(client, &maps, self.precision);
         let residual = upload_maps(client, &residual_maps, self.precision);
+        let skip = upload_maps(client, &skip_maps, self.precision);
         let output = empty(client, values * self.precision.bytes());
         let columns = empty(client, 9 * values * self.precision.bytes());
         let finish = Finish {
             activation: self.ending.activation(),
             residual: self.ending.adds_residual().then_some(&residual),
+            skip: self.ending.adds_skip().then_some(&skip),
         };
 
         match self.runner {
@@ -155,6 +178,13 @@ impl BuildTask for WideLayer {
                 let ran = run_candidate(client, candidate, &convolution);
                 ran.expect("the candidate runs");
             },
+            Runner::InferredFused => {
+                let path = BodyPath::Convolution;
+                let ran = body_layer_with_blueprint(
+                    client, &sizing, &layer, path, &input, &output, frame, finish, false,
+                );
+                ran.expect("the layer runs");
+            },
         }
 
         synced(client);
@@ -162,16 +192,34 @@ impl BuildTask for WideLayer {
         let actual = read_maps(client, &output, self.precision);
         let input_values = widen(&maps);
         let residual_values = widen(&residual_maps);
-        let added = self.ending.adds_residual().then_some(residual_values.as_slice());
+        let skip_values = widen(&skip_maps);
+        let added_values: Vec<f64> = match self.ending.adds_skip() {
+            true => residual_values
+                .iter()
+                .zip(&skip_values)
+                .map(|(residual, skip)| residual + skip)
+                .collect(),
+            false => residual_values,
+        };
+        let added = self.ending.adds_residual().then_some(added_values.as_slice());
         let (width, height) = (self.width, self.height);
         let activation = self.ending.activation();
         let expected = reference_layer(&synthetic, &input_values, width, height, activation, added);
         let convolved = reference_layer(&synthetic, &input_values, width, height, Activation::None, None);
+        let rounds_before_skip = self.ending.adds_skip() && self.runner.rounds_before_skip();
+        let before_skip = rounds_before_skip.then(|| {
+            expected
+                .iter()
+                .zip(&skip_values)
+                .map(|(value, skip)| value - skip)
+                .collect()
+        });
 
         WideOutputs {
             actual,
             expected,
             convolved,
+            before_skip,
         }
     }
 }
@@ -179,8 +227,9 @@ impl BuildTask for WideLayer {
 /// Asserts every value lies within the precision's bound of the reference, and is exactly zero wherever ReLU
 /// clips a clearly negative sum.
 ///
-/// f32 maps allow 1e-4. f16 maps allow two f16 steps at the larger of the value and the bare convolution,
-/// which the unfused paths round before the epilogue, plus 1e-4 for the f32 accumulation near zero.
+/// f32 maps allow 1e-4. f16 maps allow two f16 steps at the largest of the value, the bare convolution,
+/// which the unfused paths round before the epilogue, and the value before the skip where the runner rounds
+/// it before adding the skip. They also allow 1e-4 for the f32 accumulation near zero.
 /// `layer_steps` adds that many f16 steps of the layer's largest bare convolution to every value's bound.
 fn assert_matches_reference(
     name: &str,
@@ -202,8 +251,12 @@ fn assert_matches_reference(
     for (index, actual) in outputs.actual.iter().copied().enumerate() {
         let expected = outputs.expected[index];
         let convolved = outputs.convolved[index];
+        let before_skip = outputs
+            .before_skip
+            .as_ref()
+            .map_or(0.0, |values| values[index].abs());
         let error = (f64::from(actual) - expected).abs();
-        let magnitude = expected.abs().max(convolved.abs()) as f32;
+        let magnitude = expected.abs().max(convolved.abs()).max(before_skip) as f32;
         let bound = match precision {
             Precision::F32 => 1e-4,
             Precision::F16 => 2.0 * f64::from(f16_step(magnitude)) + 1e-4 + layer_bound,
@@ -260,6 +313,39 @@ fn every_path_matches_the_reference_from_64_to_512_features() {
 
                         assert_matches_reference(&name, &outputs, precision, ending, 0.0);
                     }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_fused_path_with_an_inferred_blueprint_matches_the_reference_from_64_to_512_features() {
+    let runs = supported_runs();
+    if !runs.contains(&(BodyPath::Convolution, Precision::F16)) {
+        println!("no f16 cooperative matrix, so the fused path does not run");
+        return;
+    }
+
+    for features in FEATURES {
+        for (width, height) in sizes_for(features) {
+            for bias in [true, false] {
+                for ending in ENDINGS {
+                    let name = format!("inferred fused {features} {width}x{height} bias {bias} {ending:?}");
+                    let task = WideLayer {
+                        features,
+                        bias,
+                        ending,
+                        precision: Precision::F16,
+                        width,
+                        height,
+                        runner: Runner::InferredFused,
+                        winograd: false,
+                    };
+
+                    let outputs = backend().build(task);
+
+                    assert_matches_reference(&name, &outputs, Precision::F16, ending, 0.0);
                 }
             }
         }
@@ -351,4 +437,42 @@ fn every_offered_candidate_matches_the_reference_at_128_256_and_512_features() {
 #[test]
 fn every_candidate_of_a_winograd_layer_matches_the_reference_with_relu_and_without_a_bias() {
     assert_every_candidate_matches(64, true);
+}
+
+struct SkipIsOutput;
+
+impl BuildTask for SkipIsOutput {
+    type Output = ();
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame = region(4, 4);
+        let synthetic = synthetic_layer(64, true, 64);
+        let layer = ConvLayer::upload(
+            client,
+            &synthetic.weights,
+            synthetic.bias.as_deref(),
+            64,
+            Precision::F16,
+            false,
+        );
+        let bytes = (frame.samples() * 64) as usize * Precision::F16.bytes();
+        let input = empty(client, bytes);
+        let output = empty(client, bytes);
+        let finish = Finish {
+            activation: Activation::None,
+            residual: Some(&input),
+            skip: Some(&output),
+        };
+        let convolution = BodyConvolution::of_conv(&layer, &input, &output, frame, finish);
+        let candidate = Candidate::FusedCubek;
+
+        let _ = run_candidate(client, candidate, &convolution);
+    }
+}
+
+#[test]
+#[should_panic(expected = "the output is the skip")]
+fn a_skip_that_is_the_output_is_refused() {
+    backend().build(SkipIsOutput);
 }

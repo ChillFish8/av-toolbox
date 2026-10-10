@@ -1,3 +1,4 @@
+mod add;
 mod direct;
 mod tune;
 mod winograd;
@@ -9,8 +10,9 @@ use cubecl::ir::DeviceProperties;
 use cubecl::prelude::{ComputeClient, Runtime};
 use cubecl::server::Handle;
 
+use self::add::add_maps;
 pub use self::direct::{DirectVariant, WeightStaging};
-use self::direct::{check_variant, run_direct};
+use self::direct::{WRITE_WIDTH, check_variant, run_direct};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::direct::{direct_variants, offered_plane_width};
 pub(crate) use self::tune::takes_tuner;
@@ -28,7 +30,8 @@ use crate::cnn::{Activation, CnnError, ConvLayer, Finish, Precision, Region};
 /// One body convolution of f16 NHWC maps, with its bias and what it applies as it writes.
 ///
 /// The weights are laid out by output channel, row, column and input channel, and the bias, if any, is in
-/// f16. The output is the convolution plus the bias, through `activation`, plus `residual` if given.
+/// f16. The output is the convolution plus the bias, through `activation`, plus `residual` and then `skip`
+/// if given.
 ///
 /// `transformed` holds the layer's Winograd weights, by position, output channel and input channel.
 /// `winograd` is whether the layer is offered the Winograd candidates.
@@ -40,6 +43,7 @@ pub struct BodyConvolution<'a> {
     pub winograd: bool,
     pub bias: Option<&'a Handle>,
     pub residual: Option<&'a Handle>,
+    pub skip: Option<&'a Handle>,
     pub activation: Activation,
     pub output: &'a Handle,
     pub width: u32,
@@ -70,6 +74,7 @@ impl<'a> BodyConvolution<'a> {
             winograd: layer.winograd,
             bias: layer.bias.as_ref(),
             residual: finish.residual,
+            skip: finish.skip,
             activation: finish.activation,
             output,
             width: region.width,
@@ -91,11 +96,12 @@ impl<'a> BodyConvolution<'a> {
         Finish {
             activation: self.activation,
             residual: self.residual,
+            skip: self.skip,
         }
     }
 
     /// Asserts that every buffer holds what the convolution reads or writes through it, and that the output
-    /// is neither the input nor the residual.
+    /// is not the input, the residual or the skip.
     fn check(&self) {
         let half = size_of::<half::f16>() as u64;
         let features = u64::from(self.features);
@@ -142,6 +148,14 @@ impl<'a> BodyConvolution<'a> {
                 "the residual is smaller than the maps"
             );
             assert!(!same_buffer(residual, self.output), "the output is the residual");
+        }
+
+        if let Some(skip) = self.skip {
+            assert!(
+                skip.size_in_used() >= map_bytes,
+                "the skip is smaller than the maps"
+            );
+            assert!(!same_buffer(skip, self.output), "the output is the skip");
         }
     }
 }
@@ -252,9 +266,19 @@ fn run_fused_cubek<R: Runtime>(
     let features = convolution.features as usize;
     let operands = Operands::body(convolution.weights, convolution.bias, features, Precision::F16);
     let region = convolution.region();
-    let finish = convolution.finish();
+    let finish = Finish {
+        skip: None,
+        ..convolution.finish()
+    };
     let input = convolution.input;
     let output = convolution.output;
 
-    launch_fused_convolution(client, &operands, input, output, region, finish, true)
+    let forced = launch_fused_convolution(client, &operands, input, output, region, finish, true)?;
+
+    if let Some(skip) = convolution.skip {
+        let quads = region.samples() as usize * features / WRITE_WIDTH as usize;
+        add_maps(client, output, skip, quads);
+    }
+
+    Ok(forced)
 }

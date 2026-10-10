@@ -469,7 +469,10 @@ pub fn run_padded_layer<R: Runtime>(
 }
 
 /// Convolves the NHWC maps of `region` in `input` with `operands` on cooperative-matrix tiles into `output`,
-/// applying `finish` as each value is written. Gives whether the forced blueprint ran.
+/// applying `finish`'s activation and residual as each value is written. Gives whether the forced blueprint
+/// ran.
+///
+/// `finish` must not carry a skip.
 ///
 /// With `allow_forced` the blueprint is forced where that is known to be faster and exact, and otherwise
 /// `cubek-convolution` infers one.
@@ -482,6 +485,8 @@ pub(crate) fn launch_fused_convolution<R: Runtime>(
     finish: Finish<'_>,
     allow_forced: bool,
 ) -> Result<bool, CnnError> {
+    debug_assert!(finish.skip.is_none(), "the fused convolution does not add a skip");
+
     let bound = bind_convolution::<R>(client, operands, input, output, region, allow_forced);
     let forced = bound.blueprint.is_some();
 

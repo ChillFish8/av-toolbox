@@ -83,6 +83,8 @@ pub enum Epilogue {
     Join,
     /// ReLU applied to the result.
     Relu,
+    /// The maps of a residual and then a skip added to the result.
+    ResidualSkip,
 }
 
 /// What a body convolution's tuning is kept under.

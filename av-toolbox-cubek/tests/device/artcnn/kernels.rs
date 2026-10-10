@@ -72,10 +72,12 @@ impl Epilogue {
             Self::Silu => Finish {
                 activation: Activation::Silu,
                 residual: None,
+                skip: None,
             },
             Self::Residual | Self::Join => Finish {
                 activation: Activation::None,
                 residual: Some(residual),
+                skip: None,
             },
         }
     }
