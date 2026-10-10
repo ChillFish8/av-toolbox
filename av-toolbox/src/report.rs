@@ -1,8 +1,8 @@
-use av_toolbox_graph::{Diagnostic, Severity};
+use av_toolbox_graph::{Diagnostic, Severity, Span};
 use av_toolbox_pipeline::{SourceMap, StageRef};
 use av_toolbox_runtime::RunError;
 use codespan_reporting::diagnostic::{Diagnostic as Report, Label, Severity as Level};
-use codespan_reporting::files::{Error as FilesError, SimpleFiles};
+use codespan_reporting::files::{Error as FilesError, Files as _, SimpleFiles};
 use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 use codespan_reporting::term::{self, Config};
 
@@ -31,6 +31,38 @@ impl PipelineFiles {
 
         Self { files, sources }
     }
+
+    /// Where `span` starts, or `None` when the span is unknown.
+    pub(crate) fn locate(&self, span: Span) -> Option<Located> {
+        if span.is_unknown() {
+            return None;
+        }
+
+        let file_id = span.file.index();
+        let name = self.files.name(file_id).ok()?;
+        let location = self.files.location(file_id, span.start).ok()?;
+
+        Some(Located {
+            file: name,
+            line: location.line_number,
+            column: location.column_number,
+        })
+    }
+
+    /// Adds a note at each call that led to the diagnostic's file.
+    pub(crate) fn with_call_notes(&self, diagnostic: Diagnostic) -> Diagnostic {
+        self.sources.with_call_notes(diagnostic)
+    }
+}
+
+/// Where a span starts in a pipeline file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Located {
+    pub(crate) file: String,
+    /// The 1-based line.
+    pub(crate) line: usize,
+    /// The 1-based column, counted in characters.
+    pub(crate) column: usize,
 }
 
 /// Prints every diagnostic against the files, errors first, then a count of what was found.
@@ -57,7 +89,7 @@ fn write_diagnostics(
         .filter(|diagnostic| diagnostic.severity() == Severity::Warning);
 
     for diagnostic in errors.chain(warnings) {
-        let noted = files.sources.with_call_notes(diagnostic.clone());
+        let noted = files.with_call_notes(diagnostic.clone());
         let report = convert(&noted);
         term::emit_to_write_style(writer, &config, &files.files, &report)?;
     }
@@ -461,5 +493,24 @@ mod tests {
             message,
             "a transfer between host and device failed: the device was lost"
         );
+    }
+
+    #[test]
+    fn a_span_locates_to_its_one_based_line_and_column() {
+        let files = file(TEXT);
+        let span = Span::new(14, 18);
+
+        let located = files.locate(span).expect("a known span");
+
+        assert_eq!(located.file, "pipeline.toml");
+        assert_eq!(located.line, 2);
+        assert_eq!(located.column, 1);
+    }
+
+    #[test]
+    fn an_unknown_span_has_no_location() {
+        let files = file(TEXT);
+
+        assert_eq!(files.locate(Span::unknown()), None);
     }
 }

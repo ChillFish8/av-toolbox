@@ -1,14 +1,27 @@
 use std::collections::BTreeMap;
 
-use av_toolbox_graph::{InputRef, StageSpec};
+use av_toolbox_graph::{Diagnostic, InputRef, Note, Severity, Span, StageSpec};
 use av_toolbox_pipeline::variables::ResolvedVariable;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::profile::file::stage_key;
+use crate::report::PipelineFiles;
 
 /// The version of the export's shape and of the hash input.
 pub(crate) const FORMAT_VERSION: u32 = 1;
+
+/// Everything `inspect` prints about a pipeline.
+#[derive(Debug, Serialize)]
+pub(crate) struct Export {
+    pub(crate) format_version: u32,
+    pub(crate) valid: bool,
+    pub(crate) pipeline: String,
+    pub(crate) hash: Option<String>,
+    pub(crate) variables: Option<BTreeMap<String, ExportedVariable>>,
+    pub(crate) stages: Option<Vec<ExportedStage>>,
+    pub(crate) diagnostics: Vec<ExportedDiagnostic>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct ExportedVariable {
@@ -36,6 +49,31 @@ pub(crate) struct ExportedInput {
     /// The input's name, or `None` when it was given positionally.
     pub(crate) name: Option<String>,
     pub(crate) stage: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct ExportedDiagnostic {
+    pub(crate) severity: String,
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+    #[serde(flatten)]
+    pub(crate) location: ExportedLocation,
+    pub(crate) notes: Vec<ExportedNote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct ExportedNote {
+    pub(crate) message: String,
+    #[serde(flatten)]
+    pub(crate) location: ExportedLocation,
+}
+
+/// Where a diagnostic or note points, with every field `None` when its span is unknown.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub(crate) struct ExportedLocation {
+    pub(crate) file: Option<String>,
+    pub(crate) line: Option<usize>,
+    pub(crate) column: Option<usize>,
 }
 
 pub(crate) fn variables(resolved: &[ResolvedVariable]) -> BTreeMap<String, ExportedVariable> {
@@ -82,14 +120,83 @@ fn input(reference: &InputRef) -> ExportedInput {
     }
 }
 
+/// Every diagnostic, errors first, with a note at each call that led to its file.
+pub(crate) fn diagnostics(files: &PipelineFiles, found: &[Diagnostic]) -> Vec<ExportedDiagnostic> {
+    let errors = found
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == Severity::Error);
+    let warnings = found
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == Severity::Warning);
+
+    let mut exported = Vec::new();
+    for diagnostic in errors.chain(warnings) {
+        let noted = files.with_call_notes(diagnostic.clone());
+        let converted = exported_diagnostic(files, &noted);
+        exported.push(converted);
+    }
+
+    exported
+}
+
+fn exported_diagnostic(files: &PipelineFiles, diagnostic: &Diagnostic) -> ExportedDiagnostic {
+    let span = diagnostic.span();
+    let location = location(files, span);
+    let notes = diagnostic
+        .notes()
+        .iter()
+        .map(|note| exported_note(files, note))
+        .collect();
+
+    ExportedDiagnostic {
+        severity: diagnostic.severity().to_string(),
+        code: diagnostic.code().as_str(),
+        message: diagnostic.message().to_string(),
+        location,
+        notes,
+    }
+}
+
+fn exported_note(files: &PipelineFiles, note: &Note) -> ExportedNote {
+    let location = location(files, note.span);
+
+    ExportedNote {
+        message: note.message.clone(),
+        location,
+    }
+}
+
+fn location(files: &PipelineFiles, span: Span) -> ExportedLocation {
+    let Some(located) = files.locate(span) else {
+        return ExportedLocation::default();
+    };
+
+    ExportedLocation {
+        file: Some(located.file),
+        line: Some(located.line),
+        column: Some(located.column),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use av_toolbox_core::StageKind;
-    use av_toolbox_graph::{ArgSpans, InputRef, Span, Spanned, StageSpec};
+    use av_toolbox_graph::{
+        ArgSpans,
+        Diagnostic,
+        DiagnosticCode,
+        FileId,
+        InputRef,
+        Span,
+        Spanned,
+        StageSpec,
+    };
+    use av_toolbox_pipeline::SourceMap;
     use av_toolbox_pipeline::variables::{ResolvedVariable, VariableType, VariableValue};
     use serde_json::json;
 
     use super::*;
+    use crate::report::PipelineFiles;
 
     fn input(name: Option<&str>, target: &str) -> Spanned<InputRef> {
         let reference = InputRef {
@@ -181,5 +288,63 @@ mod tests {
             "width": { "type": "integer", "value": 1280 },
         });
         assert_eq!(value, expected);
+    }
+
+    const ROOT_TEXT: &str = "[filter.blur]\ntype = \"test/blur\"\n";
+
+    fn root_files() -> PipelineFiles {
+        let mut sources = SourceMap::new();
+        sources.push("pipeline.toml".into(), ROOT_TEXT.to_string(), Vec::new());
+
+        PipelineFiles::new(sources)
+    }
+
+    #[test]
+    fn errors_export_before_warnings_with_their_location() {
+        let warning = Diagnostic::warning(DiagnosticCode::UnusedStage, "", Span::new(1, 7), "unused");
+        let error = Diagnostic::error(DiagnosticCode::UnknownStage, "", Span::new(14, 18), "unknown");
+        let found = [warning, error];
+
+        let exported = diagnostics(&root_files(), &found);
+
+        assert_eq!(exported[0].severity, "error");
+        assert_eq!(exported[0].code, "unknown-stage");
+        assert_eq!(exported[0].message, "unknown");
+        assert_eq!(exported[0].location.file.as_deref(), Some("pipeline.toml"));
+        assert_eq!(exported[0].location.line, Some(2));
+        assert_eq!(exported[0].location.column, Some(1));
+        assert_eq!(exported[1].severity, "warning");
+        assert_eq!(exported[1].location.column, Some(2));
+    }
+
+    #[test]
+    fn an_unknown_span_exports_null_locations() {
+        let error = Diagnostic::error(DiagnosticCode::UnreadableFile, "", Span::unknown(), "cannot read");
+
+        let exported = diagnostics(&root_files(), &[error]);
+        let value = serde_json::to_value(&exported[0]).expect("plain JSON");
+
+        assert_eq!(value["file"], json!(null));
+        assert_eq!(value["line"], json!(null));
+        assert_eq!(value["column"], json!(null));
+    }
+
+    #[test]
+    fn a_diagnostic_in_a_called_file_notes_the_call_with_its_location() {
+        let mut sources = SourceMap::new();
+        let root = sources.push("main.toml".into(), ROOT_TEXT.to_string(), Vec::new());
+        let call = Span::in_file(root, 14, 18);
+        let part = sources.push("part.toml".into(), ROOT_TEXT.to_string(), vec![call]);
+        let files = PipelineFiles::new(sources);
+        let span = Span::in_file(part, 1, 7);
+        let error = Diagnostic::error(DiagnosticCode::UnknownStage, "", span, "unknown");
+
+        let exported = diagnostics(&files, &[error]);
+
+        assert_eq!(exported[0].location.file.as_deref(), Some("part.toml"));
+        assert_eq!(exported[0].notes[0].message, "called from here");
+        assert_eq!(exported[0].notes[0].location.file.as_deref(), Some("main.toml"));
+        assert_eq!(exported[0].notes[0].location.line, Some(2));
+        assert_eq!(root, FileId::ROOT);
     }
 }
