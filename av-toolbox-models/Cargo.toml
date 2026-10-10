@@ -1,6 +1,6 @@
 [package]
 name = "av-toolbox-models"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license.workspace = true
 description = "Finds, installs and prunes the weight files av-toolbox stages load."
