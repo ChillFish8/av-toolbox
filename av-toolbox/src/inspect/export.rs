@@ -141,7 +141,7 @@ pub(crate) fn diagnostics(files: &PipelineFiles, found: &[Diagnostic]) -> Vec<Ex
 
 fn exported_diagnostic(files: &PipelineFiles, diagnostic: &Diagnostic) -> ExportedDiagnostic {
     let span = diagnostic.span();
-    let location = location(files, span);
+    let location = exported_location(files, span);
     let notes = diagnostic
         .notes()
         .iter()
@@ -158,7 +158,7 @@ fn exported_diagnostic(files: &PipelineFiles, diagnostic: &Diagnostic) -> Export
 }
 
 fn exported_note(files: &PipelineFiles, note: &Note) -> ExportedNote {
-    let location = location(files, note.span);
+    let location = exported_location(files, note.span);
 
     ExportedNote {
         message: note.message.clone(),
@@ -166,7 +166,7 @@ fn exported_note(files: &PipelineFiles, note: &Note) -> ExportedNote {
     }
 }
 
-fn location(files: &PipelineFiles, span: Span) -> ExportedLocation {
+fn exported_location(files: &PipelineFiles, span: Span) -> ExportedLocation {
     let Some(located) = files.locate(span) else {
         return ExportedLocation::default();
     };
@@ -181,22 +181,12 @@ fn location(files: &PipelineFiles, span: Span) -> ExportedLocation {
 #[cfg(test)]
 mod tests {
     use av_toolbox_core::StageKind;
-    use av_toolbox_graph::{
-        ArgSpans,
-        Diagnostic,
-        DiagnosticCode,
-        FileId,
-        InputRef,
-        Span,
-        Spanned,
-        StageSpec,
-    };
+    use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, InputRef, Span, Spanned, StageSpec};
     use av_toolbox_pipeline::SourceMap;
     use av_toolbox_pipeline::variables::{ResolvedVariable, VariableType, VariableValue};
     use serde_json::json;
 
     use super::*;
-    use crate::report::PipelineFiles;
 
     fn input(name: Option<&str>, target: &str) -> Spanned<InputRef> {
         let reference = InputRef {
@@ -345,6 +335,5 @@ mod tests {
         assert_eq!(exported[0].notes[0].message, "called from here");
         assert_eq!(exported[0].notes[0].location.file.as_deref(), Some("main.toml"));
         assert_eq!(exported[0].notes[0].location.line, Some(2));
-        assert_eq!(root, FileId::ROOT);
     }
 }

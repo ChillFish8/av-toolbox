@@ -81,6 +81,11 @@ pub(crate) enum Command {
     /// move between host and device and which stages run in parallel.
     Explain(ExplainArgs),
 
+    /// Check a pipeline and print it as JSON for other tools.
+    ///
+    /// No device is opened. The exit code is 1 when the pipeline has errors, which the JSON lists.
+    Inspect(InspectArgs),
+
     /// Download a pack of model weights from this project's GitHub releases.
     ///
     /// The pack comes from the release matching this build's version, or from the latest release when that one
@@ -186,6 +191,22 @@ fn parse_frame_budget(raw: &str) -> Result<usize, String> {
 pub(crate) struct ListStagesArgs {
     /// A stage type such as `y4m/pipe`, to show its inputs and arguments.
     pub(crate) stage_type: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct InspectArgs {
+    /// The pipeline file to inspect.
+    pub(crate) pipeline: PathBuf,
+
+    /// Sets a pipeline variable, such as `--var clip_input=in.mkv`. Can be given many times.
+    ///
+    /// Takes precedence over an `AVTB_VAR_<NAME>` environment variable for the same variable.
+    #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
+    pub(crate) vars: Vec<(String, String)>,
+
+    /// Print only the pipeline's hash, which changes whenever its resolved stages do.
+    #[arg(long)]
+    pub(crate) hash: bool,
 }
 
 #[derive(Debug, clap::Args)]

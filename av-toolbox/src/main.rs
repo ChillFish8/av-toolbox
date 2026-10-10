@@ -37,6 +37,7 @@ fn main() -> ExitCode {
         Command::ListDevices => list_devices::run(&args.accelerators),
         Command::ListStages(list) => list_stages::run(list),
         Command::Explain(explain) => explain::run(&args, explain),
+        Command::Inspect(inspect_args) => inspect::run(&args, inspect_args),
         Command::Pull(pull_args) => pull::run(pull_args),
     }
 }

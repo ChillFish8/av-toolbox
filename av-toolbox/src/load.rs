@@ -30,12 +30,19 @@ pub(crate) struct Loaded {
     pub(crate) specs: Vec<StageSpec>,
 }
 
-/// Reads a pipeline and every file it calls, or prints why it cannot be.
-pub(crate) fn load(path: &Path, vars: &[(String, String)], stderr: &mut dyn WriteColor) -> Option<Loaded> {
+/// The variables `--var` flags give, over those `AVTB_VAR_<NAME>` environment variables give.
+pub(crate) fn supplied(vars: &[(String, String)]) -> Supplied {
     let mut supplied = Supplied::from_env();
     for (name, value) in vars {
         supplied.set_flag(name.clone(), value.clone());
     }
+
+    supplied
+}
+
+/// Reads a pipeline and every file it calls, or prints why it cannot be.
+pub(crate) fn load(path: &Path, vars: &[(String, String)], stderr: &mut dyn WriteColor) -> Option<Loaded> {
+    let supplied = supplied(vars);
 
     let loaded = av_toolbox_pipeline::load(path, &DiskFiles, &supplied);
 

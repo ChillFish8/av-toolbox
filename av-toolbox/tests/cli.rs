@@ -1082,3 +1082,49 @@ inputs = ["resize"]
         assert!(!executed.stdout.is_empty());
     }
 }
+
+#[test]
+fn inspect_prints_json_whose_hash_matches_inspect_hash() {
+    let pipeline = example("resize.toml");
+    let path = pipeline.to_str().expect("utf-8 path");
+
+    let exported = toolbox(&["inspect", path]);
+    let hashed = toolbox(&["inspect", path, "--hash"]);
+    let stdout = text(&exported.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("the export is JSON");
+    let printed = text(&hashed.stdout);
+
+    assert!(exported.status.success(), "{}", text(&exported.stderr));
+    assert!(hashed.status.success());
+    assert_eq!(parsed["valid"], serde_json::json!(true));
+    assert_eq!(Some(printed.trim()), parsed["hash"].as_str());
+}
+
+#[test]
+fn inspect_of_a_broken_file_exits_one_with_json_diagnostics() {
+    let file = written("[sources.input]\ntype = \"y4m/stdin\"\n");
+    let path = file.path().to_str().expect("utf-8 path");
+
+    let output = toolbox(&["inspect", path]);
+    let stdout = text(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("the export is JSON");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(parsed["valid"], serde_json::json!(false));
+    assert_eq!(
+        parsed["diagnostics"][0]["code"],
+        serde_json::json!("invalid-definition")
+    );
+    assert!(text(&output.stderr).contains("error[invalid-definition]"));
+}
+
+#[test]
+fn inspect_hash_of_a_broken_file_prints_nothing() {
+    let file = written("[sources.input]\ntype = \"y4m/stdin\"\n");
+    let path = file.path().to_str().expect("utf-8 path");
+
+    let output = toolbox(&["inspect", path, "--hash"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+}

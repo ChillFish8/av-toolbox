@@ -4,8 +4,8 @@ use super::export::{ExportedStage, FORMAT_VERSION};
 
 /// The `sha256:<hex>` hash of `stages`.
 ///
-/// The stages are sorted by key and written as compact JSON with sorted keys.
-/// So neither the order of the stages nor the order of their args changes the hash.
+/// The stages are sorted by key and written as compact JSON with sorted keys, so neither the order of the
+/// stages nor the order of their args changes the hash.
 pub(crate) fn pipeline_hash(stages: &[ExportedStage]) -> String {
     let mut sorted = stages.to_vec();
     sorted.sort_by(|left, right| left.key.cmp(&right.key));
