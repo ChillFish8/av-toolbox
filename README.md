@@ -3,12 +3,40 @@
 GPU accelerated video filtering pipelines. Built on the learnings of [av-denoise](https://github.com/ChillFish8/av-denoise)
 
 
+## Installing
+
+Each release has a prebuilt binary per platform, with ffms2 and FFmpeg linked in.
+
+| Archive                           | Backends     |
+|-----------------------------------|--------------|
+| `av-toolbox-linux-x86.tar.gz`     | vulkan, cuda |
+| `av-toolbox-win64-x86.zip`        | vulkan, cuda |
+| `av-toolbox-macos-aarch64.tar.gz` | metal        |
+
+Optional models are not bundled. Fetch one with `av-toolbox pull <name>`.
+
+### Docker
+
+Images are published to `ghcr.io/chillfish8/av-toolbox` as `vulkan-<version>`, `cuda-<version>` and
+`rocm-<version>`. Models are stored in `/models`, so mount a volume there to keep them between runs.
+
+```bash
+docker run --rm -v avtb-models:/models ghcr.io/chillfish8/av-toolbox:vulkan-latest pull artcnn
+```
+
 ## Building
 
 Pick a backend when building. `vulkan` works on most machines, `metal` on macOS.
 
 ```bash
 cargo install --path av-toolbox --features vulkan
+```
+
+To link ffms2 and FFmpeg statically, as the release binaries do, build them from vcpkg first.
+
+```bash
+just static-deps
+just build-static
 ```
 
 ## Running a pipeline
