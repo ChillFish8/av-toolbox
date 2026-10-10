@@ -1,0 +1,267 @@
+name: Release binaries
+
+on:
+  release:
+    types: [published]
+  # A dispatch run is a dry run. It builds, smoke tests and checks the linkage of every binary, and uploads the
+  # archives as workflow artifacts without attaching them to a release. Leave `version` empty to only check the build.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 0.2.0. Defaults to the Cargo.toml version."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve and check version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: bash .github/scripts/resolve-version.sh
+
+  build:
+    name: ${{ matrix.platform }}
+    needs: resolve-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # One binary per platform carrying every backend that platform can reach. cudarc and ash load their driver
+        # libraries at runtime, so a vulkan and cuda binary runs on a host with only one of them.
+        # Linux builds on 22.04 for the older glibc floor.
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x86
+            features: vulkan,cuda,static-ffms2
+            triplet: x64-linux-release
+            archive: av-toolbox-linux-x86.tar.gz
+            binary: av-toolbox
+          - os: windows-latest
+            platform: win64-x86
+            features: vulkan,cuda,static-ffms2
+            triplet: x64-windows-static-md-release
+            archive: av-toolbox-win64-x86.zip
+            binary: av-toolbox.exe
+          - os: macos-14
+            platform: macos-aarch64
+            features: metal,static-ffms2
+            triplet: arm64-osx-release
+            archive: av-toolbox-macos-aarch64.tar.gz
+            binary: av-toolbox
+    concurrency:
+      group: release-binaries-${{ matrix.platform }}-${{ github.event.release.tag_name || inputs.version || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # nasm builds av-scenechange's assembly and clang backs ffms2-sys's bindgen. The rest is what vcpkg needs to
+      # build FFmpeg and dav1d.
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nasm clang libclang-dev pkg-config ninja-build
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install nasm pkg-config ninja
+
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Point bindgen at LLVM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
+      - name: Checkout vcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="$(jq -r '."builtin-baseline"' vcpkg.json)"
+          git clone https://github.com/microsoft/vcpkg.git "${RUNNER_TEMP}/vcpkg"
+          git -C "${RUNNER_TEMP}/vcpkg" checkout --quiet "${baseline}"
+          echo "VCPKG_ROOT=${RUNNER_TEMP}/vcpkg" >> "${GITHUB_ENV}"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=${RUNNER_TEMP}/vcpkg-cache" >> "${GITHUB_ENV}"
+          mkdir -p "${RUNNER_TEMP}/vcpkg-cache"
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/ports/**') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/ports/**') }}-
+            vcpkg-${{ matrix.triplet }}-
+
+      - name: Build static ffms2 and FFmpeg
+        shell: bash
+        env:
+          TRIPLET: ${{ matrix.triplet }}
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}" in
+            Windows) "${VCPKG_ROOT}/bootstrap-vcpkg.bat" -disableMetrics ;;
+            *) "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics ;;
+          esac
+          "${VCPKG_ROOT}/vcpkg" install --triplet "${TRIPLET}" --host-triplet "${TRIPLET}"
+
+      - name: Save vcpkg packages
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+
+      # ffms2-sys reads the headers and archive from FFMS_INCLUDE_DIR and FFMS_LIB_DIR, and the build script reads
+      # the rest of the chain through pkg-config.
+      - name: Export the static library paths
+        shell: bash
+        env:
+          TRIPLET: ${{ matrix.triplet }}
+        run: |
+          set -euo pipefail
+          prefix="${GITHUB_WORKSPACE}/vcpkg_installed/${TRIPLET}"
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            prefix="$(cygpath -w "${prefix}")"
+            echo "PKG_CONFIG=${prefix}\\tools\\pkgconf\\pkgconf.exe" >> "${GITHUB_ENV}"
+            echo "FFMS_INCLUDE_DIR=${prefix}\\include" >> "${GITHUB_ENV}"
+            echo "FFMS_LIB_DIR=${prefix}\\lib" >> "${GITHUB_ENV}"
+            echo "PKG_CONFIG_PATH=${prefix}\\lib\\pkgconfig" >> "${GITHUB_ENV}"
+          else
+            echo "FFMS_INCLUDE_DIR=${prefix}/include" >> "${GITHUB_ENV}"
+            echo "FFMS_LIB_DIR=${prefix}/lib" >> "${GITHUB_ENV}"
+            echo "PKG_CONFIG_PATH=${prefix}/lib/pkgconfig" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Build the CLI
+        run: cargo build --release -p av-toolbox --features ${{ matrix.features }}
+
+      # Hosted runners have no accelerator, so this only proves the binary starts.
+      - name: Smoke test
+        shell: bash
+        run: ./target/release/${{ matrix.binary }} --help > /dev/null
+
+      - name: Set up MSVC tools (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Fails if the binary still loads ffms2, FFmpeg or dav1d from the host.
+      - name: Check nothing is linked dynamically
+        shell: bash
+        env:
+          BINARY: target/release/${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}" in
+            Linux) listing="$(ldd "${BINARY}")" ;;
+            macOS) listing="$(otool -L "${BINARY}")" ;;
+            Windows) listing="$(dumpbin //dependents "${BINARY}")" ;;
+          esac
+          echo "${listing}"
+          if echo "${listing}" | grep -Ei 'ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d'; then
+            echo "::error::${BINARY} links a codec library dynamically"
+            exit 1
+          fi
+
+      # The binary ships with the project licence and the licences of everything linked into it. Linux and macOS get
+      # a tarball to keep the file mode. COPYFILE_DISABLE stops macOS tar adding ._ metadata entries.
+      - name: Package the CLI
+        shell: bash
+        env:
+          COPYFILE_DISABLE: "1"
+          BINARY: ${{ matrix.binary }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          staging="${RUNNER_TEMP}/cli"
+          mkdir -p "${staging}"
+          cp "target/release/${BINARY}" LICENSE THIRD-PARTY-LICENSES "${staging}/"
+          case "${RUNNER_OS}" in
+            Windows) 7z a -tzip "${GITHUB_WORKSPACE}/${ARCHIVE}" "${staging}/*" ;;
+            *) tar -czf "${GITHUB_WORKSPACE}/${ARCHIVE}" -C "${staging}" "${BINARY}" LICENSE THIRD-PARTY-LICENSES ;;
+          esac
+
+      - name: List the CLI archive
+        shell: bash
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          case "${ARCHIVE}" in
+            *.zip) 7z l "${ARCHIVE}" ;;
+            *) tar -tvzf "${ARCHIVE}" ;;
+          esac
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+      # vcpkg's build logs are the only record of a failed port build.
+      - name: Upload vcpkg logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-${{ matrix.platform }}
+          path: ${{ runner.temp }}/vcpkg/buildtrees/**/*.log
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish release binaries
+    needs: [resolve-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: List downloaded release assets
+        run: ls -la release-assets
+
+      - name: Attach release assets to the GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+
+      - name: Report the dry run
+        if: github.event_name != 'release'
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dry run"
+            echo
+            echo "All three targets built a statically linked CLI archive at version \`${VERSION}\`."
+            echo "Each binary passed its \`--help\` smoke test and the check for dynamically linked codec libraries."
+            echo "Nothing was attached to a release. The archives are on this run as workflow artifacts."
+          } >> "${GITHUB_STEP_SUMMARY}"
