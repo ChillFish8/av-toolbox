@@ -1,0 +1,114 @@
+name: PR checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly rustfmt
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo +nightly fmt --all --check
+
+  rust-clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nasm clang libclang-dev libffms2-dev
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: just clippy -- -D warnings
+
+  check-backends:
+    name: check backends
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # cubecl-hip-sys falls back to its newest bindings without a HIP install, so rocm lints without ROCm.
+      - name: Check backends
+        run: just check-backends
+
+  rust-check-windows:
+    name: check (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # ffms2 is left out because the runner has no ffms2 to bind against. The release build covers it.
+      - name: Check
+        run: cargo check -p av-toolbox --no-default-features --features vulkan
+
+  dependencies-test:
+    name: dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Test the dependency builder and converters
+        run: just dependencies-test
