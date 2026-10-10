@@ -1,5 +1,6 @@
 mod add;
 mod direct;
+mod strided;
 mod tune;
 mod winograd;
 

@@ -29,9 +29,14 @@ pub use self::kernels::{
     DirectVariant,
     Epilogue,
     Kernels,
+    Stride,
+    StridedLayer,
+    StridedVariant,
     WeightStaging,
     WinogradVariant,
     offered_candidates,
+    run_strided,
+    strided_variant,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use self::kernels::{

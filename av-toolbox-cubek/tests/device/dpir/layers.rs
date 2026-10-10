@@ -129,7 +129,13 @@ fn mirror_matches_its_reference() {
 }
 
 /// A layer of `kind` from `in_channels` to `out_channels`, with values between -`scale` and `scale`.
-fn weight_layer(kind: LayerKind, in_channels: u32, out_channels: u32, seed: u32, scale: f32) -> WeightLayer {
+pub(super) fn weight_layer(
+    kind: LayerKind,
+    in_channels: u32,
+    out_channels: u32,
+    seed: u32,
+    scale: f32,
+) -> WeightLayer {
     let taps = match kind {
         LayerKind::Conv => 9,
         LayerKind::Down | LayerKind::Up => 4,
@@ -146,7 +152,7 @@ fn weight_layer(kind: LayerKind, in_channels: u32, out_channels: u32, seed: u32,
 }
 
 /// `layer` with its values as the device holds them in `precision`.
-fn stored_layer(layer: &WeightLayer, precision: Precision) -> WeightLayer {
+pub(super) fn stored_layer(layer: &WeightLayer, precision: Precision) -> WeightLayer {
     let stored = as_stored(&layer.values, precision);
     let values = stored.into_iter().map(|value| value as f32).collect();
 
@@ -157,7 +163,7 @@ fn stored_layer(layer: &WeightLayer, precision: Precision) -> WeightLayer {
 }
 
 /// The relative error a layer summing `depth` products may reach in `precision`.
-fn bound(precision: Precision, depth: u32) -> f64 {
+pub(super) fn bound(precision: Precision, depth: u32) -> f64 {
     match precision {
         Precision::F32 => F32_BOUND,
         Precision::F16 => F16_EPSILON * f64::from(depth).sqrt(),
@@ -166,7 +172,13 @@ fn bound(precision: Precision, depth: u32) -> f64 {
 
 /// Asserts `actual` lies within `allowed` relative error of `expected`, measuring each error against the
 /// expected value's magnitude, or [FLOOR] where that is smaller.
-fn assert_matches(name: &str, precision: Precision, allowed: f64, actual: &[f32], expected: &[f64]) {
+pub(super) fn assert_matches(
+    name: &str,
+    precision: Precision,
+    allowed: f64,
+    actual: &[f32],
+    expected: &[f64],
+) {
     assert_eq!(actual.len(), expected.len(), "{name}: the value counts differ");
 
     let mut largest_error = 0.0f64;
@@ -387,12 +399,12 @@ fn the_head_reads_three_planes_and_the_strength() {
 }
 
 /// The gather then the matrix product of a 2x2 stride 2 convolution.
-struct Down {
-    layer: WeightLayer,
-    maps: Vec<f32>,
-    width: u32,
-    height: u32,
-    precision: Precision,
+pub(super) struct Down {
+    pub(super) layer: WeightLayer,
+    pub(super) maps: Vec<f32>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) precision: Precision,
 }
 
 impl BuildTask for Down {
@@ -467,12 +479,12 @@ fn the_gather_and_product_match_the_strided_convolution() {
 }
 
 /// The matrix product then the scatter of a 2x2 stride 2 transposed convolution.
-struct Up {
-    layer: WeightLayer,
-    maps: Vec<f32>,
-    width: u32,
-    height: u32,
-    precision: Precision,
+pub(super) struct Up {
+    pub(super) layer: WeightLayer,
+    pub(super) maps: Vec<f32>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) precision: Precision,
 }
 
 impl BuildTask for Up {

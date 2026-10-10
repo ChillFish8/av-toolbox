@@ -14,8 +14,13 @@ use crate::cnn::{
     PaddedLastLayer,
     Precision,
     Region,
+    Stride,
+    StridedLayer,
+    StridedVariant,
     encode,
     run_layer,
+    run_strided,
+    strided_variant,
 };
 use crate::dpir::{
     HeadLayer,
@@ -402,6 +407,16 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         Ok(())
     }
 
+    /// The strided kernel's variant for a `stride` layer reading `channels` channels, when the pass runs one.
+    fn strided(&self, stride: Stride, channels: u32) -> Option<StridedVariant> {
+        let on_cooperative_matrices = self.path != BodyPath::Im2col && self.dpir.precision == Precision::F16;
+        let properties = self.client.properties();
+
+        on_cooperative_matrices
+            .then(|| strided_variant(properties, stride, channels))
+            .flatten()
+    }
+
     /// Halves `state` of `level` into the next level's skip map, giving that map.
     fn down(&mut self, level: usize, state: &'a Handle) -> Result<&'a Handle, CnnError> {
         let [_, spare, ..] = self.levels[level];
@@ -409,6 +424,22 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         let region = self.level_region(level);
         let channels = WIDTHS[level];
         let precision = self.dpir.precision;
+        let weights = &self.dpir.downs[level];
+
+        if let Some(variant) = self.strided(Stride::Down, channels) {
+            let layer = StridedLayer {
+                input: state,
+                weights,
+                output: next_skip,
+                width: region.width,
+                height: region.height,
+                channels,
+                stride: Stride::Down,
+            };
+            run_strided(self.client, variant, &layer)?;
+
+            return Ok(next_skip);
+        }
 
         gather(
             self.client,
@@ -429,7 +460,7 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
             spare,
             rows,
             depth,
-            &self.dpir.downs[level],
+            weights,
             columns,
             precision,
             next_skip,
@@ -444,13 +475,38 @@ impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
         let [_, spare, output, _] = self.levels[level];
         let deeper_region = self.level_region(deeper);
         let precision = self.dpir.precision;
+        let channels = WIDTHS[deeper];
         // The up layers run deepest first.
-        let matrix = &self.dpir.ups[DEEPEST - deeper];
+        let weights = &self.dpir.ups[DEEPEST - deeper];
+
+        if let Some(variant) = self.strided(Stride::Up, channels) {
+            let layer = StridedLayer {
+                input: state,
+                weights,
+                output,
+                width: deeper_region.width,
+                height: deeper_region.height,
+                channels,
+                stride: Stride::Up,
+            };
+            run_strided(self.client, variant, &layer)?;
+
+            return Ok(output);
+        }
 
         let rows = deeper_region.samples() as usize;
-        let depth = WIDTHS[deeper] as usize;
+        let depth = channels as usize;
         let columns = 4 * WIDTHS[level] as usize;
-        matrix_product(self.client, state, rows, depth, matrix, columns, precision, spare)?;
+        matrix_product(
+            self.client,
+            state,
+            rows,
+            depth,
+            weights,
+            columns,
+            precision,
+            spare,
+        )?;
 
         scatter(
             self.client,

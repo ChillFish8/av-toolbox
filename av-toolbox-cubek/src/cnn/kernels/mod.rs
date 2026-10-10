@@ -1,5 +1,6 @@
 mod add;
 mod direct;
+mod strided;
 mod tune;
 mod winograd;
 
@@ -15,6 +16,7 @@ pub use self::direct::{DirectVariant, WeightStaging};
 use self::direct::{WRITE_WIDTH, check_variant, run_direct};
 #[cfg(any(test, feature = "test-support"))]
 pub use self::direct::{direct_variants, offered_plane_width};
+pub use self::strided::{Stride, StridedLayer, StridedVariant, run_strided, strided_variant};
 pub(crate) use self::tune::takes_tuner;
 pub use self::tune::{Epilogue, Kernels, offered_candidates, run_tuned};
 #[cfg(any(test, feature = "test-support"))]
