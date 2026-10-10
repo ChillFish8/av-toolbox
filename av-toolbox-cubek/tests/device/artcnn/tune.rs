@@ -304,15 +304,14 @@ fn the_tuner_chooses_the_fastest_measured_candidate() {
     );
 }
 
-/// One body convolution run twice under one label: first by `tuned`, then by `cached`, whose candidate at
-/// each of `tuned`'s indices fails.
-struct CachedFailure {
+/// One body convolution run twice under one label, first by `tuned` and then by `changed`.
+struct ChangedList {
     tuned: Vec<Candidate>,
-    cached: Vec<Candidate>,
+    changed: Vec<Candidate>,
     label: String,
 }
 
-impl BuildTask for CachedFailure {
+impl BuildTask for ChangedList {
     type Output = Option<(TunedRun, Result<TunedRun, av_toolbox_cubek::artcnn::CnnError>)>;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
@@ -338,22 +337,22 @@ impl BuildTask for CachedFailure {
             label: self.label.clone(),
             candidates: self.tuned,
         };
-        let cached_kernels = Kernels::Among {
+        let changed_kernels = Kernels::Among {
             label: self.label,
-            candidates: self.cached,
+            candidates: self.changed,
         };
 
         let tuned = run_tuned(client, &tuned_kernels, &convolution, epilogue.kind());
         let tuned = tuned.expect("the first list tunes");
-        let cached = run_tuned(client, &cached_kernels, &convolution, epilogue.kind());
+        let changed = run_tuned(client, &changed_kernels, &convolution, epilogue.kind());
         synced(client);
 
-        Some((tuned, cached))
+        Some((tuned, changed))
     }
 }
 
 #[test]
-fn a_cached_winner_that_fails_to_launch_gives_an_error() {
+fn a_changed_candidate_list_tunes_apart_from_the_list_before_it() {
     let offered = offered_variants(64);
     let Some(default_variant) = offered.first().copied() else {
         println!("the device offers no direct variant, so there is nothing to tune");
@@ -365,20 +364,25 @@ fn a_cached_winner_that_fails_to_launch_gives_an_error() {
         columns: 24,
         ..default_variant
     });
-    // Both of the first list's indices hold a failing candidate in the second, which still holds a good
-    // one, so it reaches the tuner and its cached winner.
-    let task = CachedFailure {
+    // Both of the first list's indices hold a failing candidate in the second, so reusing the first list's
+    // winner would launch a failing candidate.
+    let task = ChangedList {
         tuned: vec![good, good],
-        cached: vec![failing, failing, good],
-        label: fresh_tune_label("cached-failure"),
+        changed: vec![failing, failing, good],
+        label: fresh_tune_label("changed-list"),
     };
 
-    let Some((tuned, cached)) = backend().build(task) else {
+    let Some((tuned, changed)) = backend().build(task) else {
         println!("no f16 cooperative matrix, so there is nothing to tune");
         return;
     };
 
-    println!("tuned {tuned:?}, cached {cached:?}");
+    println!("tuned {tuned:?}, changed {changed:?}");
+    let changed = changed.expect("the changed list runs its own winner");
     assert!(tuned.executions > 1, "the first list did not benchmark");
-    assert!(cached.is_err(), "{cached:?}");
+    assert!(
+        changed.executions > 1,
+        "the changed list reused the first list's tuning"
+    );
+    assert_eq!(changed.run.candidate, Some(good));
 }

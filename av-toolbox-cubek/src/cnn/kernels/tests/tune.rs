@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use super::{R9700, TestDevice};
 use crate::artcnn::{Model, offered_candidates};
-use crate::cnn::kernels::tune::{Choice, SizeBucket, choose, fixed_candidate};
+use crate::cnn::kernels::tune::{Choice, SizeBucket, choose, fixed_candidate, list_fingerprint};
 use crate::cnn::{Candidate, DirectVariant, Kernels, direct_variants};
 
 #[test]
@@ -75,4 +75,24 @@ fn the_fixed_candidate_takes_the_first_offered_layout_where_the_default_does_not
 
     assert_eq!(at_64, Candidate::Direct(DirectVariant::default()));
     assert_eq!(at_512, Candidate::Direct(one_row));
+}
+
+#[test]
+fn a_candidate_list_has_the_same_fingerprint_on_every_run() {
+    let fingerprint = list_fingerprint(&[Candidate::FusedCubek]);
+
+    assert_eq!(fingerprint, "23c883934af57405");
+}
+
+#[test]
+fn a_changed_candidate_list_has_a_different_fingerprint() {
+    let properties = R9700.properties();
+    let offered = direct_variants(&properties, 64);
+    let mut candidates: Vec<Candidate> = offered.into_iter().map(Candidate::Direct).collect();
+    let before = list_fingerprint(&candidates);
+
+    candidates.pop();
+    let after = list_fingerprint(&candidates);
+
+    assert_ne!(before, after);
 }

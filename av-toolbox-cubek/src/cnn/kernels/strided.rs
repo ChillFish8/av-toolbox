@@ -524,6 +524,8 @@ pub fn run_strided<R: Runtime>(
     variant: StridedVariant,
     layer: &StridedLayer<'_>,
 ) -> Result<(), CnnError> {
+    assert!(!same_buffer(layer.input, layer.output), "the output is the input");
+
     let shape = strided_shape(variant, layer.stride, layer.channels);
     let shape = shape.map_err(CnnError::Convolution)?;
     let properties = client.properties();
@@ -547,7 +549,6 @@ pub fn run_strided<R: Runtime>(
     let even = layer.stride == Stride::Up || splits;
     assert!(even, "a down layer's map does not split into 2x2 blocks");
     assert!(layer.width > 0 && layer.height > 0, "the map is empty");
-    assert!(!same_buffer(layer.input, layer.output), "the output is the input");
     assert!(
         layer.input.size_in_used() >= input_values as u64 * half,
         "the input is smaller than the map"

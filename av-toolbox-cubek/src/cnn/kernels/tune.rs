@@ -38,6 +38,12 @@ const OFFERED_LABEL: &str = "offered";
 /// list.
 const OFFERED_WINOGRAD_LABEL: &str = "offered-winograd";
 
+/// The 64-bit FNV-1a offset basis.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// The 64-bit FNV-1a prime.
+const FNV_PRIME: u64 = 0x0100_0000_01b3;
+
 /// Chooses each body convolution's candidate, per device and tune key.
 static TUNER: LocalTuner<TuneKey, String> = LocalTuner::new("av-toolbox-cnn-body-convolution");
 
@@ -278,18 +284,39 @@ fn tunable_set<R: Runtime>(candidates: &[Candidate]) -> TunableSet<TuneKey, Body
 
 /// The name the tuner keeps a device's tunings of the list `label` under.
 ///
-/// The device is named by its runtime and the limits its candidates are chosen by.
-fn tuner_id<R: Runtime>(client: &ComputeClient<R>, label: &str) -> String {
+/// The device is named by its runtime and the limits its candidates are chosen by. The list's
+/// fingerprint keeps each version of a list in its own file. CubeCL keeps one tuning a key when it loads a
+/// file, so tunings of an older list sharing a file make it tune that key again.
+fn tuner_id<R: Runtime>(client: &ComputeClient<R>, label: &str, fingerprint: &str) -> String {
     let runtime = R::name(client);
     let hardware = &client.properties().hardware;
 
     format!(
-        "{runtime}-subgroups-{}-{}-shared-{}-units-{}-{label}",
+        "{runtime}-subgroups-{}-{}-shared-{}-units-{}-{label}-{fingerprint}",
         hardware.plane_size_min,
         hardware.plane_size_max,
         hardware.max_shared_memory_size,
         hardware.max_units_per_cube,
     )
+}
+
+/// A name for `candidates` that is the same on every run and changes whenever the list does.
+///
+/// It is the 64-bit FNV-1a hash of the candidates' names, each ended by a zero byte.
+pub(super) fn list_fingerprint(candidates: &[Candidate]) -> String {
+    let mut hash = FNV_OFFSET;
+
+    for candidate in candidates {
+        let name = candidate.name();
+        let ended = name.bytes().chain(std::iter::once(0));
+
+        for byte in ended {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+    }
+
+    format!("{hash:016x}")
 }
 
 /// The candidates a device with `properties` offers maps of `features` channels: the direct variants first,
@@ -457,7 +484,8 @@ fn plan_among<R: Runtime>(
         Choice::Refused(message) => Plan::Refused(message),
         Choice::Once(candidate) => Plan::Once { candidate, winograd },
         Choice::Tuned => {
-            let id = tuner_id(client, label);
+            let fingerprint = list_fingerprint(candidates);
+            let id = tuner_id(client, label, &fingerprint);
             let set = tunable_set::<R>(candidates);
             let shared_set = Arc::new(set);
 

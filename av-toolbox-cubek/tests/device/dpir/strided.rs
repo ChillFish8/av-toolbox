@@ -1,4 +1,4 @@
-use av_toolbox_cubek::cnn::{Precision, Stride, StridedLayer, run_strided, strided_variant};
+use av_toolbox_cubek::cnn::{Precision, Stride, StridedLayer, StridedVariant, run_strided, strided_variant};
 use av_toolbox_cubek::dpir::{LayerKind, WeightLayer};
 use av_toolbox_cubek::testing::dpir::{reference_down, reference_up};
 use av_toolbox_gpu::{BuildContext, BuildTask};
@@ -167,7 +167,14 @@ impl BuildTask for InputIsOutput {
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
         let channels = 64;
-        let variant = strided_variant(client.properties(), Stride::Down, channels).expect("a strided kernel");
+        // The buffers are checked before the device, so any variant reaches the check.
+        let variant = StridedVariant {
+            pixel_tiles: 1,
+            channel_tiles: 8,
+            planes_m: 1,
+            planes_n: 1,
+            plane_width: 64,
+        };
         let maps = upload_maps(client, &vec![0.0; 4 * 4 * channels as usize], Precision::F16);
         let weights = upload_maps(
             client,
