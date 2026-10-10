@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 license = "EUPL-1.2"
 repository = "https://github.com/ChillFish8/av-toolbox"
 
@@ -63,18 +63,18 @@ toml = { version = "1.1", default-features = false, features = ["std", "parse", 
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
-av-toolbox-core = { path = "av-toolbox-core", version = "0.1.1" }
-av-toolbox-cubek = { path = "av-toolbox-cubek", version = "0.1.1" }
-av-toolbox-filters = { path = "av-toolbox-filters", version = "0.1.1" }
-av-toolbox-gpu = { path = "av-toolbox-gpu", version = "0.1.1" }
-av-toolbox-graph = { path = "av-toolbox-graph", version = "0.1.1" }
-av-toolbox-masks = { path = "av-toolbox-masks", version = "0.1.1" }
-av-toolbox-models = { path = "av-toolbox-models", version = "0.1.1" }
-av-toolbox-pipeline = { path = "av-toolbox-pipeline", version = "0.1.1", default-features = false }
-av-toolbox-providers = { path = "av-toolbox-providers", version = "0.1.1" }
-av-toolbox-runtime = { path = "av-toolbox-runtime", version = "0.1.1" }
-av-toolbox-sinks = { path = "av-toolbox-sinks", version = "0.1.1" }
-av-toolbox-sources = { path = "av-toolbox-sources", version = "0.1.1", default-features = false }
+av-toolbox-core = { path = "av-toolbox-core", version = "0.1.2" }
+av-toolbox-cubek = { path = "av-toolbox-cubek", version = "0.1.2" }
+av-toolbox-filters = { path = "av-toolbox-filters", version = "0.1.2" }
+av-toolbox-gpu = { path = "av-toolbox-gpu", version = "0.1.2" }
+av-toolbox-graph = { path = "av-toolbox-graph", version = "0.1.2" }
+av-toolbox-masks = { path = "av-toolbox-masks", version = "0.1.2" }
+av-toolbox-models = { path = "av-toolbox-models", version = "0.1.2" }
+av-toolbox-pipeline = { path = "av-toolbox-pipeline", version = "0.1.2", default-features = false }
+av-toolbox-providers = { path = "av-toolbox-providers", version = "0.1.2" }
+av-toolbox-runtime = { path = "av-toolbox-runtime", version = "0.1.2" }
+av-toolbox-sinks = { path = "av-toolbox-sinks", version = "0.1.2" }
+av-toolbox-sources = { path = "av-toolbox-sources", version = "0.1.2", default-features = false }
 
 av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
 av-denoise-core = { version = "0.5", default-features = false }
