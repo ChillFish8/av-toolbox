@@ -87,6 +87,6 @@ artcnn-golden:
 dpir-golden:
     uv run --script dependencies/dpir/golden.py target/dependencies/cache/dpir av-toolbox-cubek/src/testing/fixtures/dpir
 
-# Publishes every crate to crates.io, verifying each against vulkan. Pass `--dry-run` to check without uploading.
+# Publishes every crate not yet on crates.io, waiting out rate limits. Pass `--dry-run` to check without uploading.
 publish *ARGS:
-    cargo publish --workspace --features av-toolbox-gpu/vulkan {{ARGS}}
+    uv run --script tools/publish.py {{ARGS}}
