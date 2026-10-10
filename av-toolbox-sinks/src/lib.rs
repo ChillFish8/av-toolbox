@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Sinks that write the finished stream and its artefacts out of the pipeline.
 
 mod artefacts;

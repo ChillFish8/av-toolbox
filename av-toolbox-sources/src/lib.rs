@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Sources that bring video into the pipeline
 //!
 //! - `y4m/stdin` and `y4m/pipe` read a y4m stream.

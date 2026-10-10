@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Providers that supply what stages demand
 //!
 //! - `scene-score`, which scores every frame as a scene cut for every stage demanding

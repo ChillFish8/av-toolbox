@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Filters that change the frames of a stream
 //!
 //! - `av-denoise/nlmeans`, `av-denoise/nlmeans-hq` and `av-denoise/nl4d` denoise frames with av-denoise's

@@ -86,3 +86,7 @@ artcnn-golden:
 # Writes the DPIR golden fixtures from the cached ONNX models. Run `just dependencies dpir` first.
 dpir-golden:
     uv run --script dependencies/dpir/golden.py target/dependencies/cache/dpir av-toolbox-cubek/src/testing/fixtures/dpir
+
+# Publishes every crate to crates.io, verifying each against vulkan. Pass `--dry-run` to check without uploading.
+publish *ARGS:
+    cargo publish --workspace --features av-toolbox-gpu/vulkan {{ARGS}}

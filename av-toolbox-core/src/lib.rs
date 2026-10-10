@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Core interfaces for building video processing pipelines
 //!
 //! A pipeline is made of stages, and every stage falls into one of five kinds:

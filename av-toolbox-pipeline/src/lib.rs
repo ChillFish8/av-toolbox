@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Building and running av-toolbox pipelines
 //!
 //! A pipeline is read from its TOML files with [load], which fills in variables and expands calls

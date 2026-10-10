@@ -41,4 +41,5 @@ gpu-tests = ["av-toolbox-gpu/gpu-tests"]
 [package.metadata.docs.rs]
 no-default-features = true
 features = ["vulkan"]
+rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu"]

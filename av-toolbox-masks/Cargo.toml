@@ -34,4 +34,5 @@ test-support = []
 
 [package.metadata.docs.rs]
 features = ["vulkan"]
+rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu"]

@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Compiling stage definitions into a pipeline graph
 //!
 //! A caller hands [build] a list of [StageSpec] values and gets back a [CompiledGraph]: the same

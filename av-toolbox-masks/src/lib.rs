@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Masks that select pixels from a stream
 //!
 //! Every mask stage produces a single U8 plane, where 0 is background and 255 is fully selected.

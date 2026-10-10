@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Shared CubeCL kernels for av-toolbox stages
 //!
 //! Every module launches its kernels over planes the caller already holds on the device:

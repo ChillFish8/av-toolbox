@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, doc(auto_cfg))]
+
 //! Weight files for av-toolbox stages.
 //!
 //! A [Store] finds a pack's files in the models directory, falling back to the few built into the binary. Packs
