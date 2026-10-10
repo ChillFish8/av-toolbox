@@ -1,0 +1,107 @@
+name: Release dependencies
+
+on:
+  release:
+    types: [published]
+  # A dispatch run is a dry run. It rebuilds and checks every pack and uploads the zips as workflow artifacts
+  # without attaching them to a release.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 0.2.0. Defaults to the Cargo.toml version."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve and check version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: bash .github/scripts/resolve-version.sh
+
+  build:
+    name: Build dependency packs
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-dependencies-${{ github.event.release.tag_name || inputs.version || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: target/dependencies/cache
+          key: dependency-sources-${{ hashFiles('dependencies/*/dependency.toml') }}
+          restore-keys: |
+            dependency-sources-
+
+      - name: Build and check every pack
+        run: just dependencies-check
+
+      - name: List the packs
+        run: ls -la target/dependencies/optional-dependency-*.zip
+
+      - name: Upload the packs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-packs
+          path: target/dependencies/optional-dependency-*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish dependency packs
+    needs: [resolve-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the packs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-packs
+          path: release-assets
+
+      - name: List downloaded release assets
+        run: ls -la release-assets
+
+      - name: Attach the packs to the GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+
+      - name: Report the dry run
+        if: github.event_name != 'release'
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dry run"
+            echo
+            echo "Every dependency pack rebuilt at version \`${VERSION}\` and matched the committed lock."
+            echo "Nothing was attached to a release. The packs are on this run as workflow artifacts."
+          } >> "${GITHUB_STEP_SUMMARY}"
