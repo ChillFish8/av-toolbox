@@ -20,7 +20,7 @@ use super::files::{Files, SourceMap};
 use super::resolve::{Given, resolve_variables};
 use super::{LoadFailure, Loaded};
 use crate::toml::{self, RawFile, RawStage, RawWorkers};
-use crate::variables::{FillError, Supplied, Values, fill};
+use crate::variables::{Declaration, FillError, ResolvedVariable, Supplied, Values, fill};
 
 /// Reads a pipeline and every file it calls into one flat list of stages.
 pub(super) struct Loader<'a> {
@@ -29,6 +29,8 @@ pub(super) struct Loader<'a> {
     pub(super) sources: SourceMap,
     pub(super) diagnostics: Diagnostics,
     specs: Vec<StageSpec>,
+    /// The root file's variables, once it has been expanded.
+    variables: Vec<ResolvedVariable>,
     /// Input, output and call names mapped to the name they stand for.
     pub(super) aliases: HashMap<String, String>,
     /// The aliases which are outputs of a called file.
@@ -64,6 +66,7 @@ impl<'a> Loader<'a> {
             sources: SourceMap::new(),
             diagnostics: Diagnostics::new(),
             specs: Vec::new(),
+            variables: Vec::new(),
             aliases: HashMap::new(),
             outputs: HashSet::new(),
         }
@@ -111,6 +114,7 @@ impl<'a> Loader<'a> {
             sources,
             diagnostics,
             mut specs,
+            variables,
             aliases,
             outputs,
             ..
@@ -148,7 +152,11 @@ impl<'a> Loader<'a> {
 
         specs.sort_by_key(|spec| (spec.span.file.index(), spec.span.start));
 
-        Ok(Loaded { specs, sources })
+        Ok(Loaded {
+            specs,
+            sources,
+            variables,
+        })
     }
 
     /// Expands one file into specs, returning its output names.
@@ -177,6 +185,10 @@ impl<'a> Loader<'a> {
             .iter()
             .map(|declaration| declaration.name.value.as_str())
             .collect();
+
+        if instance.call.is_none() {
+            self.variables = resolved_variables(&raw.variables, &values);
+        }
 
         match &instance.call {
             None => self.refuse_root_ports(&raw),
@@ -424,4 +436,25 @@ impl<'a> Loader<'a> {
 pub(super) fn directory_of(path: &Path) -> PathBuf {
     let parent = path.parent();
     parent.map(Path::to_path_buf).unwrap_or_default()
+}
+
+/// Pairs each declaration with the value it resolved to, skipping those that did not resolve.
+fn resolved_variables(declarations: &[Declaration], values: &Values) -> Vec<ResolvedVariable> {
+    let mut resolved = Vec::new();
+
+    for declaration in declarations {
+        let name = &declaration.name.value;
+        let Some(value) = values.get(name) else {
+            continue;
+        };
+
+        let variable = ResolvedVariable {
+            name: name.clone(),
+            variable_type: declaration.variable_type,
+            value: value.clone(),
+        };
+        resolved.push(variable);
+    }
+
+    resolved
 }

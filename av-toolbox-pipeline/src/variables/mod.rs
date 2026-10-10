@@ -100,6 +100,14 @@ impl VariableValue {
     }
 }
 
+/// A root file variable and the value it resolved to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedVariable {
+    pub name: String,
+    pub variable_type: VariableType,
+    pub value: VariableValue,
+}
+
 /// A `[variable.<name>]` table as it was written.
 #[derive(Debug, Clone)]
 pub struct Declaration {

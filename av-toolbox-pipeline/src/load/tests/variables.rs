@@ -4,7 +4,7 @@ use av_toolbox_graph::DiagnosticCode;
 use serde_json::json;
 
 use super::{codes, failed, loaded, stage};
-use crate::variables::Supplied;
+use crate::variables::{Supplied, VariableType, VariableValue};
 
 const PIPELINE: &str = r#"
 [variable.sigma]
@@ -264,4 +264,24 @@ fn the_root_file_is_in_the_source_map() {
 
     assert_eq!(root.path, Path::new("/work/main.toml"));
     assert_eq!(root.text, PIPELINE);
+}
+
+#[test]
+fn the_root_variables_are_listed_in_declaration_order() {
+    let supplied = with_flag("sigma", "1.5");
+
+    let loaded = loaded(&[("/work/main.toml", PIPELINE)], "/work/main.toml", &supplied);
+    let names: Vec<&str> = loaded
+        .variables
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .collect();
+
+    assert_eq!(names, ["sigma", "dir"]);
+    assert_eq!(loaded.variables[0].variable_type, VariableType::Float);
+    assert_eq!(loaded.variables[0].value, VariableValue::Float(1.5));
+    assert_eq!(
+        loaded.variables[1].value,
+        VariableValue::Path("/work/out".to_string())
+    );
 }

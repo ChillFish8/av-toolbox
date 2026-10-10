@@ -522,3 +522,10 @@ inputs = ["part"]
 
     assert_eq!(read.args.value["path"], serde_json::json!("/work/media/x.y4m"));
 }
+
+#[test]
+fn a_called_files_variables_are_not_listed() {
+    let loaded = loaded(&files(MAIN, PART), "/work/main.toml", &Supplied::new());
+
+    assert!(loaded.variables.is_empty());
+}

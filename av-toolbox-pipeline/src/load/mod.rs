@@ -13,13 +13,15 @@ use av_toolbox_graph::{Diagnostics, StageSpec};
 
 use self::expand::Loader;
 pub use self::files::{DiskFiles, Files, SourceFile, SourceMap};
-use crate::variables::Supplied;
+use crate::variables::{ResolvedVariable, Supplied};
 
 /// A pipeline read from its files, ready to build.
 #[derive(Debug)]
 pub struct Loaded {
     pub specs: Vec<StageSpec>,
     pub sources: SourceMap,
+    /// The root file's variables, in the order they are declared.
+    pub variables: Vec<ResolvedVariable>,
 }
 
 /// Why a pipeline could not be read, with the files read so far for pointing at.
