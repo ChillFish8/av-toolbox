@@ -33,6 +33,7 @@ VOLUME /models
 WORKDIR /app
 
 COPY --from=builder /build/target/release/av-toolbox /app/av-toolbox
+COPY --from=builder /build/LICENSE /app/LICENSE
 
 # Vulkan needs host-provided devices and driver files, so this only proves the binary's own libraries resolve.
 RUN /app/av-toolbox --help > /dev/null

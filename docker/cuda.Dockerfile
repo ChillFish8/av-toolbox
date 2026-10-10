@@ -39,6 +39,7 @@ VOLUME /models
 WORKDIR /app
 
 COPY --from=builder /build/target/release/av-toolbox /app/av-toolbox
+COPY --from=builder /build/LICENSE /app/LICENSE
 
 # CUDA needs a host-provided driver through the NVIDIA container toolkit, so this only proves the binary's own
 # libraries resolve.

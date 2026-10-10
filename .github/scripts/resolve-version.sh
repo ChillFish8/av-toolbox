@@ -8,6 +8,12 @@ set -euo pipefail
 cargo_version="$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version'])")"
 
 if [ "${EVENT_NAME}" = "release" ]; then
+    # The pull command only fetches packs from tags that start with `v`.
+    if [[ "${RELEASE_TAG}" != v* ]]; then
+        echo "::error::release tag '${RELEASE_TAG}' must start with 'v', e.g. v${cargo_version}"
+        exit 1
+    fi
+
     version="${RELEASE_TAG}"
 else
     version="${DISPATCH_VERSION:-${cargo_version}}"

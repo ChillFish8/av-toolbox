@@ -44,6 +44,7 @@ VOLUME /models
 WORKDIR /app
 
 COPY --from=builder /build/target/release/av-toolbox /app/av-toolbox
+COPY --from=builder /build/LICENSE /app/LICENSE
 
 # The JIT compiles through hiprtc at runtime, and /dev/kfd and /dev/dri come from the host, so this only proves the
 # binary's own libraries resolve.

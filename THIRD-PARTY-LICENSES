@@ -16,7 +16,8 @@ patches in
 https://github.com/microsoft/vcpkg/tree/fe8971a72787a862d89588aedfef583c50e3b5a4/ports/ffmpeg
 applied.
 To relink av-toolbox against a modified FFmpeg, build it from source with
-`just static-deps` and `just build-static`, replacing the ffmpeg port with
+`just static-deps` and `just build-static vulkan,cuda` (`metal` on macOS),
+replacing the ffmpeg port with
 your own through a vcpkg overlay port.
 
 COPYING.LGPLv2.1:
