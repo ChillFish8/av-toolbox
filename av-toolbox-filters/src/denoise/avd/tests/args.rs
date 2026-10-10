@@ -5,6 +5,7 @@ use av_denoise_core::{
     MotionSearch,
     NlmeansAlgorithm,
     PrefilterMode,
+    PsyParams,
 };
 use av_toolbox_core::{Parallelism, StageDefinition};
 use av_toolbox_providers::{SceneRequest, Scenes};
@@ -145,7 +146,6 @@ fn nlmeans_hq_carries_sigma() {
 
     assert_eq!(options.hq.sigma_override, Some(0.02));
     assert_eq!(options.hq.sigma_scale, 1.3);
-    assert!(!options.hq.windowed_noise_estimation);
     assert_eq!(options.nlm.mode, DenoisingMode::Temporal { radius: 2 });
 }
 
@@ -165,7 +165,6 @@ fn nl4d_follows_its_preset() {
     assert_eq!(options.temporal_radius, 1);
     assert_eq!(options.spatial_radius, 6);
     assert!(!options.grain_export);
-    assert!(!options.windowed_noise_estimation);
     assert_eq!(args.held_frames(), 2);
 }
 
@@ -194,6 +193,39 @@ fn an_unset_lambda_stays_unset_for_av_denoise_to_resolve() {
     let chroma = nl4d_options(&args, ChannelMode::Chroma);
 
     assert_eq!(chroma.lambda_ht, None);
+}
+
+#[test]
+fn psy_is_off_by_default() {
+    let args: Nl4dArgs = parsed(json!({}));
+
+    let options = nl4d_options(&args, ChannelMode::Luma);
+
+    assert_eq!(options.psy, None);
+}
+
+#[test]
+fn enable_psy_fills_unset_knobs_with_defaults() {
+    let args: Nl4dArgs = parsed(json!({ "enable_psy": true, "psy_line_ring": 8 }));
+
+    let options = nl4d_options(&args, ChannelMode::Luma);
+
+    let expected = PsyParams {
+        line_ring: 8,
+        ..PsyParams::default()
+    };
+    assert_eq!(options.psy, Some(expected));
+}
+
+#[test]
+fn a_psy_knob_without_enable_psy_is_refused() {
+    let args: Nl4dArgs = parsed(json!({ "psy_shadow_soften": 0.5 }));
+
+    let error = args.options(ChannelMode::Luma).expect_err("should refuse");
+
+    let message = error.to_string();
+    assert!(message.contains("psy_shadow_soften"), "{message}");
+    assert!(message.contains("enable_psy"), "{message}");
 }
 
 #[test]

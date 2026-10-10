@@ -12,6 +12,7 @@ use av_denoise_core::{
     NlmeansHqOptions,
     NlmeansOptions,
     PrefilterMode,
+    PsyParams,
     nl4d_spatial_radius_for,
     nl4d_temporal_radius_for,
     nlmeans_search_radius_for,
@@ -378,18 +379,26 @@ pub(crate) struct Nl4dArgs {
     /// Scales the luma threshold by how noisy each brightness level is, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) noise_map: Option<bool>,
+    /// Filters each area by what it looks like. The `psy_*` arguments tune it and need it on.
+    #[serde(default)]
+    pub(crate) enable_psy: bool,
     /// How much harder flat, grainy areas are filtered, av-denoise's default when not given.
     #[serde(default)]
-    pub(crate) flat_boost: Option<f32>,
-    /// The same as `flat_boost` for the chroma planes, av-denoise's default when not given.
+    pub(crate) psy_flat_boost: Option<f32>,
+    /// The same as `psy_flat_boost` for the chroma planes, av-denoise's default when not given.
     #[serde(default)]
-    pub(crate) chroma_flat_boost: Option<f32>,
+    pub(crate) psy_chroma_flat_boost: Option<f32>,
     /// How much more gently textured dark areas are filtered, av-denoise's default when not given.
     #[serde(default)]
-    pub(crate) shadow_soften: Option<f32>,
+    pub(crate) psy_shadow_soften: Option<f32>,
     /// How strongly grain may line up before a flat area counts as texture, av-denoise's default when not given.
     #[serde(default)]
-    pub(crate) flat_texture_cut: Option<f32>,
+    pub(crate) psy_flat_texture_cut: Option<f32>,
+    /// How far around a strong line, in pixels, `psy_shadow_soften` and `psy_flat_texture_cut` stop applying.
+    ///
+    /// av-denoise's default when not given.
+    #[serde(default)]
+    pub(crate) psy_line_ring: Option<u32>,
     /// Judges each coefficient together with its frequency neighbours, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) pooled_threshold: Option<bool>,
@@ -402,6 +411,45 @@ impl Nl4dArgs {
         self.temporal_radius
             .unwrap_or_else(|| nl4d_temporal_radius_for(preset))
     }
+
+    /// The psy tuning asked for, or `None` without `enable_psy`.
+    ///
+    /// A `psy_*` argument without `enable_psy` is refused, so a setting is never silently ignored.
+    fn psy(&self) -> Result<Option<PsyParams>, StageError> {
+        let knobs = [
+            ("psy_flat_boost", self.psy_flat_boost.is_some()),
+            ("psy_chroma_flat_boost", self.psy_chroma_flat_boost.is_some()),
+            ("psy_shadow_soften", self.psy_shadow_soften.is_some()),
+            ("psy_flat_texture_cut", self.psy_flat_texture_cut.is_some()),
+            ("psy_line_ring", self.psy_line_ring.is_some()),
+        ];
+
+        if !self.enable_psy {
+            let given = knobs.iter().find(|(_, given)| *given);
+            if let Some((name, _)) = given {
+                return Err(psy_needs_enabling(name));
+            }
+
+            return Ok(None);
+        }
+
+        let defaults = PsyParams::default();
+        let psy = PsyParams {
+            flat_boost: self.psy_flat_boost.unwrap_or(defaults.flat_boost),
+            chroma_flat_boost: self.psy_chroma_flat_boost.unwrap_or(defaults.chroma_flat_boost),
+            shadow_soften: self.psy_shadow_soften.unwrap_or(defaults.shadow_soften),
+            flat_texture_cut: self.psy_flat_texture_cut.unwrap_or(defaults.flat_texture_cut),
+            line_ring: self.psy_line_ring.unwrap_or(defaults.line_ring),
+        };
+
+        Ok(Some(psy))
+    }
+}
+
+fn psy_needs_enabling(name: &str) -> StageError {
+    let message = format!("{} was given {name} without enable_psy", Nl4dArgs::STAGE);
+
+    StageError::msg(message)
 }
 
 impl AvdArgs for Nl4dArgs {
@@ -444,6 +492,7 @@ impl AvdArgs for Nl4dArgs {
         let spatial_radius = self
             .spatial_radius
             .unwrap_or_else(|| nl4d_spatial_radius_for(preset));
+        let psy = self.psy()?;
 
         let options = Nl4dOptions {
             sigma: self.sigma,
@@ -453,10 +502,7 @@ impl AvdArgs for Nl4dArgs {
             spatial_radius,
             refine: self.refine.unwrap_or(defaults.refine),
             noise_map: self.noise_map.unwrap_or(defaults.noise_map),
-            flat_boost: self.flat_boost.unwrap_or(defaults.flat_boost),
-            chroma_flat_boost: self.chroma_flat_boost.unwrap_or(defaults.chroma_flat_boost),
-            shadow_soften: self.shadow_soften.unwrap_or(defaults.shadow_soften),
-            flat_texture_cut: self.flat_texture_cut.unwrap_or(defaults.flat_texture_cut),
+            psy,
             pooled_threshold: self.pooled_threshold.unwrap_or(defaults.pooled_threshold),
             temporal_radius: self.temporal_radius(),
             ..defaults

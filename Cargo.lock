@@ -182,13 +182,14 @@ dependencies = [
 
 [[package]]
 name = "av-denoise-core"
-version = "0.5.0-alpha4"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "834640e93e595751c08c31912ca30185a0b7134ad54c85836f86535ff7f4b66d"
+checksum = "b1aa5c439947af4f5664b75a12e02845c8b6c07fbb322f5a49ba01f1c608cfee"
 dependencies = [
  "anyhow",
  "bon",
  "cubecl",
+ "half",
  "strum",
  "strum_macros",
  "thiserror",

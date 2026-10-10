@@ -64,4 +64,4 @@ zip = { version = "9.0", default-features = false, features = ["deflate-flate2-z
 
 av-toolbox-gpu = { path = "av-toolbox-gpu" }
 av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
-av-denoise-core = { version = "=0.5.0-alpha4", default-features = false }
+av-denoise-core = { version = "=0.5.0", default-features = false }
