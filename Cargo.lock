@@ -236,6 +236,7 @@ dependencies = [
  "image",
  "indicatif",
  "mimalloc",
+ "pkg-config",
  "serde",
  "serde_json",
  "tempfile",

@@ -27,7 +27,7 @@ av-toolbox-core = { path = "../av-toolbox-core" }
 av-toolbox-gpu = { workspace = true }
 av-toolbox-graph = { path = "../av-toolbox-graph" }
 av-toolbox-models = { path = "../av-toolbox-models" }
-av-toolbox-pipeline = { path = "../av-toolbox-pipeline" }
+av-toolbox-pipeline = { path = "../av-toolbox-pipeline", default-features = false }
 av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 
 [dev-dependencies]
@@ -35,7 +35,14 @@ image = { workspace = true }
 y4m = { workspace = true }
 zip = { workspace = true }
 
+[build-dependencies]
+pkg-config = { workspace = true, optional = true }
+
 [features]
+default = ["ffms2"]
+ffms2 = ["av-toolbox-pipeline/ffms2"]
+# Links ffms2 and FFmpeg statically from the vcpkg tree. See `just build-static`.
+static-ffms2 = ["ffms2", "av-toolbox-pipeline/static-ffms2", "dep:pkg-config"]
 vulkan = ["av-toolbox-pipeline/vulkan", "av-toolbox-gpu/vulkan"]
 metal = ["av-toolbox-pipeline/metal", "av-toolbox-gpu/metal"]
 cuda = ["av-toolbox-pipeline/cuda", "av-toolbox-gpu/cuda"]

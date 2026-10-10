@@ -28,6 +28,8 @@ av-toolbox-runtime = { path = "../av-toolbox-runtime" }
 [features]
 default = ["ffms2"]
 ffms2 = ["dep:ffms2-sys"]
+# Links the ffms2 archive from FFMS_LIB_DIR instead of a shared library.
+static-ffms2 = ["ffms2", "ffms2-sys/static"]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-cubek/vulkan"]
 metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-cubek/metal"]
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda", "av-toolbox-cubek/cuda"]

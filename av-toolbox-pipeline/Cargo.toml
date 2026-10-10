@@ -32,6 +32,7 @@ av-toolbox-models = { path = "../av-toolbox-models" }
 [features]
 default = ["ffms2"]
 ffms2 = ["av-toolbox-sources/ffms2"]
+static-ffms2 = ["ffms2", "av-toolbox-sources/static-ffms2"]
 vulkan = [
     "av-toolbox-gpu/vulkan",
     "av-toolbox-core/vulkan",
