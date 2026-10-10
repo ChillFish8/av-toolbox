@@ -77,6 +77,20 @@ fn a_bare_root_file_name_resolves_against_the_working_directory() {
 }
 
 #[test]
+fn a_root_path_spelt_with_dot_dot_resolves_the_same() {
+    let supplied = with_flag("sigma", "1");
+
+    let loaded = loaded(
+        &[("/work/main.toml", PIPELINE)],
+        "/work/sub/../main.toml",
+        &supplied,
+    );
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value["path"], json!("/work/out/in.y4m"));
+}
+
+#[test]
 fn the_environment_fills_a_variable_without_a_flag() {
     let variables = [("AVTB_VAR_SIGMA".to_string(), "2".to_string())];
     let supplied = Supplied::from_environment(variables);

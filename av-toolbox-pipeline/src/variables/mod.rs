@@ -5,7 +5,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use av_toolbox_graph::Spanned;
 use serde_json::{Number, Value};
@@ -226,10 +226,28 @@ fn render_choice(choice: &Value) -> String {
     }
 }
 
-/// Resolves `text` against `directory` into an absolute path.
+/// Resolves `text` against `directory` into an absolute path, with `.` and `..` folded away.
 pub(crate) fn resolve_path(directory: &Path, text: &str) -> String {
     let joined = directory.join(text);
-    let absolute = std::path::absolute(&joined).unwrap_or(joined);
+    let normalised = normalise_path(&joined);
 
-    absolute.to_string_lossy().into_owned()
+    normalised.to_string_lossy().into_owned()
+}
+
+/// Makes `path` absolute and folds away `.` and `..` without touching the disk.
+pub(crate) fn normalise_path(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut folded = PathBuf::new();
+
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {},
+            Component::ParentDir => {
+                folded.pop();
+            },
+            other => folded.push(other),
+        }
+    }
+
+    folded
 }

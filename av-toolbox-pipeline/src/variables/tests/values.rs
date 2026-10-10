@@ -58,6 +58,16 @@ fn an_absolute_path_is_kept() {
 }
 
 #[test]
+fn a_resolved_path_folds_away_dot_and_dot_dot() {
+    let directory = Path::new("/work/pipelines/../shared");
+
+    assert_eq!(
+        resolve_path(directory, "./clips/../in.mkv"),
+        "/work/shared/in.mkv"
+    );
+}
+
+#[test]
 fn a_float_accepts_a_whole_number() {
     let directory = Path::new("/work");
 

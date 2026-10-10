@@ -1101,6 +1101,21 @@ fn inspect_prints_json_whose_hash_matches_inspect_hash() {
 }
 
 #[test]
+fn inspect_hashes_a_pipeline_the_same_however_its_path_is_spelt() {
+    let spelt_with_dot_dot = example("resize.toml");
+    let canonical = spelt_with_dot_dot.canonicalize().expect("the example exists");
+    let dotted_path = spelt_with_dot_dot.to_str().expect("utf-8 path");
+    let canonical_path = canonical.to_str().expect("utf-8 path");
+
+    let dotted = toolbox(&["inspect", dotted_path, "--hash"]);
+    let plain = toolbox(&["inspect", canonical_path, "--hash"]);
+
+    assert!(dotted_path.contains(".."), "{dotted_path}");
+    assert!(dotted.status.success(), "{}", text(&dotted.stderr));
+    assert_eq!(text(&dotted.stdout), text(&plain.stdout));
+}
+
+#[test]
 fn inspect_of_a_broken_file_exits_one_with_json_diagnostics() {
     let file = written("[sources.input]\ntype = \"y4m/stdin\"\n");
     let path = file.path().to_str().expect("utf-8 path");
