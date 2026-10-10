@@ -267,5 +267,78 @@ fn the_r9700_offers_the_default_variant_at_128_features_and_one_row_blocks_at_51
     let at_512 = direct_variants(&properties, 512);
 
     assert!(at_128.contains(&default_variant), "{at_128:?}");
-    assert_eq!(at_512, vec![one_row]);
+    assert!(at_512.contains(&one_row), "{at_512:?}");
+}
+
+#[test]
+fn a_chunk_that_does_not_split_the_features_into_tiles_is_refused() {
+    for chunk in [48, 72, 96] {
+        let variant = DirectVariant {
+            input_chunk: Some(chunk),
+            ..DirectVariant::default()
+        };
+
+        let shape = variant.shape(128, Activation::Silu, false);
+
+        assert!(shape.is_err(), "{chunk}");
+    }
+}
+
+#[test]
+fn a_chunk_as_wide_as_the_features_is_refused() {
+    let variant = DirectVariant {
+        input_chunk: Some(128),
+        ..DirectVariant::default()
+    };
+
+    let shape = variant.shape(128, Activation::Silu, false);
+
+    assert!(shape.is_err());
+}
+
+#[test]
+fn a_chunked_variant_must_read_its_weights_from_global_memory() {
+    let variant = DirectVariant {
+        input_chunk: Some(64),
+        weights: WeightStaging::Single,
+        ..DirectVariant::default()
+    };
+
+    let shape = variant.shape(128, Activation::Silu, false);
+
+    assert!(shape.is_err());
+}
+
+#[test]
+fn a_chunked_block_takes_shared_memory_for_its_chunk_only() {
+    let variant = DirectVariant {
+        input_chunk: Some(64),
+        ..DirectVariant::default()
+    };
+
+    let shape = variant.shape(512, Activation::Relu, false).expect("valid");
+
+    // A 6x18 block of 72 halves, one 16-byte load, and two scratch tiles.
+    assert_eq!(shape.shared_bytes(), 6 * 18 * 72 * 2 + 16 + 2 * 256 * 4);
+}
+
+#[test]
+fn the_r9700_offers_chunks_of_64_and_128_below_the_width() {
+    let properties = R9700.properties();
+    let at_64 = direct_variants(&properties, 64);
+    let at_256 = direct_variants(&properties, 256);
+
+    assert!(
+        !at_64.iter().any(|variant| variant.input_chunk.is_some()),
+        "{at_64:?}"
+    );
+    assert!(at_256.contains(&chunked(64)), "{at_256:?}");
+    assert!(at_256.contains(&chunked(128)), "{at_256:?}");
+}
+
+fn chunked(chunk: u32) -> DirectVariant {
+    DirectVariant {
+        input_chunk: Some(chunk),
+        ..DirectVariant::default()
+    }
 }

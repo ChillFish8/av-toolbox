@@ -57,7 +57,8 @@ impl WeightStaging {
 ///
 /// A workgroup computes a block of `rows` by `columns` output samples for `F / channel_groups` output
 /// channels. Its planes form a grid of `planes_m` by `planes_n`, splitting the block's samples and channels
-/// between them. Each plane is a row of `plane_width` units.
+/// between them. Each plane is a row of `plane_width` units. With `input_chunk` it stages the input
+/// channels a chunk at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DirectVariant {
     pub rows: u32,
@@ -66,6 +67,8 @@ pub struct DirectVariant {
     pub planes_m: u32,
     pub planes_n: u32,
     pub weights: WeightStaging,
+    /// How many input channels the block holds in shared memory at once, or `None` for all of them.
+    pub input_chunk: Option<u32>,
     pub plane_width: u32,
 }
 
@@ -79,6 +82,7 @@ impl Default for DirectVariant {
             planes_m: 1,
             planes_n: 2,
             weights: WeightStaging::Global,
+            input_chunk: None,
             plane_width: 64,
         }
     }
@@ -101,6 +105,9 @@ const LAYOUTS: [DirectVariant; 9] = [
 /// The plane widths the layouts are offered at.
 const PLANE_WIDTHS: [u32; 2] = [32, 64];
 
+/// The input chunks the layouts are offered at, beside staging every channel at once.
+const INPUT_CHUNKS: [u32; 2] = [64, 128];
+
 const fn layout(
     rows: u32,
     columns: u32,
@@ -115,6 +122,7 @@ const fn layout(
         planes_m,
         planes_n,
         weights,
+        input_chunk: None,
         plane_width: 64,
     }
 }
@@ -174,8 +182,25 @@ impl DirectVariant {
             ));
         }
 
+        let chunk = self.input_chunk.unwrap_or(features);
+
+        if self.input_chunk.is_some() && self.weights != WeightStaging::Global {
+            return Err("a chunked block reads its weights from global memory".to_string());
+        }
+
+        if chunk == 0 || !chunk.is_multiple_of(TILE) || !features.is_multiple_of(chunk) {
+            return Err(format!(
+                "an input chunk of {chunk} does not split {features} features into tiles"
+            ));
+        }
+
+        if self.input_chunk.is_some() && chunk == features {
+            return Err(format!("an input chunk of {chunk} stages every feature"));
+        }
+
         Ok(DirectShape {
             features,
+            chunk,
             rows: self.rows,
             columns: self.columns,
             channels,
@@ -195,6 +220,8 @@ impl DirectVariant {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct DirectShape {
     features: u32,
+    /// The input channels the block holds in shared memory at once.
+    chunk: u32,
     rows: u32,
     columns: u32,
     channels: u32,
@@ -229,7 +256,7 @@ impl DirectShape {
 
     /// The halves between one sample and the next in shared memory.
     fn sample_stride(&self) -> u32 {
-        self.features + SAMPLE_PADDING
+        self.chunk + SAMPLE_PADDING
     }
 
     /// The samples of the block with its one-sample border, as rows and columns.
@@ -298,11 +325,13 @@ fn plane_spot(#[comptime] shape: DirectShape) -> PlaneSpot {
     }
 }
 
-/// Loads the block of input samples the workgroup convolves, with its one-sample border, into `block`.
+/// Loads one chunk of input channels for the block of samples the workgroup convolves, with its one-sample
+/// border, into `block`.
 ///
-/// Samples outside the frame load as zero, the network's padding. Each unit issues all of its global loads
-/// before it stores any, so the loads are in flight together. Every load reads an address inside the frame,
-/// and the samples outside it are swapped for zero afterwards, so the loads need no branch.
+/// The chunk starts `first_load` loads into each sample of the input. Samples outside the frame load as zero,
+/// the network's padding. Each unit issues all of its global loads before it stores any, so the loads are in
+/// flight together. Every load reads an address inside the frame, and the samples outside it are swapped for
+/// zero afterwards, so the loads need no branch.
 #[cube]
 fn load_block(
     input: &Array<Load>,
@@ -311,12 +340,14 @@ fn load_block(
     block_y: u32,
     width: u32,
     height: u32,
+    first_load: u32,
     #[comptime] shape: DirectShape,
 ) {
-    let sample_loads = comptime!(shape.features / LOAD_WIDTH);
+    let source_loads = comptime!(shape.features / LOAD_WIDTH);
+    let chunk_loads = comptime!(shape.chunk / LOAD_WIDTH);
     let stride_loads = comptime!(shape.sample_stride() / LOAD_WIDTH);
     let bordered_columns = comptime!(shape.columns + 2);
-    let total = comptime!((shape.rows + 2) * (shape.columns + 2) * shape.features / LOAD_WIDTH);
+    let total = comptime!((shape.rows + 2) * (shape.columns + 2) * shape.chunk / LOAD_WIDTH);
     let units = comptime!(shape.units());
     let rounds = comptime!(total.div_ceil(units) as usize);
     let last = comptime!(total - 1);
@@ -327,8 +358,8 @@ fn load_block(
     for round in 0..rounds {
         // Units past the block's end repeat its last load, and never store it.
         let index = min(UNIT_POS + comptime!(round as u32 * units), last);
-        let sample = index / sample_loads;
-        let part = index % sample_loads;
+        let sample = index / chunk_loads;
+        let part = index % chunk_loads;
         let column = block_x + sample % bordered_columns;
         let row = block_y + sample / bordered_columns;
         // The border starts one sample before the block, so `column` and `row` are one past the frame's.
@@ -337,7 +368,7 @@ fn load_block(
         let column_from_left = max(column, 1u32);
         let frame_row = min(row_from_top, height) - 1;
         let frame_column = min(column_from_left, width) - 1;
-        let source = (frame_row * width + frame_column) * sample_loads + part;
+        let source = (frame_row * width + frame_column) * source_loads + first_load + part;
         let loaded = input[source as usize];
 
         values.push(select(inside, loaded, zero));
@@ -348,8 +379,8 @@ fn load_block(
         let index = UNIT_POS + comptime!(round as u32 * units);
 
         if index < total {
-            let sample = index / sample_loads;
-            let part = index % sample_loads;
+            let sample = index / chunk_loads;
+            let part = index % chunk_loads;
 
             block[(sample * stride_loads + part) as usize] = *values.index(round);
         }
@@ -455,8 +486,9 @@ fn start_accumulators(
 /// Convolves one block of a body layer on cooperative matrices, with the bias, the activation, the residual
 /// and the skip applied as it writes.
 ///
-/// Each workgroup reads its block with the one-sample border into shared memory once, and reuses it for all
-/// nine taps. Each plane keeps its accumulators in f32 from the bias to the write.
+/// Each workgroup reads its block with the one-sample border into shared memory one chunk of input channels
+/// at a time, and reuses each chunk for all nine taps. Each plane keeps its accumulators in f32 from the bias
+/// to the write.
 #[cube(launch_unchecked)]
 fn direct_kernel(
     input: &Array<Load>,
@@ -479,7 +511,7 @@ fn direct_kernel(
     let mut scratch =
         SharedMemory::<Sums>::new(comptime!((shape.planes() * TILE_VALUES / WRITE_WIDTH) as usize));
 
-    load_block(input, &mut block, block_x, block_y, width, height, shape);
+    load_block(input, &mut block, block_x, block_y, width, height, 0, shape);
     // Every plane reads samples another plane loaded.
     sync_cube();
 
@@ -492,8 +524,39 @@ fn direct_kernel(
         &accumulators,
         spot,
         first_channel,
+        0,
         shape,
     );
+
+    let chunk_count = comptime!(shape.features / shape.chunk);
+
+    if comptime!(chunk_count > 1) {
+        for chunk_index in 1..chunk_count {
+            let first_channel_in = chunk_index * comptime!(shape.chunk);
+            let first_load = first_channel_in / LOAD_WIDTH;
+
+            // Every plane has finished reading the previous chunk before it is replaced.
+            sync_cube();
+
+            load_block(
+                input, &mut block, block_x, block_y, width, height, first_load, shape,
+            );
+            // Every plane reads samples another plane loaded.
+            sync_cube();
+
+            multiply_taps(
+                weights,
+                &block,
+                &mut taps,
+                &accumulators,
+                spot,
+                first_channel,
+                first_channel_in,
+                shape,
+            );
+        }
+    }
+
     write_out(
         &accumulators,
         &mut scratch,
@@ -510,7 +573,9 @@ fn direct_kernel(
     );
 }
 
-/// Adds every tap's products into the plane's accumulators.
+/// Adds every tap's products over the staged chunk of input channels into the plane's accumulators.
+///
+/// The chunk's first input channel is `first_channel_in`.
 #[cube]
 fn multiply_taps(
     weights: &Array<Load>,
@@ -519,11 +584,12 @@ fn multiply_taps(
     accumulators: &Sequence<cmma::Matrix<f32>>,
     spot: PlaneSpot,
     first_channel: u32,
+    first_channel_in: u32,
     #[comptime] shape: DirectShape,
 ) {
     let pixel_tiles = comptime!(shape.pixel_tiles_per_plane() as usize);
     let channel_tiles = comptime!(shape.channel_tiles_per_plane() as usize);
-    let chunks = comptime!((shape.features / TILE) as usize);
+    let chunks = comptime!((shape.chunk / TILE) as usize);
     let row_tiles = comptime!(shape.columns / TILE);
     let stride = comptime!(shape.sample_stride());
     let bordered_columns = comptime!(shape.columns + 2);
@@ -572,7 +638,7 @@ fn multiply_taps(
                 let rhs = fragment(cmma::MatrixIdent::B, cmma::MatrixLayout::ColMajor);
 
                 if comptime!(shape.weights == WeightStaging::Global) {
-                    let tap_start = ((first_channel + channel) * TAPS + tap) * features;
+                    let tap_start = ((first_channel + channel) * TAPS + tap) * features + first_channel_in;
                     let start = (tap_start + chunk as u32 * TILE) / LOAD_WIDTH;
                     let columns = weights.slice(start as usize, (start + global_loads) as usize);
                     cmma::load(&rhs, &columns, features * TAPS);
@@ -794,14 +860,21 @@ pub fn direct_variants(properties: &DeviceProperties, features: u32) -> Vec<Dire
     };
 
     for layout in LAYOUTS {
-        let variant = DirectVariant {
+        let whole = DirectVariant {
             plane_width,
             ..layout
         };
-        let runs = check_variant(properties, &variant, features);
+        let chunked = INPUT_CHUNKS.map(|chunk| DirectVariant {
+            input_chunk: Some(chunk),
+            ..whole
+        });
 
-        if runs.is_ok() {
-            offered.push(variant);
+        for variant in std::iter::once(whole).chain(chunked) {
+            let runs = check_variant(properties, &variant, features);
+
+            if runs.is_ok() {
+                offered.push(variant);
+            }
         }
     }
 
@@ -861,7 +934,8 @@ pub(crate) fn run_direct<R: Runtime>(
     //   workgroup runs, since the grid is empty when `width` or `height` is 0. Output writes, residual reads
     //   and skip reads are guarded to samples inside the frame, at a channel below `F`.
     // - Bias reads take the workgroup's channels, which `shape` keeps below `F`.
-    // - A weight fragment's last value is at `((channel + 15) * 9 + tap) * F + chunk * 16 + 15`, below
+    // - A weight fragment's last value is at `((channel + 15) * 9 + tap) * F + input_channel + 15`, where
+    //   `input_channel` is the fragment's first input channel and a multiple of 16 below `F`, so it is below
     //   `9 * F * F`, and its slice ends at most at the weights' end.
     // - Shared-memory indices stay inside the bordered block, the staged taps and the scratch tiles that
     //   `shape` sizes. Fragments read only the channel halves each sample's load wrote, never its padding.

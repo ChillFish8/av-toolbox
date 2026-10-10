@@ -312,7 +312,8 @@ pub fn offered_candidates(properties: &DeviceProperties, features: u32, winograd
 /// of `features` channels.
 ///
 /// That is the default direct variant at the device's widest subgroup where the device offers it, then the first
-/// direct variant it offers, then the fused cubek convolution.
+/// direct variant it offers staging every input channel at once, then the first chunked one, then the fused
+/// cubek convolution.
 pub fn fixed_candidate(properties: &DeviceProperties, features: u32) -> Candidate {
     let plane_width = properties.hardware.plane_size_max;
     let variant = DirectVariant {
@@ -325,7 +326,11 @@ pub fn fixed_candidate(properties: &DeviceProperties, features: u32) -> Candidat
         return Candidate::Direct(variant);
     }
 
-    match offered.first() {
+    let first_whole = offered.iter().find(|variant| variant.input_chunk.is_none());
+    let first_any = offered.first();
+    let first = first_whole.or(first_any);
+
+    match first {
         Some(first) => Candidate::Direct(*first),
         None => Candidate::FusedCubek,
     }

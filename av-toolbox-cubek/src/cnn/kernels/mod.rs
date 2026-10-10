@@ -193,8 +193,13 @@ impl Candidate {
             WeightStaging::Double => "double",
         };
 
+        let chunk = match variant.input_chunk {
+            Some(channels) => format!("-chunk{channels}"),
+            None => String::new(),
+        };
+
         format!(
-            "direct-{}x{}-groups{}-planes{}x{}-{staging}-width{}",
+            "direct-{}x{}-groups{}-planes{}x{}-{staging}{chunk}-width{}",
             variant.rows,
             variant.columns,
             variant.channel_groups,
