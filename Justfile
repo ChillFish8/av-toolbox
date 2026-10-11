@@ -42,7 +42,7 @@ check-backends:
     cargo check -p av-toolbox-gpu 2>&1 | grep -q "at least one accelerator backend"
     cargo check -p av-toolbox-gpu --features vulkan,metal 2>&1 | grep -q "cannot both be enabled"
 
-# Builds the static ffms2 and FFmpeg tree from vcpkg.json into vcpkg_installed/.
+# Builds the static ffms2, BestSource and FFmpeg tree from vcpkg.json into vcpkg_installed/.
 static-deps:
     #!/usr/bin/env bash
     set -euo pipefail
