@@ -3,17 +3,29 @@ use std::{env, fs};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=include");
     println!("cargo:rerun-if-env-changed=VSHIP_DIR");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
 
+    generate_bindings();
+
+    if env::var_os("DOCS_RS").is_some() {
+        skip("docs.rs builds documentation only");
+        return;
+    }
+
+    let vship_dir = env::var_os("VSHIP_DIR");
+    let Some(vship_dir) = vship_dir else {
+        skip("VSHIP_DIR is unset, run `just vship <backend>` and point it at target/thirdparty/vship/<backend>");
+        return;
+    };
+
+    let vship_dir = PathBuf::from(vship_dir);
     let backend = selected_backend();
-    let vship_dir = vship_dir();
     require_matching_build(&vship_dir, backend);
 
-    let include_dir = vship_dir.join("include");
     let lib_dir = vship_dir.join("lib");
-    generate_bindings(&include_dir);
-
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=vship");
     println!("cargo:rustc-link-lib=dylib=stdc++");
@@ -22,6 +34,11 @@ fn main() {
         Backend::Vulkan => link_vulkan(),
         Backend::Cuda => link_cuda(),
     }
+}
+
+/// Links nothing, so only a library build of this crate can succeed.
+fn skip(reason: &str) {
+    println!("cargo:warning=Vship is not linked because {reason}. Anything that links avtbx-vship will fail to link.");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,15 +69,6 @@ fn selected_backend() -> Backend {
     }
 }
 
-fn vship_dir() -> PathBuf {
-    let vship_dir = env::var_os("VSHIP_DIR");
-    let Some(vship_dir) = vship_dir else {
-        panic!("VSHIP_DIR must point at target/thirdparty/vship/<backend>, run `just vship <backend>` first");
-    };
-
-    PathBuf::from(vship_dir)
-}
-
 /// Stops a Vship built for one backend from being linked with the other backend's libraries.
 fn require_matching_build(vship_dir: &Path, backend: Backend) {
     let marker = vship_dir.join("backend");
@@ -84,7 +92,8 @@ fn require_matching_build(vship_dir: &Path, backend: Backend) {
     }
 }
 
-fn generate_bindings(include_dir: &Path) {
+fn generate_bindings() {
+    let include_dir = PathBuf::from("include");
     let header = include_dir.join("VshipAPI.h");
     println!("cargo:rerun-if-changed={}", header.display());
 

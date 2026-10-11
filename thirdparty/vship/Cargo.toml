@@ -5,7 +5,6 @@ edition = "2024"
 license.workspace = true
 repository.workspace = true
 description = "GPU SSIMULACRA2 and Butteraugli through a statically linked Vship."
-publish = false
 
 [dependencies]
 thiserror = { workspace = true }
