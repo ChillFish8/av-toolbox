@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{ColorFamily, OpenOptions, VideoSource};
+use crate::{ColorFamily, IndexCache, OpenOptions, VideoSource};
 
 pub(crate) fn fixture() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -34,7 +34,10 @@ fn opening_the_fixture_reads_its_properties() {
     assert_eq!(properties.format.bits, 8);
     assert!(!properties.format.float);
     assert!(!properties.format.alpha);
-    assert_eq!((properties.format.sub_sampling_w, properties.format.sub_sampling_h), (1, 1));
+    assert_eq!(
+        (properties.format.sub_sampling_w, properties.format.sub_sampling_h),
+        (1, 1)
+    );
 }
 
 #[test]
@@ -69,4 +72,53 @@ fn a_path_with_a_nul_byte_is_refused() {
     let error = VideoSource::open(path, &options).expect_err("a nul path opened");
 
     assert!(error.message().contains("nul byte"), "{error}");
+}
+
+fn find_index(directory: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(directory).ok()?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_index(&path) {
+                return Some(found);
+            }
+
+            continue;
+        }
+
+        let is_index = path.extension().is_some_and(|extension| extension == "bsindex");
+        if is_index {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn modified(path: &Path) -> std::time::SystemTime {
+    let metadata = std::fs::metadata(path).expect("reads the index metadata");
+
+    metadata.modified().expect("reads the index modified time")
+}
+
+#[test]
+fn a_directory_cache_writes_an_index_and_reuses_it() {
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let cache = folder.path().join("indexes");
+    let options = OpenOptions {
+        cache: IndexCache::Directory(cache.clone()),
+        ..OpenOptions::default()
+    };
+    let fixture = fixture();
+
+    let first = VideoSource::open(&fixture, &options).expect("first open");
+    drop(first);
+    let index = find_index(&cache).expect("an index under the cache directory");
+    let written_at = modified(&index);
+
+    let second = VideoSource::open(&fixture, &options).expect("second open");
+    drop(second);
+
+    assert_eq!(modified(&index), written_at);
 }

@@ -20,7 +20,9 @@ fn main() {
 fn expected_lib_dir() -> PathBuf {
     let lib_dir = env::var_os("BESTSOURCE_LIB_DIR");
     let Some(lib_dir) = lib_dir else {
-        panic!("BESTSOURCE_LIB_DIR must point at vcpkg_installed/<triplet>/lib, run `just static-deps` first");
+        panic!(
+            "BESTSOURCE_LIB_DIR must point at vcpkg_installed/<triplet>/lib, run `just static-deps` first"
+        );
     };
 
     let Ok(expected_dir) = Path::new(&lib_dir).canonicalize() else {

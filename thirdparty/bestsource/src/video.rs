@@ -4,6 +4,7 @@ use std::ptr;
 
 use crate::error::{BestSourceError, ERROR_BUFFER_LEN};
 use crate::format::VideoFormat;
+use crate::frame::Frame;
 use crate::sys;
 
 /// BestSource's cache mode that never reads or writes an index.
@@ -128,6 +129,24 @@ impl VideoSource {
     pub fn properties(&self) -> &VideoProperties {
         &self.properties
     }
+
+    /// Decodes frame `n`, counting from zero.
+    pub fn frame(&mut self, n: i64) -> Result<Frame, BestSourceError> {
+        let mut raw = ptr::null_mut();
+        let mut error = [0u8; ERROR_BUFFER_LEN];
+        // SAFETY: `self.raw` is live and borrowed mutably, so nothing else decodes at once. `raw` and
+        // `error` are valid out pointers and `error.len()` is the buffer's real size.
+        let status =
+            unsafe { sys::bs_video_frame(self.raw, n, &mut raw, error.as_mut_ptr().cast(), error.len()) };
+        if status != 0 {
+            return Err(BestSourceError::from_buffer(&error));
+        }
+
+        // SAFETY: The shim handed over a live frame that only the returned `Frame` frees.
+        let frame = unsafe { Frame::from_raw(raw) };
+
+        Ok(frame)
+    }
 }
 
 impl Drop for VideoSource {
@@ -150,11 +169,16 @@ fn c_path(path: &Path) -> Result<CString, BestSourceError> {
 }
 
 fn non_utf8_path_error(path: &Path) -> BestSourceError {
-    BestSourceError::new(format!("{} is not valid utf-8, which bestsource requires", path.display()))
+    BestSourceError::new(format!(
+        "{} is not valid utf-8, which bestsource requires",
+        path.display()
+    ))
 }
 
 fn nul_path_error(text: &str) -> BestSourceError {
     let printable = text.replace('\0', "\\0");
 
-    BestSourceError::new(format!("{printable} carries a nul byte, which bestsource cannot take"))
+    BestSourceError::new(format!(
+        "{printable} carries a nul byte, which bestsource cannot take"
+    ))
 }
