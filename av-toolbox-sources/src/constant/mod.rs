@@ -5,6 +5,7 @@ mod image;
 mod like;
 mod picture;
 mod repeat;
+mod seeker;
 mod solid;
 
 use self::convert::Converted;

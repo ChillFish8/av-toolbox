@@ -80,7 +80,7 @@ impl Repeat {
 }
 
 /// The meta of frame `index`, with a timestamp when there is a frame rate.
-fn meta_at(index: u64, frame_rate: Option<FrameRate>) -> FrameMeta {
+pub(super) fn meta_at(index: u64, frame_rate: Option<FrameRate>) -> FrameMeta {
     let mut meta = FrameMeta::at(index);
 
     if let Some(rate) = frame_rate {

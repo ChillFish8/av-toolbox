@@ -4,6 +4,7 @@ use av_toolbox_core::{
     FilterDefinition,
     InputSignature,
     Parallelism,
+    Seeker,
     Source,
     SourceDefinition,
     StageDefinition,
@@ -29,6 +30,7 @@ use super::colour::Colour;
 use super::convert::{check, convert};
 use super::like::{REFERENCE_SIGNATURE, accepts_reference, reference_format};
 use super::repeat::{RepeatFilter, RepeatSource};
+use super::seeker::RepeatSeeker;
 use crate::shared::{Carried, produced_by};
 
 const FILL: &str = "solid/fill";
@@ -119,6 +121,13 @@ impl SourceDefinition for Fill {
         let source = RepeatSource::new(opened.converted, opened.frames);
 
         Ok(Box::new(source))
+    }
+
+    fn seeker(opened: &Self::Opened) -> Result<Option<Box<dyn Seeker>>, StageError> {
+        let converted = opened.converted.clone();
+        let seeker = RepeatSeeker::new(converted, opened.frames);
+
+        Ok(Some(Box::new(seeker)))
     }
 }
 

@@ -6,6 +6,7 @@ use av_toolbox_core::{
     FilterDefinition,
     InputSignature,
     Parallelism,
+    Seeker,
     Source,
     SourceDefinition,
     StageDefinition,
@@ -33,6 +34,7 @@ use super::convert::{convert, size_of_picture, wrong_size};
 use super::like::{REFERENCE_SIGNATURE, accepts_reference, reference_format};
 use super::picture::{decode, dimensions};
 use super::repeat::{RepeatFilter, RepeatSource};
+use super::seeker::RepeatSeeker;
 use crate::shared::{Carried, produced_by};
 
 const FILE: &str = "image/file";
@@ -119,6 +121,13 @@ impl SourceDefinition for File {
         let source = RepeatSource::new(opened.converted, opened.frames);
 
         Ok(Box::new(source))
+    }
+
+    fn seeker(opened: &Self::Opened) -> Result<Option<Box<dyn Seeker>>, StageError> {
+        let converted = opened.converted.clone();
+        let seeker = RepeatSeeker::new(converted, opened.frames);
+
+        Ok(Some(Box::new(seeker)))
     }
 }
 

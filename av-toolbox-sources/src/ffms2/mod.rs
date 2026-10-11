@@ -8,6 +8,7 @@ use std::time::Duration;
 use av_toolbox_core::{
     BoundInputs,
     InputSignature,
+    Seeker,
     Source,
     SourceDefinition,
     StageDefinition,
@@ -29,6 +30,7 @@ use av_toolbox_gpu::{
     FrameRate,
     HostFrame,
     HostFrameMut,
+    HostPool,
     HostSide,
     Matrix,
     OutputFormats,
@@ -41,7 +43,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use self::format::Choice;
-use self::sys::{Ffms2Error, StridedPlane, VideoSource};
+use self::sys::{Ffms2Error, Index, StridedPlane, VideoSource};
 use crate::shared::{Carried, produced_by};
 
 /// Arguments for `ffms2/file`.
@@ -75,6 +77,10 @@ pub(crate) struct Opened {
     expected: FrameShape,
     path: PathBuf,
     next: i32,
+    /// The index the stream was opened from, kept to open seekers.
+    index: Index,
+    track: i32,
+    threads: i32,
 }
 
 impl Opened {
@@ -181,6 +187,9 @@ impl SourceDefinition for File {
             expected,
             path: args.path.clone(),
             next: 0,
+            index,
+            track: track_index,
+            threads,
         })
     }
 
@@ -200,6 +209,25 @@ impl SourceDefinition for File {
         let source = FileSource::new(opened);
 
         Ok(Box::new(source))
+    }
+
+    fn seeker(opened: &Self::Opened) -> Result<Option<Box<dyn Seeker>>, StageError> {
+        let created = VideoSource::open(&opened.path, opened.track, &opened.index, opened.threads);
+        let mut video = created.map_err(|error| open_error(&opened.path, &error))?;
+
+        let shape = opened.expected;
+        let configured = video.set_output_format(shape.format_id, shape.width, shape.height);
+        configured.map_err(|error| open_error(&opened.path, &error))?;
+
+        let seeker = FileSeeker {
+            video,
+            format: opened.format,
+            expected: shape,
+            path: opened.path.clone(),
+            pool: HostPool::new(),
+        };
+
+        Ok(Some(Box::new(seeker)))
     }
 }
 
@@ -226,40 +254,116 @@ impl Source<HostSide> for FileSource {
         }
 
         let current = opened.next;
-        let pts = opened.video.pts(current);
-        let (numerator, denominator) = opened.video.time_base();
-        let timestamp = pts.and_then(|pts| timestamp_of(pts, numerator, denominator));
-
-        let decoded = opened.video.frame(current);
-        let frame = decoded.map_err(|error| frame_error(&opened.path, current, &error))?;
-        let actual = FrameShape {
-            width: frame.width(),
-            height: frame.height(),
-            format_id: frame.converted_pixel_format(),
-        };
-        validate_decoded_frame(actual, opened.expected, &opened.path, current)?;
-
-        let meta = FrameMeta {
-            timestamp,
-            ..FrameMeta::at(current as u64)
-        };
+        let meta = meta_of(&opened.video, current);
         let mut host_frame = context.alloc_host_frame(&opened.format, meta);
-
-        let plane_channels = ffmpeg_plane_channels(opened.format.layout);
-        for (plane_index, channel) in plane_channels.iter().enumerate() {
-            let (row_bytes, rows) = plane_extent(&opened.format, *channel, &opened.path, current)?;
-
-            // SAFETY: `validate_decoded_frame` confirmed the frame holds the output format at the
-            // output resolution, and `plane_extent` sized this plane from that same format.
-            let plane = unsafe { frame.plane(plane_index, row_bytes, rows) };
-            let plane = plane.ok_or_else(|| missing_plane_error(&opened.path, current, *channel))?;
-
-            copy_plane(&mut host_frame, *channel, &plane, &opened.path, current)?;
-        }
+        decode_into(
+            &mut opened.video,
+            &opened.format,
+            opened.expected,
+            &opened.path,
+            current,
+            &mut host_frame,
+        )?;
 
         opened.next += 1;
 
         Ok(Some(host_frame.freeze()))
+    }
+}
+
+/// Decodes frame `current` of `video` into `host_frame`.
+fn decode_into(
+    video: &mut VideoSource,
+    format: &FrameFormat,
+    expected: FrameShape,
+    path: &Path,
+    current: i32,
+    host_frame: &mut HostFrameMut,
+) -> Result<(), StageError> {
+    let decoded = video.frame(current);
+    let frame = decoded.map_err(|error| frame_error(path, current, &error))?;
+    let actual = FrameShape {
+        width: frame.width(),
+        height: frame.height(),
+        format_id: frame.converted_pixel_format(),
+    };
+    validate_decoded_frame(actual, expected, path, current)?;
+
+    let plane_channels = ffmpeg_plane_channels(format.layout);
+    for (plane_index, channel) in plane_channels.iter().enumerate() {
+        let (row_bytes, rows) = plane_extent(format, *channel, path, current)?;
+
+        // SAFETY: `validate_decoded_frame` confirmed the frame holds the output format at the
+        // output resolution, and `plane_extent` sized this plane from that same format.
+        let plane = unsafe { frame.plane(plane_index, row_bytes, rows) };
+        let plane = plane.ok_or_else(|| missing_plane_error(path, current, *channel))?;
+
+        copy_plane(host_frame, *channel, &plane, path, current)?;
+    }
+
+    Ok(())
+}
+
+/// The metadata of frame `current`, with its timestamp when the track has one.
+fn meta_of(video: &VideoSource, current: i32) -> FrameMeta {
+    let pts = video.pts(current);
+    let (numerator, denominator) = video.time_base();
+    let timestamp = pts.and_then(|pts| timestamp_of(pts, numerator, denominator));
+
+    FrameMeta {
+        timestamp,
+        ..FrameMeta::at(current as u64)
+    }
+}
+
+/// Reads any frame of a file through a decoder of its own.
+pub(crate) struct FileSeeker {
+    video: VideoSource,
+    format: FrameFormat,
+    expected: FrameShape,
+    path: PathBuf,
+    pool: HostPool,
+}
+
+fn past_end(path: &Path, index: usize, count: usize) -> StageError {
+    let message = format!(
+        "{} has {count} frames, so frame {index} cannot be read",
+        path.display()
+    );
+
+    StageError::msg(message)
+}
+
+impl Seeker for FileSeeker {
+    fn format(&self) -> &FrameFormat {
+        &self.format
+    }
+
+    fn frame_count(&self) -> usize {
+        let count = self.video.num_frames();
+
+        usize::try_from(count).unwrap_or(0)
+    }
+
+    fn read(&mut self, index: usize) -> Result<HostFrame, StageError> {
+        let count = self.frame_count();
+        if index >= count {
+            return Err(past_end(&self.path, index, count));
+        }
+
+        let current = index as i32;
+        let meta = meta_of(&self.video, current);
+        let mut host_frame = self.pool.alloc_frame(&self.format, meta);
+        decode_into(
+            &mut self.video,
+            &self.format,
+            self.expected,
+            &self.path,
+            current,
+            &mut host_frame,
+        )?;
+
+        Ok(host_frame.freeze())
     }
 }
 
@@ -569,6 +673,7 @@ fn missing_plane_error(path: &Path, frame: i32, channel: Channel) -> StageError 
 mod tests {
     use std::path::PathBuf;
 
+    use av_toolbox_core::Seeker;
     use av_toolbox_gpu::{
         Channel,
         ChromaLocation,
@@ -617,6 +722,55 @@ mod tests {
         }
 
         frames
+    }
+
+    fn seeker_over(opened: &Opened) -> Box<dyn Seeker> {
+        let found = File::seeker(opened).expect("opens a second source");
+
+        found.expect("ffms2 can seek")
+    }
+
+    #[test]
+    fn the_seeker_reads_what_the_stream_decodes() {
+        let (_folder, opened) = opened("yuv420p.mkv", None);
+        let mut seeker = seeker_over(&opened);
+        let (_second_folder, streamed) = self::opened("yuv420p.mkv", None);
+        let frames = decode_all(streamed);
+
+        assert_eq!(seeker.frame_count(), frames.len());
+        for index in [0, 4, 7] {
+            let read = seeker.read(index).expect("reads");
+
+            assert_eq!(read.meta().index, frames[index].meta().index);
+            for channel in [Channel::Y, Channel::U, Channel::V] {
+                let read_plane = read.plane(channel).expect("carried");
+                let streamed_plane = frames[index].plane(channel).expect("carried");
+
+                assert_eq!(read_plane.bytes(), streamed_plane.bytes(), "{index} {channel}");
+            }
+        }
+    }
+
+    #[test]
+    fn reading_through_the_seeker_leaves_the_stream_at_its_start() {
+        let (_folder, opened) = opened("yuv420p.mkv", None);
+        let mut seeker = seeker_over(&opened);
+        seeker.read(5).expect("reads");
+
+        let frames = decode_all(opened);
+
+        assert_eq!(frames.len(), 8);
+        assert_eq!(frames[0].meta().index, 0);
+    }
+
+    #[test]
+    fn reading_past_the_end_is_refused() {
+        let (_folder, opened) = opened("yuv420p.mkv", None);
+        let mut seeker = seeker_over(&opened);
+
+        let refused = seeker.read(8);
+
+        assert!(refused.is_err());
     }
 
     #[test]
