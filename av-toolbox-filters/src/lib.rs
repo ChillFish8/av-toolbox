@@ -48,6 +48,7 @@
 //! - `planes/extract` pulls one plane, or the chroma pair, out of a clip.
 //! - `planes/merge` builds a clip by picking each plane from one of several clips.
 //! - `upscale/artcnn` doubles a clip's size, running its luma through the ArtCNN network.
+//! - `vship/ssimulacra2` scores a distorted clip against a reference with SSIMULACRA2 through Vship.
 //! - `warp/awarpsharp` sharpens by pulling samples toward nearby edges, the way aWarpSharp2 does.
 
 mod aa;
@@ -79,6 +80,8 @@ mod sizing;
 #[cfg(feature = "test-support")]
 pub mod testing;
 mod upscale;
+#[cfg(feature = "vship")]
+mod vship;
 mod warp;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
@@ -132,6 +135,8 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<planes::Merge>()?;
     registry.register_filter::<warp::Awarpsharp>()?;
     registry.register_filter::<upscale::Artcnn>()?;
+    #[cfg(feature = "vship")]
+    registry.register_filter::<vship::Ssimulacra2>()?;
 
     Ok(())
 }
@@ -195,5 +200,11 @@ mod tests {
         assert!(registered("planes/merge"));
         assert!(registered("warp/awarpsharp"));
         assert!(registered("upscale/artcnn"));
+    }
+
+    #[cfg(feature = "vship")]
+    #[test]
+    fn every_vship_filter_is_registered() {
+        assert!(registered("vship/ssimulacra2"));
     }
 }

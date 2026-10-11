@@ -19,6 +19,7 @@ av-toolbox-gpu = { workspace = true }
 av-toolbox-models = { workspace = true }
 av-toolbox-providers = { workspace = true }
 av-denoise-core = { workspace = true }
+avtbx-vship = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -35,6 +36,13 @@ rocm = ["av-toolbox-gpu/rocm", "av-toolbox-core/rocm", "av-toolbox-providers/roc
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]
 # Exposes internals for tests in this crate's tests/device suite.
 test-support = []
+vship = ["dep:avtbx-vship"]
+# Builds the vendored Vship and links it statically instead of the system libvship.
+static-vship = ["vship", "avtbx-vship/static"]
+# Builds the static Vship with its Vulkan backend.
+vship-vulkan = ["avtbx-vship/vulkan"]
+# Builds the static Vship with its CUDA backend.
+vship-cuda = ["avtbx-vship/cuda"]
 
 [package.metadata.docs.rs]
 features = ["vulkan"]

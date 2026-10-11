@@ -292,6 +292,7 @@ dependencies = [
  "av-toolbox-gpu",
  "av-toolbox-models",
  "av-toolbox-providers",
+ "avtbx-vship",
  "cubecl",
  "schemars",
  "serde",
