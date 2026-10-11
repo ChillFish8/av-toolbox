@@ -1,6 +1,6 @@
+mod auto;
 mod instance;
 mod manual;
-#[expect(dead_code, reason = "no stage runs the probe yet")]
 mod probe;
 #[cfg(test)]
 mod tests;
@@ -10,10 +10,10 @@ use av_toolbox_gpu::{FormatSet, FrameFormat, FrameLayout, StreamFormat};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+pub(crate) use self::auto::Auto;
 pub(crate) use self::instance::Cropper;
 pub(crate) use self::manual::Manual;
-#[cfg_attr(not(test), expect(unused_imports, reason = "no stage runs the probe yet"))]
-pub(crate) use self::probe::{Crop, CropBox, CropRequest, sample_indices};
+pub(crate) use self::probe::{Crop, CropBox, CropRequest};
 
 /// How many samples a crop removes from each edge.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Deserialize, JsonSchema)]

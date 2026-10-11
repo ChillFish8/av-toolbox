@@ -243,7 +243,10 @@ impl CompiledGraph {
                 &arguments,
                 node.open_slot(),
             ) {
-                Ok(stage) => prepared[slot] = Some(stage),
+                Ok(mut stage) => match settle_stage(node, &mut stage) {
+                    Ok(()) => prepared[slot] = Some(stage),
+                    Err(error) => diagnostics.push(settle_failed(node, error)),
+                },
                 Err(error) => report(self, node, error, &mut diagnostics),
             }
         }

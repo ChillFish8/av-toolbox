@@ -134,6 +134,24 @@ av-toolbox execute examples/image.toml --var image=logo.png --var output=logo.y4
 av-toolbox execute examples/recolour-lines.toml --var colour=#ff0000 --var input=clip.mkv --var output=output.y4m
 ```
 
+## Cropping
+
+`crop/manual` removes a given number of samples from each edge. `crop/auto` finds the black bars around the picture
+and removes them, measuring 13 frames spread across the clip before the run starts. It needs a file source, and has
+to come before any stage that changes the frame size.
+
+```toml
+[filter.crop]
+type = "crop/manual"
+inputs = ["input"]
+args.top = 140
+args.bottom = 140
+```
+
+```bash
+av-toolbox execute examples/crop.toml --var input=clip.mkv --var output=output.y4m
+```
+
 ## Drawing a pipeline
 
 ```bash

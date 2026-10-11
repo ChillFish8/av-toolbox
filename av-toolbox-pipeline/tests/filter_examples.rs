@@ -263,6 +263,41 @@ fn the_resample_example_round_trips_a_flat_clip() {
     }
 }
 
+/// A gradient picture between black bars 8 rows tall at the top and bottom.
+fn letterboxed_luma() -> Vec<u8> {
+    let gradient = gradient_luma();
+    let bar_rows = 8;
+    let mut luma = Vec::with_capacity(gradient.len());
+
+    for (row, line) in gradient.chunks(SIZE).enumerate() {
+        if row < bar_rows || row >= SIZE - bar_rows {
+            luma.extend(vec![16u8; SIZE]);
+            continue;
+        }
+
+        let bright = line.iter().map(|value| (*value).max(40));
+        luma.extend(bright);
+    }
+
+    luma
+}
+
+#[test]
+fn the_crop_example_removes_the_letterbox() {
+    let luma = letterboxed_luma();
+    let clip = clip_with_luma(&luma);
+
+    let decoded = run_example_on("crop.toml", &[], &clip);
+
+    let picture_rows = &luma[8 * SIZE..(SIZE - 8) * SIZE];
+    for frame in &decoded.frames {
+        assert_eq!(
+            frame.luma, picture_rows,
+            "only the picture between the bars is kept"
+        );
+    }
+}
+
 #[test]
 fn the_planes_example_writes_444() {
     let decoded = run_example("planes.toml", &[("width", "64"), ("height", "64")]);

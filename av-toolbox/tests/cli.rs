@@ -37,6 +37,7 @@ fn every_example_explains_without_a_device() {
         "resize.toml",
         "solid.toml",
         "image.toml",
+        "crop.toml",
         "recolour-lines.toml",
         "artcnn.toml",
         "deblock-dpir.toml",

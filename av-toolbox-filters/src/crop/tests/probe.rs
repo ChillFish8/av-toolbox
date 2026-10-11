@@ -13,7 +13,8 @@ use av_toolbox_gpu::{
     Subsampling,
 };
 
-use crate::crop::{Crop, CropBox, CropRequest, Edges, sample_indices};
+use crate::crop::probe::sample_indices;
+use crate::crop::{Crop, CropBox, CropRequest, Edges};
 
 const WIDTH: u32 = 32;
 const HEIGHT: u32 = 24;

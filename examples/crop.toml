@@ -1,0 +1,27 @@
+# Reads a video, removes the black bars around its picture and writes it out as y4m.
+#
+# crop/auto measures 13 frames spread across the clip before the run starts, so the source has to be a file. Use
+# crop/manual with left, right, top and bottom to crop by hand.
+
+[variable.input]
+type = "path"
+description = "The video to decode"
+default = "input.mkv"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.crop]
+type = "crop/auto"
+inputs = ["input"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["crop"]
+args.path = "{{ output }}"
