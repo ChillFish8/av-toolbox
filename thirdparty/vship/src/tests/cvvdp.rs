@@ -1,4 +1,4 @@
-use crate::tests::support::{color_space, distorted_frame, gpu_id, planes, reference_frame};
+use crate::tests::support::{SIZE, color_space, distorted_frame, gpu_id, planes, reference_frame};
 use crate::{Cvvdp, CvvdpOptions, DisplayModel, Planes};
 
 const FRAMES: usize = 5;
@@ -133,7 +133,7 @@ fn loaded_history_frames_are_not_scored() {
 }
 
 #[test]
-fn a_cvvdp_map_has_the_reported_size_and_is_near_zero_for_identical_frames() {
+fn a_cvvdp_map_matches_the_frame_size_and_is_near_zero_for_identical_frames() {
     let reference = reference_frame();
     let reference_planes = planes(&reference);
     let mut metric = cvvdp();
@@ -144,7 +144,7 @@ fn a_cvvdp_map_has_the_reported_size_and_is_near_zero_for_identical_frames() {
         .expect("scores with a map");
 
     let peak = map.data().iter().copied().fold(0.0f32, f32::max);
-    assert!(map.width() > 0 && map.height() > 0);
+    assert_eq!((map.width(), map.height()), (SIZE, SIZE));
     assert_eq!(map.data().len(), map.width() * map.height());
     assert!(peak < 0.01, "{peak}");
 }

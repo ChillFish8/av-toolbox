@@ -1,8 +1,8 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use super::FramePair;
 use super::handler::Handler;
+use super::{FramePair, check_matching_sizes};
 use crate::colour::{ColorSpace, Planes};
 use crate::distmap::{DistortionMap, MapSize};
 use crate::error::VshipError;
@@ -35,6 +35,8 @@ impl Butteraugli {
         intensity_multiplier: f32,
         gpu_id: i32,
     ) -> Result<Self, VshipError> {
+        check_matching_sizes(&reference, &distorted)?;
+
         let mut init = sys::Vship_InitButteraugli_1 {
             structType: sys::Vship_StructInitButteraugli_1,
             src_colorspace: reference.to_raw(),

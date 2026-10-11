@@ -37,7 +37,7 @@ impl Handler {
     /// # Safety
     ///
     /// `score` must point at a live score struct whose `structType` matches this handler's metric. Its
-    /// map pointer must be null, or come from [DistortionMap::target](crate::DistortionMap) checked
+    /// map pointer must be null, or come from a [DistortionMap](crate::DistortionMap) checked
     /// against this handler's map size.
     pub(super) unsafe fn compute(
         &mut self,

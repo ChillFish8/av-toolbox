@@ -19,7 +19,8 @@ impl MapSize {
         };
 
         let pixels = map_width.checked_mul(map_height);
-        if pixels.is_none() {
+        let bytes = pixels.and_then(|pixel_count| pixel_count.checked_mul(size_of::<f32>()));
+        if bytes.is_none() {
             return Err(unusable_size_error(width, height));
         }
 

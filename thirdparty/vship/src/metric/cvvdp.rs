@@ -1,8 +1,8 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use super::FramePair;
 use super::handler::Handler;
+use super::{FramePair, check_matching_sizes};
 use crate::colour::{ColorSpace, Planes};
 use crate::display::DisplayModel;
 use crate::distmap::{DistortionMap, MapSize};
@@ -12,16 +12,19 @@ use crate::sys;
 /// How a [Cvvdp](crate::Cvvdp) models viewing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CvvdpOptions {
-    /// The frame rate of the video, above 0.
+    /// The frame rate of the video, above 0 and at most 1000.
     pub fps: f32,
     /// Scales frames to the display's resolution before scoring.
     pub resize_to_display: bool,
     pub display: DisplayModel,
 }
 
+/// The largest frame rate accepted, as Vship sizes its frame history from it.
+const MAX_FPS: f32 = 1000.0;
+
 impl CvvdpOptions {
     fn check(&self) -> Result<(), VshipError> {
-        let usable_fps = self.fps.is_finite() && self.fps > 0.0;
+        let usable_fps = self.fps.is_finite() && self.fps > 0.0 && self.fps <= MAX_FPS;
         if !usable_fps {
             return Err(unusable_fps_error(self.fps));
         }
@@ -49,6 +52,7 @@ impl Cvvdp {
         options: &CvvdpOptions,
         gpu_id: i32,
     ) -> Result<Self, VshipError> {
+        check_matching_sizes(&reference, &distorted)?;
         options.check()?;
 
         let display_strings = options.display.c_strings()?;
@@ -106,7 +110,7 @@ impl Cvvdp {
         self.handler.load_temporal(&frames)
     }
 
-    /// Clears the frame history, leaving the running score as it is.
+    /// Clears the frame history and restarts the running score.
     pub fn reset(&mut self) -> Result<(), VshipError> {
         self.handler.reset()
     }
@@ -150,7 +154,9 @@ impl Cvvdp {
 }
 
 fn unusable_fps_error(fps: f32) -> VshipError {
-    VshipError::new(format!("cvvdp needs a frame rate above 0, not {fps}"))
+    VshipError::new(format!(
+        "cvvdp needs a frame rate above 0 and at most {MAX_FPS}, not {fps}"
+    ))
 }
 
 #[cfg(test)]
@@ -170,6 +176,15 @@ mod tests {
         let options = options_at(0.0);
 
         let error = options.check().expect_err("a zero fps passed");
+
+        assert!(error.message().contains("frame rate"), "{error}");
+    }
+
+    #[test]
+    fn a_frame_rate_above_1000_is_refused() {
+        let options = options_at(1000.5);
+
+        let error = options.check().expect_err("a huge fps passed");
 
         assert!(error.message().contains("frame rate"), "{error}");
     }

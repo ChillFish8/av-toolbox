@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
-use super::FramePair;
 use super::handler::Handler;
+use super::{FramePair, check_matching_sizes};
 use crate::colour::{ColorSpace, Planes};
 use crate::error::VshipError;
 use crate::sys;
@@ -16,6 +16,8 @@ pub struct Ssimulacra2 {
 
 impl Ssimulacra2 {
     pub fn new(reference: ColorSpace, distorted: ColorSpace, gpu_id: i32) -> Result<Self, VshipError> {
+        check_matching_sizes(&reference, &distorted)?;
+
         let mut init = sys::Vship_InitSSIMULACRA2_1 {
             structType: sys::Vship_StructInitSSIMULACRA2_1,
             src_colorspace: reference.to_raw(),

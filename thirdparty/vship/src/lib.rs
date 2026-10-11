@@ -1,4 +1,4 @@
-//! GPU SSIMULACRA2 and Butteraugli through a statically linked Vship
+//! GPU SSIMULACRA2, Butteraugli and CVVDP through a statically linked Vship
 //!
 //! [device_count] and [device_info] list the devices Vship's backend can use.
 //! [Ssimulacra2], [Butteraugli] and [Cvvdp] score a distorted frame against a reference on one device.
