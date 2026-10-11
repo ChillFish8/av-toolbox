@@ -5,6 +5,7 @@ use super::RenderOptions;
 use crate::demands::{NodeDemand, ProviderPlacement};
 use crate::graph::{CompiledGraph, Node, NodeId, NodeRole};
 use crate::plan::{ExecutionPlan, Narrowed, Region, RegionId, Routing};
+use crate::probes::NodeProbe;
 
 /// Everything a renderer draws, worked out once from a graph and its plan.
 ///
@@ -43,6 +44,7 @@ pub(crate) struct DiagramBox {
     pub(crate) width: usize,
     pub(crate) reason: Option<&'static str>,
     pub(crate) provider: Option<ProviderPlacement>,
+    pub(crate) probes: Vec<String>,
     pub(crate) demands: Vec<ShownDemand>,
 }
 
@@ -172,7 +174,7 @@ impl DiagramBox {
     /// The lines of text the box holds, in the order they are printed.
     ///
     /// A provider is titled with its kind, then names its instance and the side it was registered
-    /// for. A box's demands come last, one line each and in order.
+    /// for. A box's probes and then its demands come last, one line each and in order.
     pub(crate) fn lines(&self, options: &RenderOptions) -> Vec<String> {
         let title = match &self.provider {
             Some(placement) => format!("{} · implied", placement.kind.name()),
@@ -207,6 +209,10 @@ impl DiagramBox {
 
         if let Some(reason) = self.reason {
             lines.push(format!("({reason})"));
+        }
+
+        for probe in &self.probes {
+            lines.push(probe.clone());
         }
 
         for demand in &self.demands {
@@ -290,6 +296,11 @@ pub(crate) fn routing_text(routing: Routing) -> &'static str {
         Routing::ByFrame => "by frame",
         Routing::ByChunk => "by chunk",
     }
+}
+
+/// The line a box prints for a probe, such as `probes crop: 13 samples`.
+fn probe_line(probe: &NodeProbe) -> String {
+    format!("probes {}: {}", probe.probe.kind().name(), probe.description)
 }
 
 fn demand_text(demand: &NodeDemand) -> String {
@@ -431,6 +442,7 @@ fn box_of(node: &Node, block: usize, width: usize, reason: Option<&'static str>)
         NodeRole::Provider(placement) => (None, Some(placement.clone())),
         NodeRole::Stage => (None, None),
     };
+    let probes = node.probes().iter().map(probe_line).collect();
     let demands = node.demands().iter().map(ShownDemand::of).collect();
 
     DiagramBox {
@@ -444,6 +456,7 @@ fn box_of(node: &Node, block: usize, width: usize, reason: Option<&'static str>)
         width,
         reason,
         provider,
+        probes,
         demands,
     }
 }
@@ -957,6 +970,25 @@ mod tests {
         assert_eq!(
             denoise.lines(&RenderOptions::default()),
             vec!["denoise", "test/temporal", "chunks on fixture-cuts: fixture-cuts"]
+        );
+    }
+
+    #[test]
+    fn a_stage_box_lists_its_probes_before_its_demands() {
+        let specs = [
+            crate::tests::probes::seekable("input"),
+            crate::tests::probes::probing("crop", "input", serde_json::json!({ "mark": 3 })),
+            crate::tests::probes::sink("out", "crop"),
+        ];
+        let graph = crate::tests::probes::recorded(&specs);
+        let diagram = Diagram::of(&graph);
+        let crop = box_named(&diagram, "crop");
+
+        let lines = crop.lines(&RenderOptions::default());
+
+        assert_eq!(
+            lines,
+            vec!["crop", "test/probing", "probes fixture-probe: mark 3"]
         );
     }
 

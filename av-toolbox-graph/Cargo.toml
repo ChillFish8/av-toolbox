@@ -9,6 +9,7 @@ description = "Compiles av-toolbox stage definitions into a pipeline graph."
 [dependencies]
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 av-toolbox-core = { workspace = true }
 av-toolbox-gpu = { workspace = true }

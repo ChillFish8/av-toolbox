@@ -1,13 +1,23 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use av_toolbox_core::{Crossing, OpenSlot, Residency, StageArtefacts, StageHandle, StageKind, StreamType};
+use av_toolbox_core::{
+    Crossing,
+    OpenSlot,
+    Probed,
+    Residency,
+    StageArtefacts,
+    StageHandle,
+    StageKind,
+    StreamType,
+};
 use av_toolbox_gpu::ChunkRoute;
 use serde_json::Value;
 
 use crate::demands::{NodeDemand, ProviderPlacement};
 use crate::diagnostic::stage_path;
 use crate::plan::ExecutionPlan;
+use crate::probes::NodeProbe;
 use crate::{ArgSpans, ArtefactSinkNode, Span};
 
 /// A node's position in the graph.
@@ -186,6 +196,10 @@ pub struct Node {
     route: Option<ChunkRoute>,
     /// What this node demanded, as the demand pass settled it.
     demands: Vec<NodeDemand>,
+    /// What this node asks its sources, as the build recorded it.
+    probes: Vec<NodeProbe>,
+    /// What this node's probes found, once they have run.
+    probed: Option<Probed>,
 }
 
 impl Node {
@@ -209,6 +223,8 @@ impl Node {
             open: OpenSlot::new(),
             route: None,
             demands: Vec::new(),
+            probes: Vec::new(),
+            probed: None,
         }
     }
 
@@ -311,6 +327,24 @@ impl Node {
 
     pub(crate) fn set_demands(&mut self, demands: Vec<NodeDemand>) {
         self.demands = demands;
+    }
+
+    /// What this node asks its sources, as the build recorded it.
+    pub fn probes(&self) -> &[NodeProbe] {
+        &self.probes
+    }
+
+    /// What this node's probes found, once they have run.
+    pub fn probed(&self) -> Option<&Probed> {
+        self.probed.as_ref()
+    }
+
+    pub(crate) fn set_probes(&mut self, probes: Vec<NodeProbe>) {
+        self.probes = probes;
+    }
+
+    pub(crate) fn set_probed(&mut self, probed: Probed) {
+        self.probed = Some(probed);
     }
 }
 
@@ -466,6 +500,8 @@ impl CompiledGraph {
             open: OpenSlot::new(),
             route: None,
             demands: Vec::new(),
+            probes: Vec::new(),
+            probed: None,
         };
 
         self.nodes.push(node);
@@ -509,6 +545,8 @@ impl CompiledGraph {
             open: OpenSlot::new(),
             route: None,
             demands: Vec::new(),
+            probes: Vec::new(),
+            probed: None,
         };
 
         self.nodes.push(node);

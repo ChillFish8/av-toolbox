@@ -7,6 +7,7 @@ mod filters;
 mod host;
 mod masks;
 mod planes;
+mod probing;
 mod providers;
 mod rated;
 mod shared;
@@ -31,6 +32,15 @@ pub(crate) use self::filters::{
 use self::host::{HostBlur, HostFile, HostJoin, HostStdout, Log};
 use self::masks::{Anchored, Gather, Matched, Merge, Mislabelled, TemporalMerge};
 use self::planes::{Blend, Combine, HostMasker, LayoutFile, PlainBlend};
+pub(crate) use self::probing::{
+    FixtureProbe,
+    MarkRequest,
+    PROBE_CALLS,
+    PlainProbe,
+    SEEKABLE_OPENS,
+    SEEKER_READS,
+};
+use self::probing::{Pair, Probing, Seekable};
 use self::providers::{Breaking, Demanding, DemandingPair, Marking, Relaying, TagReading, Tagging};
 pub(crate) use self::providers::{BreaksRequest, FixtureBreaks, FixtureMarks, MarksRequest};
 use self::rated::{Rated, Retime};
@@ -42,6 +52,18 @@ pub(crate) fn chunked() -> Parallelism {
 }
 
 pub(crate) fn registry() -> PipelineRegistry {
+    let mut registry = registry_without_probe_kinds();
+
+    registry
+        .register_probe::<FixtureProbe>()
+        .expect("should register");
+    registry.register_probe::<PlainProbe>().expect("should register");
+
+    registry
+}
+
+/// Every fixture stage, with no probe kind registered.
+pub(crate) fn registry_without_probe_kinds() -> PipelineRegistry {
     let mut registry = PipelineRegistry::new();
 
     registry.register_source::<Counted>().expect("should register");
@@ -103,6 +125,9 @@ pub(crate) fn registry() -> PipelineRegistry {
     registry
         .register_artefact_sink::<Files>()
         .expect("should register");
+    registry.register_source::<Seekable>().expect("should register");
+    registry.register_filter::<Probing>().expect("should register");
+    registry.register_filter::<Pair>().expect("should register");
 
     registry
 }
@@ -119,7 +144,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 47);
+        assert_eq!(identifiers.len(), 50);
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
@@ -145,6 +170,9 @@ mod tests {
         assert!(identifiers.contains(&"test/tag-reading"));
         assert!(identifiers.contains(&"test/grain"));
         assert!(identifiers.contains(&"test/files"));
+        assert!(identifiers.contains(&"test/seekable"));
+        assert!(identifiers.contains(&"test/probing"));
+        assert!(identifiers.contains(&"test/pair"));
     }
 
     #[test]

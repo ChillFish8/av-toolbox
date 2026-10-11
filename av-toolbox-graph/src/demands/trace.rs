@@ -118,7 +118,7 @@ fn trace_upstream(
 }
 
 /// The position of the edge bound to `input`, by its signature param or its variadic name.
-pub(super) fn bound_edge(node: &Node, input: &str) -> Option<usize> {
+pub(crate) fn bound_edge(node: &Node, input: &str) -> Option<usize> {
     node.inputs().iter().position(|edge| match edge.param() {
         Some(param) => param == input,
         None => edge.name() == Some(input),

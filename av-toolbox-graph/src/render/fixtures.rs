@@ -537,6 +537,7 @@ pub(crate) fn example_diagram() -> Diagram {
             width: blocks[stage.block].width,
             reason: None,
             provider: stage.provider,
+            probes: Vec::new(),
             demands: stage.demands,
         })
         .collect();

@@ -63,6 +63,12 @@ pub enum DiagnosticCode {
     ArtefactSinkSelectsNothing,
     /// An artefact sink was given inputs.
     ArtefactSinkHasInputs,
+    /// A stage probes with a kind no one registered.
+    UnknownProbe,
+    /// A stage could not use what its probes found.
+    ProbeFailed,
+    /// A stage probes a source that cannot seek.
+    UnseekableSource,
 }
 
 impl DiagnosticCode {
@@ -104,6 +110,9 @@ impl DiagnosticCode {
             Self::UnmatchedArtefactPattern => "unmatched-artefact-pattern",
             Self::ArtefactSinkSelectsNothing => "artefact-sink-selects-nothing",
             Self::ArtefactSinkHasInputs => "artefact-sink-has-inputs",
+            Self::UnknownProbe => "unknown-probe",
+            Self::ProbeFailed => "probe-failed",
+            Self::UnseekableSource => "unseekable-source",
         }
     }
 }
@@ -373,6 +382,13 @@ mod tests {
             DiagnosticCode::ArtefactSinkHasInputs.as_str(),
             "artefact-sink-has-inputs"
         );
+    }
+
+    #[test]
+    fn the_probe_codes_render_as_kebab_case() {
+        assert_eq!(DiagnosticCode::UnknownProbe.as_str(), "unknown-probe");
+        assert_eq!(DiagnosticCode::ProbeFailed.as_str(), "probe-failed");
+        assert_eq!(DiagnosticCode::UnseekableSource.as_str(), "unseekable-source");
     }
 
     #[test]

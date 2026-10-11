@@ -44,6 +44,7 @@ fn lone_box(name: &str, planned: bool) -> Diagram {
         width: 1,
         reason: None,
         provider: None,
+        probes: Vec::new(),
         demands: Vec::new(),
     };
 
@@ -113,6 +114,7 @@ fn hand_built(regions: &[(&[&str], usize)], links: &[(usize, usize)], planned: b
                 width: *width,
                 reason: None,
                 provider: None,
+                probes: Vec::new(),
                 demands: Vec::new(),
             });
         }

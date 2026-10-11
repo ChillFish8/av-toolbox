@@ -13,8 +13,10 @@ use av_toolbox_graph::{
     optimise,
     place_transfers,
     plan,
+    record_probes,
     render_ascii,
     render_html,
+    run_probes,
     satisfy_demands,
     settle_mask_planes,
     solve,
@@ -54,6 +56,7 @@ impl<'r> Pipeline<'r> {
         let passes = default_passes();
         optimise(&mut graph, &passes);
         satisfy_demands(&mut graph, registry)?;
+        record_probes(&mut graph, registry)?;
 
         Ok(Self {
             registry,
@@ -96,6 +99,8 @@ impl<'r> Pipeline<'r> {
             mut graph,
             mut warnings,
         } = self;
+
+        run_probes(&mut graph, registry)?;
 
         let capabilities = backend.capabilities();
         let mut formats = solve(&graph, registry, capabilities)?;

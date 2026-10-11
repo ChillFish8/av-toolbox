@@ -38,6 +38,7 @@ mod graph;
 mod instantiate;
 mod optimise;
 mod plan;
+mod probes;
 mod render;
 mod residency;
 mod solve;
@@ -66,6 +67,7 @@ pub use self::optimise::{
     optimise,
 };
 pub use self::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId, Routing, plan};
+pub use self::probes::{NodeProbe, record_probes, run_probes};
 pub use self::render::{RenderOptions, render_ascii, render_html};
 pub use self::residency::place_transfers;
 pub use self::solve::{SolvedFormats, solve};

@@ -16,7 +16,7 @@ use av_toolbox_gpu::{ChunkRoute, LayerId};
 
 use self::insert::insert_instances;
 use self::place::{place_demand, provider_demands};
-use self::trace::bound_edge;
+pub(crate) use self::trace::bound_edge;
 use crate::graph::{CompiledGraph, EdgeId, Node, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 

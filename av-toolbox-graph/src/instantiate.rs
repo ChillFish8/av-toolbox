@@ -16,6 +16,7 @@ use av_toolbox_core::{
     Sided,
     Sink,
     Source,
+    StageError,
     StageInstance,
 };
 use av_toolbox_gpu::{Backend, HostSide, ResolvedFormats};
@@ -118,7 +119,16 @@ impl CompiledGraph {
                 &arguments,
                 node.open_slot(),
             ) {
-                Ok(stage) => prepared[id.index()] = Some(stage),
+                Ok(mut stage) => {
+                    let settled = settle_stage(node, &mut stage);
+                    match settled {
+                        Ok(()) => prepared[id.index()] = Some(stage),
+                        Err(error) => {
+                            let diagnostic = settle_failed(node, error);
+                            diagnostics.push(diagnostic);
+                        },
+                    }
+                },
                 Err(error) => report(self, node, error, diagnostics),
             }
         }
@@ -398,6 +408,21 @@ pub(crate) fn describe(error: &BuildStageError) -> String {
     }
 
     message
+}
+
+/// Hands a freshly prepared stage what its probes found, when they have run.
+fn settle_stage(node: &Node, stage: &mut PreparedStage) -> Result<(), StageError> {
+    let Some(probed) = node.probed() else {
+        return Ok(());
+    };
+
+    stage.settle(probed)
+}
+
+fn settle_failed(node: &Node, error: StageError) -> Diagnostic {
+    let message = format!("`{}` could not use what its probes found: {error}", node.name());
+
+    Diagnostic::error(DiagnosticCode::ProbeFailed, node.path(), node.span(), message)
 }
 
 /// Diagnostics raised while preparing a graph need no device, so these tests join the fast suite
