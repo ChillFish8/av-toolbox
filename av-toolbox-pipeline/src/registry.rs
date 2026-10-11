@@ -50,4 +50,10 @@ mod tests {
     fn the_ffms2_source_is_registered() {
         assert!(registered(StageKind::Source, "ffms2/file"));
     }
+
+    #[cfg(feature = "bestsource")]
+    #[test]
+    fn the_bestsource_source_is_registered() {
+        assert!(registered(StageKind::Source, "bestsource/file"));
+    }
 }

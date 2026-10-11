@@ -1,0 +1,22 @@
+# Decodes a video with BestSource and writes it as a y4m stream.
+#
+# Needs the `bestsource` feature.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.mkv"
+
+[variable.output]
+type = "path"
+description = "Where to write the y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "bestsource/file"
+args.path = "{{ input }}"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["input"]
+args.path = "{{ output }}"

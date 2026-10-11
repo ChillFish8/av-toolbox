@@ -1,8 +1,38 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    require_one_ffmpeg();
+
     #[cfg(feature = "static-ffms2")]
     link_static_ffms2();
+}
+
+/// Fails a build that would link the system FFmpeg and the vcpkg FFmpeg into one binary.
+fn require_one_ffmpeg() {
+    let ffms2 = feature_enabled("FFMS2");
+    let bestsource = feature_enabled("BESTSOURCE");
+    if !(ffms2 && bestsource) {
+        return;
+    }
+
+    let static_ffms2 = feature_enabled("STATIC_FFMS2");
+    let static_bestsource = feature_enabled("STATIC_BESTSOURCE");
+    if static_ffms2 == static_bestsource {
+        return;
+    }
+
+    let missing = if static_ffms2 {
+        "static-bestsource"
+    } else {
+        "static-ffms2"
+    };
+    panic!("ffms2 and bestsource must link FFmpeg the same way, enable `{missing}` as well");
+}
+
+fn feature_enabled(name: &str) -> bool {
+    let variable = format!("CARGO_FEATURE_{name}");
+
+    std::env::var_os(variable).is_some()
 }
 
 /// Links the libraries a static ffms2 depends on.

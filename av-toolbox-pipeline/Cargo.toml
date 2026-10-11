@@ -35,6 +35,8 @@ av-toolbox-models = { workspace = true }
 default = ["ffms2"]
 ffms2 = ["av-toolbox-sources/ffms2"]
 static-ffms2 = ["ffms2", "av-toolbox-sources/static-ffms2"]
+bestsource = ["av-toolbox-sources/bestsource"]
+static-bestsource = ["bestsource", "av-toolbox-sources/static-bestsource"]
 vulkan = [
     "av-toolbox-gpu/vulkan",
     "av-toolbox-core/vulkan",

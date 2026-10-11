@@ -72,15 +72,16 @@ static-deps:
     fi
     .vcpkg/vcpkg install --triplet {{vcpkg_triplet}} --host-triplet {{vcpkg_triplet}}
 
-# Builds a release CLI with ffms2 and FFmpeg linked statically. Run `static-deps` first.
+# Builds a release CLI with ffms2, BestSource and FFmpeg linked statically. Run `static-deps` first.
 build-static features=static_features:
     #!/usr/bin/env bash
     set -euo pipefail
     prefix="$PWD/vcpkg_installed/{{vcpkg_triplet}}"
     export FFMS_INCLUDE_DIR="$prefix/include"
     export FFMS_LIB_DIR="$prefix/lib"
+    export BESTSOURCE_LIB_DIR="$prefix/lib"
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
-    cargo build --release -p av-toolbox --features {{features}},static-ffms2
+    cargo build --release -p av-toolbox --features {{features}},static-ffms2,static-bestsource
 
 # Lints and tests the BestSource wrapper in both link modes. Run `static-deps` first.
 test-bestsource:
@@ -90,6 +91,8 @@ test-bestsource:
     cargo nextest run --cargo-profile test-release -p avtbx-bestsource
     cargo clippy -p av-toolbox-sources --features av-toolbox-sources/vulkan,av-toolbox-sources/bestsource --all-targets -- -D warnings
     cargo nextest run --cargo-profile test-release -p av-toolbox-sources --features av-toolbox-sources/vulkan,av-toolbox-sources/bestsource bestsource
+    cargo nextest run --cargo-profile test-release -p av-toolbox-pipeline --features av-toolbox-pipeline/vulkan,av-toolbox-pipeline/gpu-tests,av-toolbox-pipeline/bestsource bestsource
+    cargo nextest run --cargo-profile test-release -p av-toolbox --features av-toolbox/vulkan,av-toolbox/bestsource every_example_explains
     prefix="$PWD/vcpkg_installed/{{vcpkg_triplet}}"
     export BESTSOURCE_LIB_DIR="$prefix/lib"
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"

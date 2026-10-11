@@ -45,6 +45,9 @@ default = ["ffms2"]
 ffms2 = ["av-toolbox-pipeline/ffms2"]
 # Links ffms2 and FFmpeg statically from the vcpkg tree. See `just build-static`.
 static-ffms2 = ["ffms2", "av-toolbox-pipeline/static-ffms2", "dep:pkg-config"]
+bestsource = ["av-toolbox-pipeline/bestsource"]
+# Links BestSource and FFmpeg statically from the vcpkg tree. See `just build-static`.
+static-bestsource = ["bestsource", "av-toolbox-pipeline/static-bestsource"]
 vulkan = ["av-toolbox-pipeline/vulkan", "av-toolbox-gpu/vulkan"]
 metal = ["av-toolbox-pipeline/metal", "av-toolbox-gpu/metal"]
 cuda = ["av-toolbox-pipeline/cuda", "av-toolbox-gpu/cuda"]

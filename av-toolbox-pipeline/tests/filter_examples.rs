@@ -216,6 +216,15 @@ fn run_example(name: &str, extra_flags: &[(&str, &str)]) -> Decoded {
 
 /// Writes `clip` as the input, runs `name` with `extra_flags`, and decodes the output.
 fn run_example_on(name: &str, extra_flags: &[(&str, &str)], clip: &[u8]) -> Decoded {
+    let (frames, decoded) = run_example_counted(name, extra_flags, clip);
+
+    assert_eq!(frames, FRAMES);
+
+    decoded
+}
+
+/// Runs `name` like `run_example_on`, handing back the frame count the run reported with the decoded output.
+fn run_example_counted(name: &str, extra_flags: &[(&str, &str)], clip: &[u8]) -> (u64, Decoded) {
     let folder = tempfile::tempdir().expect("a temp dir");
     let input = folder.path().join("input.y4m");
     let output = folder.path().join("output.y4m");
@@ -241,10 +250,30 @@ fn run_example_on(name: &str, extra_flags: &[(&str, &str)], clip: &[u8]) -> Deco
     let engine = compiled.engine(settings).expect("should build the engine");
     let report = engine.run().expect("should run");
 
-    assert_eq!(report.frames, FRAMES);
-
     let written = fs::read(&output).expect("reads the output");
-    decode(&written)
+
+    (report.frames, decode(&written))
+}
+
+#[cfg(feature = "bestsource")]
+#[test]
+fn the_bestsource_example_decodes_the_fixture() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../av-toolbox-sources/tests/media/yuv420p.mkv"
+    );
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let media = folder.path().join("yuv420p.mkv");
+    fs::copy(fixture, &media).expect("copies the fixture");
+
+    let flags = [("input", utf8(&media))];
+    let (frames, decoded) = run_example_counted("bestsource.toml", &flags, &[]);
+
+    assert_eq!(frames, 8);
+    assert_eq!(decoded.frames.len(), 8);
+    for frame in &decoded.frames {
+        assert_eq!(frame.luma.len(), SIZE * SIZE);
+    }
 }
 
 #[test]

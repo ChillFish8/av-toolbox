@@ -47,6 +47,9 @@ fn every_example_explains_without_a_device() {
         "nl4d-grain-table.toml",
     ];
 
+    #[cfg(feature = "bestsource")]
+    let names = [&names[..], &["bestsource.toml"]].concat();
+
     for name in names {
         let path = example(name);
         let path = path.to_str().expect("utf-8 path");
