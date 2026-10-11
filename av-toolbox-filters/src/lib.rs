@@ -27,6 +27,7 @@
 //! - `dehalo/yahr` removes halos by limiting a clip's detail to the detail of its warp-sharpened
 //!   self, the way havsfunc's YAHR does.
 //! - `dering/hq` smooths ringing inside a mask of the area around edges.
+//! - `crop/manual` removes a given number of samples from each edge of a clip.
 //! - `deinterlace/bwdif` rebuilds progressive frames from interlaced fields, the way bwdif does, at the
 //!   input's rate or at one frame per field.
 //! - `deinterlace/qtgmc` rebuilds progressive frames from interlaced fields, the way QTGMC does, smoothing
@@ -54,6 +55,7 @@ mod bits;
 mod blend;
 mod checks;
 mod cnn;
+mod crop;
 mod deband;
 mod deblock;
 mod dehalo;
@@ -94,6 +96,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<aa::Eedi3>()?;
     registry.register_filter::<aa::Sangnom>()?;
     registry.register_filter::<blend::Masked>()?;
+    registry.register_filter::<crop::Manual>()?;
     registry.register_filter::<deband::Placebo>()?;
     registry.register_filter::<deblock::Dpir>()?;
     registry.register_filter::<deblock::H264>()?;
@@ -155,6 +158,7 @@ mod tests {
         assert!(registered("aa/eedi3"));
         assert!(registered("aa/sangnom"));
         assert!(registered("blend/masked"));
+        assert!(registered("crop/manual"));
         assert!(registered("deband/placebo"));
         assert!(registered("deblock/dpir"));
         assert!(registered("deblock/h264"));

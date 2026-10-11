@@ -2,6 +2,7 @@
 
 mod aa;
 mod blend;
+mod crop;
 mod deband;
 mod deblock;
 mod dehalo;
