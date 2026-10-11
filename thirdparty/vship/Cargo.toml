@@ -1,0 +1,22 @@
+[package]
+name = "avtbx-vship"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+description = "GPU SSIMULACRA2 and Butteraugli through a statically linked Vship."
+publish = false
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+bindgen = { workspace = true }
+
+[features]
+# Links a Vship built by `just vship vulkan`.
+vulkan = []
+# Links a Vship built by `just vship cuda`.
+cuda = []
+gpu-tests = []

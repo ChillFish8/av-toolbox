@@ -15,6 +15,7 @@ members = [
     "av-toolbox-sources",
     "av-toolbox-providers",
     "thirdparty/bestsource",
+    "thirdparty/vship",
 ]
 
 [workspace.package]
@@ -28,6 +29,7 @@ debug-assertions = true
 overflow-checks = true
 
 [workspace.dependencies]
+bindgen = "0.73"
 bytesize = "2.7"
 cc = "1.2"
 codespan-reporting = "0.13"

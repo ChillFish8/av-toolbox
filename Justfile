@@ -8,7 +8,7 @@ backend_features := "av-toolbox-gpu/" + test_backend + ",av-toolbox-core/" + tes
 device_features := backend_features + ",av-toolbox-gpu/gpu-tests,av-toolbox-core/gpu-tests,av-toolbox-graph/gpu-tests,av-toolbox-runtime/gpu-tests,av-toolbox-sources/gpu-tests,av-toolbox-providers/gpu-tests,av-toolbox-sinks/gpu-tests,av-toolbox-pipeline/gpu-tests,av-toolbox/gpu-tests,av-toolbox-masks/gpu-tests,av-toolbox-filters/gpu-tests,av-toolbox-cubek/gpu-tests"
 
 # Crates the workspace recipes leave out, since each needs a library built outside cargo.
-thirdparty_excludes := "--exclude avtbx-bestsource"
+thirdparty_excludes := "--exclude avtbx-bestsource --exclude avtbx-vship"
 
 # The vcpkg triplet `static-deps` installs for. Override on Intel macOS.
 vcpkg_triplet := env("AVTB_VCPKG_TRIPLET", if os() == "macos" { "arm64-osx-release" } else { "x64-linux-release" })
@@ -79,6 +79,43 @@ test-bestsource:
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
     cargo clippy -p avtbx-bestsource --all-targets -- -D warnings
     cargo nextest run --cargo-profile test-release -p avtbx-bestsource
+
+# The Vship commit `vship` builds, tag v5.1.2.
+vship_commit := "5a627933274196219f782b3b74e13fad47cd6370"
+
+# Builds the static Vship library for `vulkan` or `cuda` into target/thirdparty/vship/<backend>.
+vship backend:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{backend}}" in
+        vulkan) make_backend=Vulkan ;;
+        cuda) make_backend=Cuda ;;
+        *) echo "the backend must be vulkan or cuda, not {{backend}}" >&2; exit 1 ;;
+    esac
+    if [ "$(uname -s)" != "Linux" ]; then
+        echo "just vship only builds on Linux" >&2
+        exit 1
+    fi
+    source_dir="$PWD/target/thirdparty/vship/src"
+    install_dir="$PWD/target/thirdparty/vship/{{backend}}"
+    if [ ! -d "$source_dir" ]; then
+        git clone https://codeberg.org/Line-fr/Vship.git "$source_dir"
+    fi
+    git -C "$source_dir" fetch --quiet origin
+    git -C "$source_dir" checkout --quiet {{vship_commit}}
+    make -C "$source_dir" build ENABLE_STATIC=1 BACKEND="$make_backend"
+    mkdir -p "$install_dir/lib" "$install_dir/include"
+    cp "$source_dir/libvship.a" "$install_dir/lib/"
+    cp "$source_dir/src/VshipAPI.h" "$source_dir/src/VshipColor.h" "$install_dir/include/"
+    echo "{{backend}}" > "$install_dir/backend"
+
+# Lints and tests the Vship wrapper on one backend, device tests included. Run `vship <backend>` first.
+test-vship backend:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export VSHIP_DIR="$PWD/target/thirdparty/vship/{{backend}}"
+    cargo clippy -p avtbx-vship --all-targets --features {{backend}},gpu-tests -- -D warnings
+    cargo nextest run --cargo-profile test-release -p avtbx-vship --features {{backend}},gpu-tests
 
 # Builds the optional dependencies under dependencies/, or only the ones named.
 dependencies *IDENTIFIERS:
