@@ -20,6 +20,7 @@ fn gpu_id() -> i32 {
         "integrated" => true,
         _ => return 0,
     };
+
     let ordinal: usize = ordinal.parse().expect("AVTB_DEVICE has a numeric ordinal");
 
     let count = device_count().expect("counts devices");
@@ -89,7 +90,8 @@ fn planes(frame: &[Vec<u8>; 3]) -> Planes<'_> {
 #[test]
 fn vship_lists_a_named_device() {
     let count = device_count().expect("counts devices");
-    let info = device_info(gpu_id()).expect("describes the test device");
+    let gpu_id = gpu_id();
+    let info = device_info(gpu_id).expect("describes the test device");
 
     assert!(count > 0);
     assert!(!info.name.is_empty());
@@ -98,10 +100,12 @@ fn vship_lists_a_named_device() {
 #[test]
 fn identical_frames_score_near_100_on_ssimulacra2() {
     let reference = reference_frame();
-    let mut metric = Ssimulacra2::new(color_space(), color_space(), gpu_id()).expect("makes the metric");
+    let reference_planes = planes(&reference);
+    let gpu_id = gpu_id();
+    let mut metric = Ssimulacra2::new(color_space(), color_space(), gpu_id).expect("makes the metric");
 
     let score = metric
-        .compute(&planes(&reference), &planes(&reference))
+        .compute(&reference_planes, &reference_planes)
         .expect("scores");
 
     assert!(score > 99.5, "{score}");
@@ -111,10 +115,13 @@ fn identical_frames_score_near_100_on_ssimulacra2() {
 fn a_distorted_frame_scores_lower_on_ssimulacra2() {
     let reference = reference_frame();
     let distorted = distorted_frame();
-    let mut metric = Ssimulacra2::new(color_space(), color_space(), gpu_id()).expect("makes the metric");
+    let reference_planes = planes(&reference);
+    let distorted_planes = planes(&distorted);
+    let gpu_id = gpu_id();
+    let mut metric = Ssimulacra2::new(color_space(), color_space(), gpu_id).expect("makes the metric");
 
     let score = metric
-        .compute(&planes(&reference), &planes(&distorted))
+        .compute(&reference_planes, &distorted_planes)
         .expect("scores");
 
     assert!(score < 99.0, "{score}");
@@ -123,11 +130,13 @@ fn a_distorted_frame_scores_lower_on_ssimulacra2() {
 #[test]
 fn identical_frames_score_0_on_butteraugli() {
     let reference = reference_frame();
+    let reference_planes = planes(&reference);
+    let gpu_id = gpu_id();
     let mut metric =
-        Butteraugli::new(color_space(), color_space(), 2, 203.0, gpu_id()).expect("makes the metric");
+        Butteraugli::new(color_space(), color_space(), 2, 203.0, gpu_id).expect("makes the metric");
 
     let score = metric
-        .compute(&planes(&reference), &planes(&reference))
+        .compute(&reference_planes, &reference_planes)
         .expect("scores");
 
     assert!(score.norm_inf.abs() < 1e-6, "{score:?}");
@@ -137,11 +146,14 @@ fn identical_frames_score_0_on_butteraugli() {
 fn a_distorted_frame_scores_higher_on_butteraugli() {
     let reference = reference_frame();
     let distorted = distorted_frame();
+    let reference_planes = planes(&reference);
+    let distorted_planes = planes(&distorted);
+    let gpu_id = gpu_id();
     let mut metric =
-        Butteraugli::new(color_space(), color_space(), 2, 203.0, gpu_id()).expect("makes the metric");
+        Butteraugli::new(color_space(), color_space(), 2, 203.0, gpu_id).expect("makes the metric");
 
     let score = metric
-        .compute(&planes(&reference), &planes(&distorted))
+        .compute(&reference_planes, &distorted_planes)
         .expect("scores");
 
     assert!(score.norm_inf > 0.1, "{score:?}");
@@ -166,10 +178,13 @@ fn planes_that_do_not_fit_are_refused_before_vship() {
         reference[1].clone(),
         reference[2].clone(),
     ];
-    let mut metric = Ssimulacra2::new(color_space(), color_space(), gpu_id()).expect("makes the metric");
+    let reference_planes = planes(&reference);
+    let short_planes = planes(&short);
+    let gpu_id = gpu_id();
+    let mut metric = Ssimulacra2::new(color_space(), color_space(), gpu_id).expect("makes the metric");
 
     let error = metric
-        .compute(&planes(&reference), &planes(&short))
+        .compute(&reference_planes, &short_planes)
         .expect_err("short planes scored");
 
     assert_eq!(error.code(), 0);

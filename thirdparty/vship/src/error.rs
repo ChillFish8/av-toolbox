@@ -35,7 +35,25 @@ impl VshipError {
         let buffer_len = c_int::try_from(buffer.len()).unwrap_or(c_int::MAX);
         // SAFETY: The buffer is writable for `buffer_len` bytes.
         unsafe { sys::Vship_GetDetailedLastError(buffer.as_mut_ptr().cast(), buffer_len) };
-        let text = message_from_buffer(&buffer);
+
+        Self::from_buffer(code, &buffer)
+    }
+
+    fn last_for_handler(handle: sys::Vship_Handle, code: sys::Vship_Exception) -> Self {
+        let mut buffer = [0u8; MESSAGE_BUFFER_LEN];
+        let buffer_len = c_int::try_from(buffer.len()).unwrap_or(c_int::MAX);
+        // SAFETY: The buffer is writable for `buffer_len` bytes and `handle` is a live handler.
+        let written =
+            unsafe { sys::Vship_GetDetailedLastErrorHandler(handle, buffer.as_mut_ptr().cast(), buffer_len) };
+        if written == 0 {
+            return Self::last(code);
+        }
+
+        Self::from_buffer(code, &buffer)
+    }
+
+    fn from_buffer(code: sys::Vship_Exception, buffer: &[u8]) -> Self {
+        let text = message_from_buffer(buffer);
 
         if text.is_empty() {
             return Self {
@@ -55,6 +73,20 @@ pub(crate) fn check(status: sys::Vship_Exception) -> Result<(), VshipError> {
     }
 
     Err(VshipError::last(status))
+}
+
+/// Turns a Vship status into a result, reading the message recorded on `handle` on failure.
+///
+/// Unlike [check], two handlers failing on different threads do not read each other's message.
+pub(crate) fn check_handler(
+    handle: sys::Vship_Handle,
+    status: sys::Vship_Exception,
+) -> Result<(), VshipError> {
+    if status == sys::Vship_NoError {
+        return Ok(());
+    }
+
+    Err(VshipError::last_for_handler(handle, status))
 }
 
 /// Reads a message up to the first NUL byte, replacing invalid UTF-8.

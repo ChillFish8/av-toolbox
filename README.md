@@ -33,6 +33,7 @@ cargo install --path av-toolbox --features vulkan
 ```
 
 To link ffms2 and FFmpeg statically, as the release binaries do, build them from vcpkg first.
+`just static-deps` needs vcpkg's host tools: `git`, `curl`, `zip`, `unzip`, `tar`, `pkg-config`, `ninja`, `nasm` and a C++ compiler.
 
 ```bash
 just static-deps

@@ -109,7 +109,7 @@ impl VideoSource {
                 options.threads,
                 cache_mode,
                 cache_pointer,
-                &mut raw,
+                &raw mut raw,
                 error.as_mut_ptr().cast(),
                 error.len(),
             )
@@ -120,7 +120,7 @@ impl VideoSource {
 
         let mut raw_properties = sys::BsVideoProps::default();
         // SAFETY: `raw` was just opened and `raw_properties` is a valid out pointer.
-        unsafe { sys::bs_video_properties(raw, &mut raw_properties) };
+        unsafe { sys::bs_video_properties(raw, &raw mut raw_properties) };
         let properties = VideoProperties::from_raw(&raw_properties);
 
         Ok(Self { raw, properties })
@@ -137,7 +137,7 @@ impl VideoSource {
         // SAFETY: `self.raw` is live and borrowed mutably, so nothing else decodes at once. `raw` and
         // `error` are valid out pointers and `error.len()` is the buffer's real size.
         let status =
-            unsafe { sys::bs_video_frame(self.raw, n, &mut raw, error.as_mut_ptr().cast(), error.len()) };
+            unsafe { sys::bs_video_frame(self.raw, n, &raw mut raw, error.as_mut_ptr().cast(), error.len()) };
         if status != 0 {
             return Err(BestSourceError::from_buffer(&error));
         }

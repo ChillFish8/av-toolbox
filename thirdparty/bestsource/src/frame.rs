@@ -40,7 +40,7 @@ impl Frame {
     pub(crate) unsafe fn from_raw(raw: *mut sys::BsFrame) -> Self {
         let mut props = sys::BsFrameProps::default();
         // SAFETY: `raw` is live per this function's contract and `props` is a valid out pointer.
-        unsafe { sys::bs_frame_info(raw, &mut props) };
+        unsafe { sys::bs_frame_info(raw, &raw mut props) };
 
         Self { raw, props }
     }
@@ -125,7 +125,10 @@ impl Frame {
         }
 
         let (alpha, alpha_stride) = match target.alpha.as_mut() {
-            Some(plane) if format.alpha => (plane.data.as_mut_ptr(), stride_to_isize(plane.stride)?),
+            Some(plane) if format.alpha => {
+                let stride = stride_to_isize(plane.stride)?;
+                (plane.data.as_mut_ptr(), stride)
+            },
             _ => (ptr::null_mut(), 0),
         };
 
@@ -167,15 +170,21 @@ impl Frame {
         let height = dimension(self.props.ss_mod_height)?;
 
         for (index, plane) in target.planes.iter().enumerate() {
-            let (row_bytes, rows) = format.plane_extent(index > 0, width, height);
             let name = format!("plane {index}");
+            let extent = format.plane_extent(index > 0, width, height);
+            let Some((row_bytes, rows)) = extent else {
+                return Err(plane_extent_error(&name));
+            };
             check_plane(plane, row_bytes, rows, &name)?;
         }
 
         if format.alpha
             && let Some(alpha) = &target.alpha
         {
-            let (row_bytes, rows) = format.plane_extent(false, width, height);
+            let extent = format.plane_extent(false, width, height);
+            let Some((row_bytes, rows)) = extent else {
+                return Err(plane_extent_error("the alpha plane"));
+            };
             check_plane(alpha, row_bytes, rows, "the alpha plane")?;
         }
 
@@ -239,6 +248,12 @@ fn stride_to_isize(stride: usize) -> Result<isize, BestSourceError> {
             "a stride of {stride} bytes is too large"
         ))),
     }
+}
+
+fn plane_extent_error(name: &str) -> BestSourceError {
+    BestSourceError::new(format!(
+        "{name} is too large to address or has an invalid subsampling"
+    ))
 }
 
 fn plane_count_error(expected: usize, given: usize) -> BestSourceError {

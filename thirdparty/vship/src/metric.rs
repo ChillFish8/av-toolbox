@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::ptr;
 
 use crate::colour::{ColorSpace, Planes};
-use crate::error::{VshipError, check};
+use crate::error::{VshipError, check, check_handler};
 use crate::sys;
 
 /// The three Butteraugli norms of one frame pair.
@@ -33,7 +33,7 @@ impl Ssimulacra2 {
             dis_colorspace: distorted.to_raw(),
             gpu_id,
         };
-        let argument = ptr::from_mut(&mut init).cast::<c_void>();
+        let argument = (&raw mut init).cast::<c_void>();
         let handle = init_handler(argument)?;
 
         Ok(Self {
@@ -49,7 +49,7 @@ impl Ssimulacra2 {
             structType: sys::Vship_StructScoreSSIMULACRA2,
             score: 0.0,
         };
-        let score_pointer = ptr::from_mut(&mut score).cast::<c_void>();
+        let score_pointer = (&raw mut score).cast::<c_void>();
         let frames = FramePair {
             reference_space: &self.reference,
             distorted_space: &self.distorted,
@@ -98,7 +98,7 @@ impl Butteraugli {
             intensity_multiplier,
             gpu_id,
         };
-        let argument = ptr::from_mut(&mut init).cast::<c_void>();
+        let argument = (&raw mut init).cast::<c_void>();
         let handle = init_handler(argument)?;
 
         Ok(Self {
@@ -122,7 +122,7 @@ impl Butteraugli {
             dstp: ptr::null(),
             dststride: 0,
         };
-        let score_pointer = ptr::from_mut(&mut score).cast::<c_void>();
+        let score_pointer = (&raw mut score).cast::<c_void>();
         let frames = FramePair {
             reference_space: &self.reference,
             distorted_space: &self.distorted,
@@ -157,7 +157,7 @@ fn init_handler(argument: *mut c_void) -> Result<sys::Vship_Handle, VshipError> 
     let mut handle = ptr::null_mut();
     // SAFETY: `argument` points at a live init struct whose `structType` names its type, and
     // `handle` is a valid out pointer.
-    let status = unsafe { sys::Vship_InitHandler(&mut handle, argument) };
+    let status = unsafe { sys::Vship_InitHandler(&raw mut handle, argument) };
     check(status)?;
 
     Ok(handle)
@@ -192,7 +192,7 @@ fn compute_handler(
         )
     };
 
-    check(status)
+    check_handler(handle, status)
 }
 
 fn free_handler(handle: sys::Vship_Handle) {

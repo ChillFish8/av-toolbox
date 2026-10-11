@@ -17,7 +17,7 @@ pub struct DeviceInfo {
 pub fn device_count() -> Result<i32, VshipError> {
     let mut count = 0;
     // SAFETY: `count` is a valid out pointer.
-    let status = unsafe { sys::Vship_GetDeviceCount(&mut count) };
+    let status = unsafe { sys::Vship_GetDeviceCount(&raw mut count) };
     check(status)?;
 
     Ok(count)

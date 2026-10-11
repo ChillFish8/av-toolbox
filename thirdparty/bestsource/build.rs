@@ -11,6 +11,8 @@ fn main() {
     let headers = probe_bestsource(false);
     require_expected_tree(&headers, &expected_dir);
 
+    // The shim is compiled before the second probe so the linker sees it ahead of the BestSource
+    // archives it depends on.
     compile_shim(&headers);
 
     probe_bestsource(true);

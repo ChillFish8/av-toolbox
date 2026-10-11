@@ -54,7 +54,7 @@ pub enum ChromaLocation {
 /// How a frame's planes are stored and what colour they hold.
 ///
 /// Matrix, transfer and primaries use H.273 numbering. A matrix of `0` means RGB, any other value
-/// means YUV. Subsampling is a power of two and only applies to YUV chroma.
+/// means YUV. The subsampling fields hold the log2 shift, so `0`, `1` or `2`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorSpace {
     pub sample: SampleType,
@@ -115,18 +115,21 @@ impl ColorSpace {
 
     /// The row size in bytes and the row count of plane `index`.
     fn plane_extent(&self, index: usize) -> Result<(usize, usize), VshipError> {
+        let shift_w = subsampling_shift(self.sub_sampling_w)?;
+        let shift_h = subsampling_shift(self.sub_sampling_h)?;
         let width = dimension(self.width)?;
         let height = dimension(self.height)?;
         let subsampled = index > 0 && self.matrix != 0;
         let (plane_width, plane_height) = if subsampled {
-            let shift_w = subsampling_shift(self.sub_sampling_w)?;
-            let shift_h = subsampling_shift(self.sub_sampling_h)?;
             (size_rounded_up(width, shift_w), size_rounded_up(height, shift_h))
         } else {
             (width, height)
         };
+        let Some(row_bytes) = plane_width.checked_mul(self.sample.bytes_per_sample()) else {
+            return Err(plane_too_large_error(index));
+        };
 
-        Ok((plane_width * self.sample.bytes_per_sample(), plane_height))
+        Ok((row_bytes, plane_height))
     }
 }
 
@@ -209,19 +212,31 @@ fn size_rounded_up(size: usize, shift: u32) -> usize {
 fn subsampling_shift(value: i32) -> Result<u32, VshipError> {
     match u32::try_from(value) {
         Ok(shift) if shift <= 2 => Ok(shift),
-        _ => Err(VshipError::new(format!(
-            "a subsampling of {value} is not supported, it must be between 0 and 2"
-        ))),
+        _ => Err(unsupported_subsampling_error(value)),
     }
+}
+
+fn unsupported_subsampling_error(value: i32) -> VshipError {
+    VshipError::new(format!(
+        "a subsampling of {value} is not supported. It must be between 0 and 2."
+    ))
+}
+
+fn plane_too_large_error(index: usize) -> VshipError {
+    VshipError::new(format!("plane {index} is too large to address"))
 }
 
 fn dimension(value: i64) -> Result<usize, VshipError> {
     match usize::try_from(value) {
-        Ok(converted) => Ok(converted),
-        Err(_) => Err(VshipError::new(format!(
-            "the colour space has a negative size of {value}"
-        ))),
+        Ok(converted) if converted >= 1 => Ok(converted),
+        _ => Err(size_below_one_error(value)),
     }
+}
+
+fn size_below_one_error(value: i64) -> VshipError {
+    VshipError::new(format!(
+        "the colour space has a size of {value}, which is below 1"
+    ))
 }
 
 fn narrow_stride_error(name: &str, index: usize, stride: usize, row_bytes: usize) -> VshipError {
@@ -409,6 +424,40 @@ mod tests {
     }
 
     #[test]
+    fn an_unsupported_subsampling_is_refused_for_rgb() {
+        let color_space = ColorSpace {
+            matrix: 0,
+            sub_sampling_w: 3,
+            ..yuv420(64, 48)
+        };
+        let plane = vec![0u8; 64 * 48];
+        let planes = Planes {
+            data: [&plane, &plane, &plane],
+            strides: [64, 64, 64],
+        };
+
+        let error = planes
+            .check(&color_space, "the reference")
+            .expect_err("a subsampling of 3 passed");
+
+        assert!(error.message().contains("subsampling"), "{error}");
+    }
+
+    #[test]
+    fn a_row_that_overflows_is_refused() {
+        let color_space = ColorSpace {
+            sample: SampleType::Float,
+            ..yuv420(i64::MAX, 1)
+        };
+
+        let error = color_space
+            .plane_extent(0)
+            .expect_err("an overflowing row passed");
+
+        assert!(error.message().contains("too large"), "{error}");
+    }
+
+    #[test]
     fn a_negative_size_is_refused() {
         let empty: &[u8] = &[];
         let planes = Planes {
@@ -420,6 +469,21 @@ mod tests {
             .check(&yuv420(-1, 4), "the reference")
             .expect_err("a negative size passed");
 
-        assert!(error.message().contains("negative"), "{error}");
+        assert!(error.message().contains("below 1"), "{error}");
+    }
+
+    #[test]
+    fn a_zero_size_is_refused() {
+        let empty: &[u8] = &[];
+        let planes = Planes {
+            data: [empty, empty, empty],
+            strides: [0, 0, 0],
+        };
+
+        let error = planes
+            .check(&yuv420(0, 4), "the reference")
+            .expect_err("a zero size passed");
+
+        assert!(error.message().contains("below 1"), "{error}");
     }
 }
