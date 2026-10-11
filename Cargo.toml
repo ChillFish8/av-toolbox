@@ -14,6 +14,7 @@ members = [
     "av-toolbox-sinks",
     "av-toolbox-sources",
     "av-toolbox-providers",
+    "thirdparty/bestsource",
 ]
 
 [workspace.package]
@@ -28,6 +29,7 @@ overflow-checks = true
 
 [workspace.dependencies]
 bytesize = "2.7"
+cc = "1.2"
 codespan-reporting = "0.13"
 console = "0.16"
 ctrlc = "3.5"

@@ -1,0 +1,18 @@
+[package]
+name = "avtbx-bestsource"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+description = "Frame accurate video decoding through a statically linked BestSource."
+publish = false
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
+pkg-config = { workspace = true }

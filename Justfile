@@ -7,6 +7,9 @@ backend_features := "av-toolbox-gpu/" + test_backend + ",av-toolbox-core/" + tes
 # The above plus the device tests those crates gate behind gpu-tests.
 device_features := backend_features + ",av-toolbox-gpu/gpu-tests,av-toolbox-core/gpu-tests,av-toolbox-graph/gpu-tests,av-toolbox-runtime/gpu-tests,av-toolbox-sources/gpu-tests,av-toolbox-providers/gpu-tests,av-toolbox-sinks/gpu-tests,av-toolbox-pipeline/gpu-tests,av-toolbox/gpu-tests,av-toolbox-masks/gpu-tests,av-toolbox-filters/gpu-tests,av-toolbox-cubek/gpu-tests"
 
+# Crates the workspace recipes leave out, since each needs a library built outside cargo.
+thirdparty_excludes := "--exclude avtbx-bestsource"
+
 # The vcpkg triplet `static-deps` installs for. Override on Intel macOS.
 vcpkg_triplet := env("AVTB_VCPKG_TRIPLET", if os() == "macos" { "arm64-osx-release" } else { "x64-linux-release" })
 
@@ -19,18 +22,18 @@ format:
 
 # Lints the workspace. Pass `-- -D warnings` to fail on any lint.
 clippy *ARGS:
-    cargo clippy --workspace --all-targets --features {{device_features}} {{ARGS}}
+    cargo clippy --workspace {{thirdparty_excludes}} --all-targets --features {{device_features}} {{ARGS}}
 
 # Every test, accelerator and doc tests included.
 test:
-    cargo nextest run --cargo-profile test-release --workspace --features {{device_features}}
-    cargo test --doc --profile test-release --workspace --features {{device_features}}
-    cargo check --workspace --features av-toolbox-gpu/{{test_backend}}
+    cargo nextest run --cargo-profile test-release --workspace {{thirdparty_excludes}} --features {{device_features}}
+    cargo test --doc --profile test-release --workspace {{thirdparty_excludes}} --features {{device_features}}
+    cargo check --workspace {{thirdparty_excludes}} --features av-toolbox-gpu/{{test_backend}}
 
 # Every test that runs without an accelerator.
 test-fast:
-    cargo nextest run --cargo-profile test-release --workspace --features {{backend_features}}
-    cargo test --doc --profile test-release --workspace --features {{backend_features}}
+    cargo nextest run --cargo-profile test-release --workspace {{thirdparty_excludes}} --features {{backend_features}}
+    cargo test --doc --profile test-release --workspace {{thirdparty_excludes}} --features {{backend_features}}
 
 # Lints every backend including test code, and checks the illegal feature sets are refused.
 check-backends:
@@ -66,6 +69,16 @@ build-static features=static_features:
     export FFMS_LIB_DIR="$prefix/lib"
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
     cargo build --release -p av-toolbox --features {{features}},static-ffms2
+
+# Lints and tests the BestSource wrapper against the vcpkg tree. Run `static-deps` first.
+test-bestsource:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="$PWD/vcpkg_installed/{{vcpkg_triplet}}"
+    export BESTSOURCE_LIB_DIR="$prefix/lib"
+    export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
+    cargo clippy -p avtbx-bestsource --all-targets -- -D warnings
+    cargo nextest run --cargo-profile test-release -p avtbx-bestsource
 
 # Builds the optional dependencies under dependencies/, or only the ones named.
 dependencies *IDENTIFIERS:

@@ -448,6 +448,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "avtbx-bestsource"
+version = "0.1.2"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
