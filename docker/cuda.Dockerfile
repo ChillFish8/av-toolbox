@@ -10,14 +10,16 @@ ARG ARCH_SNAPSHOT
 # cudarc loads CUDA at runtime, so the toolkit is not needed to compile.
 RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "${ARCH_SNAPSHOT}" > /etc/pacman.d/mirrorlist \
     && pacman -Syyuu --noconfirm --needed --disable-download-timeout \
-        git rust clang nasm ffms2 \
+        git rust clang nasm curl zip unzip tar pkgconf ninja cmake jq just python \
     && rm -rf /var/cache/pacman/pkg/*
 
 WORKDIR /build
 
 COPY . .
 
-RUN cargo build --release -p av-toolbox --features cuda
+RUN --mount=type=cache,target=/root/.cache/vcpkg \
+    VCPKG_DEFAULT_BINARY_CACHE=/root/.cache/vcpkg just static-deps \
+    && just build-static cuda
 
 FROM ${ARCH_RUNTIME_IMAGE} AS runtime
 
@@ -25,7 +27,7 @@ ARG ARCH_SNAPSHOT
 
 RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "${ARCH_SNAPSHOT}" > /etc/pacman.d/mirrorlist \
     && pacman -Syyuu --noconfirm --needed --disable-download-timeout \
-        ffmpeg ffms2 gcc-libs cuda \
+        gcc-libs cuda \
     && rm -rf /opt/cuda/doc /opt/cuda/extras /opt/cuda/nsight* /opt/cuda/libnvvp /opt/cuda/compute-sanitizer /opt/cuda/gds /opt/cuda/tools \
     && rm -rf /var/cache/pacman/pkg/*
 
@@ -40,9 +42,13 @@ WORKDIR /app
 
 COPY --from=builder /build/target/release/av-toolbox /app/av-toolbox
 COPY --from=builder /build/LICENSE /app/LICENSE
+COPY --from=builder /build/THIRD-PARTY-LICENSES /app/THIRD-PARTY-LICENSES
 
 # CUDA needs a host-provided driver through the NVIDIA container toolkit, so this only proves the binary's own
 # libraries resolve.
 RUN /app/av-toolbox --help > /dev/null
+
+# Fails if the binary still loads FFmpeg or its codecs from the system.
+RUN ! ldd /app/av-toolbox | grep -Ei 'ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d|xxhash'
 
 ENTRYPOINT ["/app/av-toolbox"]

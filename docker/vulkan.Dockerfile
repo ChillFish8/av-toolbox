@@ -9,14 +9,16 @@ ARG ARCH_SNAPSHOT
 
 RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "${ARCH_SNAPSHOT}" > /etc/pacman.d/mirrorlist \
     && pacman -Syyuu --noconfirm --needed --disable-download-timeout \
-        git rust clang nasm ffms2 \
+        git rust clang nasm curl zip unzip tar pkgconf ninja cmake jq just python \
     && rm -rf /var/cache/pacman/pkg/*
 
 WORKDIR /build
 
 COPY . .
 
-RUN cargo build --release -p av-toolbox --features vulkan
+RUN --mount=type=cache,target=/root/.cache/vcpkg \
+    VCPKG_DEFAULT_BINARY_CACHE=/root/.cache/vcpkg just static-deps \
+    && just build-static vulkan
 
 FROM ${ARCH_RUNTIME_IMAGE} AS runtime
 
@@ -24,7 +26,7 @@ ARG ARCH_SNAPSHOT
 
 RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "${ARCH_SNAPSHOT}" > /etc/pacman.d/mirrorlist \
     && pacman -Syyuu --noconfirm --needed --disable-download-timeout \
-        ffmpeg ffms2 gcc-libs vulkan-icd-loader vulkan-radeon vulkan-intel \
+        gcc-libs vulkan-icd-loader vulkan-radeon vulkan-intel \
     && rm -rf /var/cache/pacman/pkg/*
 
 ENV AVTB_MODELS=/models
@@ -34,8 +36,12 @@ WORKDIR /app
 
 COPY --from=builder /build/target/release/av-toolbox /app/av-toolbox
 COPY --from=builder /build/LICENSE /app/LICENSE
+COPY --from=builder /build/THIRD-PARTY-LICENSES /app/THIRD-PARTY-LICENSES
 
 # Vulkan needs host-provided devices and driver files, so this only proves the binary's own libraries resolve.
 RUN /app/av-toolbox --help > /dev/null
+
+# Fails if the binary still loads FFmpeg or its codecs from the system.
+RUN ! ldd /app/av-toolbox | grep -Ei 'ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d|xxhash'
 
 ENTRYPOINT ["/app/av-toolbox"]

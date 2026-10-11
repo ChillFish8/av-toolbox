@@ -48,19 +48,19 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux-x86
-            features: vulkan,cuda,static-ffms2
+            features: vulkan,cuda,static-ffms2,static-bestsource
             triplet: x64-linux-release
             archive: av-toolbox-linux-x86.tar.gz
             binary: av-toolbox
           - os: windows-latest
             platform: win64-x86
-            features: vulkan,cuda,static-ffms2
+            features: vulkan,cuda,static-ffms2,static-bestsource
             triplet: x64-windows-static-md-release
             archive: av-toolbox-win64-x86.zip
             binary: av-toolbox.exe
           - os: macos-14
             platform: macos-aarch64
-            features: metal,static-ffms2
+            features: metal,static-ffms2,static-bestsource
             triplet: arm64-osx-release
             archive: av-toolbox-macos-aarch64.tar.gz
             binary: av-toolbox
@@ -137,8 +137,8 @@ jobs:
           path: ${{ runner.temp }}/vcpkg-cache
           key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
-      # ffms2-sys reads the headers and archive from FFMS_INCLUDE_DIR and FFMS_LIB_DIR, and the build script reads
-      # the rest of the chain through pkg-config.
+      # ffms2-sys reads the headers and archive from FFMS_INCLUDE_DIR and FFMS_LIB_DIR, BestSource reads its archive
+      # from BESTSOURCE_LIB_DIR, and the build scripts read the rest of the chain through pkg-config.
       - name: Export the static library paths
         shell: bash
         env:
@@ -151,10 +151,12 @@ jobs:
             echo "PKG_CONFIG=${prefix}\\tools\\pkgconf\\pkgconf.exe" >> "${GITHUB_ENV}"
             echo "FFMS_INCLUDE_DIR=${prefix}\\include" >> "${GITHUB_ENV}"
             echo "FFMS_LIB_DIR=${prefix}\\lib" >> "${GITHUB_ENV}"
+            echo "BESTSOURCE_LIB_DIR=${prefix}\\lib" >> "${GITHUB_ENV}"
             echo "PKG_CONFIG_PATH=${prefix}\\lib\\pkgconfig" >> "${GITHUB_ENV}"
           else
             echo "FFMS_INCLUDE_DIR=${prefix}/include" >> "${GITHUB_ENV}"
             echo "FFMS_LIB_DIR=${prefix}/lib" >> "${GITHUB_ENV}"
+            echo "BESTSOURCE_LIB_DIR=${prefix}/lib" >> "${GITHUB_ENV}"
             echo "PKG_CONFIG_PATH=${prefix}/lib/pkgconfig" >> "${GITHUB_ENV}"
           fi
 
@@ -170,7 +172,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # Fails if the binary still loads ffms2, FFmpeg or dav1d from the host.
+      # Fails if the binary still loads ffms2, FFmpeg, dav1d or xxHash from the host.
       - name: Check nothing is linked dynamically
         shell: bash
         env:
@@ -183,7 +185,7 @@ jobs:
             Windows) listing="$(dumpbin //dependents "${BINARY}")" ;;
           esac
           echo "${listing}"
-          if echo "${listing}" | grep -Ei 'ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d'; then
+          if echo "${listing}" | grep -Ei 'ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d|xxhash'; then
             echo "::error::${BINARY} links a codec library dynamically"
             exit 1
           fi

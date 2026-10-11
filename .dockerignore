@@ -2,8 +2,15 @@
 !Cargo.toml
 !Cargo.lock
 !LICENSE
+!THIRD-PARTY-LICENSES
 !.cargo
 !av-toolbox*
 !dependencies
+!Justfile
+!vcpkg.json
+!vcpkg-configuration.json
+!vcpkg
+!thirdparty
+thirdparty/*/vendor
 **/__pycache__
 **/target
