@@ -58,53 +58,59 @@ impl Seeker for RepeatSeeker {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::time::Duration;
 
     use av_toolbox_core::{Seeker, SourceDefinition};
     use av_toolbox_gpu::HostFrame;
+    use image::{GrayImage, Luma};
     use serde_json::json;
 
     use crate::constant::{File, Fill, Prepared};
 
     fn fill_prepared() -> Prepared {
-        let args = serde_json::from_value(json!({
+        let value = json!({
             "width": 4,
             "height": 4,
             "frames": 4,
             "colour": "#336699",
             "frame_rate": [24, 1],
-        }))
-        .expect("parses");
+        });
+        let args = serde_json::from_value(value).expect("parses");
 
         Fill::open(&args).expect("opens")
     }
 
-    fn image_prepared(folder: &std::path::Path) -> Prepared {
+    fn image_prepared(folder: &Path) -> Prepared {
         let path = folder.join("small.png");
-        let small = image::GrayImage::from_pixel(8, 4, image::Luma([200]));
+        let small = GrayImage::from_pixel(8, 4, Luma([200]));
         small.save(&path).expect("writes the image");
-        let args = serde_json::from_value(json!({
+
+        let value = json!({
             "path": path,
             "frames": 4,
             "frame_rate": [24, 1],
-        }))
-        .expect("parses");
+        });
+        let args = serde_json::from_value(value).expect("parses");
 
         File::open(&args).expect("opens")
     }
 
     fn assert_repeats(prepared: &Prepared, mut seeker: Box<dyn Seeker>) {
         assert_eq!(seeker.frame_count(), 4);
+
         let frame: HostFrame = seeker.read(3).expect("reads");
 
         assert_eq!(frame.meta().index, 3);
         assert_eq!(frame.meta().timestamp, Some(Duration::from_millis(125)));
+
         let channels = prepared.converted.format.channels();
         for (channel, bytes) in channels.iter().zip(&prepared.converted.planes) {
             let plane = frame.plane(*channel).expect("carried");
 
             assert_eq!(plane.bytes(), bytes.as_slice());
         }
+
         assert!(seeker.read(4).is_err());
     }
 

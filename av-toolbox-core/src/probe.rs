@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use av_toolbox_gpu::{FrameFormat, HostFrame};
@@ -16,8 +16,8 @@ pub trait ProbeDefinition: 'static {
     /// What a stage asks for.
     type Request: Clone + PartialEq + Debug + Serialize + DeserializeOwned + JsonSchema + Send + Sync;
 
-    /// What the probe found for one request.
-    type Output: Clone + Debug + Send + Sync + 'static;
+    /// What the probe found for one request, shown to the user through its [Display].
+    type Output: Clone + Debug + Display + Send + Sync + 'static;
 
     /// The name the kind is registered under, such as `crop`.
     fn kind() -> &'static str;
@@ -235,7 +235,7 @@ pub(crate) fn describe_as<P: ProbeDefinition>(probe: &AnyProbe) -> String {
 
 pub(crate) fn show_as<P: ProbeDefinition>(value: &ProbedValue) -> String {
     match value.downcast_ref::<P::Output>() {
-        Some(output) => format!("{output:?}"),
+        Some(output) => format!("{output}"),
         None => P::kind().to_string(),
     }
 }

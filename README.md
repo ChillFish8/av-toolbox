@@ -148,6 +148,8 @@ args.top = 140
 args.bottom = 140
 ```
 
+`examples/crop.toml` uses `crop/auto` instead, finding the bars for itself.
+
 ```bash
 av-toolbox execute examples/crop.toml --var input=clip.mkv --var output=output.y4m
 ```

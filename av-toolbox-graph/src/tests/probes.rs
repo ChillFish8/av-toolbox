@@ -63,7 +63,8 @@ pub(crate) fn recorded(specs: &[StageSpec]) -> CompiledGraph {
     graph
 }
 
-fn probed(specs: &[StageSpec]) -> CompiledGraph {
+/// Records and then runs probes, as `Pipeline::compile` does.
+pub(crate) fn probed(specs: &[StageSpec]) -> CompiledGraph {
     let registry = testing::registry();
     let mut graph = recorded(specs);
     run_probes(&mut graph, &registry).expect("should probe");
@@ -242,6 +243,7 @@ fn a_stage_refusing_what_its_probes_found_is_reported() {
     ];
     let registry = testing::registry();
     let mut graph = recorded(&specs);
+
     let id = node_named(&graph, "crop");
     let probed = found(11);
     graph.node_mut(id).set_probed(probed);
@@ -267,9 +269,39 @@ fn one_probing_stage_is_answered_and_settled() {
     let graph = probed(&specs);
 
     assert_eq!(found_on(&graph, "crop"), 11);
+
     let registry = testing::registry();
     let capabilities = residency::tests::capabilities();
     solve(&graph, &registry, &capabilities).expect("the settled stage produces");
+}
+
+#[test]
+fn a_settled_probe_carries_what_it_found() {
+    let specs = [
+        seekable("input"),
+        probing("crop", "input", json!({ "mark": 3 })),
+        sink("out", "crop"),
+    ];
+
+    let graph = probed(&specs);
+
+    let id = node_named(&graph, "crop");
+    let probes = graph.node(id).probes();
+    assert_eq!(probes[0].found.as_deref(), Some("11"));
+}
+
+#[test]
+fn a_recorded_probe_has_found_nothing() {
+    let specs = [
+        seekable("input"),
+        probing("crop", "input", json!({ "mark": 3 })),
+        sink("out", "crop"),
+    ];
+
+    let graph = recorded(&specs);
+
+    let id = node_named(&graph, "crop");
+    assert_eq!(graph.node(id).probes()[0].found, None);
 }
 
 #[test]
@@ -378,6 +410,7 @@ fn probing_opens_its_source_once() {
     ];
 
     let graph = probed(&specs);
+
     let registry = testing::registry();
     let capabilities = residency::tests::capabilities();
     solve(&graph, &registry, &capabilities).expect("solves");

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use av_toolbox_core::{ProbeDefinition, Seeker, StageError};
 use av_toolbox_gpu::{Channel, ColourRange, FrameFormat, FrameLayout, HostFrame, SampleFormat};
@@ -21,6 +22,23 @@ pub(crate) struct CropRequest {
 pub(crate) struct CropBox {
     pub(crate) edges: Edges,
     pub(crate) measured: (u32, u32),
+}
+
+impl fmt::Display for CropBox {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Edges {
+            left,
+            right,
+            top,
+            bottom,
+        } = self.edges;
+        let (width, height) = self.measured;
+
+        write!(
+            formatter,
+            "top {top}, bottom {bottom}, left {left}, right {right} of {width}x{height}"
+        )
+    }
 }
 
 /// What makes a row or column a bar, in the source's own sample values.

@@ -383,3 +383,20 @@ fn combining_boxes_of_different_sizes_names_both() {
     assert!(message.contains("32x24"), "{message}");
     assert!(message.contains("64x48"), "{message}");
 }
+
+#[test]
+fn a_crop_box_shows_each_edge_and_the_measured_size() {
+    let found = CropBox {
+        edges: Edges {
+            left: 0,
+            right: 0,
+            top: 140,
+            bottom: 140,
+        },
+        measured: (1920, 1080),
+    };
+
+    let shown = found.to_string();
+
+    assert_eq!(shown, "top 140, bottom 140, left 0, right 0 of 1920x1080");
+}

@@ -235,9 +235,12 @@ mod tests {
     fn settled(value: serde_json::Value, found: CropBox) -> AutoArgs {
         let mut args = parsed(value);
         let mut probed = Probed::new();
-        probed.insert("input", ProbeKind::of::<Crop>(), Arc::new(found));
+        let kind = ProbeKind::of::<Crop>();
+        let output = Arc::new(found);
+        probed.insert("input", kind, output);
 
         Auto::settle(&mut args, &probed).expect("settles");
+
         args
     }
 

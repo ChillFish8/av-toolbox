@@ -15,6 +15,8 @@ pub struct NodeProbe {
     pub probe: AnyProbe,
     /// The probe as `PipelineRegistry::describe_probe` puts it, such as `13 samples`.
     pub description: String,
+    /// What the probe found, as `PipelineRegistry::show_probed` puts it, once probes have run.
+    pub found: Option<String>,
 }
 
 fn unknown_probe(node: &Node, probe: &AnyProbe) -> Diagnostic {
@@ -79,6 +81,7 @@ fn recorded_probes(
                 input: asked.input,
                 probe: asked.probe,
                 description,
+                found: None,
             };
             probes.push(probe);
         }

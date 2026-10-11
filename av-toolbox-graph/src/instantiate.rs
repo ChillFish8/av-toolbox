@@ -104,36 +104,48 @@ impl CompiledGraph {
 
         for id in self.order() {
             let node = self.node(*id);
-
-            if let NodeRole::Crossing(crossing) = node.role() {
-                prepared[id.index()] = Some(PreparedStage::Crossing(*crossing));
-                continue;
-            }
-
-            let arguments = arguments_for(self, node);
-
-            match registry.prepare_with(
-                node.kind(),
-                node.identifier(),
-                node.args(),
-                &arguments,
-                node.open_slot(),
-            ) {
-                Ok(mut stage) => {
-                    let settled = settle_stage(node, &mut stage);
-                    match settled {
-                        Ok(()) => prepared[id.index()] = Some(stage),
-                        Err(error) => {
-                            let diagnostic = settle_failed(node, error);
-                            diagnostics.push(diagnostic);
-                        },
-                    }
-                },
-                Err(error) => report(self, node, error, diagnostics),
-            }
+            prepared[id.index()] = self.prepared_node(registry, node, diagnostics);
         }
 
         prepared
+    }
+
+    /// Prepares `node` and settles it with what its probes found.
+    ///
+    /// A failure at either step is pushed onto `diagnostics` and leaves no stage.
+    fn prepared_node(
+        &self,
+        registry: &PipelineRegistry,
+        node: &Node,
+        diagnostics: &mut Diagnostics,
+    ) -> Option<PreparedStage> {
+        if let NodeRole::Crossing(crossing) = node.role() {
+            return Some(PreparedStage::Crossing(*crossing));
+        }
+
+        let arguments = arguments_for(self, node);
+        let prepared = registry.prepare_with(
+            node.kind(),
+            node.identifier(),
+            node.args(),
+            &arguments,
+            node.open_slot(),
+        );
+        let mut stage = match prepared {
+            Ok(stage) => stage,
+            Err(error) => {
+                report(self, node, error, diagnostics);
+                return None;
+            },
+        };
+
+        if let Err(error) = settle_stage(node, &mut stage) {
+            let diagnostic = settle_failed(node, error);
+            diagnostics.push(diagnostic);
+            return None;
+        }
+
+        Some(stage)
     }
 
     /// Builds every stage through the registry, in dependency order.
@@ -228,27 +240,7 @@ impl CompiledGraph {
 
         for (slot, id) in region.nodes().iter().enumerate() {
             let node = self.node(*id);
-
-            if let NodeRole::Crossing(crossing) = node.role() {
-                prepared[slot] = Some(PreparedStage::Crossing(*crossing));
-                continue;
-            }
-
-            let arguments = arguments_for(self, node);
-
-            match registry.prepare_with(
-                node.kind(),
-                node.identifier(),
-                node.args(),
-                &arguments,
-                node.open_slot(),
-            ) {
-                Ok(mut stage) => match settle_stage(node, &mut stage) {
-                    Ok(()) => prepared[slot] = Some(stage),
-                    Err(error) => diagnostics.push(settle_failed(node, error)),
-                },
-                Err(error) => report(self, node, error, &mut diagnostics),
-            }
+            prepared[slot] = self.prepared_node(registry, node, &mut diagnostics);
         }
 
         let mut stages = Vec::with_capacity(region.nodes().len());

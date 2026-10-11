@@ -23,6 +23,8 @@ use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 /// One probe a stage made, with the sources it reaches.
 struct Asked {
     node: NodeId,
+    /// Where the probe sits in its node's probes.
+    index: usize,
     probe: NodeProbe,
     reached: Reached,
 }
@@ -72,7 +74,7 @@ pub fn run_probes(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Res
         return Err(diagnostics);
     }
 
-    let asked = asked_probes(graph);
+    let mut asked = asked_probes(graph);
     let jobs = jobs_for(graph, registry, &prepared, &asked, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
@@ -83,13 +85,21 @@ pub fn run_probes(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Res
         return Err(diagnostics);
     }
 
-    let settled = settled_probes(graph, registry, &asked, &answers, &mut diagnostics);
+    let settled = settled_probes(graph, registry, &mut asked, &answers, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
 
     for (node, probed) in settled {
         graph.node_mut(node).set_probed(probed);
+    }
+
+    for one in asked {
+        let Some(found) = one.probe.found else {
+            continue;
+        };
+
+        graph.node_mut(one.node).set_found(one.index, found);
     }
 
     Ok(())
@@ -100,7 +110,7 @@ fn asked_probes(graph: &CompiledGraph) -> Vec<Asked> {
 
     for id in graph.order() {
         let node = graph.node(*id);
-        for probe in node.probes() {
+        for (index, probe) in node.probes().iter().enumerate() {
             let Some(edge) = bound_edge(node, probe.input) else {
                 continue;
             };
@@ -109,6 +119,7 @@ fn asked_probes(graph: &CompiledGraph) -> Vec<Asked> {
             let reached = reached(graph, start);
             asked.push(Asked {
                 node: *id,
+                index,
                 probe: probe.clone(),
                 reached,
             });
@@ -290,16 +301,18 @@ fn run_batches(
 }
 
 /// Hands each probing stage one value per probe, combining the answers of several sources.
+///
+/// Each settled probe in `asked` notes what it found, as it is shown to the user.
 fn settled_probes(
     graph: &CompiledGraph,
     registry: &PipelineRegistry,
-    asked: &[Asked],
+    asked: &mut [Asked],
     answers: &[Answer],
     diagnostics: &mut Diagnostics,
 ) -> BTreeMap<NodeId, Probed> {
     let mut settled: BTreeMap<NodeId, Probed> = BTreeMap::new();
 
-    for one in asked {
+    for one in asked.iter_mut() {
         let node = graph.node(one.node);
         let kind = one.probe.probe.kind();
         let values = values_for(one, answers);
@@ -329,6 +342,7 @@ fn settled_probes(
 
         let probed = settled.entry(one.node).or_default();
         probed.insert(one.probe.input, kind, value);
+        one.probe.found = Some(shown);
     }
 
     settled
@@ -379,10 +393,9 @@ fn no_combiner(kind: ProbeKind) -> StageError {
 
 fn unseekable(probing: &Node, source: &Node, kind: ProbeKind) -> Diagnostic {
     let message = format!(
-        "`{}` probes {} of `{}`, and `{}` ({}) cannot seek",
+        "`{}` probes {} of `{}` ({}), which cannot seek. Read it with a file source such as ffms2/file.",
         probing.name(),
         kind.name(),
-        source.name(),
         source.name(),
         source.identifier()
     );

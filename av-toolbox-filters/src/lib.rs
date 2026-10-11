@@ -13,6 +13,8 @@
 //!   across each row, the way EEDI3 does.
 //! - `aa/sangnom` anti-aliases by rebuilding each field along its edges, the way SangNom2 does.
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
+//! - `crop/auto` finds the black bars around a clip's picture and removes them.
+//! - `crop/manual` removes a given number of samples from each edge of a clip.
 //! - `deband/placebo` smooths banding with libplacebo's algorithm, then adds grain.
 //! - `deblock/dpir` removes compression blocking with the DPIR network, the way vs-jetpack's dpir does.
 //! - `deblock/h264` removes compression blocking with H.264's in-loop deblocking filter, the way
@@ -27,8 +29,6 @@
 //! - `dehalo/yahr` removes halos by limiting a clip's detail to the detail of its warp-sharpened
 //!   self, the way havsfunc's YAHR does.
 //! - `dering/hq` smooths ringing inside a mask of the area around edges.
-//! - `crop/auto` finds the black bars around a clip's picture and removes them.
-//! - `crop/manual` removes a given number of samples from each edge of a clip.
 //! - `deinterlace/bwdif` rebuilds progressive frames from interlaced fields, the way bwdif does, at the
 //!   input's rate or at one frame per field.
 //! - `deinterlace/qtgmc` rebuilds progressive frames from interlaced fields, the way QTGMC does, smoothing

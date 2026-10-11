@@ -343,6 +343,11 @@ impl Node {
         self.probes = probes;
     }
 
+    /// Notes what the probe at `index` found, as it is shown to the user.
+    pub(crate) fn set_found(&mut self, index: usize, found: String) {
+        self.probes[index].found = Some(found);
+    }
+
     pub(crate) fn set_probed(&mut self, probed: Probed) {
         self.probed = Some(probed);
     }
