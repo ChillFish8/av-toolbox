@@ -5,10 +5,13 @@
 //!
 //! - `y4m/stdin` and `y4m/pipe` read a y4m stream.
 //! - `ffms2/file` decodes a media file.
+//! - `bestsource/file` decodes a media file frame accurately.
 //! - `solid/fill` and `image/file` repeat one frame of a colour or an image.
 //! - `solid/like` and `image/like` are filters that stand in for a source, repeating one frame in the size, format
 //!   and length of a reference clip.
 
+#[cfg(feature = "bestsource")]
+mod bestsource;
 mod constant;
 #[cfg(feature = "ffms2")]
 mod ffms2;
@@ -30,6 +33,9 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     #[cfg(feature = "ffms2")]
     registry.register_source::<ffms2::File>()?;
 
+    #[cfg(feature = "bestsource")]
+    registry.register_source::<bestsource::File>()?;
+
     Ok(())
 }
 
@@ -46,6 +52,12 @@ mod tests {
         registry
             .stages()
             .any(|info| info.kind() == kind && info.full_identifier() == identifier)
+    }
+
+    #[cfg(feature = "bestsource")]
+    #[test]
+    fn the_bestsource_file_stage_is_registered() {
+        assert!(registered(StageKind::Source, "bestsource/file"));
     }
 
     #[test]

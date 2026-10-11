@@ -88,6 +88,8 @@ test-bestsource:
     set -euo pipefail
     cargo clippy -p avtbx-bestsource --all-targets -- -D warnings
     cargo nextest run --cargo-profile test-release -p avtbx-bestsource
+    cargo clippy -p av-toolbox-sources --features av-toolbox-sources/vulkan,av-toolbox-sources/bestsource --all-targets -- -D warnings
+    cargo nextest run --cargo-profile test-release -p av-toolbox-sources --features av-toolbox-sources/vulkan,av-toolbox-sources/bestsource bestsource
     prefix="$PWD/vcpkg_installed/{{vcpkg_triplet}}"
     export BESTSOURCE_LIB_DIR="$prefix/lib"
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"

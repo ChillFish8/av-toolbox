@@ -79,6 +79,7 @@ av-toolbox-providers = { path = "av-toolbox-providers", version = "0.1.2" }
 av-toolbox-runtime = { path = "av-toolbox-runtime", version = "0.1.2" }
 av-toolbox-sinks = { path = "av-toolbox-sinks", version = "0.1.2" }
 av-toolbox-sources = { path = "av-toolbox-sources", version = "0.1.2", default-features = false }
+avtbx-bestsource = { path = "thirdparty/bestsource", version = "0.1.2" }
 
 av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
 av-denoise-core = { version = "0.5", default-features = false }

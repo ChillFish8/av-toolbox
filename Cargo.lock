@@ -437,6 +437,7 @@ dependencies = [
  "av-toolbox-gpu",
  "av-toolbox-graph",
  "av-toolbox-runtime",
+ "avtbx-bestsource",
  "ffms2-sys",
  "image",
  "schemars",

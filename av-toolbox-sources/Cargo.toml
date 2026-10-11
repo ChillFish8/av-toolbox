@@ -14,6 +14,7 @@ tracing = { workspace = true }
 y4m = { workspace = true }
 
 ffms2-sys = { workspace = true, optional = true }
+avtbx-bestsource = { workspace = true, optional = true }
 
 av-toolbox-core = { workspace = true }
 av-toolbox-cubek = { workspace = true }
@@ -32,6 +33,9 @@ default = ["ffms2"]
 ffms2 = ["dep:ffms2-sys"]
 # Links the ffms2 archive from FFMS_LIB_DIR instead of a shared library.
 static-ffms2 = ["ffms2", "ffms2-sys/static"]
+bestsource = ["dep:avtbx-bestsource"]
+# Links the BestSource archive from BESTSOURCE_LIB_DIR instead of building it.
+static-bestsource = ["bestsource", "avtbx-bestsource/static"]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-cubek/vulkan"]
 metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-cubek/metal"]
 cuda = ["av-toolbox-gpu/cuda", "av-toolbox-core/cuda", "av-toolbox-cubek/cuda"]
