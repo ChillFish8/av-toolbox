@@ -1,8 +1,10 @@
 mod butteraugli;
+mod cvvdp;
 mod handler;
 mod ssimulacra2;
 
 pub use self::butteraugli::{Butteraugli, ButteraugliScore};
+pub use self::cvvdp::{Cvvdp, CvvdpOptions};
 pub use self::ssimulacra2::Ssimulacra2;
 use crate::colour::{ColorSpace, Planes};
 
