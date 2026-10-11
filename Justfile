@@ -99,42 +99,14 @@ test-bestsource:
     cargo clippy -p avtbx-bestsource --features static --all-targets -- -D warnings
     cargo nextest run --cargo-profile test-release -p avtbx-bestsource --features static
 
-# The Vship commit `vship` builds, tag v5.1.2.
-vship_commit := "5a627933274196219f782b3b74e13fad47cd6370"
-
-# Builds the static Vship library for `vulkan` or `cuda` into target/thirdparty/vship/<backend>.
-vship backend:
+# Lints and tests the Vship wrapper statically with Vulkan and against the system libvship.
+test-vship:
     #!/usr/bin/env bash
     set -euo pipefail
-    case "{{backend}}" in
-        vulkan) make_backend=Vulkan ;;
-        cuda) make_backend=Cuda ;;
-        *) echo "the backend must be vulkan or cuda, not {{backend}}" >&2; exit 1 ;;
-    esac
-    if [ "$(uname -s)" != "Linux" ]; then
-        echo "just vship only builds on Linux" >&2
-        exit 1
-    fi
-    source_dir="$PWD/target/thirdparty/vship/src"
-    install_dir="$PWD/target/thirdparty/vship/{{backend}}"
-    if [ ! -d "$source_dir" ]; then
-        git clone https://codeberg.org/Line-fr/Vship.git "$source_dir"
-    fi
-    git -C "$source_dir" fetch --quiet origin
-    git -C "$source_dir" checkout --quiet {{vship_commit}}
-    make -C "$source_dir" build ENABLE_STATIC=1 BACKEND="$make_backend"
-    mkdir -p "$install_dir/lib" "$install_dir/include"
-    cp "$source_dir/libvship.a" "$install_dir/lib/"
-    cp "$source_dir/src/VshipAPI.h" "$source_dir/src/VshipColor.h" "$install_dir/include/"
-    echo "{{backend}}" > "$install_dir/backend"
-
-# Lints and tests the Vship wrapper on one backend, device tests included. Run `vship <backend>` first.
-test-vship backend:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    export VSHIP_DIR="$PWD/target/thirdparty/vship/{{backend}}"
-    cargo clippy -p avtbx-vship --all-targets --features {{backend}},gpu-tests -- -D warnings
-    cargo nextest run --cargo-profile test-release -p avtbx-vship --features {{backend}},gpu-tests
+    cargo clippy -p avtbx-vship --features static,vulkan,gpu-tests --all-targets -- -D warnings
+    cargo nextest run --cargo-profile test-release -p avtbx-vship --features static,vulkan,gpu-tests
+    cargo clippy -p avtbx-vship --features gpu-tests --all-targets -- -D warnings
+    cargo nextest run --cargo-profile test-release -p avtbx-vship --features gpu-tests
 
 # Builds the optional dependencies under dependencies/, or only the ones named.
 dependencies *IDENTIFIERS:

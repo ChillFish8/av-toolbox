@@ -4,18 +4,36 @@ version.workspace = true
 edition = "2024"
 license.workspace = true
 repository.workspace = true
-description = "GPU SSIMULACRA2 and Butteraugli through a statically linked Vship."
+description = "GPU SSIMULACRA2, Butteraugli and CVVDP through Vship."
+include = [
+    "Cargo.toml",
+    "build.rs",
+    "build/**",
+    "src/**",
+    "include/**",
+    "vendor/vship/LICENSE",
+    "vendor/vship/src/**",
+    "vendor/vship/include/**",
+    "vendor/vship/libvshipSpvShaders/**",
+]
 
 [dependencies]
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [build-dependencies]
 bindgen = { workspace = true }
+cc = { workspace = true }
+pkg-config = { workspace = true }
 
 [features]
-# Links a Vship built by `just vship vulkan`.
+# Builds the vendored Vship and links it statically, in place of the system libvship.
+static = []
+# The backend a `static` build uses.
 vulkan = []
-# Links a Vship built by `just vship cuda`.
+# The backend a `static` build uses.
 cuda = []
 gpu-tests = []

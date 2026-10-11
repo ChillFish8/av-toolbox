@@ -1,4 +1,4 @@
-//! GPU SSIMULACRA2, Butteraugli and CVVDP through a statically linked Vship
+//! GPU SSIMULACRA2, Butteraugli and CVVDP through Vship
 //!
 //! [device_count] and [device_info] list the devices Vship's backend can use.
 //! [Ssimulacra2], [Butteraugli] and [Cvvdp] score a distorted frame against a reference on one device.
@@ -10,8 +10,11 @@ mod display;
 mod distmap;
 mod error;
 mod metric;
+#[cfg(test)]
+#[path = "../build/shaders.rs"]
+mod shader_header;
 mod sys;
-#[cfg(all(test, feature = "gpu-tests"))]
+#[cfg(test)]
 mod tests;
 
 pub use self::colour::{ChromaLocation, ColorSpace, Planes, Range, SampleType};

@@ -463,6 +463,9 @@ name = "avtbx-vship"
 version = "0.1.2"
 dependencies = [
  "bindgen 0.73.2",
+ "cc",
+ "pkg-config",
+ "tempfile",
  "thiserror",
  "tracing",
 ]
