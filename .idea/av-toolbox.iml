@@ -33,6 +33,9 @@
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-models/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-providers/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/av-toolbox-providers/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/thirdparty/bestsource/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/thirdparty/bestsource/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/thirdparty/vship/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/scratchpad/vs-bench/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

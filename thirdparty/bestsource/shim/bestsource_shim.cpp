@@ -131,6 +131,7 @@ extern "C" void bs_frame_info(const bs_frame *frame, bs_frame_props *out_props) 
     out_props->chroma_location = video_frame->ChromaLocation;
     out_props->color_range = video_frame->ColorRange;
     out_props->key_frame = video_frame->KeyFrame ? 1 : 0;
+    out_props->interlaced = video_frame->InterlacedFrame ? 1 : 0;
     out_props->top_field_first = video_frame->TopFieldFirst ? 1 : 0;
 }
 

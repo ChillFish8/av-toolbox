@@ -106,6 +106,10 @@ impl Frame {
         self.props.key_frame != 0
     }
 
+    pub fn interlaced(&self) -> bool {
+        self.props.interlaced != 0
+    }
+
     pub fn top_field_first(&self) -> bool {
         self.props.top_field_first != 0
     }

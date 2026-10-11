@@ -1,3 +1,4 @@
+# Keep REF in step with the thirdparty/bestsource/vendor submodules.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
 vcpkg_from_github(

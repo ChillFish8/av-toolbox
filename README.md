@@ -26,6 +26,8 @@ docker run --rm -v avtb-models:/models ghcr.io/chillfish8/av-toolbox:vulkan-late
 
 ## Building
 
+Clone with `--recursive`, or run `just submodules` after cloning, to fetch the vendored BestSource sources.
+
 Pick a backend when building. `vulkan` works on most machines, `metal` on macOS.
 
 ```bash

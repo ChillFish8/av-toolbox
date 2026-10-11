@@ -49,6 +49,7 @@ typedef struct bs_frame_props {
     int chroma_location;
     int color_range;
     int key_frame;
+    int interlaced;
     int top_field_first;
 } bs_frame_props;
 

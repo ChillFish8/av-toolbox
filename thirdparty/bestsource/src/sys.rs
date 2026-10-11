@@ -54,6 +54,7 @@ pub(crate) struct BsFrameProps {
     pub chroma_location: c_int,
     pub color_range: c_int,
     pub key_frame: c_int,
+    pub interlaced: c_int,
     pub top_field_first: c_int,
 }
 

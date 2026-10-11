@@ -4,8 +4,27 @@ version.workspace = true
 edition = "2024"
 license.workspace = true
 repository.workspace = true
-description = "Frame accurate video decoding through a statically linked BestSource."
-publish = false
+description = "Frame accurate video decoding through BestSource."
+include = [
+    "Cargo.toml",
+    "build.rs",
+    "src/**",
+    "shim/**",
+    "vendor/bestsource/LICENSE",
+    "vendor/bestsource/src/audiosource.*",
+    "vendor/bestsource/src/bsshared.*",
+    "vendor/bestsource/src/gpuhash.*",
+    "vendor/bestsource/src/tracklist.*",
+    "vendor/bestsource/src/videosource.*",
+    "vendor/bestsource/src/version.h",
+    "vendor/libp2p/COPYING",
+    "vendor/libp2p/*.cpp",
+    "vendor/libp2p/*.h",
+    "vendor/libp2p/simd/*",
+]
+
+[features]
+static = []
 
 [dependencies]
 thiserror = { workspace = true }

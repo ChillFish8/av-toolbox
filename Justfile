@@ -45,6 +45,18 @@ check-backends:
     cargo check -p av-toolbox-gpu 2>&1 | grep -q "at least one accelerator backend"
     cargo check -p av-toolbox-gpu --features vulkan,metal 2>&1 | grep -q "cannot both be enabled"
 
+# Fetches the vendored BestSource and libp2p sources at their pinned commits.
+submodules:
+    git submodule update --init --recursive
+
+# Moves every submodule to its upstream's latest commit.
+#
+# Review the new pins and move the matching `REF`s in `vcpkg/ports/bestsource` and `vcpkg/ports/libp2p`
+# after any change in revision.
+update-submodules:
+    git submodule update --init --remote --recursive
+    git submodule status
+
 # Builds the static ffms2, BestSource and FFmpeg tree from vcpkg.json into vcpkg_installed/.
 static-deps:
     #!/usr/bin/env bash
@@ -70,15 +82,17 @@ build-static features=static_features:
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
     cargo build --release -p av-toolbox --features {{features}},static-ffms2
 
-# Lints and tests the BestSource wrapper against the vcpkg tree. Run `static-deps` first.
+# Lints and tests the BestSource wrapper in both link modes. Run `static-deps` first.
 test-bestsource:
     #!/usr/bin/env bash
     set -euo pipefail
+    cargo clippy -p avtbx-bestsource --all-targets -- -D warnings
+    cargo nextest run --cargo-profile test-release -p avtbx-bestsource
     prefix="$PWD/vcpkg_installed/{{vcpkg_triplet}}"
     export BESTSOURCE_LIB_DIR="$prefix/lib"
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
-    cargo clippy -p avtbx-bestsource --all-targets -- -D warnings
-    cargo nextest run --cargo-profile test-release -p avtbx-bestsource
+    cargo clippy -p avtbx-bestsource --features static --all-targets -- -D warnings
+    cargo nextest run --cargo-profile test-release -p avtbx-bestsource --features static
 
 # The Vship commit `vship` builds, tag v5.1.2.
 vship_commit := "5a627933274196219f782b3b74e13fad47cd6370"

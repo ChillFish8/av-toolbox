@@ -1,0 +1,6 @@
+[submodule "thirdparty/bestsource/vendor/bestsource"]
+	path = thirdparty/bestsource/vendor/bestsource
+	url = https://github.com/vapoursynth/bestsource.git
+[submodule "thirdparty/bestsource/vendor/libp2p"]
+	path = thirdparty/bestsource/vendor/libp2p
+	url = https://github.com/sekrit-twc/libp2p.git

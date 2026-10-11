@@ -122,3 +122,21 @@ fn a_directory_cache_writes_an_index_and_reuses_it() {
 
     assert_eq!(modified(&index), written_at);
 }
+
+#[test]
+fn a_beside_source_cache_writes_the_index_next_to_the_file() {
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let source = folder.path().join("clip.mkv");
+    let fixture = fixture();
+    std::fs::copy(fixture, &source).expect("copies the fixture");
+    let options = OpenOptions {
+        cache: IndexCache::BesideSource,
+        ..OpenOptions::default()
+    };
+
+    let opened = VideoSource::open(&source, &options).expect("opens");
+    drop(opened);
+
+    let index = folder.path().join("clip.mkv.0.bsindex");
+    assert!(index.exists(), "no index at {}", index.display());
+}

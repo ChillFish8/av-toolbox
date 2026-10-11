@@ -13,11 +13,16 @@ const CACHE_MODE_DISABLED: c_int = 0;
 /// BestSource's cache mode that always writes an index under a directory, keyed by the source path.
 const CACHE_MODE_ALWAYS_WRITE_SUBTREE: c_int = 2;
 
+/// BestSource's cache mode that always writes an index at a path, beside the source when it has none.
+const CACHE_MODE_ALWAYS_WRITE_ABSOLUTE: c_int = 4;
+
 /// Where BestSource keeps the index it builds for a source.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum IndexCache {
     #[default]
     Disabled,
+    /// Written to `<file>.<track>.bsindex` beside the source and read back on later opens.
+    BesideSource,
     /// Written to `<directory>/<source path>.<track>.bsindex` and read back on later opens.
     Directory(PathBuf),
 }
@@ -91,6 +96,7 @@ impl VideoSource {
         let source_path = c_path(path)?;
         let (cache_mode, cache_path) = match &options.cache {
             IndexCache::Disabled => (CACHE_MODE_DISABLED, None),
+            IndexCache::BesideSource => (CACHE_MODE_ALWAYS_WRITE_ABSOLUTE, None),
             IndexCache::Directory(directory) => (CACHE_MODE_ALWAYS_WRITE_SUBTREE, Some(c_path(directory)?)),
         };
         let cache_pointer = match &cache_path {
