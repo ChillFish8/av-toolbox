@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::Runtime;
@@ -21,13 +21,14 @@ pub struct BuildContext<R: Runtime> {
     client: ComputeClient<R>,
     capabilities: Capabilities,
     pool: BufferPool,
+    device: Device,
 }
 
 impl<R: Runtime> BuildContext<R> {
-    fn new(accelerator: Accelerator, client: ComputeClient<R>) -> Self {
+    fn new(accelerator: Accelerator, device: Device, client: ComputeClient<R>) -> Self {
         let policy = StreamPolicy::for_accelerator(accelerator);
 
-        Self::with_policy(accelerator, client, policy)
+        Self::with_policy(accelerator, device, client, policy)
     }
 
     /// A context whose clients keep work across threads in order by `policy`.
@@ -36,6 +37,7 @@ impl<R: Runtime> BuildContext<R> {
     /// clones it, so every clone queues on that stream whichever thread uses it.
     pub(crate) fn with_policy(
         accelerator: Accelerator,
+        device: Device,
         mut client: ComputeClient<R>,
         policy: StreamPolicy,
     ) -> Self {
@@ -48,19 +50,24 @@ impl<R: Runtime> BuildContext<R> {
             }
         }
 
-        Self::assemble(accelerator, client, policy)
+        Self::assemble(accelerator, device, client, policy)
     }
 
     /// A context that leaves each thread on its own stream and never flushes, so work handed
     /// between threads can run out of order.
     #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
-    pub(crate) fn unordered(accelerator: Accelerator, client: ComputeClient<R>) -> Self {
+    pub(crate) fn unordered(accelerator: Accelerator, device: Device, client: ComputeClient<R>) -> Self {
         // The pool reports `SharedStream` only so it never flushes. The client is deliberately
         // left unpinned, so each thread keeps its own stream.
-        Self::assemble(accelerator, client, StreamPolicy::SharedStream)
+        Self::assemble(accelerator, device, client, StreamPolicy::SharedStream)
     }
 
-    fn assemble(accelerator: Accelerator, client: ComputeClient<R>, policy: StreamPolicy) -> Self {
+    fn assemble(
+        accelerator: Accelerator,
+        device: Device,
+        client: ComputeClient<R>,
+        policy: StreamPolicy,
+    ) -> Self {
         let capabilities = Capabilities::from_properties(accelerator, client.properties());
         let pool_client = client.clone();
         let allocator = ClientAllocator::new(pool_client);
@@ -71,6 +78,7 @@ impl<R: Runtime> BuildContext<R> {
             client,
             capabilities,
             pool,
+            device,
         }
     }
 
@@ -84,6 +92,11 @@ impl<R: Runtime> BuildContext<R> {
 
     pub const fn pool(&self) -> &BufferPool {
         &self.pool
+    }
+
+    /// The device the pipeline runs on, with [Device::Default] resolved where the backend can.
+    pub const fn device(&self) -> Device {
+        self.device
     }
 
     pub fn stream_policy(&self) -> StreamPolicy {
@@ -112,11 +125,6 @@ pub type DeviceSync = Arc<dyn Fn() -> Result<(), RuntimeError> + Send + Sync>;
 /// An opened accelerator, ready to build stages against.
 pub struct Backend {
     accelerator: Accelerator,
-    device: Device,
-    /// The device `CUBECL_WGPU_DEFAULT_DEVICE` named when [Device::Default] was opened.
-    #[cfg(any(feature = "vulkan", feature = "metal"))]
-    wgpu_override: Option<Device>,
-    resolved: OnceLock<Device>,
     inner: Opened,
 }
 
@@ -127,6 +135,30 @@ enum Opened {
     Rocm(BuildContext<cubecl::hip::HipRuntime>),
     #[cfg(any(feature = "vulkan", feature = "metal"))]
     Wgpu(BuildContext<cubecl::wgpu::WgpuRuntime>),
+}
+
+/// CUDA and ROCm number their devices from zero, so the default is the first one.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn first_discrete_if_default(selector: Device) -> Device {
+    if selector == Device::Default {
+        Device::Discrete { index: 0 }
+    } else {
+        selector
+    }
+}
+
+/// Resolves `selector` to the device the client opened, asking it for its devices when `selector` is the default.
+#[cfg(any(feature = "vulkan", feature = "metal"))]
+fn wgpu_device(
+    selector: Device,
+    client: &ComputeClient<cubecl::wgpu::WgpuRuntime>,
+    overridden: Option<Device>,
+) -> Device {
+    if selector == Device::Default {
+        resolve::wgpu_default(client, overridden)
+    } else {
+        selector
+    }
 }
 
 impl Backend {
@@ -147,34 +179,38 @@ impl Backend {
             #[cfg(feature = "cuda")]
             Accelerator::Cuda => {
                 let selector = device;
-                let device = supported_device(device.to_cuda())?;
-                let client = open_client::<cubecl::cuda::CudaRuntime>(accelerator, selector, &device)?;
+                let supported = supported_device(device.to_cuda())?;
+                let client = open_client::<cubecl::cuda::CudaRuntime>(accelerator, selector, &supported)?;
+                let resolved = first_discrete_if_default(selector);
 
-                Opened::Cuda(BuildContext::new(accelerator, client))
+                Opened::Cuda(BuildContext::new(accelerator, resolved, client))
             },
             #[cfg(feature = "rocm")]
             Accelerator::Rocm => {
                 let selector = device;
-                let device = supported_device(device.to_amd())?;
-                let client = open_client::<cubecl::hip::HipRuntime>(accelerator, selector, &device)?;
+                let supported = supported_device(device.to_amd())?;
+                let client = open_client::<cubecl::hip::HipRuntime>(accelerator, selector, &supported)?;
+                let resolved = first_discrete_if_default(selector);
 
-                Opened::Rocm(BuildContext::new(accelerator, client))
+                Opened::Rocm(BuildContext::new(accelerator, resolved, client))
             },
             #[cfg(feature = "vulkan")]
             Accelerator::Vulkan => {
                 let selector = device;
-                let device = supported_device(device.to_wgpu())?;
-                let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &device)?;
+                let supported = supported_device(device.to_wgpu())?;
+                let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &supported)?;
+                let resolved = wgpu_device(selector, &client, wgpu_override);
 
-                Opened::Wgpu(BuildContext::new(accelerator, client))
+                Opened::Wgpu(BuildContext::new(accelerator, resolved, client))
             },
             #[cfg(feature = "metal")]
             Accelerator::Metal => {
                 let selector = device;
-                let device = supported_device(device.to_wgpu())?;
-                let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &device)?;
+                let supported = supported_device(device.to_wgpu())?;
+                let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &supported)?;
+                let resolved = wgpu_device(selector, &client, wgpu_override);
 
-                Opened::Wgpu(BuildContext::new(accelerator, client))
+                Opened::Wgpu(BuildContext::new(accelerator, resolved, client))
             },
             // docs.rs widens the `Accelerator` variants behind `cfg(docsrs)` so they all appear in
             // the rendered enum, even when the matching backend feature is off. This arm keeps the
@@ -183,14 +219,7 @@ impl Backend {
             _ => unreachable!(),
         };
 
-        Some(Self {
-            accelerator,
-            device,
-            #[cfg(any(feature = "vulkan", feature = "metal"))]
-            wgpu_override,
-            resolved: OnceLock::new(),
-            inner,
-        })
+        Some(Self { accelerator, inner })
     }
 
     /// Opens the first accelerator this build enables that starts on `device`.
@@ -209,24 +238,15 @@ impl Backend {
 
     /// The device this backend runs on, with [Device::Default] resolved to the one the backend picked.
     ///
-    /// It stays [Device::Default] only when no selector can name the device picked. Resolving
-    /// asks the backend for its devices on the first call, and later calls reuse the answer.
+    /// It stays [Device::Default] only when no selector can name the device picked.
     pub fn device(&self) -> Device {
-        if self.device != Device::Default {
-            return self.device;
-        }
-
-        *self.resolved.get_or_init(|| self.resolve_default())
-    }
-
-    fn resolve_default(&self) -> Device {
         match &self.inner {
             #[cfg(feature = "cuda")]
-            Opened::Cuda(_) => Device::Discrete { index: 0 },
+            Opened::Cuda(context) => context.device(),
             #[cfg(feature = "rocm")]
-            Opened::Rocm(_) => Device::Discrete { index: 0 },
+            Opened::Rocm(context) => context.device(),
             #[cfg(any(feature = "vulkan", feature = "metal"))]
-            Opened::Wgpu(context) => resolve::wgpu_default(context.client(), self.wgpu_override),
+            Opened::Wgpu(context) => context.device(),
         }
     }
 
@@ -371,6 +391,24 @@ mod tests {
         assert!(
             reported[0].devices.contains(&resolved),
             "{resolved} is not listed"
+        );
+
+        struct ReportDevice;
+
+        impl BuildTask for ReportDevice {
+            type Output = Device;
+
+            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+                context.device()
+            }
+        }
+
+        let context_device = backend.build(ReportDevice);
+
+        assert_ne!(context_device, Device::Default);
+        assert!(
+            reported[0].devices.contains(&context_device),
+            "{context_device} is not listed"
         );
     }
 

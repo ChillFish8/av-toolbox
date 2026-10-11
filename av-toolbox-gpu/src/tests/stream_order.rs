@@ -260,8 +260,10 @@ impl RuntimeTask for CountStaleReads {
     fn run<R: Runtime>(self, client: &ComputeClient<R>) -> Self::Output {
         let client = client.clone();
         let context = match self.ordering {
-            WorkOrder::Unordered => BuildContext::unordered(TEST_ACCELERATOR, client),
-            WorkOrder::Policy(policy) => BuildContext::with_policy(TEST_ACCELERATOR, client, policy),
+            WorkOrder::Unordered => BuildContext::unordered(TEST_ACCELERATOR, test_device(), client),
+            WorkOrder::Policy(policy) => {
+                BuildContext::with_policy(TEST_ACCELERATOR, test_device(), client, policy)
+            },
         };
 
         (0..HAND_OFFS)
