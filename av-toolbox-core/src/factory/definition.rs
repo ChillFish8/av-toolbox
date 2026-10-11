@@ -195,6 +195,38 @@ impl<D: StageDefinition> Definition<D> {
         Ok(())
     }
 
+    /// Rejects a probe naming an input the stage does not have, or a second probe of one kind on one input.
+    fn check_probe_inputs(&self, args: &D::Args) -> Result<(), BuildStageError> {
+        let params = D::inputs().params();
+        let probes = D::probes(args);
+
+        for (position, probed) in probes.iter().enumerate() {
+            let names_an_input = params.iter().any(|param| param.name() == probed.input);
+            if !names_an_input {
+                let error = RegistryError::InvalidProbe {
+                    identifier: self.full_identifier.clone(),
+                    input: probed.input,
+                };
+                return Err(self.invalid_args(ArgsError::InvalidProbe(error)));
+            }
+
+            let earlier = &probes[..position];
+            let repeated = earlier
+                .iter()
+                .any(|other| other.input == probed.input && other.probe.kind() == probed.probe.kind());
+            if repeated {
+                let error = RegistryError::DuplicateProbeInput {
+                    identifier: self.full_identifier.clone(),
+                    input: probed.input,
+                    kind: probed.probe.kind().name(),
+                };
+                return Err(self.invalid_args(ArgsError::InvalidProbe(error)));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Deserializes the arguments and binds the inputs, refusing demands the stage could not be given.
     pub(super) fn prepared(
         &self,
@@ -204,6 +236,7 @@ impl<D: StageDefinition> Definition<D> {
     ) -> Result<Prepared<D>, BuildStageError> {
         let args = self.deserialize_args(args)?;
         self.check_demand_inputs(&args)?;
+        self.check_probe_inputs(&args)?;
 
         let bound = bind_inputs(D::inputs(), inputs).map_err(|source| self.invalid_inputs(source))?;
         self.check_chunk_input(&args, &bound)?;

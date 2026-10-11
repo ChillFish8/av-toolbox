@@ -31,10 +31,13 @@ use crate::{
     Crossing,
     InputArgument,
     InputDemand,
+    InputProbe,
     InputSignature,
     OpenSlot,
     Parallelism,
+    Probed,
     Residency,
+    Seeker,
     StageArtefacts,
     StageError,
     StageKind,
@@ -167,6 +170,36 @@ impl PreparedStage {
             Self::Sink(prepared) => prepared.demands(),
             Self::MetaSink(prepared) => prepared.demands(),
             Self::Crossing(_) => Vec::new(),
+        }
+    }
+
+    /// What this stage needs to learn from its sources before formats are solved.
+    pub fn probes(&self) -> Vec<InputProbe> {
+        match self {
+            Self::Filter(prepared) => prepared.probes(),
+            Self::Mask(prepared) => prepared.probes(),
+            Self::Sink(prepared) => prepared.probes(),
+            Self::MetaSink(prepared) => prepared.probes(),
+            Self::Source(_) | Self::Provider(_) | Self::Crossing(_) => Vec::new(),
+        }
+    }
+
+    /// Hands the stage what its probes found.
+    pub fn settle(&mut self, probed: &Probed) -> Result<(), StageError> {
+        match self {
+            Self::Filter(prepared) => prepared.settle(probed),
+            Self::Mask(prepared) => prepared.settle(probed),
+            Self::Sink(prepared) => prepared.settle(probed),
+            Self::MetaSink(prepared) => prepared.settle(probed),
+            Self::Source(_) | Self::Provider(_) | Self::Crossing(_) => Ok(()),
+        }
+    }
+
+    /// A seeker over this stage's input, when it is a source that can seek.
+    pub fn seeker(&self) -> Result<Option<Box<dyn Seeker>>, StageError> {
+        match self {
+            Self::Source(prepared) => prepared.seeker(),
+            _ => Ok(None),
         }
     }
 

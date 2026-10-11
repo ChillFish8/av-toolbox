@@ -19,10 +19,12 @@ use crate::{
     BuildStageError,
     InputArgument,
     InputDemand,
+    InputProbe,
     MetaSink,
     MetaSinkDefinition,
     OpenSlot,
     Parallelism,
+    Probed,
     StageError,
 };
 
@@ -51,6 +53,14 @@ impl<D: MetaSinkDefinition> PreparedMetaSink for Prepared<D> {
 
     fn demands(&self) -> Vec<InputDemand> {
         self.stage_demands()
+    }
+
+    fn probes(&self) -> Vec<InputProbe> {
+        D::probes(&self.args)
+    }
+
+    fn settle(&mut self, probed: &Probed) -> Result<(), StageError> {
+        D::settle(&mut self.args, probed)
     }
 
     fn suggested_workers(&self) -> Option<usize> {

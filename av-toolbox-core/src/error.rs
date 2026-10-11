@@ -55,6 +55,14 @@ pub enum RegistryError {
     },
     #[error("stage {identifier} demands something of `{input}`, which is no input of it")]
     InvalidDemand { identifier: String, input: &'static str },
+    #[error("stage {identifier} probes `{input}`, which is no input of it")]
+    InvalidProbe { identifier: String, input: &'static str },
+    #[error("stage {identifier} makes more than one {kind} probe of `{input}`")]
+    DuplicateProbeInput {
+        identifier: String,
+        input: &'static str,
+        kind: &'static str,
+    },
     #[error("a demand kind named {kind} is already registered")]
     DuplicateDemand { kind: &'static str },
     #[error("a probe kind named {kind} is already registered")]
@@ -134,6 +142,8 @@ pub enum ArgsError {
     Deserialize(#[source] serde_json::Error),
     #[error(transparent)]
     InvalidDemand(RegistryError),
+    #[error(transparent)]
+    InvalidProbe(RegistryError),
     #[error(
         "stage {identifier} is chunked on a variadic input given without a name, so its chunk input has no name"
     )]

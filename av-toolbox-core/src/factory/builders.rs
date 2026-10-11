@@ -26,10 +26,13 @@ use crate::{
     FilterDefinition,
     InputArgument,
     InputDemand,
+    InputProbe,
     MaskDefinition,
     OpenSlot,
     Parallelism,
+    Probed,
     Residency,
+    Seeker,
     SinkDefinition,
     SourceDefinition,
     StageError,
@@ -76,6 +79,14 @@ macro_rules! impl_stage_factory {
 
             fn demands(&self) -> Vec<InputDemand> {
                 self.stage_demands()
+            }
+
+            fn probes(&self) -> Vec<InputProbe> {
+                D::probes(&self.args)
+            }
+
+            fn settle(&mut self, probed: &Probed) -> Result<(), StageError> {
+                D::settle(&mut self.args, probed)
             }
 
             fn suggested_workers(&self) -> Option<usize> {
@@ -174,6 +185,15 @@ macro_rules! impl_source_factory {
 
             fn demands(&self) -> Vec<InputDemand> {
                 self.stage_demands()
+            }
+
+            fn seeker(&self) -> Result<Option<Box<dyn Seeker>>, StageError> {
+                let open = || D::open(&self.args);
+                let found = self
+                    .slot
+                    .read(open, |opened: &D::Opened| D::seeker(opened))?;
+
+                found
             }
 
             fn suggested_workers(&self) -> Option<usize> {
@@ -277,6 +297,14 @@ macro_rules! impl_sink_factory {
 
             fn demands(&self) -> Vec<InputDemand> {
                 self.stage_demands()
+            }
+
+            fn probes(&self) -> Vec<InputProbe> {
+                D::probes(&self.args)
+            }
+
+            fn settle(&mut self, probed: &Probed) -> Result<(), StageError> {
+                D::settle(&mut self.args, probed)
             }
 
             fn suggested_workers(&self) -> Option<usize> {

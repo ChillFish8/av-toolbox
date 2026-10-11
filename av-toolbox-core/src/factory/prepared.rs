@@ -17,15 +17,20 @@ use crate::{
     BuiltSink,
     BuiltSource,
     InputDemand,
+    InputProbe,
     KeyFilter,
     MetaSink,
     Parallelism,
+    Probed,
     Residency,
+    Seeker,
     StageError,
 };
 
 /// A source whose arguments are deserialized, ready to negotiate and build.
 pub trait PreparedSource: Send + Sync {
+    fn seeker(&self) -> Result<Option<Box<dyn Seeker>>, StageError>;
+
     /// The smallest unit of a stream this stage can be given on its own.
     fn parallelism(&self) -> Parallelism;
 
@@ -54,6 +59,10 @@ pub trait PreparedSource: Send + Sync {
 
 /// A filter whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedFilter: Send + Sync {
+    fn probes(&self) -> Vec<InputProbe>;
+
+    fn settle(&mut self, probed: &Probed) -> Result<(), StageError>;
+
     /// The smallest unit of a stream this stage can be given on its own.
     fn parallelism(&self) -> Parallelism;
 
@@ -94,6 +103,10 @@ pub trait PreparedFilter: Send + Sync {
 
 /// A mask whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedMask: Send + Sync {
+    fn probes(&self) -> Vec<InputProbe>;
+
+    fn settle(&mut self, probed: &Probed) -> Result<(), StageError>;
+
     /// The smallest unit of a stream this stage can be given on its own.
     fn parallelism(&self) -> Parallelism;
 
@@ -163,6 +176,10 @@ pub trait PreparedProvider: Send + Sync {
 
 /// A sink whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedSink: Send + Sync {
+    fn probes(&self) -> Vec<InputProbe>;
+
+    fn settle(&mut self, probed: &Probed) -> Result<(), StageError>;
+
     /// The smallest unit of a stream this stage can be given on its own.
     fn parallelism(&self) -> Parallelism;
 
@@ -197,6 +214,10 @@ pub trait PreparedSink: Send + Sync {
 
 /// A metadata-only sink whose arguments are deserialized and whose inputs are bound.
 pub trait PreparedMetaSink: Send + Sync {
+    fn probes(&self) -> Vec<InputProbe>;
+
+    fn settle(&mut self, probed: &Probed) -> Result<(), StageError>;
+
     /// The smallest unit of a stream this stage can be given on its own.
     fn parallelism(&self) -> Parallelism;
 

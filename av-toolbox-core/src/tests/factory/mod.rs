@@ -4,6 +4,7 @@ mod granularity;
 mod opens;
 mod planes_of;
 mod prepare;
+mod probes;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -38,6 +39,7 @@ use crate::{
     InputParam,
     InputSignature,
     Inputs,
+    PipelineRegistry,
     StageDefinition,
     StageError,
     StageHandle,
@@ -134,6 +136,15 @@ impl FilterDefinition for ExampleDefinition {
 
 fn definition() -> Definition<ExampleDefinition> {
     Definition::new(StageKind::Filter).expect("should build the definition")
+}
+
+fn registry_with_example() -> PipelineRegistry {
+    let mut registry = PipelineRegistry::new();
+    registry
+        .register_filter::<ExampleDefinition>()
+        .expect("registers");
+
+    registry
 }
 
 fn reference_input() -> Vec<InputArgument> {

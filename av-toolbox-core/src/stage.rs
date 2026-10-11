@@ -23,11 +23,14 @@ use crate::{
     BoundInputs,
     Filter,
     InputDemand,
+    InputProbe,
     InputSignature,
     KeyFilter,
     Mask,
     MetaSink,
     Parallelism,
+    Probed,
+    Seeker,
     Sink,
     Source,
     StageError,
@@ -261,6 +264,18 @@ pub trait StageDefinition: 'static {
         Vec::new()
     }
 
+    /// What this stage needs to learn from its sources before formats are solved.
+    fn probes(_args: &Self::Args) -> Vec<InputProbe> {
+        Vec::new()
+    }
+
+    /// Settles the args with what this stage's probes found.
+    ///
+    /// It is called each time the stage is prepared once its probes have run.
+    fn settle(_args: &mut Self::Args, _probed: &Probed) -> Result<(), StageError> {
+        Ok(())
+    }
+
     /// How many workers this stage would like when the pipeline does not say.
     fn workers(_args: &Self::Args) -> Option<usize> {
         None
@@ -297,6 +312,13 @@ pub trait SourceDefinition: StageDefinition {
     /// Whether opening the input waits on a live stream, such as standard input or a pipe.
     fn reads_stream(_args: &Self::Args) -> bool {
         false
+    }
+
+    /// A reader that can jump to any frame, for sources that can seek.
+    ///
+    /// Reading through it never moves the stream the built source produces.
+    fn seeker(_opened: &Self::Opened) -> Result<Option<Box<dyn Seeker>>, StageError> {
+        Ok(None)
     }
 
     /// What it could produce, given what opening the input found.
