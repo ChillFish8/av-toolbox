@@ -131,6 +131,14 @@ impl HostFrameMut {
         Some(self.frame.planes[index].bytes_mut())
     }
 
+    /// Every plane with its channel, in plane order, all writable at once.
+    pub fn planes_mut(&mut self) -> Vec<(Channel, &mut [u8])> {
+        let channels = self.frame.format.channels();
+        let planes = self.frame.planes.iter_mut().map(HostPlane::bytes_mut);
+
+        channels.iter().copied().zip(planes).collect()
+    }
+
     /// Declares what the samples now mean, for a stage that converted them in place.
     pub fn set_colour(&mut self, colour: ColourInfo) {
         self.frame.format.colour = colour;
@@ -421,6 +429,20 @@ mod tests {
                 .iter()
                 .all(|&byte| byte == 9)
         );
+    }
+
+    #[test]
+    fn every_plane_is_writable_at_once_through_planes_mut() {
+        let mut frame = HostPool::new().alloc_frame(&format(), FrameMeta::at(0));
+        for (index, (_channel, bytes)) in frame.planes_mut().into_iter().enumerate() {
+            bytes.fill(index as u8 + 1);
+        }
+
+        for (channel, expected) in [(Channel::Y, 1), (Channel::U, 2), (Channel::V, 3)] {
+            let plane = frame.plane(channel).expect("a plane");
+
+            assert!(plane.bytes().iter().all(|&byte| byte == expected), "{channel:?}");
+        }
     }
 
     #[test]

@@ -11,7 +11,12 @@ const BESTSOURCE_SOURCES: [&str; 5] = [
 ];
 
 /// libp2p's sources built on every target.
-const P2P_SOURCES: [&str; 4] = ["p2p_api.cpp", "v210.cpp", "simd/cpuinfo_x86.cpp", "simd/p2p_simd.cpp"];
+const P2P_SOURCES: [&str; 4] = [
+    "p2p_api.cpp",
+    "v210.cpp",
+    "simd/cpuinfo_x86.cpp",
+    "simd/p2p_simd.cpp",
+];
 
 /// The system libraries dynamic mode links, with the least version each needs.
 const SYSTEM_LIBRARIES: [(&str, &str); 4] = [
@@ -67,7 +72,9 @@ fn warn_lines(text: &str) {
 fn link_static() {
     let lib_dir = env::var_os("BESTSOURCE_LIB_DIR");
     let Some(lib_dir) = lib_dir else {
-        skip("BESTSOURCE_LIB_DIR is unset, run `just static-deps` and point it at vcpkg_installed/<triplet>/lib");
+        skip(
+            "BESTSOURCE_LIB_DIR is unset, run `just static-deps` and point it at vcpkg_installed/<triplet>/lib",
+        );
         return;
     };
 
@@ -222,7 +229,11 @@ fn compile_libp2p() {
     let is_x86 = matches!(target_arch.as_str(), "x86" | "x86_64");
 
     let mut build = cc::Build::new();
-    build.cpp(true).std("c++14").warnings(false).include("vendor/libp2p");
+    build
+        .cpp(true)
+        .std("c++14")
+        .warnings(false)
+        .include("vendor/libp2p");
 
     let source_dir = Path::new("vendor/libp2p");
     for source in P2P_SOURCES {

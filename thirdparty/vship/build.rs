@@ -17,7 +17,9 @@ fn main() {
 
     let vship_dir = env::var_os("VSHIP_DIR");
     let Some(vship_dir) = vship_dir else {
-        skip("VSHIP_DIR is unset, run `just vship <backend>` and point it at target/thirdparty/vship/<backend>");
+        skip(
+            "VSHIP_DIR is unset, run `just vship <backend>` and point it at target/thirdparty/vship/<backend>",
+        );
         return;
     };
 
@@ -38,7 +40,9 @@ fn main() {
 
 /// Links nothing, so only a library build of this crate can succeed.
 fn skip(reason: &str) {
-    println!("cargo:warning=Vship is not linked because {reason}. Anything that links avtbx-vship will fail to link.");
+    println!(
+        "cargo:warning=Vship is not linked because {reason}. Anything that links avtbx-vship will fail to link."
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

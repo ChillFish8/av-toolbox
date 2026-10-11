@@ -1,4 +1,5 @@
 mod carried;
+mod colour;
 mod timestamp;
 mod y4m;
 
@@ -20,6 +21,7 @@ use av_toolbox_gpu::{
 };
 
 pub(crate) use self::carried::Carried;
+pub(crate) use self::colour::{RawColour, colour_of, field_order_of};
 pub(crate) use self::timestamp::timestamp_of;
 pub(crate) use self::y4m::Y4mReader;
 

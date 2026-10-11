@@ -19,10 +19,6 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ChromaLocation,
-    ColourInfo,
-    ColourRange,
-    FieldOrder,
     FrameContext,
     FrameFormat,
     FrameLayout,
@@ -32,19 +28,16 @@ use av_toolbox_gpu::{
     HostFrameMut,
     HostPool,
     HostSide,
-    Matrix,
     OutputFormats,
-    Primaries,
     ResolvedFormats,
     Runtime,
-    Transfer,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use self::format::Choice;
 use self::sys::{Ffms2Error, Index, StridedPlane, VideoSource};
-use crate::shared::{Carried, produced_by};
+use crate::shared::{Carried, RawColour, colour_of, field_order_of, produced_by};
 
 /// Arguments for `ffms2/file`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -463,116 +456,6 @@ fn resolve_choice(
     }
 }
 
-/// A frame's colour properties as ffms2 reports them, before mapping.
-struct RawColour {
-    range: i32,
-    matrix: i32,
-    primaries: i32,
-    transfer: i32,
-    chroma_location: i32,
-}
-
-/// The field order a decoded frame's interlacing flags give.
-fn field_order_of(interlaced: bool, top_field_first: bool) -> FieldOrder {
-    if !interlaced {
-        return FieldOrder::Progressive;
-    }
-
-    if top_field_first {
-        FieldOrder::TopFirst
-    } else {
-        FieldOrder::BottomFirst
-    }
-}
-
-/// The colour a frame carries, mapped from its ffms2 properties.
-///
-/// A forced format that crosses the RGB/YUV family boundary overrides the source's matrix and
-/// range, which no longer describe the samples once ffms2 has recoloured them. An RGB output made
-/// from a YUV source is identity matrix at full range, and a YUV output made from an RGB source
-/// carries no matrix or range at all.
-fn colour_of(
-    raw: RawColour,
-    full_range: bool,
-    source_layout: Option<FrameLayout>,
-    output_layout: FrameLayout,
-) -> ColourInfo {
-    let mapped = ColourInfo {
-        range: range_of(raw.range, full_range),
-        matrix: matrix_of(raw.matrix),
-        primaries: primaries_of(raw.primaries),
-        transfer: transfer_of(raw.transfer),
-        chroma_location: chroma_location_of(raw.chroma_location),
-    };
-
-    match (source_layout, output_layout) {
-        (Some(FrameLayout::Yuv { .. }), FrameLayout::Rgb) => ColourInfo {
-            matrix: Matrix::Identity,
-            range: ColourRange::Full,
-            ..mapped
-        },
-        (Some(FrameLayout::Rgb), FrameLayout::Yuv { .. }) => ColourInfo {
-            matrix: Matrix::Unspecified,
-            range: ColourRange::Unspecified,
-            ..mapped
-        },
-        _ => mapped,
-    }
-}
-
-fn range_of(value: i32, full_range: bool) -> ColourRange {
-    if full_range {
-        return ColourRange::Full;
-    }
-
-    match value {
-        1 => ColourRange::Limited,
-        2 => ColourRange::Full,
-        _ => ColourRange::Unspecified,
-    }
-}
-
-fn matrix_of(value: i32) -> Matrix {
-    match value {
-        0 => Matrix::Identity,
-        1 => Matrix::Bt709,
-        5 | 6 => Matrix::Bt601,
-        9 => Matrix::Bt2020Ncl,
-        _ => Matrix::Unspecified,
-    }
-}
-
-fn primaries_of(value: i32) -> Primaries {
-    match value {
-        1 => Primaries::Bt709,
-        5 | 6 => Primaries::Bt601,
-        9 => Primaries::Bt2020,
-        _ => Primaries::Unspecified,
-    }
-}
-
-fn transfer_of(value: i32) -> Transfer {
-    match value {
-        1 | 6 | 14 | 15 => Transfer::Bt709,
-        13 => Transfer::Srgb,
-        16 => Transfer::Pq,
-        18 => Transfer::Hlg,
-        _ => Transfer::Unspecified,
-    }
-}
-
-/// Maps ffms2's chroma location, where 0 is unspecified and `1..=6` follow its enum.
-fn chroma_location_of(raw: i32) -> ChromaLocation {
-    match raw {
-        2 => ChromaLocation::Center,
-        3 => ChromaLocation::TopLeft,
-        4 => ChromaLocation::Top,
-        5 => ChromaLocation::BottomLeft,
-        6 => ChromaLocation::Bottom,
-        _ => ChromaLocation::Left,
-    }
-}
-
 /// A frame's timestamp from its PTS and the track's time base.
 ///
 /// The time base's `Num` and `Den` give the frame's place in milliseconds, so the nanosecond
@@ -676,11 +559,12 @@ mod tests {
     use av_toolbox_core::Seeker;
     use av_toolbox_gpu::{
         Channel,
-        ChromaLocation,
+        ColourInfo,
         ColourRange,
         FieldOrder,
         FrameLayout,
         FrameRate,
+        Matrix,
         SampleFormat,
         Subsampling,
         testing_context,
@@ -799,14 +683,6 @@ mod tests {
         let (_folder, opened) = opened("yuv420p.mkv", None);
 
         assert_eq!(opened.format().frame_rate, FrameRate::new(25, 1));
-    }
-
-    #[test]
-    fn ffms2_chroma_location_values_map_to_their_position() {
-        assert_eq!(chroma_location_of(0), ChromaLocation::Left);
-        assert_eq!(chroma_location_of(1), ChromaLocation::Left);
-        assert_eq!(chroma_location_of(2), ChromaLocation::Center);
-        assert_eq!(chroma_location_of(6), ChromaLocation::Bottom);
     }
 
     #[test]
@@ -1149,13 +1025,6 @@ mod tests {
 
         assert!(track_error.to_string().contains("track"));
         assert!(threads_error.to_string().contains("threads"));
-    }
-
-    #[test]
-    fn transfers_on_the_bt709_curve_map_to_bt709() {
-        for value in [1, 6, 14, 15] {
-            assert_eq!(transfer_of(value), Transfer::Bt709, "{value}");
-        }
     }
 
     #[test]
