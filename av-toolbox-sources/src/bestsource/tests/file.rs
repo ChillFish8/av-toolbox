@@ -24,6 +24,14 @@ fn args_for(path: PathBuf) -> FileArgs {
     }
 }
 
+#[test]
+fn unknown_args_are_refused() {
+    let table = serde_json::json!({ "path": "clip.mkv", "index-dir": "indexes" });
+    let parsed = serde_json::from_value::<FileArgs>(table);
+
+    assert!(parsed.is_err());
+}
+
 fn opened(name: &str) -> (tempfile::TempDir, Opened) {
     let (folder, source) = copied(name);
     let opened = File::open(&args_for(source)).expect("opens");

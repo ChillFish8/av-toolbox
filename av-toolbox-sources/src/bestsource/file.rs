@@ -41,11 +41,12 @@ use avtbx_bestsource::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::format::{mapped_format, plane_channels};
+use super::format::{describe_format, mapped_format, plane_channels};
 use crate::shared::{RawColour, colour_of, field_order_of, produced_by};
 
 /// Arguments for `bestsource/file`.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FileArgs {
     /// The media file to decode.
     pub(crate) path: PathBuf,
@@ -61,6 +62,8 @@ pub(crate) struct FileArgs {
 pub(crate) struct Opened {
     video: VideoSource,
     format: FrameFormat,
+    /// The format of the first frame, which every later frame must match.
+    video_format: VideoFormat,
     /// The options the track was opened with, kept to open seekers.
     options: OpenOptions,
     path: PathBuf,
@@ -109,13 +112,14 @@ impl SourceDefinition for File {
         let probed = video.frame(0);
         let probe = probed.map_err(|error| frame_error(&args.path, 0, &error))?;
         let format = format_of(&args.path, &properties, &probe)?;
+        let video_format = probe.format();
+        log_trimmed_size(&args.path, &probe);
         drop(probe);
-
-        log_trimmed_size(&args.path, &properties);
 
         Ok(Opened {
             video,
             format,
+            video_format,
             options,
             path: args.path.clone(),
             time_base: properties.time_base,
@@ -147,6 +151,7 @@ impl SourceDefinition for File {
         let seeker = FileSeeker {
             video,
             format: opened.format,
+            video_format: opened.video_format,
             path: opened.path.clone(),
             time_base: opened.time_base,
             pool: HostPool::new(),
@@ -183,7 +188,11 @@ impl Source<HostSide> for FileSource {
         let frame = decoded.map_err(|error| frame_error(&opened.path, current, &error))?;
         let meta = meta_of(&frame, current, opened.time_base);
         let mut host_frame = context.alloc_host_frame(&opened.format, meta);
-        export_into(&frame, &opened.format, &opened.path, current, &mut host_frame)?;
+        let expected = Expected {
+            format: &opened.format,
+            video_format: &opened.video_format,
+        };
+        export_into(&frame, expected, &opened.path, current, &mut host_frame)?;
 
         opened.next += 1;
 
@@ -195,6 +204,7 @@ impl Source<HostSide> for FileSource {
 pub(crate) struct FileSeeker {
     video: VideoSource,
     format: FrameFormat,
+    video_format: VideoFormat,
     path: PathBuf,
     time_base: (i64, i64),
     pool: HostPool,
@@ -225,7 +235,11 @@ impl Seeker for FileSeeker {
         let frame = decoded.map_err(|error| frame_error(&self.path, current, &error))?;
         let meta = meta_of(&frame, current, self.time_base);
         let mut host_frame = self.pool.alloc_frame(&self.format, meta);
-        export_into(&frame, &self.format, &self.path, current, &mut host_frame)?;
+        let expected = Expected {
+            format: &self.format,
+            video_format: &self.video_format,
+        };
+        export_into(&frame, expected, &self.path, current, &mut host_frame)?;
 
         Ok(host_frame.freeze())
     }
@@ -259,8 +273,8 @@ fn format_of(path: &Path, properties: &VideoProperties, probe: &Frame) -> Result
         return Err(unsupported_format_error(path, &video_format));
     };
 
-    let width = dimension(path, properties.ss_mod_width)?;
-    let height = dimension(path, properties.ss_mod_height)?;
+    let width = dimension(path, probe.ss_mod_width())?;
+    let height = dimension(path, probe.ss_mod_height())?;
     let raw_colour = RawColour {
         range: probe.range(),
         matrix: probe.matrix(),
@@ -283,14 +297,36 @@ fn format_of(path: &Path, properties: &VideoProperties, probe: &Frame) -> Result
     })
 }
 
+/// What every decoded frame of a track must look like.
+#[derive(Clone, Copy)]
+struct Expected<'a> {
+    format: &'a FrameFormat,
+    video_format: &'a VideoFormat,
+}
+
 /// Copies a decoded frame into a host frame's planes, channel by channel.
 fn export_into(
     frame: &Frame,
-    format: &FrameFormat,
+    expected: Expected<'_>,
     path: &Path,
     current: i64,
     host_frame: &mut HostFrameMut,
 ) -> Result<(), StageError> {
+    let format = expected.format;
+    let video_format = expected.video_format;
+    if !same_shape(video_format, format.width, format.height, frame) {
+        let decoded = frame.format();
+        let decoded_size = (frame.ss_mod_width(), frame.ss_mod_height());
+        let expected_size = (format.width, format.height);
+
+        return Err(changed_format_error(
+            path,
+            current,
+            (&decoded, decoded_size),
+            (video_format, expected_size),
+        ));
+    }
+
     let channels = plane_channels(format.layout);
     let mut strides = Vec::with_capacity(channels.len());
     for channel in channels {
@@ -314,6 +350,30 @@ fn export_into(
     let exported = frame.export_planar(&mut target);
 
     exported.map_err(|error| frame_error(path, current, &error))
+}
+
+/// Whether a decoded frame has the format and size the track opened with.
+fn same_shape(expected: &VideoFormat, width: u32, height: u32, frame: &Frame) -> bool {
+    let actual = frame.format();
+
+    shapes_match(
+        expected,
+        (width, height),
+        &actual,
+        (frame.ss_mod_width(), frame.ss_mod_height()),
+    )
+}
+
+fn shapes_match(
+    expected: &VideoFormat,
+    expected_size: (u32, u32),
+    actual: &VideoFormat,
+    actual_size: (i32, i32),
+) -> bool {
+    let same_width = i64::from(expected_size.0) == i64::from(actual_size.0);
+    let same_height = i64::from(expected_size.1) == i64::from(actual_size.1);
+
+    expected == actual && same_width && same_height
 }
 
 /// The bytes in each row of a channel's plane.
@@ -367,19 +427,18 @@ fn frame_rate_of((numerator, denominator): (i64, i64)) -> Option<FrameRate> {
 }
 
 /// Says once when the exported size trims the coded size to a whole multiple of the subsampling.
-fn log_trimmed_size(path: &Path, properties: &VideoProperties) {
-    let trimmed =
-        properties.ss_mod_width != properties.width || properties.ss_mod_height != properties.height;
+fn log_trimmed_size(path: &Path, probe: &Frame) {
+    let trimmed = probe.ss_mod_width() != probe.width() || probe.ss_mod_height() != probe.height();
     if !trimmed {
         return;
     }
 
     tracing::info!(
         path = %path.display(),
-        coded_width = properties.width,
-        coded_height = properties.height,
-        width = properties.ss_mod_width,
-        height = properties.ss_mod_height,
+        coded_width = probe.width(),
+        coded_height = probe.height(),
+        width = probe.ss_mod_width(),
+        height = probe.ss_mod_height(),
         "bestsource trims the frame to a whole multiple of its chroma subsampling"
     );
 }
@@ -429,8 +488,30 @@ fn no_frames_error(path: &Path) -> StageError {
 
 fn unsupported_format_error(path: &Path, format: &VideoFormat) -> StageError {
     let display = path.display();
+    let described = describe_format(format);
     let message = format!(
-        "bestsource decodes {display} as {format:?}, which the pipeline does not carry. Use ffms2/file to convert it on decode."
+        "bestsource decodes {display} as {described}, which the pipeline does not carry. \
+         Use ffms2/file to convert it on decode."
+    );
+
+    StageError::msg(message)
+}
+
+fn changed_format_error(
+    path: &Path,
+    frame: i64,
+    (decoded, decoded_size): (&VideoFormat, (i32, i32)),
+    (opened, opened_size): (&VideoFormat, (u32, u32)),
+) -> StageError {
+    let display = path.display();
+    let decoded_text = describe_format(decoded);
+    let opened_text = describe_format(opened);
+    let (decoded_width, decoded_height) = decoded_size;
+    let (opened_width, opened_height) = opened_size;
+    let message = format!(
+        "frame {frame} of {display} decodes as {decoded_text} {decoded_width}x{decoded_height}, \
+         but the track opened as {opened_text} {opened_width}x{opened_height}, \
+         which bestsource/file cannot carry. Use ffms2/file to convert it on decode."
     );
 
     StageError::msg(message)
@@ -459,7 +540,43 @@ fn past_end_error(path: &Path, index: usize, count: usize) -> StageError {
 
 #[cfg(test)]
 mod tests {
+    use avtbx_bestsource::ColorFamily;
+
     use super::*;
+
+    fn yuv420(bits: i32) -> VideoFormat {
+        VideoFormat {
+            color_family: ColorFamily::Yuv,
+            alpha: false,
+            float: false,
+            bits,
+            sub_sampling_w: 1,
+            sub_sampling_h: 1,
+        }
+    }
+
+    #[test]
+    fn an_identical_shape_passes() {
+        let format = yuv420(8);
+
+        assert!(shapes_match(&format, (64, 48), &format, (64, 48)));
+    }
+
+    #[test]
+    fn a_bit_depth_change_is_refused() {
+        let opened = yuv420(8);
+        let decoded = yuv420(10);
+
+        assert!(!shapes_match(&opened, (64, 48), &decoded, (64, 48)));
+    }
+
+    #[test]
+    fn a_size_change_is_refused() {
+        let format = yuv420(8);
+
+        assert!(!shapes_match(&format, (64, 48), &format, (32, 48)));
+        assert!(!shapes_match(&format, (64, 48), &format, (64, 24)));
+    }
 
     #[test]
     fn a_pts_scales_by_the_time_base_in_seconds() {

@@ -223,7 +223,7 @@ fn run_example_on(name: &str, extra_flags: &[(&str, &str)], clip: &[u8]) -> Deco
     decoded
 }
 
-/// Runs `name` like `run_example_on`, handing back the frame count the run reported with the decoded output.
+/// Writes `clip` as the input, runs `name` with `extra_flags`, and returns the reported frame count with the decoded output.
 fn run_example_counted(name: &str, extra_flags: &[(&str, &str)], clip: &[u8]) -> (u64, Decoded) {
     let folder = tempfile::tempdir().expect("a temp dir");
     let input = folder.path().join("input.y4m");
@@ -271,6 +271,7 @@ fn the_bestsource_example_decodes_the_fixture() {
 
     assert_eq!(frames, 8);
     assert_eq!(decoded.frames.len(), 8);
+
     for frame in &decoded.frames {
         assert_eq!(frame.luma.len(), SIZE * SIZE);
     }

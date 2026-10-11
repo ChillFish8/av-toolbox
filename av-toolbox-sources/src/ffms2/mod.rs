@@ -41,6 +41,7 @@ use crate::shared::{Carried, RawColour, colour_of, field_order_of, produced_by};
 
 /// Arguments for `ffms2/file`.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FileArgs {
     /// The media file to decode.
     pub(crate) path: PathBuf,
@@ -571,6 +572,14 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn unknown_args_are_refused() {
+        let table = serde_json::json!({ "path": "clip.mkv", "index-dir": "indexes" });
+        let parsed = serde_json::from_value::<FileArgs>(table);
+
+        assert!(parsed.is_err());
+    }
 
     fn copied(name: &str) -> (tempfile::TempDir, PathBuf) {
         let folder = tempfile::tempdir().expect("a temp dir");

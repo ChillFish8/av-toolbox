@@ -23,6 +23,33 @@ pub(crate) fn plane_channels(layout: FrameLayout) -> &'static [Channel] {
     }
 }
 
+/// A short readable description of a format, such as `yuv 4:2:0 10 bit`.
+pub(crate) fn describe_format(format: &VideoFormat) -> String {
+    let family = match format.color_family {
+        ColorFamily::Yuv => {
+            let chroma = chroma_text(format.sub_sampling_w, format.sub_sampling_h);
+
+            format!("yuv {chroma}")
+        },
+        ColorFamily::Gray => "gray".to_string(),
+        ColorFamily::Rgb => "rgb".to_string(),
+        ColorFamily::Bayer => "bayer".to_string(),
+        ColorFamily::Unknown => "unknown".to_string(),
+    };
+    let bits = format.bits;
+    let kind = if format.float { " float" } else { "" };
+    let alpha = if format.alpha { " with alpha" } else { "" };
+
+    format!("{family} {bits} bit{kind}{alpha}")
+}
+
+fn chroma_text(shift_w: i32, shift_h: i32) -> String {
+    let horizontal = 4 >> shift_w.clamp(0, 3);
+    let vertical = if shift_h == 0 { horizontal } else { 0 };
+
+    format!("4:{horizontal}:{vertical}")
+}
+
 fn layout_of(format: &VideoFormat) -> Option<FrameLayout> {
     match format.color_family {
         ColorFamily::Yuv => {
@@ -69,6 +96,20 @@ mod tests {
             sub_sampling_w: shift_w,
             sub_sampling_h: shift_h,
         }
+    }
+
+    #[test]
+    fn formats_are_described_in_words() {
+        let float_rgb = VideoFormat {
+            color_family: ColorFamily::Rgb,
+            alpha: true,
+            float: true,
+            ..yuv(32, 0, 0)
+        };
+
+        assert_eq!(describe_format(&yuv(8, 2, 0)), "yuv 4:1:1 8 bit");
+        assert_eq!(describe_format(&yuv(10, 1, 1)), "yuv 4:2:0 10 bit");
+        assert_eq!(describe_format(&float_rgb), "rgb 32 bit float with alpha");
     }
 
     #[test]

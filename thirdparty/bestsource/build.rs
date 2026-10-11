@@ -101,7 +101,8 @@ fn link_dynamic() {
         Ok(libraries) => libraries,
         Err(reason) => {
             let fix = "Install the FFmpeg 9 and xxHash development packages, or enable the `static` feature";
-            skip(&format!("{reason}. {fix}"));
+            let reason = format!("{reason}. {fix}");
+            skip(&reason);
             return;
         },
     };
@@ -162,7 +163,8 @@ fn probe_system_libraries(emit_metadata: bool) -> Result<Vec<pkg_config::Library
         match probe {
             Ok(library) => libraries.push(library),
             Err(error) => {
-                warn_lines(&error.to_string());
+                let text = error.to_string();
+                warn_lines(&text);
                 return Err(format!("pkg-config found no {name} {least_version} or newer"));
             },
         }
