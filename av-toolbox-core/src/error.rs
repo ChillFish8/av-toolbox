@@ -57,6 +57,8 @@ pub enum RegistryError {
     InvalidDemand { identifier: String, input: &'static str },
     #[error("a demand kind named {kind} is already registered")]
     DuplicateDemand { kind: &'static str },
+    #[error("a probe kind named {kind} is already registered")]
+    DuplicateProbe { kind: &'static str },
     #[error("a provider of {kind} demands is already registered")]
     DuplicateProvider { kind: &'static str },
     #[error("stage {identifier} declares the artefact {name} more than once")]

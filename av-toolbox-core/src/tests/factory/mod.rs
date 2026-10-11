@@ -164,7 +164,7 @@ pub(super) fn capabilities() -> Capabilities {
         .build()
 }
 
-pub(super) fn frame_format() -> FrameFormat {
+pub(crate) fn frame_format() -> FrameFormat {
     FrameFormat {
         width: 64,
         height: 64,

@@ -6,8 +6,10 @@ use serde_json::Value;
 use crate::factory::Definition;
 use crate::{
     AnyDemand,
+    AnyProbe,
     ArtefactSinkDefinition,
     BuildStageError,
+    CombineProbeFn,
     Crossing,
     DemandDefinition,
     DemandKind,
@@ -31,11 +33,15 @@ use crate::{
     PreparedSink,
     PreparedSource,
     PreparedStage,
+    ProbeDefinition,
+    ProbeKind,
+    ProbedValue,
     ProviderDefinition,
     ProviderSide,
     RegistryError,
     RequestError,
     Residency,
+    RunProbeFn,
     SinkDefinition,
     SourceDefinition,
     StageDefinition,
@@ -43,6 +49,7 @@ use crate::{
     StageFactory,
     StageInfo,
     StageKind,
+    probe,
 };
 
 type Factories<P> = HashMap<String, Box<dyn StageFactory<P>>>;
@@ -52,6 +59,15 @@ struct RegisteredDemand {
     kind: DemandKind,
     schema: Schema,
     describe: fn(&AnyDemand) -> String,
+}
+
+/// A registered probe kind and the erased functions that run it.
+struct RegisteredProbe {
+    kind: ProbeKind,
+    describe: fn(&AnyProbe) -> String,
+    show: fn(&ProbedValue) -> String,
+    run: RunProbeFn,
+    combine: CombineProbeFn,
 }
 
 /// The provider registered for one demand kind.
@@ -77,6 +93,7 @@ pub struct PipelineRegistry {
     artefact_sinks: Factories<dyn PreparedArtefactSink>,
     demands: HashMap<&'static str, RegisteredDemand>,
     served: HashMap<DemandKind, RegisteredProvider>,
+    probes: HashMap<&'static str, RegisteredProbe>,
 }
 
 impl PipelineRegistry {
@@ -303,6 +320,56 @@ impl PipelineRegistry {
         self.demands.insert(kind.name(), registered);
 
         Ok(())
+    }
+
+    /// Registers a probe kind, rejecting a second kind of the same name.
+    pub fn register_probe<P: ProbeDefinition>(&mut self) -> Result<(), RegistryError> {
+        let kind = ProbeKind::of::<P>();
+        if self.probes.contains_key(kind.name()) {
+            return Err(RegistryError::DuplicateProbe { kind: kind.name() });
+        }
+
+        let registered = RegisteredProbe {
+            kind,
+            describe: probe::describe_as::<P>,
+            show: probe::show_as::<P>,
+            run: probe::run_as::<P>,
+            combine: probe::combine_as::<P>,
+        };
+        self.probes.insert(kind.name(), registered);
+
+        Ok(())
+    }
+
+    /// The registered probe kind named `name`.
+    pub fn probe_kind(&self, name: &str) -> Option<ProbeKind> {
+        self.probes.get(name).map(|registered| registered.kind)
+    }
+
+    /// A short description of `probe`, or its kind's name when the kind is not registered.
+    pub fn describe_probe(&self, probe: &AnyProbe) -> String {
+        let kind = probe.kind();
+
+        match self.probes.get(kind.name()) {
+            Some(registered) => (registered.describe)(probe),
+            None => kind.name().to_string(),
+        }
+    }
+
+    pub fn probe_runner(&self, kind: ProbeKind) -> Option<RunProbeFn> {
+        self.probes.get(kind.name()).map(|registered| registered.run)
+    }
+
+    pub fn probe_combiner(&self, kind: ProbeKind) -> Option<CombineProbeFn> {
+        self.probes.get(kind.name()).map(|registered| registered.combine)
+    }
+
+    /// What a probe of `kind` found, written out for a log line.
+    pub fn show_probed(&self, kind: ProbeKind, value: &ProbedValue) -> String {
+        match self.probes.get(kind.name()) {
+            Some(registered) => (registered.show)(value),
+            None => kind.name().to_string(),
+        }
     }
 
     /// The registered demand kind named `name`.

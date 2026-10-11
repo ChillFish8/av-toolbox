@@ -36,6 +36,7 @@ mod meta;
 mod open;
 mod parallelism;
 mod placement;
+mod probe;
 mod provider;
 mod provision;
 mod registry;
@@ -106,6 +107,17 @@ pub use self::meta::{MetaInputs, MetaItem, MetaSink, end_meta_sink, record_meta_
 pub use self::open::OpenSlot;
 pub use self::parallelism::{ChunkRequest, Granularity, Parallelism};
 pub use self::placement::{PathEdge, PathNode, PathView, PlaceError, PlaceFn};
+pub use self::probe::{
+    AnyProbe,
+    CombineProbeFn,
+    InputProbe,
+    ProbeDefinition,
+    ProbeKind,
+    Probed,
+    ProbedValue,
+    RunProbeFn,
+    Seeker,
+};
 pub use self::provider::{
     DemandsFn,
     LayerDemand,
