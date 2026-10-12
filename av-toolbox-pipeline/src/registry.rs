@@ -76,4 +76,22 @@ mod tests {
             assert!(summary.ends_with('.'), "{identifier} has the summary {summary:?}");
         }
     }
+
+    #[test]
+    fn every_built_in_description_has_a_blank_line_after_its_summary() {
+        let registry = registry().expect("the built-in stages register");
+
+        for info in registry.stages() {
+            let description = info.description();
+            let identifier = info.full_identifier();
+            let second_line = description.lines().nth(1);
+
+            if let Some(line) = second_line {
+                assert!(
+                    line.trim().is_empty(),
+                    "{identifier} has the second line {line:?}"
+                );
+            }
+        }
+    }
 }

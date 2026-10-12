@@ -46,15 +46,15 @@ struct Artefact {
 
 /// Every stage as one pretty-printed JSON array.
 pub(super) fn render(stages: &[StageInfo<'_>]) -> String {
-    let described: Vec<Described<'_>> = stages.iter().map(described).collect();
-    serde_json::to_string_pretty(&described).expect("a description is plain JSON")
+    let descriptions: Vec<Described<'_>> = stages.iter().map(described).collect();
+    serde_json::to_string_pretty(&descriptions).expect("a description is plain JSON")
 }
 
 fn described<'a>(info: &StageInfo<'a>) -> Described<'a> {
     let tags = info.tags().iter().map(tag_name).collect();
 
     let signature = info.inputs();
-    let inputs = inputs(signature);
+    let stage_inputs = inputs(signature);
 
     let stage_artefacts = info.artefacts();
     let artefacts = stage_artefacts.declared().iter().map(artefact).collect();
@@ -65,7 +65,7 @@ fn described<'a>(info: &StageInfo<'a>) -> Described<'a> {
         tags,
         summary: info.summary(),
         details: info.details(),
-        inputs,
+        inputs: stage_inputs,
         artefacts,
         schema: info.schema(),
     }

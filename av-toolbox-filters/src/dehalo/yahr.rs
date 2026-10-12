@@ -239,7 +239,7 @@ impl StageDefinition for Yahr {
 
     fn description() -> &'static str {
         "Removes halos by capping detail at that of a warp-sharpened copy, as YAHR does.\n\n\
-         Warp-sharpening thins edges by pulling nearby pixels toward them."
+         Warp-sharpening thins edges by pulling nearby pixels towards them."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

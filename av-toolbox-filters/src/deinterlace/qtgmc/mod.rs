@@ -230,8 +230,8 @@ impl StageDefinition for Qtgmc {
 
     fn description() -> &'static str {
         "Deinterlaces with motion-compensated smoothing, as QTGMC does.\n\n\
-         Slower than `deinterlace/bwdif` but steadier, with less shimmer. It can also clean up progressive \
-         frames or repair the output of another deinterlacer."
+         It is slower than `deinterlace/bwdif` but steadier, with less shimmer. It can also clean up \
+         progressive frames or repair the output of another deinterlacer."
     }
 
     fn tags() -> &'static [Tag] {

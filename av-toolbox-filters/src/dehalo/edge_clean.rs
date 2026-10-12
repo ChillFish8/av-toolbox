@@ -393,7 +393,7 @@ impl StageDefinition for EdgeClean {
 
     fn description() -> &'static str {
         "Cleans halos and specks from around edges, as havsfunc's `EdgeCleaner` does.\n\n\
-         It warp-sharpens the clip, which thins edges by pulling nearby pixels toward them."
+         It warp-sharpens the clip, which thins edges by pulling nearby pixels towards them."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

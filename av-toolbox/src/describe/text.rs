@@ -11,6 +11,9 @@ const PIPED_WIDTH: usize = 100;
 /// How far a description sits from the left edge, under the name it describes.
 const DESCRIPTION_INDENT: usize = 6;
 
+/// The widest argument shape that stays on one line and sets the column the notes line up in.
+const MAX_SHAPE_COLUMN: usize = 50;
+
 /// The narrowest a wrapped line may get, however small the terminal.
 const MIN_LINE_WIDTH: usize = 40;
 
@@ -37,10 +40,10 @@ pub(super) fn render(stages: &[StageInfo<'_>], width: usize) -> String {
 }
 
 fn render_stage(info: &StageInfo<'_>, width: usize) -> String {
-    let header = header(info);
+    let heading = header(info);
     let summary_line = info.summary();
     let summary = wrap(summary_line, width, 0);
-    let mut drawn = format!("{header}\n\n{summary}");
+    let mut drawn = format!("{heading}\n\n{summary}");
 
     if let Some(details) = info.details() {
         let wrapped = wrap(details, width, 0);
@@ -159,15 +162,27 @@ fn render_arguments(arguments: &[Argument], width: usize) -> String {
     let shape_width = arguments
         .iter()
         .map(|argument| argument.shape.chars().count())
+        .filter(|&length| length <= MAX_SHAPE_COLUMN)
         .max()
         .unwrap_or(0);
+
+    let shape_column = 2 + name_width + 2;
+    let available = width.saturating_sub(shape_column).max(MIN_LINE_WIDTH);
+    let margin = " ".repeat(shape_column);
 
     let mut drawn = String::new();
     for argument in arguments {
         let name = &argument.name;
         let shape = &argument.shape;
         let note = argument_note(argument);
-        let row = format!("  {name:<name_width$}  {shape:<shape_width$}  {note}");
+        let shape_length = shape.chars().count();
+        let row = if shape_length > MAX_SHAPE_COLUMN {
+            let lines = wrap_shape(shape, available);
+            let wrapped_shape = lines.join(&format!("\n{margin}"));
+            format!("  {name:<name_width$}  {wrapped_shape}  {note}")
+        } else {
+            format!("  {name:<name_width$}  {shape:<shape_width$}  {note}")
+        };
         let trimmed = row.trim_end();
         drawn.push_str(trimmed);
         drawn.push('\n');
@@ -181,6 +196,37 @@ fn render_arguments(arguments: &[Argument], width: usize) -> String {
     }
 
     drawn
+}
+
+/// Splits `shape` into lines of at most `available` columns, breaking after a `|`.
+///
+/// A single option longer than `available` stays whole on its own line.
+fn wrap_shape(shape: &str, available: usize) -> Vec<String> {
+    let options: Vec<&str> = shape.split(" | ").collect();
+    let last = options.len() - 1;
+    let mut lines = Vec::new();
+    let mut line = String::new();
+
+    for (index, option) in options.iter().enumerate() {
+        let unit = if index == last {
+            option.to_string()
+        } else {
+            format!("{option} |")
+        };
+        let fits = line.is_empty() || line.chars().count() + 1 + unit.chars().count() <= available;
+        if !fits {
+            lines.push(std::mem::take(&mut line));
+        }
+
+        if !line.is_empty() {
+            line.push(' ');
+        }
+
+        line.push_str(&unit);
+    }
+
+    lines.push(line);
+    lines
 }
 
 /// `required`, the default value, or nothing for an argument that may be left out.
@@ -281,6 +327,43 @@ mod tests {
             "  preset  fast | slow      default fast\n",
             "      How much quality is traded for speed.\n",
             "  lambda  float, optional\n",
+        );
+
+        assert_eq!(drawn, expected);
+    }
+
+    #[test]
+    fn a_long_shape_wraps_under_the_shape_column_with_its_note_last() {
+        let long_shape = "a | b | c | d | e | f | g | h | i | j | k | l | m | n | o | p | q | r | s | t";
+        let arguments = [
+            argument("depth", "integer", true, None, None),
+            argument("format", long_shape, true, None, None),
+            argument("preset", "fast | slow", false, Some("fast"), None),
+        ];
+
+        let drawn = render_arguments(&arguments, 40);
+        let expected = concat!(
+            "  depth   integer      required\n",
+            "  format  a | b | c | d | e | f | g | h | i | j |\n",
+            "          k | l | m | n | o | p | q | r | s | t  required\n",
+            "  preset  fast | slow  default fast\n",
+        );
+
+        assert_eq!(drawn, expected);
+    }
+
+    #[test]
+    fn a_shape_of_44_characters_aligns_with_the_short_shapes() {
+        let shape = "one of string | list of 3 integers | objects";
+        let arguments = [
+            argument("colour", shape, true, None, None),
+            argument("frames", "integer", true, None, None),
+        ];
+
+        let drawn = render_arguments(&arguments, 100);
+        let expected = format!(
+            "  colour  {shape}  required\n  frames  {:<44}  required\n",
+            "integer"
         );
 
         assert_eq!(drawn, expected);
