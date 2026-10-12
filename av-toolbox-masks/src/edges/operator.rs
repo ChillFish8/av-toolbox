@@ -39,6 +39,8 @@ pub(crate) trait EdgeOperator: 'static {
     const OPERATOR: Operator;
 
     fn identifier() -> &'static str;
+
+    fn description() -> &'static str;
 }
 
 pub(crate) struct Kirsch;
@@ -48,6 +50,10 @@ impl EdgeOperator for Kirsch {
 
     fn identifier() -> &'static str {
         "kirsch"
+    }
+
+    fn description() -> &'static str {
+        "Finds edges in the luma by the strongest response of 8 directional kernels."
     }
 }
 
@@ -59,6 +65,10 @@ impl EdgeOperator for Prewitt {
     fn identifier() -> &'static str {
         "prewitt"
     }
+
+    fn description() -> &'static str {
+        "Finds edges in the luma by the strength of the Prewitt gradient."
+    }
 }
 
 pub(crate) struct Sobel;
@@ -68,6 +78,10 @@ impl EdgeOperator for Sobel {
 
     fn identifier() -> &'static str {
         "sobel"
+    }
+
+    fn description() -> &'static str {
+        "Finds edges in the luma by the strength of the Sobel gradient."
     }
 }
 
@@ -151,6 +165,10 @@ impl<O: EdgeOperator> StageDefinition for Edges<O> {
 
     fn identifier() -> &'static str {
         O::identifier()
+    }
+
+    fn description() -> &'static str {
+        O::description()
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

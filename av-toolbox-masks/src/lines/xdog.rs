@@ -385,6 +385,10 @@ impl StageDefinition for Xdog {
         "xdog"
     }
 
+    fn description() -> &'static str {
+        "Finds line art by taking a wide blur of the luma away from a narrow one."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

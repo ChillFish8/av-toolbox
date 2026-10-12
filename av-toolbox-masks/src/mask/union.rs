@@ -129,6 +129,10 @@ impl StageDefinition for Union {
         "union"
     }
 
+    fn description() -> &'static str {
+        "Joins masks, selecting every pixel any of them selects."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

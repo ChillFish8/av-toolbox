@@ -234,6 +234,10 @@ impl StageDefinition for DetailMask {
         "mask"
     }
 
+    fn description() -> &'static str {
+        "Marks texture and edges in the luma."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

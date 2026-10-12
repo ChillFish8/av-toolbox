@@ -204,6 +204,10 @@ impl StageDefinition for Vote {
         "vote"
     }
 
+    fn description() -> &'static str {
+        "Selects the pixels that enough of its input masks agree on."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

@@ -275,6 +275,10 @@ impl StageDefinition for Canny {
         "canny"
     }
 
+    fn description() -> &'static str {
+        "Finds thin, connected edges with Canny's method."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

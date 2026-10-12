@@ -114,6 +114,10 @@ impl StageDefinition for Threshold {
         "threshold"
     }
 
+    fn description() -> &'static str {
+        "Hardens a mask so every pixel is either fully selected or background."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

@@ -284,6 +284,10 @@ impl StageDefinition for Neo {
         "neo"
     }
 
+    fn description() -> &'static str {
+        "Marks fine detail and lines in the luma."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

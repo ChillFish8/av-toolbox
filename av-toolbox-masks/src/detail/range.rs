@@ -171,6 +171,10 @@ impl StageDefinition for Range {
         "range"
     }
 
+    fn description() -> &'static str {
+        "Marks where the luma changes within a small neighbourhood."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

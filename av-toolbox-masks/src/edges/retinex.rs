@@ -310,6 +310,10 @@ impl StageDefinition for Retinex {
         "retinex"
     }
 
+    fn description() -> &'static str {
+        "Finds edges after evening out the lighting, bringing out lines in dark areas."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

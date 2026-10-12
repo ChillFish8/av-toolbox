@@ -301,6 +301,10 @@ impl StageDefinition for Adaptive {
         "adaptive"
     }
 
+    fn description() -> &'static str {
+        "Finds dark strokes by comparing each sample with its neighbourhood."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }
