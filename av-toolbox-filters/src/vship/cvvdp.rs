@@ -103,6 +103,12 @@ impl StageDefinition for Cvvdp {
         "cvvdp"
     }
 
+    fn description() -> &'static str {
+        "Scores how visible the differences from a reference are on a chosen display.\n\n\
+         Scores run up to 10, which means no visible difference. By default it takes motion across frames \
+         into account."
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Evaluation]
     }

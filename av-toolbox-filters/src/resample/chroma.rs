@@ -276,6 +276,11 @@ impl StageDefinition for Chroma {
         "chroma"
     }
 
+    fn description() -> &'static str {
+        "Changes how many colour samples a YUV clip stores, such as 4:2:0 to 4:4:4.\n\n\
+         It can also move where the colour samples sit relative to the brightness samples."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

@@ -105,6 +105,10 @@ impl<K: ResizeKernel> StageDefinition for Resize<K> {
         K::identifier()
     }
 
+    fn description() -> &'static str {
+        K::description()
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

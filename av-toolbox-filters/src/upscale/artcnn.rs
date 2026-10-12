@@ -214,6 +214,12 @@ impl StageDefinition for Artcnn {
         "artcnn"
     }
 
+    fn description() -> &'static str {
+        "Doubles a clip's size, upscaling brightness with the ArtCNN neural network.\n\n\
+         It is trained for anime. Colour is resized with a plain bicubic filter, and the stage uses up to \
+         about 1 GiB of GPU memory."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Stream
     }

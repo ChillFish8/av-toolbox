@@ -147,6 +147,10 @@ impl StageDefinition for Depth {
         "depth"
     }
 
+    fn description() -> &'static str {
+        "Converts a clip to a different bit depth, dithering when the depth is lowered."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

@@ -150,6 +150,10 @@ impl StageDefinition for Extract {
         "extract"
     }
 
+    fn description() -> &'static str {
+        "Pulls one plane, or the U and V pair, out of a clip as a clip of its own."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

@@ -63,6 +63,10 @@ impl StageDefinition for Ssimulacra2 {
         "ssimulacra2"
     }
 
+    fn description() -> &'static str {
+        "Scores how close each frame looks to a reference, where 100 means identical."
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Evaluation]
     }

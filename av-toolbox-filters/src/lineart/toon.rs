@@ -167,6 +167,10 @@ impl StageDefinition for Toon {
         "toon"
     }
 
+    fn description() -> &'static str {
+        "Deepens dark lines in proportion to how dark they already are, for line art."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

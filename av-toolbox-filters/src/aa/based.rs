@@ -358,6 +358,11 @@ impl StageDefinition for Based {
         "based"
     }
 
+    fn description() -> &'static str {
+        "Anti-aliases luma by doubling it with ArtCNN, running EEDI3, then halving it.\n\n\
+         Other planes pass through unchanged. It is slower than `aa/eedi3` alone."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Stream
     }

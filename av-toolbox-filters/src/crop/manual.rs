@@ -40,6 +40,10 @@ impl StageDefinition for Manual {
         "manual"
     }
 
+    fn description() -> &'static str {
+        "Crops a fixed number of pixels from each edge of the frame."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

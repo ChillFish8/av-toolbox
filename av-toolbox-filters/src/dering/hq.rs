@@ -609,6 +609,12 @@ impl StageDefinition for Hq {
         "hq"
     }
 
+    fn description() -> &'static str {
+        "Smooths ringing around edges, as havsfunc's `HQDeringmod` does.\n\n\
+         Ringing is the faint ripples that compression leaves beside sharp edges. Only the area just around \
+         edges is smoothed."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

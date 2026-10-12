@@ -375,6 +375,10 @@ impl StageDefinition for Eedi3 {
         "eedi3"
     }
 
+    fn description() -> &'static str {
+        "Smooths jagged edges by rebuilding rows along traced edge paths, as EEDI3 does."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

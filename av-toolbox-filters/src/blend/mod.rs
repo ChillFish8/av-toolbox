@@ -60,6 +60,11 @@ impl StageDefinition for Masked {
         "masked"
     }
 
+    fn description() -> &'static str {
+        "Combines two clips through a mask, taking `overlay` where it is set.\n\n\
+         Elsewhere the result is `base`, and a partly set mask mixes the two."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

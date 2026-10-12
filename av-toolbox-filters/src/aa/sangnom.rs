@@ -119,6 +119,10 @@ impl StageDefinition for Sangnom {
         "sangnom"
     }
 
+    fn description() -> &'static str {
+        "Smooths jagged edges by rebuilding rows along their edges, as SangNom2 does."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

@@ -83,6 +83,10 @@ impl StageDefinition for Butteraugli {
         "butteraugli"
     }
 
+    fn description() -> &'static str {
+        "Scores how different each frame looks from a reference, where 0 means identical."
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Evaluation]
     }

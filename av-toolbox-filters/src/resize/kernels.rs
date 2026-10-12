@@ -12,6 +12,8 @@ pub(crate) trait ResizeKernel: 'static {
 
     fn identifier() -> &'static str;
 
+    fn description() -> &'static str;
+
     fn window(args: &Self::Args) -> Window;
 
     /// The kernel the arguments describe, or an error when they describe none.
@@ -223,6 +225,10 @@ impl ResizeKernel for Point {
         "point"
     }
 
+    fn description() -> &'static str {
+        "Resizes a clip by copying the nearest sample, keeping hard pixel edges."
+    }
+
     fn window(args: &Self::Args) -> Window {
         window_of(args)
     }
@@ -241,6 +247,10 @@ impl ResizeKernel for Bilinear {
         "bilinear"
     }
 
+    fn description() -> &'static str {
+        "Resizes a clip with bilinear filtering, which is fast but soft."
+    }
+
     fn window(args: &Self::Args) -> Window {
         window_of(args)
     }
@@ -257,6 +267,10 @@ impl ResizeKernel for Bicubic {
 
     fn identifier() -> &'static str {
         "bicubic"
+    }
+
+    fn description() -> &'static str {
+        "Resizes a clip with a bicubic filter whose blur and sharpness can be tuned."
     }
 
     fn window(args: &Self::Args) -> Window {
@@ -284,6 +298,10 @@ impl ResizeKernel for Lanczos {
         "lanczos"
     }
 
+    fn description() -> &'static str {
+        "Resizes a clip with Lanczos filtering, which is sharp but can leave faint halos."
+    }
+
     fn window(args: &Self::Args) -> Window {
         Window {
             width: args.width,
@@ -309,6 +327,10 @@ impl ResizeKernel for Spline16 {
         "spline16"
     }
 
+    fn description() -> &'static str {
+        "Resizes a clip with a Spline16 filter, a little softer than Spline36."
+    }
+
     fn window(args: &Self::Args) -> Window {
         window_of(args)
     }
@@ -327,6 +349,10 @@ impl ResizeKernel for Spline36 {
         "spline36"
     }
 
+    fn description() -> &'static str {
+        "Resizes a clip with a Spline36 filter, a sharp all-round choice."
+    }
+
     fn window(args: &Self::Args) -> Window {
         window_of(args)
     }
@@ -343,6 +369,10 @@ impl ResizeKernel for Spline64 {
 
     fn identifier() -> &'static str {
         "spline64"
+    }
+
+    fn description() -> &'static str {
+        "Resizes a clip with a Spline64 filter, slightly sharper than Spline36."
     }
 
     fn window(args: &Self::Args) -> Window {

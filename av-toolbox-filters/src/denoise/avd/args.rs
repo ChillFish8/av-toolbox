@@ -62,6 +62,7 @@ pub(crate) enum EngineOptions {
 pub(crate) trait AvdArgs: DeserializeOwned + JsonSchema + Send + Sync + 'static {
     const IDENTIFIER: &'static str;
     const STAGE: &'static str;
+    const DESCRIPTION: &'static str;
 
     fn planes(&self) -> Option<&[ChannelName]>;
 
@@ -221,6 +222,8 @@ impl NlmeansArgs {
 impl AvdArgs for NlmeansArgs {
     const IDENTIFIER: &'static str = "nlmeans";
     const STAGE: &'static str = "av-denoise/nlmeans";
+    const DESCRIPTION: &'static str =
+        "Removes noise by blending each patch of the picture with similar patches nearby.";
 
     fn planes(&self) -> Option<&[ChannelName]> {
         self.planes.as_deref()
@@ -306,6 +309,8 @@ impl NlmeansHqArgs {
 impl AvdArgs for NlmeansHqArgs {
     const IDENTIFIER: &'static str = "nlmeans-hq";
     const STAGE: &'static str = "av-denoise/nlmeans-hq";
+    const DESCRIPTION: &'static str =
+        "Removes noise by blending similar patches, scaled to the noise measured in each frame.";
 
     fn planes(&self) -> Option<&[ChannelName]> {
         self.planes.as_deref()
@@ -455,6 +460,10 @@ fn psy_needs_enabling(name: &str) -> StageError {
 impl AvdArgs for Nl4dArgs {
     const IDENTIFIER: &'static str = "nl4d";
     const STAGE: &'static str = "av-denoise/nl4d";
+    const DESCRIPTION: &'static str =
+        "Removes noise by filtering groups of matching blocks across neighbouring frames.\n\n\
+         It can hand over the grain it removed from luma as an AV1 film grain table, so an encoder can add \
+         similar grain back.";
 
     fn artefacts() -> &'static [ArtefactDecl] {
         ARTEFACTS

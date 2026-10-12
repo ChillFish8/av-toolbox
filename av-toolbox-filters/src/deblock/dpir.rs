@@ -504,6 +504,10 @@ impl StageDefinition for Dpir {
         "dpir"
     }
 
+    fn description() -> &'static str {
+        "Removes compression blocking with the DPIR neural network."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Stream
     }

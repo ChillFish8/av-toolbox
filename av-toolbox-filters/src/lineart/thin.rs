@@ -164,6 +164,10 @@ impl StageDefinition for Thin {
         "thin"
     }
 
+    fn description() -> &'static str {
+        "Thins dark lines by warping the picture around them towards their centre."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

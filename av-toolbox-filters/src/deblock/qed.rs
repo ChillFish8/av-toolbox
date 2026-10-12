@@ -336,6 +336,12 @@ impl StageDefinition for Qed {
         "qed"
     }
 
+    fn description() -> &'static str {
+        "Removes compression blocking with two H.264 deblock passes, as Deblock_QED does.\n\n\
+         Block borders take the first pass, and the second pass's change is smoothed into each block's \
+         interior."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

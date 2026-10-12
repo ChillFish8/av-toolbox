@@ -367,6 +367,12 @@ impl StageDefinition for Match {
         "match"
     }
 
+    fn description() -> &'static str {
+        "Rebuilds whole film frames from telecined video by pairing up matching fields.\n\n\
+         Telecine spreads film frames across interlaced fields to raise the frame rate. Follow this with \
+         `ivtc/decimate` to drop the duplicate frames it leaves."
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Deinterlace]
     }

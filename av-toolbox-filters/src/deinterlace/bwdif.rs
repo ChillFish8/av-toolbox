@@ -236,6 +236,10 @@ impl StageDefinition for Bwdif {
         "bwdif"
     }
 
+    fn description() -> &'static str {
+        "Deinterlaces by filling missing rows from nearby rows and fields, as bwdif does."
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Deinterlace]
     }

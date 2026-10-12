@@ -208,6 +208,10 @@ impl StageDefinition for Pp7 {
         "pp7"
     }
 
+    fn description() -> &'static str {
+        "Removes compression blocking by dropping weak frequency detail, as pp7 does."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

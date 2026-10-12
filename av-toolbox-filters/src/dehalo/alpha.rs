@@ -461,6 +461,10 @@ impl StageDefinition for Alpha {
         "alpha"
     }
 
+    fn description() -> &'static str {
+        "Removes halos around edges, as havsfunc's `DeHalo_alpha` does."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

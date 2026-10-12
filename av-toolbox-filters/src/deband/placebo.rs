@@ -251,6 +251,11 @@ impl StageDefinition for Placebo {
         "placebo"
     }
 
+    fn description() -> &'static str {
+        "Smooths banding in gradients, then adds grain to hide it, as libplacebo does.\n\n\
+         Banding is the visible steps that compression leaves in smooth gradients such as skies."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

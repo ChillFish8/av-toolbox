@@ -120,6 +120,10 @@ impl StageDefinition for Vinverse {
         "vinverse"
     }
 
+    fn description() -> &'static str {
+        "Smooths away comb-like stripes left on moving edges after deinterlacing."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

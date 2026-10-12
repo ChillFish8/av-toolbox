@@ -486,6 +486,11 @@ impl StageDefinition for Fine {
         "fine"
     }
 
+    fn description() -> &'static str {
+        "Removes halos only near strong edges, as havsfunc's `FineDehalo` does.\n\n\
+         It runs `dehalo/alpha` in a band around those edges, so detail elsewhere is left alone."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

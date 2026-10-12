@@ -115,6 +115,12 @@ impl StageDefinition for Auto {
         "auto"
     }
 
+    fn description() -> &'static str {
+        "Finds and removes the black bars around the picture.\n\n\
+         The bars are measured once, on frames spread across the source, and the same crop applies to the \
+         whole clip. Place it before any stage that changes the frame size."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

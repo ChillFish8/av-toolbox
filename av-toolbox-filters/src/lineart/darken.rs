@@ -136,6 +136,10 @@ impl StageDefinition for Darken {
         "darken"
     }
 
+    fn description() -> &'static str {
+        "Darkens thin dark lines, mainly for anime and other line art."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

@@ -214,6 +214,10 @@ impl StageDefinition for H264 {
         "h264"
     }
 
+    fn description() -> &'static str {
+        "Removes compression blocking with H.264's in-loop deblocking filter."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

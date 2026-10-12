@@ -425,6 +425,10 @@ impl StageDefinition for Merge {
         "merge"
     }
 
+    fn description() -> &'static str {
+        "Builds a clip by taking each of its planes from one of several input clips."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

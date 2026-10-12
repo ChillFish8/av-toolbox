@@ -72,6 +72,10 @@ impl<A: AvdArgs> StageDefinition for Denoise<A> {
         A::IDENTIFIER
     }
 
+    fn description() -> &'static str {
+        A::DESCRIPTION
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Denoise]
     }

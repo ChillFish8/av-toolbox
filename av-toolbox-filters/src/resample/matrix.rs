@@ -337,6 +337,11 @@ impl StageDefinition for Matrix {
         "matrix"
     }
 
+    fn description() -> &'static str {
+        "Converts a clip between RGB and YUV.\n\n\
+         YUV must be 4:4:4, so run `resample/chroma` first on a clip with subsampled colour."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

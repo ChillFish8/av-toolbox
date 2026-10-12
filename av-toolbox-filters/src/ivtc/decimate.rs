@@ -285,6 +285,12 @@ impl StageDefinition for Decimate {
         "decimate"
     }
 
+    fn description() -> &'static str {
+        "Drops the most duplicate-looking frame from every cycle, lowering the frame rate.\n\n\
+         Run it after `ivtc/match` to bring telecined video back to its film frame rate, such as 29.97 to \
+         23.976 fps."
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Deinterlace]
     }

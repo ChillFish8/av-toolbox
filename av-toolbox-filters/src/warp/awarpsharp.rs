@@ -208,6 +208,10 @@ impl StageDefinition for Awarpsharp {
         "awarpsharp"
     }
 
+    fn description() -> &'static str {
+        "Sharpens edges by pulling nearby samples towards them, which also thins lines."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }
