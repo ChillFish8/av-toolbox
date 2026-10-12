@@ -185,7 +185,8 @@ such as standard input can only be read once.
 
 ```bash
 av-toolbox list-stages
-av-toolbox list-stages y4m/pipe
+av-toolbox list-stages --kind filter
+av-toolbox describe y4m/pipe
 av-toolbox list-devices
 ```
 

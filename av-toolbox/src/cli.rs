@@ -1,6 +1,7 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+use av_toolbox_core::StageKind;
 use av_toolbox_gpu::{Accelerator, Device, default_accelerators};
 use clap::{Parser, Subcommand, ValueEnum};
 use codespan_reporting::term::termcolor::ColorChoice;
@@ -191,7 +192,32 @@ fn parse_frame_budget(raw: &str) -> Result<usize, String> {
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct ListStagesArgs {}
+pub(crate) struct ListStagesArgs {
+    /// Only list stages of this kind. Can be given many times.
+    #[arg(long = "kind", value_enum, value_name = "KIND")]
+    pub(crate) kinds: Vec<KindFilter>,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
+pub(crate) enum KindFilter {
+    Source,
+    Filter,
+    Mask,
+    Sink,
+    Provider,
+}
+
+impl KindFilter {
+    pub(crate) fn stage_kind(self) -> StageKind {
+        match self {
+            Self::Source => StageKind::Source,
+            Self::Filter => StageKind::Filter,
+            Self::Mask => StageKind::Mask,
+            Self::Sink => StageKind::Sink,
+            Self::Provider => StageKind::Provider,
+        }
+    }
+}
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct DescribeArgs {

@@ -164,7 +164,7 @@ fn list_stages_shows_each_providers_kind_and_side() {
             .find(|line| line.starts_with(identifier))
             .expect("the provider is listed");
 
-        row.split_whitespace().collect()
+        row.split_whitespace().take(3).collect()
     };
 
     assert_eq!(
@@ -1236,4 +1236,14 @@ fn describe_json_for_an_unknown_stage_prints_nothing() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(text(&output.stderr).contains("did you mean y4m/stdout?"));
+}
+
+#[test]
+fn list_stages_filters_by_kind() {
+    let output = toolbox(&["list-stages", "--kind", "sink"]);
+    let stdout = text(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.contains("y4m/stdout"), "{stdout}");
+    assert!(!stdout.contains("resize/bicubic"), "{stdout}");
 }
