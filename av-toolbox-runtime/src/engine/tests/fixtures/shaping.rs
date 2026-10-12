@@ -76,6 +76,10 @@ impl StageDefinition for Masking {
         "masking"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }
@@ -177,6 +181,10 @@ impl StageDefinition for Multiplying {
 
     fn identifier() -> &'static str {
         "multiplying"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

@@ -30,6 +30,10 @@ macro_rules! fixture_source {
                 $identifier
             }
 
+            fn description() -> &'static str {
+                "A stage used by tests."
+            }
+
             fn inputs() -> &'static InputSignature {
                 const SIGNATURE: &InputSignature = $signature;
                 SIGNATURE
@@ -130,6 +134,10 @@ macro_rules! fixture_stage {
                 $identifier
             }
 
+            fn description() -> &'static str {
+                "A stage used by tests."
+            }
+
             fn inputs() -> &'static InputSignature {
                 const SIGNATURE: &InputSignature = $signature;
                 SIGNATURE
@@ -206,6 +214,10 @@ macro_rules! fixture_sink {
                 $identifier
             }
 
+            fn description() -> &'static str {
+                "A stage used by tests."
+            }
+
             fn inputs() -> &'static InputSignature {
                 const SIGNATURE: &InputSignature = $signature;
                 SIGNATURE
@@ -261,6 +273,10 @@ macro_rules! opinionated_source {
 
             fn identifier() -> &'static str {
                 $identifier
+            }
+
+            fn description() -> &'static str {
+                "A stage used by tests."
             }
 
             fn inputs() -> &'static InputSignature {
@@ -331,6 +347,10 @@ macro_rules! opinionated_filter {
 
             fn identifier() -> &'static str {
                 $identifier
+            }
+
+            fn description() -> &'static str {
+                "A stage used by tests."
             }
 
             fn inputs() -> &'static InputSignature {

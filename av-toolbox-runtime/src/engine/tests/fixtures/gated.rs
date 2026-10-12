@@ -121,6 +121,10 @@ impl StageDefinition for Slow {
         "slow"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     // Per chunk, so a held worker is holding a whole chunk. Every test that gates one of these
     // is written about a chunk taking far longer than the rest.
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -235,6 +239,10 @@ impl StageDefinition for HostSlow {
         "host-slow"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         host_chunked()
     }
@@ -344,6 +352,10 @@ impl StageDefinition for Tracked {
 
     fn identifier() -> &'static str {
         "tracked"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(args: &Self::Args) -> Parallelism {
@@ -466,6 +478,10 @@ impl StageDefinition for Matching {
 
     fn identifier() -> &'static str {
         "matching"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

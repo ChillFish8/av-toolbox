@@ -107,6 +107,10 @@ impl StageDefinition for Recording {
         "recording"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
         SIGNATURE
@@ -195,6 +199,10 @@ impl StageDefinition for HostRecording {
         "host-recording"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
         SIGNATURE
@@ -279,6 +287,10 @@ impl StageDefinition for Hoarding {
         "hoarding"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
         SIGNATURE
@@ -354,6 +366,10 @@ impl StageDefinition for Pairing {
 
     fn identifier() -> &'static str {
         "pairing"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
@@ -454,6 +470,10 @@ impl StageDefinition for Gated {
         "gated"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
         SIGNATURE
@@ -539,6 +559,10 @@ impl StageDefinition for MetaRecording {
 
     fn identifier() -> &'static str {
         "meta-recording"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

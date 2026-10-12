@@ -168,6 +168,10 @@ impl StageDefinition for Seekable {
         "seekable"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -262,6 +266,10 @@ impl StageDefinition for Probing {
 
     fn identifier() -> &'static str {
         "probing"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn probes(args: &Self::Args) -> Vec<InputProbe> {

@@ -185,6 +185,10 @@ impl StageDefinition for Listed {
         "listed"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     // Per frame, like `av-toolbox-graph`'s own `WideningSource` fixture, so a widened source
     // reaches the planner's width decision rather than being narrowed by its granularity before
     // the engine ever sees it. `a_widened_source_is_rejected` needs exactly that to exercise the
@@ -308,6 +312,10 @@ impl StageDefinition for HostListed {
 
     fn identifier() -> &'static str {
         "host-listed"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

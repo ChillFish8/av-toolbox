@@ -58,6 +58,10 @@ impl StageDefinition for HostFile {
         "host-file"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -119,6 +123,10 @@ impl StageDefinition for HostBlur {
 
     fn identifier() -> &'static str {
         "host-blur"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
@@ -187,6 +195,10 @@ impl StageDefinition for HostStdout {
         "host-stdout"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("input")]);
         SIGNATURE
@@ -246,6 +258,10 @@ impl StageDefinition for HostJoin {
 
     fn identifier() -> &'static str {
         "host-join"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -320,6 +336,10 @@ impl StageDefinition for Log {
 
     fn identifier() -> &'static str {
         "log"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

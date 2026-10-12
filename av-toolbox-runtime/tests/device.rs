@@ -111,6 +111,10 @@ impl StageDefinition for Frames {
         "source"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::EMPTY;
         SIGNATURE
@@ -170,6 +174,10 @@ impl StageDefinition for Pass {
 
     fn identifier() -> &'static str {
         "filter"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     // Per frame, so a pipeline that asks for more than one worker can actually get it. A
@@ -259,6 +267,10 @@ impl StageDefinition for Recording {
 
     fn identifier() -> &'static str {
         "sink"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

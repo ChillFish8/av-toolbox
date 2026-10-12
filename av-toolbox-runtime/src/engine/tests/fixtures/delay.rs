@@ -129,6 +129,10 @@ impl StageDefinition for Delay {
         "delay"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_frame {
             true => Parallelism::Frame,

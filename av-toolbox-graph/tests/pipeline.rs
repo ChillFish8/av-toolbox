@@ -73,6 +73,10 @@ impl StageDefinition for Read {
         "read"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -126,6 +130,10 @@ impl StageDefinition for Write {
 
     fn identifier() -> &'static str {
         "write"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

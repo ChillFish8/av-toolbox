@@ -115,6 +115,10 @@ impl StageDefinition for Tagging {
         "tagging"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
         let reads_host_cuts = args
             .iter()
@@ -219,6 +223,10 @@ impl StageDefinition for TagRecording {
 
     fn identifier() -> &'static str {
         "tag-recording"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn demands(args: &Self::Args) -> Vec<InputDemand> {

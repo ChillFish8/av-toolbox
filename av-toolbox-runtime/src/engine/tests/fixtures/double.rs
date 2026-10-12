@@ -100,6 +100,10 @@ impl StageDefinition for Double {
         "double"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }

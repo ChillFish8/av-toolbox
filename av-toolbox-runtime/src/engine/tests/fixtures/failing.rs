@@ -164,6 +164,10 @@ impl StageDefinition for Failing {
         "failing"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
             true => chunked(),
@@ -249,6 +253,10 @@ impl StageDefinition for Panicking {
 
     fn identifier() -> &'static str {
         "panicking"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

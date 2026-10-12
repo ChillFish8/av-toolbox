@@ -73,6 +73,10 @@ impl StageDefinition for Matched {
         "matched"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         COUPLED_INPUTS
     }
@@ -145,6 +149,10 @@ impl StageDefinition for Anchored {
 
     fn identifier() -> &'static str {
         "anchored"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
@@ -221,6 +229,10 @@ impl StageDefinition for Mislabelled {
         "mislabelled"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature =
             &InputSignature::new(&[InputParam::required("base").accepting(StreamType::Frames)]);
@@ -287,6 +299,10 @@ impl StageDefinition for TemporalMerge {
 
     fn identifier() -> &'static str {
         "temporal-merge"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(args: &Self::Args) -> Parallelism {
@@ -366,6 +382,10 @@ impl StageDefinition for Gather {
 
     fn identifier() -> &'static str {
         "gather"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

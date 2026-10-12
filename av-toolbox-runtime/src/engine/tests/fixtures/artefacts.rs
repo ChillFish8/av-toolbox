@@ -177,6 +177,10 @@ impl StageDefinition for Artefacting {
         "artefacting"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(args: &Self::Args) -> Parallelism {
         if args.per_chunk {
             return chunked();
@@ -326,6 +330,10 @@ impl StageDefinition for Collecting {
 
     fn identifier() -> &'static str {
         "collecting"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

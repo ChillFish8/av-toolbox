@@ -130,6 +130,10 @@ impl StageDefinition for Breaking {
         "breaking"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature =
             &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
@@ -201,6 +205,10 @@ impl StageDefinition for Marking {
 
     fn identifier() -> &'static str {
         "marking"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
@@ -343,6 +351,10 @@ impl StageDefinition for Relaying {
         "relaying"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
         args.iter()
             .filter_map(|served| served.demand.request::<FixtureRelays>())
@@ -434,6 +446,10 @@ impl StageDefinition for Tagging {
         "tagging"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
         let reads_host_cuts = args
             .iter()
@@ -522,6 +538,10 @@ impl StageDefinition for TagReading {
 
     fn identifier() -> &'static str {
         "tag-reading"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
@@ -703,6 +723,10 @@ impl StageDefinition for Demanding {
         "demanding"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.chunks {
             true => args.chunked(),
@@ -795,6 +819,10 @@ impl StageDefinition for DemandingPair {
 
     fn identifier() -> &'static str {
         "demanding-pair"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn demands(args: &Self::Args) -> Vec<InputDemand> {

@@ -111,6 +111,10 @@ impl StageDefinition for Marking {
         "marking"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(args: &Self::Args) -> Parallelism {
         if args.per_chunk {
             return chunked();
@@ -244,6 +248,10 @@ impl StageDefinition for FlowRecording {
 
     fn identifier() -> &'static str {
         "flow-recording"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn demands(args: &Self::Args) -> Vec<InputDemand> {

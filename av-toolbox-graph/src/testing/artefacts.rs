@@ -62,6 +62,10 @@ impl StageDefinition for Grain {
         "grain"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn artefacts() -> &'static [ArtefactDecl] {
         const DECLARED: &[ArtefactDecl] = &[
             ArtefactDecl::opaque("table", "tbl", "A grain table."),
@@ -138,6 +142,10 @@ impl StageDefinition for Files {
 
     fn identifier() -> &'static str {
         "files"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

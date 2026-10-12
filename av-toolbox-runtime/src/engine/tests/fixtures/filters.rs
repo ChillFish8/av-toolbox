@@ -101,6 +101,10 @@ impl StageDefinition for Pass {
         "pass"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::Frame
     }
@@ -188,6 +192,10 @@ impl StageDefinition for HostPass {
 
     fn identifier() -> &'static str {
         "host-pass"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -297,6 +305,10 @@ impl StageDefinition for Flushing {
         "flushing"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(args: &Self::Args) -> Parallelism {
         match args.per_chunk {
             true => chunked(),
@@ -390,6 +402,10 @@ impl StageDefinition for Allocating {
 
     fn identifier() -> &'static str {
         "allocating"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

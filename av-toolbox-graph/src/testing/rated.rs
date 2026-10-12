@@ -80,6 +80,10 @@ impl StageDefinition for Rated {
         "rated"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -138,6 +142,10 @@ impl StageDefinition for Retime {
 
     fn identifier() -> &'static str {
         "retime"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

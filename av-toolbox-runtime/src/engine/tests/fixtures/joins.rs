@@ -77,6 +77,10 @@ impl StageDefinition for Join {
         "join"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     // Per chunk, so a region headed by one routes by chunk.
     fn parallelism(_args: &Self::Args) -> Parallelism {
         chunked()
@@ -172,6 +176,10 @@ impl StageDefinition for Referring {
 
     fn identifier() -> &'static str {
         "referring"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(args: &Self::Args) -> Parallelism {

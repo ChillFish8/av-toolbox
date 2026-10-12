@@ -72,6 +72,10 @@ impl StageDefinition for Failing {
         "failing"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
         SIGNATURE
@@ -144,6 +148,10 @@ impl StageDefinition for Recording {
 
     fn identifier() -> &'static str {
         "recording"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
@@ -236,6 +244,10 @@ impl StageDefinition for Prefers16 {
         "prefers16"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature =
             &InputSignature::new(&[InputParam::required("reference").accepting(StreamType::Frames)]);
@@ -321,6 +333,10 @@ impl StageDefinition for Sparse {
 
     fn identifier() -> &'static str {
         "sparse"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
@@ -413,6 +429,10 @@ impl StageDefinition for Temporal {
 
     fn identifier() -> &'static str {
         "temporal"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(args: &Self::Args) -> Parallelism {

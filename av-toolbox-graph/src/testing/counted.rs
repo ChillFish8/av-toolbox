@@ -50,6 +50,10 @@ impl StageDefinition for Counted {
         "counted"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -104,6 +108,10 @@ impl StageDefinition for Unopenable {
 
     fn identifier() -> &'static str {
         "unopenable"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
