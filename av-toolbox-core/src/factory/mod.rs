@@ -338,7 +338,10 @@ mod tests {
     fn the_details_are_everything_after_the_first_blank_line() {
         let description = "Removes noise.\n\nFirst paragraph.\n\nSecond paragraph.\n";
 
-        assert_eq!(details_of(description), Some("First paragraph.\n\nSecond paragraph."));
+        assert_eq!(
+            details_of(description),
+            Some("First paragraph.\n\nSecond paragraph.")
+        );
     }
 
     #[test]

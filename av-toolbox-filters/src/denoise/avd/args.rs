@@ -460,10 +460,10 @@ fn psy_needs_enabling(name: &str) -> StageError {
 impl AvdArgs for Nl4dArgs {
     const IDENTIFIER: &'static str = "nl4d";
     const STAGE: &'static str = "av-denoise/nl4d";
-    const DESCRIPTION: &'static str =
-        "Removes noise by filtering groups of matching blocks across neighbouring frames.\n\n\
-         It can hand over the grain it removed from luma as an AV1 film grain table, so an encoder can add \
-         similar grain back.";
+    const DESCRIPTION: &'static str = "Removes noise by filtering groups of matching blocks \
+                                       across neighbouring frames.\n\n\
+                                       It can hand over the grain it removed from luma as an AV1 film grain \
+                                       table, so an encoder can add similar grain back.";
 
     fn artefacts() -> &'static [ArtefactDecl] {
         ARTEFACTS

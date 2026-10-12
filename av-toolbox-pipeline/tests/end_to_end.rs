@@ -74,6 +74,10 @@ impl StageDefinition for Pass {
         "pass"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature =
             &InputSignature::new(&[InputParam::required("source").accepting(StreamType::Frames)]);

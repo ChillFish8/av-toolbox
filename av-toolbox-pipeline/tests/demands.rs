@@ -72,6 +72,10 @@ impl StageDefinition for Rateless {
         "rateless"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -141,6 +145,10 @@ impl StageDefinition for TenSecondScenes {
 
     fn identifier() -> &'static str {
         "ten-second-scenes"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn demands(_args: &Self::Args) -> Vec<InputDemand> {

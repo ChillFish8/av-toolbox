@@ -64,4 +64,16 @@ mod tests {
         assert!(registered(StageKind::Filter, "vship/butteraugli"));
         assert!(registered(StageKind::Filter, "vship/cvvdp"));
     }
+
+    #[test]
+    fn every_built_in_stage_has_a_summary_ending_in_a_full_stop() {
+        let registry = registry().expect("the built-in stages register");
+
+        for info in registry.stages() {
+            let summary = info.summary();
+            let identifier = info.full_identifier();
+
+            assert!(summary.ends_with('.'), "{identifier} has the summary {summary:?}");
+        }
+    }
 }
