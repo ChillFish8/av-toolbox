@@ -71,6 +71,10 @@ impl StageDefinition for File {
         "file"
     }
 
+    fn description() -> &'static str {
+        "Produces frames that all show one PNG or JPEG image."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -153,6 +157,10 @@ impl StageDefinition for ImageLike {
 
     fn identifier() -> &'static str {
         "like"
+    }
+
+    fn description() -> &'static str {
+        "Shows one image for every frame of a reference clip, in its size, format and length."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

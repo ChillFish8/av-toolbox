@@ -76,6 +76,10 @@ impl StageDefinition for Fill {
         "fill"
     }
 
+    fn description() -> &'static str {
+        "Produces frames of a single colour."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -153,6 +157,10 @@ impl StageDefinition for SolidLike {
 
     fn identifier() -> &'static str {
         "like"
+    }
+
+    fn description() -> &'static str {
+        "Produces a single colour in the size, format and length of a reference clip."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

@@ -41,6 +41,10 @@ impl StageDefinition for Discard {
         "discard"
     }
 
+    fn description() -> &'static str {
+        "Drops every frame and mask it is given.\n\nUseful when a run only needs its metadata or artefacts."
+    }
+
     fn inputs() -> &'static InputSignature {
         INPUTS
     }

@@ -53,6 +53,10 @@ impl StageDefinition for SceneScoreProvider {
         "scene-score"
     }
 
+    fn description() -> &'static str {
+        "Supplies a scene cut score for every frame to stages that demand scene scores."
+    }
+
     /// The detector's lookahead.
     fn held_frames(_args: &Self::Args, _formats: &ResolvedFormats) -> usize {
         LOOKAHEAD

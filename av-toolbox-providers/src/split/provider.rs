@@ -62,6 +62,10 @@ impl StageDefinition for SceneSplitProvider {
         "scene-split"
     }
 
+    fn description() -> &'static str {
+        "Supplies scene breaks to stages that demand scenes, splitting long scenes to fit."
+    }
+
     /// The longest scene any limited layer holds.
     fn held_frames(args: &Self::Args, formats: &ResolvedFormats) -> usize {
         let input = formats.input(0);

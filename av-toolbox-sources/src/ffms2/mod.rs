@@ -96,6 +96,10 @@ impl StageDefinition for File {
         "file"
     }
 
+    fn description() -> &'static str {
+        "Decodes a video track from a media file with FFMS2."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }

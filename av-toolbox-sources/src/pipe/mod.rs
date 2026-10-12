@@ -68,6 +68,10 @@ impl StageDefinition for Pipe {
         "pipe"
     }
 
+    fn description() -> &'static str {
+        "Reads a y4m stream from a FIFO, a file or an inherited file descriptor."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }

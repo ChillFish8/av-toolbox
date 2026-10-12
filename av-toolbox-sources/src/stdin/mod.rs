@@ -34,6 +34,10 @@ impl StageDefinition for Stdin {
         "stdin"
     }
 
+    fn description() -> &'static str {
+        "Reads a y4m stream from standard input."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }

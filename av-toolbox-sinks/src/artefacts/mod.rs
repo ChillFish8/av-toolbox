@@ -43,6 +43,10 @@ impl StageDefinition for Files {
         "files"
     }
 
+    fn description() -> &'static str {
+        "Writes each artefact the pipeline's stages produce to its own file in a directory."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }

@@ -40,6 +40,10 @@ impl StageDefinition for Pipe {
         "pipe"
     }
 
+    fn description() -> &'static str {
+        "Writes the stream as y4m to a FIFO, a file or an inherited file descriptor."
+    }
+
     fn inputs() -> &'static InputSignature {
         INPUTS
     }

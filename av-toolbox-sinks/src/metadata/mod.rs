@@ -73,6 +73,10 @@ impl StageDefinition for Ndjson {
         "ndjson"
     }
 
+    fn description() -> &'static str {
+        "Writes each frame's metadata as one line of JSON to a file or descriptor."
+    }
+
     /// Scene breaks and scene cut scores, both on the input, when `scenes` is set.
     fn demands(args: &Self::Args) -> Vec<InputDemand> {
         let Some(request) = args.scenes.clone() else {

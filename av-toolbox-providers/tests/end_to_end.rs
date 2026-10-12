@@ -139,6 +139,10 @@ impl StageDefinition for Chunked {
         "chunked"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature =
             &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
@@ -227,6 +231,10 @@ impl StageDefinition for Whole {
         "whole"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     /// The same scenes the filter before it chunks on, so the two share one layer.
     fn demands(_args: &Self::Args) -> Vec<InputDemand> {
         let demand = AnyDemand::new::<Scenes>(SceneRequest::natural());
@@ -281,6 +289,10 @@ impl StageDefinition for Pieces {
 
     fn identifier() -> &'static str {
         "pieces"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn demands(_args: &Self::Args) -> Vec<InputDemand> {

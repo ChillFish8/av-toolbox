@@ -90,6 +90,10 @@ impl StageDefinition for File {
         "file"
     }
 
+    fn description() -> &'static str {
+        "Decodes a video track from a media file with BestSource, accurate to the frame."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }

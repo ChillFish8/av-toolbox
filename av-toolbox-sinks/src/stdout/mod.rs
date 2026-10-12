@@ -44,6 +44,10 @@ impl StageDefinition for Stdout {
         "stdout"
     }
 
+    fn description() -> &'static str {
+        "Writes the stream as y4m to standard output."
+    }
+
     fn inputs() -> &'static InputSignature {
         INPUTS
     }
