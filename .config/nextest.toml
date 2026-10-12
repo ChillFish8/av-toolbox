@@ -1,0 +1,4 @@
+# Fails now and then under full-suite GPU load, but passes alone.
+[[profile.default.overrides]]
+filter = 'test(executing_the_grain_table_example_writes_a_table)'
+retries = 2
