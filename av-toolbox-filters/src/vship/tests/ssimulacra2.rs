@@ -26,11 +26,20 @@ fn an_unknown_field_is_refused() {
 
 #[cfg(feature = "gpu-tests")]
 mod device {
-    use av_toolbox_core::BuildStageError;
-    use av_toolbox_gpu::{Attachments, Depth, FrameFormat, FrameLayout, HostFrame, MetaValue, SampleFormat};
+    use av_toolbox_gpu::{Depth, FrameFormat, FrameLayout, HostFrame, MetaValue, SampleFormat};
     use serde_json::json;
 
-    use crate::vship::tests::device::{Run, blurred_luma, built, detailed_luma, frame, run, yuv420};
+    use crate::vship::tests::device::{
+        Run,
+        blurred_luma,
+        build_error,
+        built,
+        detailed_luma,
+        float_named,
+        frame,
+        run,
+        yuv420,
+    };
 
     const STAGE: &str = "vship/ssimulacra2";
 
@@ -63,36 +72,6 @@ mod device {
                 float_named(&attachments, "score")
             })
             .collect()
-    }
-
-    fn float_named(attachments: &Attachments, name: &str) -> f64 {
-        let found = attachments
-            .stages()
-            .flat_map(|(_, values)| values.iter())
-            .find(|(key, _)| key == name);
-
-        match found {
-            Some((_, MetaValue::Float(value))) => *value,
-            other => panic!("expected a float named {name}, found {other:?}"),
-        }
-    }
-
-    /// The stage's own reason for refusing to build.
-    fn build_error(
-        stage: &str,
-        args: serde_json::Value,
-        reference: FrameFormat,
-        distorted: FrameFormat,
-    ) -> String {
-        let refused = built(stage, args, reference, distorted);
-        let Err(error) = refused else {
-            panic!("the stage should not build");
-        };
-
-        match error {
-            BuildStageError::Build { source, .. } => source.to_string(),
-            other => panic!("expected a build failure, got {other}"),
-        }
     }
 
     #[test]

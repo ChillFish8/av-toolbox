@@ -49,6 +49,8 @@
 //! - `planes/merge` builds a clip by picking each plane from one of several clips.
 //! - `upscale/artcnn` doubles a clip's size, running its luma through the ArtCNN network.
 //! - `vship/ssimulacra2` scores a distorted clip against a reference with SSIMULACRA2 through Vship.
+//! - `vship/butteraugli` scores a distorted clip against a reference with Butteraugli through Vship.
+//! - `vship/cvvdp` scores a distorted clip against a reference with CVVDP through Vship.
 //! - `warp/awarpsharp` sharpens by pulling samples toward nearby edges, the way aWarpSharp2 does.
 
 mod aa;
@@ -137,6 +139,10 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<upscale::Artcnn>()?;
     #[cfg(feature = "vship")]
     registry.register_filter::<vship::Ssimulacra2>()?;
+    #[cfg(feature = "vship")]
+    registry.register_filter::<vship::Butteraugli>()?;
+    #[cfg(feature = "vship")]
+    registry.register_filter::<vship::Cvvdp>()?;
 
     Ok(())
 }
@@ -206,5 +212,25 @@ mod tests {
     #[test]
     fn every_vship_filter_is_registered() {
         assert!(registered("vship/ssimulacra2"));
+        assert!(registered("vship/butteraugli"));
+        assert!(registered("vship/cvvdp"));
+    }
+
+    #[cfg(feature = "vship")]
+    #[test]
+    fn every_vship_filter_is_tagged_evaluation() {
+        let mut registry = PipelineRegistry::new();
+        register(&mut registry).expect("the filters register");
+
+        let vship_stages: Vec<_> = registry
+            .stages()
+            .filter(|info| info.full_identifier().starts_with("vship/"))
+            .collect();
+
+        assert_eq!(vship_stages.len(), 3);
+        for info in vship_stages {
+            let expected = [av_toolbox_core::Tag::Evaluation];
+            assert_eq!(info.tags(), &expected, "{}", info.full_identifier());
+        }
     }
 }

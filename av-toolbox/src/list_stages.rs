@@ -236,6 +236,7 @@ fn tag_name(tag: &Tag) -> &'static str {
         Tag::Deinterlace => "deinterlace",
         Tag::Color => "color",
         Tag::Conversion => "conversion",
+        Tag::Evaluation => "evaluation",
         Tag::Other(name) => name,
     }
 }

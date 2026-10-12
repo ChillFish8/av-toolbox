@@ -5,11 +5,13 @@ use av_toolbox_core::{
     Inputs,
     PipelineRegistry,
     PreparedStage,
+    StageError,
     StageHandle,
     StageKind,
     StreamType,
 };
 use av_toolbox_gpu::{
+    Attachments,
     Backend,
     Channel,
     ChromaLocation,
@@ -24,6 +26,7 @@ use av_toolbox_gpu::{
     HostStreamItem,
     Matrix,
     MetaRecord,
+    MetaValue,
     Primaries,
     ResolvedFormats,
     SampleFormat,
@@ -68,6 +71,8 @@ pub(crate) fn yuv420(sample: SampleFormat) -> FrameFormat {
 }
 
 /// Builds `stage` from `args` over a reference and a distorted clip, the way a pipeline would.
+///
+/// The output format is the first one the stage's `produces` offers.
 pub(crate) fn built(
     stage: &str,
     args: serde_json::Value,
@@ -94,14 +99,27 @@ pub(crate) fn built(
         Some(StreamFormat::Frames(reference)),
         Some(StreamFormat::Frames(distorted)),
     ];
-    let output = Some(StreamFormat::Frames(distorted));
-    let formats = ResolvedFormats::new(inputs, output);
     let backend = Backend::open_default(test_device()).expect("a backend should open");
+    let produced = match prepared.produces(backend.capabilities(), &inputs) {
+        Ok(produced) => produced,
+        Err(source) => return Err(produce_error(stage, source)),
+    };
+
+    let sample = produced.samples.preferences()[0];
+    let output = produced.template.with_sample(sample);
+    let formats = ResolvedFormats::new(inputs, Some(output));
 
     let filter = prepared.build(&backend, &formats)?;
     let host = filter.into_host().expect("a host filter");
 
     Ok(host)
+}
+
+fn produce_error(stage: &str, source: StageError) -> BuildStageError {
+    BuildStageError::Build {
+        identifier: stage.to_string(),
+        source,
+    }
 }
 
 /// Runs every pair of frames through `filter` as one stream.
@@ -130,6 +148,68 @@ pub(crate) fn run(filter: &mut dyn Filter<HostSide>, pairs: Vec<(HostFrame, Host
     let records = context.take_records();
 
     Run { frames, records }
+}
+
+/// The stage's own reason for refusing to build.
+pub(crate) fn build_error(
+    stage: &str,
+    args: serde_json::Value,
+    reference: FrameFormat,
+    distorted: FrameFormat,
+) -> String {
+    let refused = built(stage, args, reference, distorted);
+    let Err(error) = refused else {
+        panic!("the stage should not build");
+    };
+
+    match error {
+        BuildStageError::Build { source, .. } => source.to_string(),
+        other => panic!("expected a build failure, got {other}"),
+    }
+}
+
+pub(crate) fn float_named(attachments: &Attachments, name: &str) -> f64 {
+    let found = attachments
+        .stages()
+        .flat_map(|(_, values)| values.iter())
+        .find(|(key, _)| key == name);
+
+    match found {
+        Some((_, MetaValue::Float(value))) => *value,
+        other => panic!("expected a float named {name}, found {other:?}"),
+    }
+}
+
+/// The value `stage` attached to `frame` under `name`.
+pub(crate) fn frame_float(frame: &HostFrame, stage: &str, name: &str) -> f64 {
+    let mut attachments = frame.meta().attachments.clone();
+    attachments.stamp(stage);
+
+    float_named(&attachments, name)
+}
+
+/// The names and values of the run's one `summary` record, in the order they were written.
+pub(crate) fn summary_values(run: &Run, stage: &str) -> Vec<(String, MetaValue)> {
+    assert_eq!(run.records.len(), 1);
+    let record = &run.records[0];
+    assert_eq!(record.kind(), "summary");
+
+    let mut attachments = record.attachments().clone();
+    attachments.stamp(stage);
+
+    attachments
+        .stages()
+        .flat_map(|(_, values)| values.iter().cloned())
+        .collect()
+}
+
+/// The `Y` plane of an `F32` frame, read as little-endian floats.
+pub(crate) fn f32_plane(frame: &HostFrame) -> Vec<f32> {
+    let plane = frame.plane(Channel::Y).expect("the frame has a Y plane");
+
+    let (values, _) = plane.bytes().as_chunks::<4>();
+
+    values.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect()
 }
 
 /// A frame of `format` at `index`, with luma from `luma` and neutral chroma.

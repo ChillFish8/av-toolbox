@@ -7,5 +7,6 @@ pub enum Tag {
     Deinterlace,
     Color,
     Conversion,
+    Evaluation,
     Other(&'static str),
 }

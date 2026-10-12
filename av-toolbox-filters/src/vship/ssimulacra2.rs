@@ -9,6 +9,7 @@ use av_toolbox_core::{
     StageError,
     StageInstance,
     StreamType,
+    Tag,
 };
 use av_toolbox_gpu::{
     BuildContext,
@@ -60,6 +61,10 @@ impl StageDefinition for Ssimulacra2 {
 
     fn identifier() -> &'static str {
         "ssimulacra2"
+    }
+
+    fn tags() -> &'static [Tag] {
+        &[Tag::Evaluation]
     }
 
     fn inputs() -> &'static InputSignature {
