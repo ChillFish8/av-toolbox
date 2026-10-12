@@ -197,6 +197,10 @@ pub(crate) struct ListStagesArgs {}
 pub(crate) struct DescribeArgs {
     /// A stage type such as `y4m/pipe`.
     pub(crate) stage_type: String,
+
+    /// Print the description as JSON for other tools.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, clap::Args)]

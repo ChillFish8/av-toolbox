@@ -1,4 +1,5 @@
 mod arguments;
+mod json;
 mod text;
 
 use std::process::ExitCode;
@@ -21,6 +22,13 @@ pub(crate) fn run(describe: &DescribeArgs) -> ExitCode {
             return ExitCode::FAILURE;
         },
     };
+
+    if describe.json {
+        let rendered = json::render(&stages);
+        println!("{rendered}");
+
+        return ExitCode::SUCCESS;
+    }
 
     let width = text::output_width();
     let rendered = text::render(&stages, width);

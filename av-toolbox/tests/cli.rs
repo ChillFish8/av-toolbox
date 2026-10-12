@@ -1215,3 +1215,25 @@ fn inspect_hash_of_a_broken_file_prints_nothing() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
 }
+
+#[test]
+fn describe_json_parses_with_the_stages_schema() {
+    let output = toolbox(&["describe", "av-denoise/nl4d", "--json"]);
+    let stdout = text(&output.stdout);
+
+    assert!(output.status.success());
+
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(value[0]["identifier"], "av-denoise/nl4d");
+    assert_eq!(value[0]["kind"], "filter");
+    assert!(value[0]["schema"]["properties"].is_object(), "{stdout}");
+}
+
+#[test]
+fn describe_json_for_an_unknown_stage_prints_nothing() {
+    let output = toolbox(&["describe", "y4m/stdot", "--json"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(text(&output.stderr).contains("did you mean y4m/stdout?"));
+}
