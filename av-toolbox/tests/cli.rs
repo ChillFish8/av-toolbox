@@ -178,16 +178,21 @@ fn list_stages_shows_each_providers_kind_and_side() {
 }
 
 #[test]
-fn list_stages_describes_one_type() {
-    let output = toolbox(&["list-stages", "y4m/stdout"]);
+fn describe_shows_a_stages_summary_and_arguments() {
+    let output = toolbox(&["describe", "y4m/stdout"]);
+    let stdout = text(&output.stdout);
 
     assert!(output.status.success());
-    assert!(text(&output.stdout).contains("frame_rate"));
+    assert!(
+        stdout.contains("Writes the stream as y4m to standard output."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("frame_rate"), "{stdout}");
 }
 
 #[test]
-fn list_stages_shows_the_nl4d_grain_table() {
-    let output = toolbox(&["list-stages", "av-denoise/nl4d"]);
+fn describe_shows_the_nl4d_grain_table() {
+    let output = toolbox(&["describe", "av-denoise/nl4d"]);
     let stdout = text(&output.stdout);
 
     assert!(output.status.success());
@@ -196,12 +201,38 @@ fn list_stages_shows_the_nl4d_grain_table() {
 }
 
 #[test]
+fn describe_covers_both_kinds_of_a_type_registered_twice() {
+    let output = toolbox(&["describe", "y4m/pipe"]);
+    let stdout = text(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.contains("y4m/pipe  sink"), "{stdout}");
+    assert!(stdout.contains("y4m/pipe  source"), "{stdout}");
+}
+
+#[test]
+fn describe_a_provider_lists_no_arguments() {
+    let output = toolbox(&["describe", "provider/scene-split"]);
+    let stdout = text(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.ends_with("ARGUMENTS\n  none\n"), "{stdout}");
+}
+
+#[test]
 fn an_unknown_stage_type_exits_one_with_a_suggestion() {
-    let output = toolbox(&["list-stages", "y4m/stdot"]);
+    let output = toolbox(&["describe", "y4m/stdot"]);
     let stderr = text(&output.stderr);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr.contains("did you mean y4m/stdout?"));
+}
+
+#[test]
+fn list_stages_takes_no_stage_type() {
+    let output = toolbox(&["list-stages", "y4m/stdout"]);
+
+    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]

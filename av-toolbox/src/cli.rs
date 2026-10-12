@@ -72,8 +72,11 @@ pub(crate) enum Command {
     /// same physical card.
     ListDevices,
 
-    /// List every stage a pipeline can use, or describe one.
+    /// List every stage a pipeline can use.
     ListStages(ListStagesArgs),
+
+    /// Describe a stage, its inputs and its arguments.
+    Describe(DescribeArgs),
 
     /// Draw a pipeline as a graph.
     ///
@@ -188,9 +191,12 @@ fn parse_frame_budget(raw: &str) -> Result<usize, String> {
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct ListStagesArgs {
-    /// A stage type such as `y4m/pipe`, to show its inputs and arguments.
-    pub(crate) stage_type: Option<String>,
+pub(crate) struct ListStagesArgs {}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct DescribeArgs {
+    /// A stage type such as `y4m/pipe`.
+    pub(crate) stage_type: String,
 }
 
 #[derive(Debug, clap::Args)]
