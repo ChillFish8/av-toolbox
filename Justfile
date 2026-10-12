@@ -99,7 +99,7 @@ test-bestsource:
     cargo clippy -p avtbx-bestsource --features static --all-targets -- -D warnings
     cargo nextest run --cargo-profile test-release -p avtbx-bestsource --features static
 
-# Lints and tests the Vship wrapper statically with Vulkan and against the system libvship.
+# Lints and tests the Vship wrapper statically with Vulkan and against the system libvship, then the stages.
 test-vship:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -107,6 +107,18 @@ test-vship:
     cargo nextest run --cargo-profile test-release -p avtbx-vship --features static,vulkan,gpu-tests
     cargo clippy -p avtbx-vship --features gpu-tests --all-targets -- -D warnings
     cargo nextest run --cargo-profile test-release -p avtbx-vship --features gpu-tests
+    just test-vship-stages
+
+# Lints and tests the Vship stages against the system libvship, through the pipeline and CLI.
+test-vship-stages:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo clippy -p av-toolbox-filters --features av-toolbox-filters/vulkan,av-toolbox-filters/gpu-tests,av-toolbox-filters/vship --all-targets -- -D warnings
+    cargo clippy -p av-toolbox-pipeline --features av-toolbox-pipeline/vulkan,av-toolbox-pipeline/vship --all-targets -- -D warnings
+    cargo clippy -p av-toolbox --features av-toolbox/vulkan,av-toolbox/gpu-tests,av-toolbox/vship --all-targets -- -D warnings
+    cargo nextest run --cargo-profile test-release -p av-toolbox-filters --features av-toolbox-filters/vulkan,av-toolbox-filters/gpu-tests,av-toolbox-filters/vship -E 'test(vship)'
+    cargo nextest run --cargo-profile test-release -p av-toolbox-pipeline --features av-toolbox-pipeline/vulkan,av-toolbox-pipeline/vship -E 'test(vship_stages)'
+    cargo nextest run --cargo-profile test-release -p av-toolbox --features av-toolbox/vulkan,av-toolbox/gpu-tests,av-toolbox/vship -E 'test(vship) | test(every_example_explains)'
 
 # Builds the optional dependencies under dependencies/, or only the ones named.
 dependencies *IDENTIFIERS:

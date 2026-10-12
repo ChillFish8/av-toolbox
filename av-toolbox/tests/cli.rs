@@ -50,6 +50,9 @@ fn every_example_explains_without_a_device() {
     #[cfg(feature = "bestsource")]
     let names = [&names[..], &["bestsource.toml"]].concat();
 
+    #[cfg(feature = "vship")]
+    let names = [&names[..], &["vship.toml"]].concat();
+
     for name in names {
         let path = example(name);
         let path = path.to_str().expect("utf-8 path");
@@ -754,6 +757,40 @@ frames = 4
             assert_eq!(line["index"], position as u64, "{lines:?}");
             assert!(line["scene_score"].is_null(), "{lines:?}");
         }
+    }
+
+    #[cfg(feature = "vship")]
+    #[test]
+    fn vship_scores_reach_ndjson_with_one_summary_record() {
+        let directory = tempfile::tempdir().expect("a temp dir");
+        let log_path = directory.path().join("scores.ndjson");
+        let log_path = log_path.to_str().expect("utf-8 path");
+        let metadata_var = format!("metadata={log_path}");
+
+        let run = execute("vship.toml", &[&metadata_var], Some(textured_y4m_stream()));
+        let stderr = text(&run.output.stderr);
+
+        assert!(run.output.status.success(), "{stderr}");
+
+        let logged = std::fs::read_to_string(log_path).expect("reads the log");
+        let lines: Vec<serde_json::Value> = logged
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("valid json"))
+            .collect();
+        let frames: Vec<&serde_json::Value> = lines.iter().filter(|line| line["kind"] == "frame").collect();
+        let summaries: Vec<&serde_json::Value> =
+            lines.iter().filter(|line| line["kind"] == "summary").collect();
+        assert_eq!(frames.len() as u64, METADATA_FRAME_COUNT, "{lines:?}");
+        assert_eq!(summaries.len(), 1, "{lines:?}");
+
+        for frame in frames {
+            assert!(frame["filter.score"]["score"].is_number(), "{lines:?}");
+        }
+
+        assert_eq!(
+            summaries[0]["filter.score"]["frames"], METADATA_FRAME_COUNT,
+            "{lines:?}"
+        );
     }
 
     #[test]

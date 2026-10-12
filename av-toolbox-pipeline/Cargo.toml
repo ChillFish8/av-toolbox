@@ -37,6 +37,10 @@ ffms2 = ["av-toolbox-sources/ffms2"]
 static-ffms2 = ["ffms2", "av-toolbox-sources/static-ffms2"]
 bestsource = ["av-toolbox-sources/bestsource"]
 static-bestsource = ["bestsource", "av-toolbox-sources/static-bestsource"]
+vship = ["av-toolbox-filters/vship"]
+static-vship = ["vship", "av-toolbox-filters/static-vship"]
+vship-vulkan = ["av-toolbox-filters/vship-vulkan"]
+vship-cuda = ["av-toolbox-filters/vship-cuda"]
 vulkan = [
     "av-toolbox-gpu/vulkan",
     "av-toolbox-core/vulkan",

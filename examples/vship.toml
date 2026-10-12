@@ -1,0 +1,44 @@
+# Scores a lightly debanded copy of a clip against the original with SSIMULACRA2 and logs the scores.
+#
+# Every frame gets a score, and a closing summary line carries the statistics.
+# Needs the `vship` feature.
+
+[variable.input]
+type = "path"
+description = "The clip to read"
+default = "input.mkv"
+
+[variable.metadata]
+type = "path"
+description = "Where to write the score log"
+default = "scores.ndjson"
+
+[variable.output]
+type = "path"
+description = "Where to write the scored y4m stream"
+default = "output.y4m"
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[filter.altered]
+type = "deband/placebo"
+inputs = ["input"]
+args.iterations = 1
+args.threshold = [2.0, 1.0, 1.0]
+args.grain = [0.0, 0.0, 0.0]
+
+[filter.score]
+type = "vship/ssimulacra2"
+inputs = ["input", "altered"]
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["score"]
+args.path = "{{ output }}"
+
+[sink.log]
+type = "metadata/ndjson"
+inputs = ["score"]
+args.path = "{{ metadata }}"

@@ -48,6 +48,11 @@ static-ffms2 = ["ffms2", "av-toolbox-pipeline/static-ffms2", "dep:pkg-config"]
 bestsource = ["av-toolbox-pipeline/bestsource"]
 # Links BestSource and FFmpeg statically from the vcpkg tree. See `just build-static`.
 static-bestsource = ["bestsource", "av-toolbox-pipeline/static-bestsource"]
+vship = ["av-toolbox-pipeline/vship"]
+# Builds the vendored Vship and links it statically. See `just build-static`.
+static-vship = ["vship", "av-toolbox-pipeline/static-vship"]
+vship-vulkan = ["av-toolbox-pipeline/vship-vulkan"]
+vship-cuda = ["av-toolbox-pipeline/vship-cuda"]
 vulkan = ["av-toolbox-pipeline/vulkan", "av-toolbox-gpu/vulkan"]
 metal = ["av-toolbox-pipeline/metal", "av-toolbox-gpu/metal"]
 cuda = ["av-toolbox-pipeline/cuda", "av-toolbox-gpu/cuda"]

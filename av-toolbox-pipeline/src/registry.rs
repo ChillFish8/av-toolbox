@@ -56,4 +56,12 @@ mod tests {
     fn the_bestsource_source_is_registered() {
         assert!(registered(StageKind::Source, "bestsource/file"));
     }
+
+    #[cfg(feature = "vship")]
+    #[test]
+    fn the_vship_stages_are_registered() {
+        assert!(registered(StageKind::Filter, "vship/ssimulacra2"));
+        assert!(registered(StageKind::Filter, "vship/butteraugli"));
+        assert!(registered(StageKind::Filter, "vship/cvvdp"));
+    }
 }
