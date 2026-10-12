@@ -154,6 +154,10 @@ impl StageDefinition for Pattern {
         "pattern"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -217,6 +221,10 @@ impl StageDefinition for HostPattern {
 
     fn identifier() -> &'static str {
         "host-pattern"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

@@ -1,5 +1,6 @@
 mod artefacts;
 pub(crate) mod demand;
+mod description;
 mod factory;
 mod held_frames;
 mod inputs;

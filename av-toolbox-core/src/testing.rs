@@ -114,6 +114,10 @@ macro_rules! stamping_provider {
                 $identifier
             }
 
+            fn description() -> &'static str {
+                "A stage used by tests."
+            }
+
             fn inputs() -> &'static InputSignature {
                 const SIGNATURE: &InputSignature =
                     &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);

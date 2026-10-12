@@ -101,6 +101,10 @@ impl StageDefinition for DemandingExample {
         "demanding"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(_args: &Self::Args) -> Parallelism {
         Parallelism::chunk::<Cuts>(Breaks { every: 4 })
     }
@@ -143,6 +147,10 @@ impl StageDefinition for VariadicExample {
 
     fn identifier() -> &'static str {
         "variadic"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

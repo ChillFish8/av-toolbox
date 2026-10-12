@@ -77,6 +77,10 @@ macro_rules! cuts_provider {
                 $identifier
             }
 
+            fn description() -> &'static str {
+                "A stage used by tests."
+            }
+
             fn held_frames(args: &Self::Args, _formats: &ResolvedFormats) -> usize {
                 args.len()
             }

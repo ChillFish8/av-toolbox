@@ -89,6 +89,10 @@ impl StageDefinition for HoldingNothing {
         "holding-nothing"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         signature()
     }
@@ -137,6 +141,10 @@ impl StageDefinition for WidthHolding {
 
     fn identifier() -> &'static str {
         "width-holding"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

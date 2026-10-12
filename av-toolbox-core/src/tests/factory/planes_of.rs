@@ -93,6 +93,10 @@ impl StageDefinition for ValidPlanesOf {
         "valid-planes-of"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[
             InputParam::required("base"),
@@ -148,6 +152,10 @@ impl StageDefinition for MaskNamingAMissingInput {
         "missing-planes-of"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("mask")
             .accepting(StreamType::Mask)
@@ -198,6 +206,10 @@ impl StageDefinition for PlanesOfOnAFrameInput {
 
     fn identifier() -> &'static str {
         "planes-of-on-a-frame-input"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
@@ -251,6 +263,10 @@ impl StageDefinition for FilterNamingAMissingInput {
 
     fn identifier() -> &'static str {
         "filter-missing-planes-of"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

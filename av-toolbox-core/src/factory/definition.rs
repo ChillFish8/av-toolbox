@@ -5,7 +5,7 @@ use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::StageInfo;
+use super::{StageInfo, summary_of};
 use crate::demand::intern;
 use crate::{
     ArgsError,
@@ -45,6 +45,7 @@ impl<D: StageDefinition> Definition<D> {
 
         let full_identifier = format!("{}/{}", D::package(), D::identifier());
 
+        Self::check_description(&full_identifier)?;
         Self::check_planes_of(&full_identifier)?;
         Self::check_artefacts(&full_identifier)?;
 
@@ -84,6 +85,7 @@ impl<D: StageDefinition> Definition<D> {
             identifier: D::identifier(),
             full_identifier: &self.full_identifier,
             tags: D::tags(),
+            description: D::description(),
             schema: &self.schema,
             inputs: D::inputs(),
             artefacts: StageArtefacts::of::<D>(),
@@ -274,6 +276,18 @@ impl<D: StageDefinition> Definition<D> {
             package: D::package().to_string(),
             identifier: D::identifier().to_string(),
             segment: label,
+        })
+    }
+
+    fn check_description(full_identifier: &str) -> Result<(), RegistryError> {
+        let description = D::description();
+        let summary = summary_of(description);
+        if !summary.is_empty() {
+            return Ok(());
+        }
+
+        Err(RegistryError::MissingDescription {
+            identifier: full_identifier.to_string(),
         })
     }
 }

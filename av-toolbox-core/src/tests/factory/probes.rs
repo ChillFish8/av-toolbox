@@ -62,6 +62,10 @@ impl StageDefinition for Probing {
         "probing"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn probes(args: &Self::Args) -> Vec<InputProbe> {
         let input = if args.missing { "missing" } else { "reference" };
         let probe = InputProbe {
@@ -231,6 +235,10 @@ impl StageDefinition for Seekable {
 
     fn identifier() -> &'static str {
         "seekable"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

@@ -201,6 +201,10 @@ impl StageDefinition for HostDefinition {
         "host"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
         SIGNATURE
@@ -280,6 +284,10 @@ fn an_identifier_segment_containing_a_slash_is_rejected() {
 
         fn identifier() -> &'static str {
             "nl4d"
+        }
+
+        fn description() -> &'static str {
+            "A stage used by tests."
         }
 
         fn inputs() -> &'static InputSignature {

@@ -70,6 +70,10 @@ impl StageDefinition for Counted {
         "counted"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }

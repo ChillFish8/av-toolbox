@@ -52,6 +52,7 @@ pub struct StageInfo<'a> {
     identifier: &'static str,
     full_identifier: &'a str,
     tags: &'static [Tag],
+    description: &'static str,
     schema: &'a Value,
     inputs: &'static InputSignature,
     artefacts: StageArtefacts,
@@ -78,6 +79,21 @@ impl<'a> StageInfo<'a> {
         self.tags
     }
 
+    /// What this stage does, its summary line then any explanation.
+    pub fn description(&self) -> &'static str {
+        self.description
+    }
+
+    /// The first line of the description.
+    pub fn summary(&self) -> &'static str {
+        summary_of(self.description)
+    }
+
+    /// The explanation after the description's first blank line, when it has one.
+    pub fn details(&self) -> Option<&'static str> {
+        details_of(self.description)
+    }
+
     pub fn schema(&self) -> &'a Value {
         self.schema
     }
@@ -90,6 +106,21 @@ impl<'a> StageInfo<'a> {
     pub fn artefacts(&self) -> StageArtefacts {
         self.artefacts
     }
+}
+
+fn summary_of(description: &str) -> &str {
+    let first_line = description.lines().next().unwrap_or("");
+    first_line.trim()
+}
+
+fn details_of(description: &str) -> Option<&str> {
+    let (_, rest) = description.split_once("\n\n")?;
+    let trimmed = rest.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed)
 }
 
 /// Prepares stages of one kind without naming their concrete definition.
@@ -291,5 +322,32 @@ impl PreparedStage {
             Self::Sink(prepared) => prepared.residency(),
             Self::Crossing(crossing) => crossing.to_side(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_summary_is_the_first_line_trimmed() {
+        assert_eq!(summary_of("  Removes noise.  \n\nMore."), "Removes noise.");
+    }
+
+    #[test]
+    fn the_details_are_everything_after_the_first_blank_line() {
+        let description = "Removes noise.\n\nFirst paragraph.\n\nSecond paragraph.\n";
+
+        assert_eq!(details_of(description), Some("First paragraph.\n\nSecond paragraph."));
+    }
+
+    #[test]
+    fn a_one_line_description_has_no_details() {
+        assert_eq!(details_of("Removes noise."), None);
+    }
+
+    #[test]
+    fn blank_details_are_none() {
+        assert_eq!(details_of("Removes noise.\n\n   \n"), None);
     }
 }

@@ -83,6 +83,10 @@ impl StageDefinition for ExampleDefinition {
         "nl4d"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn tags() -> &'static [Tag] {
         &[Tag::Denoise]
     }

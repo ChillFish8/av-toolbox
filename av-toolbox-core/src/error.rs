@@ -37,6 +37,8 @@ pub enum RegistryError {
         identifier: String,
         segment: &'static str,
     },
+    #[error("stage {identifier} has no description")]
+    MissingDescription { identifier: String },
     #[error("a {kind} stage with the identifier {identifier} is already registered")]
     DuplicateStage { kind: StageKind, identifier: String },
     #[error("source {identifier} declares inputs, sources take no inputs")]

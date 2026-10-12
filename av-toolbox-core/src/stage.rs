@@ -182,6 +182,10 @@ pub trait StageInstance: Send + 'static {
 ///         "nl4d"
 ///     }
 ///
+///     fn description() -> &'static str {
+///         "Removes noise by filtering matching blocks across frames."
+///     }
+///
 ///     fn inputs() -> &'static InputSignature {
 ///         const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
 ///         SIGNATURE
@@ -236,6 +240,11 @@ pub trait StageDefinition: 'static {
     fn package() -> &'static str;
 
     fn identifier() -> &'static str;
+
+    /// What this stage does, for someone choosing stages for a pipeline.
+    ///
+    /// The first line is a short summary. A longer explanation may follow after a blank line.
+    fn description() -> &'static str;
 
     fn tags() -> &'static [Tag] {
         &[]
@@ -541,6 +550,10 @@ mod tests {
 
         fn identifier() -> &'static str {
             "nl4d"
+        }
+
+        fn description() -> &'static str {
+            "A stage used by tests."
         }
 
         fn inputs() -> &'static InputSignature {

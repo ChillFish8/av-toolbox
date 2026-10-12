@@ -53,6 +53,10 @@ impl StageDefinition for TemporalExample {
         "temporal"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn parallelism(args: &Self::Args) -> Parallelism {
         if args.radius == 0 {
             Parallelism::Frame
@@ -143,6 +147,10 @@ impl StageDefinition for ChunkAuthorityExample {
 
     fn identifier() -> &'static str {
         "chunk-authority"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

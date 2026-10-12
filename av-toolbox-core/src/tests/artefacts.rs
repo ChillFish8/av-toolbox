@@ -127,6 +127,10 @@ impl<const ARTEFACTS: usize> StageDefinition for Declaring<ARTEFACTS> {
         "declaring"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn artefacts() -> &'static [ArtefactDecl] {
         match ARTEFACTS {
             0 => GOOD,
@@ -265,6 +269,10 @@ impl StageDefinition for Files {
         "files"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         &InputSignature::EMPTY
     }
@@ -292,6 +300,10 @@ impl StageDefinition for ReadingFiles {
 
     fn identifier() -> &'static str {
         "reading-files"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {
@@ -405,6 +417,10 @@ impl StageDefinition for LogSink {
         "log"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature =
             &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
@@ -459,6 +475,10 @@ impl StageDefinition for LogMetaSink {
         "log"
     }
 
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
     fn inputs() -> &'static InputSignature {
         const SIGNATURE: &InputSignature =
             &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
@@ -499,6 +519,10 @@ impl StageDefinition for ClashingArtefactSink {
 
     fn identifier() -> &'static str {
         "log"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
     }
 
     fn inputs() -> &'static InputSignature {

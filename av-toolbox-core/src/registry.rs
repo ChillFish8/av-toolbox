@@ -566,6 +566,10 @@ mod tests {
             "nl4d"
         }
 
+        fn description() -> &'static str {
+            "A stage used by tests."
+        }
+
         fn inputs() -> &'static InputSignature {
             const SIGNATURE: &InputSignature = &InputSignature::new(&[InputParam::required("reference")]);
             SIGNATURE
@@ -591,6 +595,10 @@ mod tests {
 
         fn identifier() -> &'static str {
             "file"
+        }
+
+        fn description() -> &'static str {
+            "A stage used by tests."
         }
 
         fn inputs() -> &'static InputSignature {
@@ -634,6 +642,10 @@ mod tests {
 
         fn identifier() -> &'static str {
             "live"
+        }
+
+        fn description() -> &'static str {
+            "A stage used by tests."
         }
 
         fn inputs() -> &'static InputSignature {
@@ -682,6 +694,10 @@ mod tests {
 
         fn identifier() -> &'static str {
             "greedy"
+        }
+
+        fn description() -> &'static str {
+            "A stage used by tests."
         }
 
         fn inputs() -> &'static InputSignature {
@@ -870,6 +886,10 @@ mod tests {
             "log"
         }
 
+        fn description() -> &'static str {
+            "A stage used by tests."
+        }
+
         fn inputs() -> &'static InputSignature {
             const SIGNATURE: &InputSignature =
                 &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
@@ -910,6 +930,10 @@ mod tests {
 
         fn identifier() -> &'static str {
             "log"
+        }
+
+        fn description() -> &'static str {
+            "A stage used by tests."
         }
 
         fn inputs() -> &'static InputSignature {
@@ -1008,6 +1032,10 @@ mod tests {
 
         fn identifier() -> &'static str {
             if UNLOAD { "unload" } else { "upload" }
+        }
+
+        fn description() -> &'static str {
+            "A stage used by tests."
         }
 
         fn inputs() -> &'static InputSignature {
