@@ -8,3 +8,4 @@ __pycache__/
 *.html
 /.vcpkg
 /vcpkg_installed
+/artefacts
