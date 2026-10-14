@@ -122,6 +122,8 @@ const fn check_one_authority(params: &[InputParam]) {
 
 impl InputSignature {
     pub const EMPTY: Self = Self::new(&[]);
+    /// The signature every artefact sink declares, taking any number of positional inputs.
+    pub const ARTEFACTS: Self = Self::with_variadic(&[]);
 
     pub const fn new(params: &'static [InputParam]) -> Self {
         check_one_authority(params);

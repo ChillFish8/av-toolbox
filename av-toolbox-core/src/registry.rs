@@ -17,6 +17,7 @@ use crate::{
     FilterDefinition,
     InputArgument,
     InputDemand,
+    InputSignature,
     LayerDemand,
     MaskDefinition,
     MetaSinkDefinition,
@@ -196,12 +197,13 @@ impl PipelineRegistry {
         insert(&mut self.meta_sinks, definition)
     }
 
-    /// Registers an artefact sink, which shares the sink identifiers and takes no inputs.
+    /// Registers an artefact sink, which shares the sink identifiers and declares
+    /// [InputSignature::ARTEFACTS](crate::InputSignature::ARTEFACTS).
     pub fn register_artefact_sink<D: ArtefactSinkDefinition>(&mut self) -> Result<(), RegistryError> {
         let definition = Definition::<D>::new(StageKind::Sink)?;
         let identifier = definition.full_identifier();
-        if !D::inputs().is_empty() {
-            return Err(RegistryError::ArtefactSinkTakesInputs {
+        if *D::inputs() != InputSignature::ARTEFACTS {
+            return Err(RegistryError::ArtefactSinkSignature {
                 identifier: identifier.to_string(),
             });
         }

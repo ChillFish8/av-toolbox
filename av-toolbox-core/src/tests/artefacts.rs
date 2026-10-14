@@ -274,7 +274,7 @@ impl StageDefinition for Files {
     }
 
     fn inputs() -> &'static InputSignature {
-        &InputSignature::EMPTY
+        &InputSignature::ARTEFACTS
     }
 }
 
@@ -288,7 +288,7 @@ impl ArtefactSinkDefinition for Files {
     }
 }
 
-/// An artefact sink that declares an input, which artefact sinks cannot take.
+/// An artefact sink that declares a named input.
 struct ReadingFiles;
 
 impl StageDefinition for ReadingFiles {
@@ -313,6 +313,39 @@ impl StageDefinition for ReadingFiles {
 }
 
 impl ArtefactSinkDefinition for ReadingFiles {
+    fn selection(args: &Self::Args) -> KeyFilter {
+        KeyFilter::new(args.include.clone(), None)
+    }
+
+    fn build(_args: Self::Args) -> Result<Box<dyn ArtefactSink>, StageError> {
+        Ok(Box::new(FilesSink))
+    }
+}
+
+/// An artefact sink that declares no inputs.
+struct SilentFiles;
+
+impl StageDefinition for SilentFiles {
+    type Args = FilesArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "silent-files"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
+    fn inputs() -> &'static InputSignature {
+        &InputSignature::EMPTY
+    }
+}
+
+impl ArtefactSinkDefinition for SilentFiles {
     fn selection(args: &Self::Args) -> KeyFilter {
         KeyFilter::new(args.include.clone(), None)
     }
@@ -370,15 +403,30 @@ fn an_artefact_sink_with_bad_arguments_is_refused() {
 }
 
 #[test]
-fn an_artefact_sink_declaring_inputs_is_refused() {
+fn an_artefact_sink_declaring_a_named_input_is_refused() {
     let mut registry = PipelineRegistry::new();
 
     let result = registry.register_artefact_sink::<ReadingFiles>();
 
-    assert!(matches!(
-        result,
-        Err(RegistryError::ArtefactSinkTakesInputs { .. })
-    ));
+    assert!(matches!(result, Err(RegistryError::ArtefactSinkSignature { .. })));
+}
+
+#[test]
+fn an_artefact_sink_declaring_no_inputs_is_refused() {
+    let mut registry = PipelineRegistry::new();
+
+    let result = registry.register_artefact_sink::<SilentFiles>();
+
+    assert!(matches!(result, Err(RegistryError::ArtefactSinkSignature { .. })));
+}
+
+#[test]
+fn the_artefacts_signature_is_variadic_with_no_params() {
+    let signature = InputSignature::ARTEFACTS;
+
+    assert!(signature.is_variadic());
+    assert!(signature.params().is_empty());
+    assert_eq!(signature.variadic_accepts(), None);
 }
 
 #[test]
@@ -526,7 +574,7 @@ impl StageDefinition for ClashingArtefactSink {
     }
 
     fn inputs() -> &'static InputSignature {
-        &InputSignature::EMPTY
+        &InputSignature::ARTEFACTS
     }
 }
 

@@ -43,8 +43,8 @@ pub enum RegistryError {
     DuplicateStage { kind: StageKind, identifier: String },
     #[error("source {identifier} declares inputs, sources take no inputs")]
     SourceTakesInputs { identifier: String },
-    #[error("artefact sink {identifier} declares inputs, artefact sinks take no inputs")]
-    ArtefactSinkTakesInputs { identifier: String },
+    #[error("artefact sink {identifier} must declare InputSignature::ARTEFACTS as its inputs")]
+    ArtefactSinkSignature { identifier: String },
     #[error("the schema generated for stage {identifier} is not valid: {reason}")]
     InvalidSchema { identifier: String, reason: String },
     #[error("the identifier {identifier} is reserved for the transfers the graph inserts")]

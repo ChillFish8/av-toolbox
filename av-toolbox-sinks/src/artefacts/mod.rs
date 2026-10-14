@@ -48,7 +48,7 @@ impl StageDefinition for Files {
     }
 
     fn inputs() -> &'static InputSignature {
-        &InputSignature::EMPTY
+        &InputSignature::ARTEFACTS
     }
 }
 

@@ -337,7 +337,7 @@ impl StageDefinition for Collecting {
     }
 
     fn inputs() -> &'static InputSignature {
-        &InputSignature::EMPTY
+        &InputSignature::ARTEFACTS
     }
 }
 

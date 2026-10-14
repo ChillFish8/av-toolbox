@@ -455,7 +455,9 @@ pub trait MetaSinkDefinition: StageDefinition {
 
 /// A sink that writes the artefacts stages hand over, rather than frames.
 ///
-/// It takes no inputs and is handed its artefacts once the run has ended.
+/// It names the stages it takes artefacts from as its inputs, declaring
+/// [InputSignature::ARTEFACTS](crate::InputSignature::ARTEFACTS), and is handed its artefacts once
+/// the run has ended.
 pub trait ArtefactSinkDefinition: StageDefinition {
     /// The artefacts this sink takes, matched against keys such as `filter.grain.table`.
     fn selection(args: &Self::Args) -> KeyFilter;
