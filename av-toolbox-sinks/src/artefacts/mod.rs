@@ -23,10 +23,10 @@ const STAGE: &str = "artefacts/files";
 pub(crate) struct FilesArgs {
     /// The directory to write into, created when there is something to write.
     pub(crate) directory: PathBuf,
-    /// Artefacts to keep, such as `filter.grain.*`, where `*` matches any run of characters. Every artefact is
-    /// kept when unset.
+    /// Artefacts to keep by name, such as `grain_table`, where `*` matches any run of characters. Every artefact
+    /// the inputs declare is kept when unset.
     pub(crate) include: Option<Vec<Pattern>>,
-    /// Artefacts to drop, which wins over `include`.
+    /// Artefacts to drop by name, which wins over `include`.
     pub(crate) exclude: Option<Vec<Pattern>>,
 }
 
@@ -283,13 +283,14 @@ mod tests {
 
     #[test]
     fn the_selection_reads_include_and_exclude() {
-        let value = json!({ "directory": "out", "include": ["filter.*"], "exclude": ["*.table"] });
+        let value = json!({ "directory": "out", "include": ["grain_*", "cuts"], "exclude": ["*_debug"] });
         let parsed: FilesArgs = serde_json::from_value(value).expect("valid args");
 
         let selection = Files::selection(&parsed);
 
-        assert!(selection.keeps("filter.grain.cuts"));
-        assert!(!selection.keeps("filter.grain.table"));
-        assert!(!selection.keeps("mask.edges.map"));
+        assert!(selection.keeps("grain_table"));
+        assert!(selection.keeps("cuts"));
+        assert!(!selection.keeps("grain_debug"));
+        assert!(!selection.keeps("frames"));
     }
 }

@@ -116,6 +116,65 @@ impl FilterDefinition for Grain {
     }
 }
 
+/// A pass through filter declaring a structured `shots`.
+pub(super) struct Scenes;
+
+impl StageDefinition for Scenes {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "scenes"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
+    fn artefacts() -> &'static [ArtefactDecl] {
+        const DECLARED: &[ArtefactDecl] = &[ArtefactDecl::structured("shots", "Where each shot starts.")];
+        DECLARED
+    }
+
+    fn inputs() -> &'static InputSignature {
+        Grain::inputs()
+    }
+}
+
+impl FilterDefinition for Scenes {
+    type Side = DeviceSide;
+
+    fn accepts_input(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        index: usize,
+        offered: StreamFormat,
+        inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Grain::accepts_input(capabilities, args, index, offered, inputs)
+    }
+
+    fn produces(
+        capabilities: &Capabilities,
+        args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        Grain::produces(capabilities, args, chosen)
+    }
+
+    fn build<R: Runtime>(
+        context: &BuildContext<R>,
+        args: Self::Args,
+        inputs: BoundInputs,
+        formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Grain::build(context, args, inputs, formats)
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FilesArgs {
     include: Option<Vec<Pattern>>,

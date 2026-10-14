@@ -459,7 +459,7 @@ pub trait MetaSinkDefinition: StageDefinition {
 /// [InputSignature::ARTEFACTS](crate::InputSignature::ARTEFACTS), and is handed its artefacts once
 /// the run has ended.
 pub trait ArtefactSinkDefinition: StageDefinition {
-    /// The artefacts this sink takes, matched against keys such as `filter.grain.table`.
+    /// The artefacts this sink takes from its inputs, matched against artefact names such as `grain_table`.
     fn selection(args: &Self::Args) -> KeyFilter;
 
     fn build(args: Self::Args) -> Result<Box<dyn ArtefactSink>, StageError>;

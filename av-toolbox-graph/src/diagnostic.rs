@@ -61,8 +61,10 @@ pub enum DiagnosticCode {
     UnmatchedArtefactPattern,
     /// An artefact sink's include and exclude keep no artefact.
     ArtefactSinkSelectsNothing,
-    /// An artefact sink was given inputs.
-    ArtefactSinkHasInputs,
+    /// An artefact sink names no stage to take artefacts from.
+    ArtefactSinkNoInputs,
+    /// An artefact sink names a stage that declares no artefacts.
+    InputDeclaresNoArtefacts,
     /// A stage probes with a kind no one registered.
     UnknownProbe,
     /// A stage could not use what its probes found.
@@ -109,7 +111,8 @@ impl DiagnosticCode {
             Self::RemovedTransforms => "removed-transforms",
             Self::UnmatchedArtefactPattern => "unmatched-artefact-pattern",
             Self::ArtefactSinkSelectsNothing => "artefact-sink-selects-nothing",
-            Self::ArtefactSinkHasInputs => "artefact-sink-has-inputs",
+            Self::ArtefactSinkNoInputs => "artefact-sink-no-inputs",
+            Self::InputDeclaresNoArtefacts => "input-declares-no-artefacts",
             Self::UnknownProbe => "unknown-probe",
             Self::ProbeFailed => "probe-failed",
             Self::UnseekableSource => "unseekable-source",
@@ -379,8 +382,12 @@ mod tests {
             "artefact-sink-selects-nothing"
         );
         assert_eq!(
-            DiagnosticCode::ArtefactSinkHasInputs.as_str(),
-            "artefact-sink-has-inputs"
+            DiagnosticCode::ArtefactSinkNoInputs.as_str(),
+            "artefact-sink-no-inputs"
+        );
+        assert_eq!(
+            DiagnosticCode::InputDeclaresNoArtefacts.as_str(),
+            "input-declares-no-artefacts"
         );
     }
 

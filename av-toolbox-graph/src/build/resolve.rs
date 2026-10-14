@@ -17,7 +17,7 @@ pub(crate) struct Resolution<'a> {
     pub(crate) stages: Vec<Option<ResolvedStage<'a>>>,
     /// Every name a spec declared, mapped to the index of its first definition.
     pub(crate) by_name: HashMap<String, usize>,
-    /// The index of every spec naming an artefact sink, which never becomes a node.
+    /// The index of every spec naming an artefact sink whose inputs all name a stage, which never becomes a node.
     pub(crate) artefact_sinks: Vec<usize>,
 }
 
@@ -46,13 +46,12 @@ pub(crate) fn resolve<'a>(
 
         let identifier = spec.stage_type.value.as_str();
         let takes_artefacts = spec.kind == StageKind::Sink && registry.is_artefact_sink(identifier);
-        if takes_artefacts {
+        let inputs_accepted = check_inputs(spec, specs, &by_name, diagnostics);
+        if takes_artefacts && inputs_accepted {
             artefact_sinks.push(index);
-            stages.push(None);
-            continue;
         }
 
-        if !check_inputs(spec, specs, &by_name, diagnostics) {
+        if takes_artefacts || !inputs_accepted {
             stages.push(None);
             continue;
         }

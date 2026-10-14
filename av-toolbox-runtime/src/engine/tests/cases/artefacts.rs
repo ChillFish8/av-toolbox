@@ -32,7 +32,7 @@ fn a_whole_stream_stage_hands_over_one_piece() {
         source_spec("input", &[0, 0, 0], 0),
         artefacting_spec("count", "input", 1, false, "counting"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
 
     let engine = build_engine(&specs, Settings::default());
@@ -53,7 +53,7 @@ fn pieces_from_a_chunked_stage_on_two_workers_merge_in_chunk_order() {
         source_spec("input", &[0, 0, 1, 1, 1, 2, 3, 3], 0),
         artefacting_spec("count", "input", 2, true, "counting"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
     let (graph, solved) = planned_graph(&specs);
 
@@ -79,7 +79,7 @@ fn a_per_frame_stage_in_a_chunk_routed_region_merges_in_chunk_order() {
         artefacting_spec("count", "input", 2, true, "counting"),
         tally,
         sink_spec("out", "tally"),
-        collecting_spec("files", &["filter.tally.frames"]),
+        collecting_spec("files", "tally", &["frames"]),
     ];
     let (graph, solved) = planned_graph(&specs);
 
@@ -103,7 +103,7 @@ fn a_chunked_worker_given_no_chunk_hands_over_nothing() {
         source_spec("input", &[0, 0, 1], 0),
         artefacting_spec("count", "input", 4, true, "counting"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
     let (graph, solved) = planned_graph(&specs);
 
@@ -125,7 +125,7 @@ fn every_worker_is_told_what_is_wanted() {
         source_spec("input", &[0, 1, 2, 3], 0),
         artefacting_spec("count", "input", 2, true, "counting"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
 
     let engine = build_engine(&specs, Settings::default());
@@ -141,7 +141,7 @@ fn a_failing_merge_fails_the_run() {
         source_spec("input", &[0, 0], 0),
         artefacting_spec("count", "input", 1, false, "broken"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.broken"]),
+        collecting_spec("files", "count", &["broken"]),
     ];
 
     let engine = build_engine(&specs, Settings::default());
@@ -158,7 +158,7 @@ fn a_cancelled_run_hands_nothing_to_an_artefact_sink() {
         source_spec("input", &[0, 0, 0, 0], 0),
         artefacting_spec("count", "input", 1, false, "counting"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
 
     let engine = build_engine(&specs, Settings::default());
@@ -177,7 +177,7 @@ fn a_failing_artefact_sink_fails_the_run_naming_it() {
         source_spec("input", &[0, 0], 0),
         artefacting_spec("count", "input", 1, false, "opaque"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.bytes"]),
+        collecting_spec("files", "count", &["bytes"]),
     ];
 
     let engine = build_engine(&specs, Settings::default());
@@ -192,7 +192,7 @@ fn a_stage_refusing_what_is_wanted_fails_the_build_once_naming_it() {
         source_spec("input", &[0, 0, 1, 1], 0),
         artefacting_spec("count", "input", 2, true, "refusing"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
     let (graph, solved) = planned_graph(&specs);
 
@@ -220,7 +220,7 @@ fn a_discarding_engine_writes_nothing() {
         source_spec("input", &[0, 0, 0], 0),
         artefacting_spec("count", "input", 1, false, "counting"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
 
     let engine = build_engine(&specs, Settings::default()).discarding_artefacts();
@@ -238,7 +238,7 @@ fn a_discarding_engine_still_fails_a_broken_merge() {
         source_spec("input", &[0, 0], 0),
         artefacting_spec("count", "input", 1, false, "broken"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.broken"]),
+        collecting_spec("files", "count", &["broken"]),
     ];
 
     let engine = build_engine(&specs, Settings::default()).discarding_artefacts();

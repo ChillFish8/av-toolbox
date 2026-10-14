@@ -19,7 +19,7 @@ fn counting_graph() -> (CompiledGraph, NodeId) {
         source_spec("input", &[0, 0], 0),
         artefacting_spec("count", "input", 1, true, "counting"),
         sink_spec("out", "count"),
-        collecting_spec("files", &["filter.count.frames"]),
+        collecting_spec("files", "count", &["frames"]),
     ];
     let (graph, _) = planned_graph(&specs);
     let count = graph

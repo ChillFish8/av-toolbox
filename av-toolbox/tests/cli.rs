@@ -966,6 +966,7 @@ inputs = ["denoise"]
 
 [sink.grain]
 type = "artefacts/files"
+inputs = ["denoise"]
 args.directory = "{}"
 "##,
             grain_text

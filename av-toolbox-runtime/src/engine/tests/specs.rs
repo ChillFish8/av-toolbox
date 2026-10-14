@@ -268,8 +268,9 @@ pub(crate) fn artefacting_spec(
 }
 
 /// An artefact sink recording what it is handed, keeping only what `include` matches.
-pub(crate) fn collecting_spec(name: &str, include: &[&str]) -> StageSpec {
+pub(crate) fn collecting_spec(name: &str, input: &str, include: &[&str]) -> StageSpec {
     let mut collecting = spec(StageKind::Sink, name, "test/collecting");
+    collecting.inputs = vec![positional(input)];
     collecting.args = Spanned::unknown(json!({ "include": include }));
     collecting
 }

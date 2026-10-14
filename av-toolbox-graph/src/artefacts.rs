@@ -74,7 +74,7 @@ impl ArtefactSinkNode {
         self.span
     }
 
-    /// The node and artefact name of everything this sink takes, in node order and then declaration order.
+    /// The node and artefact name of everything this sink takes, in input order and then declaration order.
     pub fn selected(&self) -> &[(NodeId, &'static str)] {
         &self.selected
     }

@@ -16,7 +16,7 @@ mod specs;
 use av_toolbox_core::testing::{FixtureCuts, HostStamping, Stamping};
 use av_toolbox_core::{Parallelism, PipelineRegistry};
 
-use self::artefacts::{Files, Grain};
+use self::artefacts::{Files, Grain, Scenes};
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
 use self::endpoints::{Deep, File, FloatFirst, Stdout, Wide, WideningSource};
@@ -122,6 +122,7 @@ pub(crate) fn registry_without_probe_kinds() -> PipelineRegistry {
         .register_meta_sink::<TagReading>()
         .expect("should register");
     registry.register_filter::<Grain>().expect("should register");
+    registry.register_filter::<Scenes>().expect("should register");
     registry
         .register_artefact_sink::<Files>()
         .expect("should register");
@@ -144,7 +145,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 50);
+        assert_eq!(identifiers.len(), 51);
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));

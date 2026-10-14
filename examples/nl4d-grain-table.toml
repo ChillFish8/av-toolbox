@@ -42,5 +42,6 @@ args.path = "{{ output }}"
 
 [sink.grain]
 type = "artefacts/files"
+inputs = ["denoise"]
 args.directory = "{{ grain }}"
-args.include = ["*.grain_table"]
+args.include = ["grain_table"]
