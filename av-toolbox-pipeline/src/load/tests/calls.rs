@@ -371,7 +371,7 @@ inputs = ["spare"]
 }
 
 #[test]
-fn an_unread_output_keeps_its_stages_beside_an_artefact_sink() {
+fn an_output_only_an_artefact_sink_reads_keeps_its_stages() {
     let extra = r#"
 [filter.spare]
 type = "test/denoise"
@@ -383,6 +383,35 @@ inputs = ["spare"]
     let reports = r#"
 [sink.reports]
 type = "artefacts/files"
+inputs = ["denoised.extra"]
+args.directory = "reports"
+"#;
+    let part = format!("{PART}{extra}");
+    let read_clean = MAIN.replace("inputs = [\"denoised\"]", "inputs = [\"denoised.clean\"]");
+    let main = format!("{read_clean}{reports}");
+
+    let loaded = loaded(&files(&main, &part), "/work/main.toml", &Supplied::new());
+    let reports = stage(&loaded.specs, "reports");
+    let names: Vec<&str> = loaded.specs.iter().map(|spec| spec.name.value.as_str()).collect();
+
+    assert!(names.contains(&"denoised.spare"));
+    assert_eq!(reports.inputs[0].value.target, "denoised.spare");
+}
+
+#[test]
+fn an_unread_output_beside_an_artefact_sink_drops_its_stages() {
+    let extra = r#"
+[filter.spare]
+type = "test/denoise"
+inputs = ["clip"]
+
+[output.extra]
+inputs = ["spare"]
+"#;
+    let reports = r#"
+[sink.reports]
+type = "artefacts/files"
+inputs = ["denoised.clean"]
 args.directory = "reports"
 "#;
     let part = format!("{PART}{extra}");
@@ -392,7 +421,7 @@ args.directory = "reports"
     let loaded = loaded(&files(&main, &part), "/work/main.toml", &Supplied::new());
     let names: Vec<&str> = loaded.specs.iter().map(|spec| spec.name.value.as_str()).collect();
 
-    assert!(names.contains(&"denoised.spare"));
+    assert!(!names.contains(&"denoised.spare"));
     assert!(names.contains(&"denoised.denoise"));
 }
 
