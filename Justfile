@@ -30,6 +30,9 @@ vcpkg_triplet := env("AVTB_VCPKG_TRIPLET", if os() == "macos" { "arm64-osx-relea
 # The backend `build-static` builds when none is given.
 static_features := if os() == "macos" { "metal" } else { "vulkan" }
 
+# The backend features used for the `run` alias
+run_features := static_features + ",ffms2,bestsource"
+
 # Formats the whole workspace.
 format:
     cargo +nightly fmt --all
@@ -43,6 +46,19 @@ test:
     cargo nextest run --cargo-profile test-release --workspace --features {{device_features}}
     cargo test --doc --profile test-release --workspace --features {{device_features}}
     cargo check --workspace --features av-toolbox-gpu/{{test_backend}}
+
+# Helper run alias which enabled the platform default features
+run *ARGS:
+    cargo run --release --features {{run_features}} -- {{ARGS}}
+
+# Execute a pipeline and pipe the output to ffmpeg into a lossless h264 file.
+#
+# The pipeline must write its y4m stream to standard output.
+execute-to-lossless pipeline output *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run --release --features {{run_features}} -- execute "{{pipeline}}" {{ARGS}} \
+        | ffmpeg -hide_banner -nostdin -loglevel warning -i - -c:v libx264 -preset veryfast -qp 0 "{{output}}"
 
 # Every test that runs without an accelerator.
 test-fast:
