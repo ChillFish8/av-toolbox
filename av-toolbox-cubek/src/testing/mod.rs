@@ -13,6 +13,7 @@ mod eedi3;
 mod h264;
 mod hysteresis;
 mod ivtc;
+mod labels;
 mod lineart;
 mod matrix;
 mod motion;
@@ -152,6 +153,7 @@ pub use self::ivtc::{
     vfm_decisions,
     vfm_matched_frames,
 };
+pub use self::labels::reference_labels;
 pub use self::lineart::{
     reference_clamped_merge,
     reference_darken,

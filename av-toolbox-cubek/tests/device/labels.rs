@@ -1,8 +1,9 @@
 use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, Settled, UNSET, count, keep, label};
+use av_toolbox_cubek::testing::{SplitMix, reference_labels};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::support::{Sizing, backend, empty, plane, read_u8, read_u32, upload_u8};
+use crate::support::{Sizing, backend, empty, plane, read_u8, read_u32, upload_u8, upload_u32};
 
 /// What labelling a mark plane gave.
 struct Labelled {
@@ -19,6 +20,8 @@ struct Label {
     width: u32,
     height: u32,
     minimum: u32,
+    /// A value every label starts as before labelling, in place of a zeroed plane.
+    stale: Option<u32>,
 }
 
 impl BuildTask for Label {
@@ -32,7 +35,13 @@ impl BuildTask for Label {
 
         let marks = upload_u8(client, &self.marks);
         let counted = upload_u8(client, &self.counted);
-        let labels = empty(client, samples * size_of::<u32>());
+        let labels = match self.stale {
+            Some(value) => {
+                let filled = vec![value; samples];
+                upload_u32(client, &filled)
+            },
+            None => empty(client, samples * size_of::<u32>()),
+        };
         let counts = empty(client, samples * size_of::<u32>());
         let changed = empty(client, size_of::<u32>());
         let kept = empty(client, samples);
@@ -103,6 +112,7 @@ fn run(rows: &[&str], minimum: u32) -> Labelled {
         width,
         height,
         minimum,
+        stale: None,
     })
 }
 
@@ -180,9 +190,159 @@ fn counting_other_marks_flags_the_blobs_they_touch() {
         width,
         height,
         minimum: 1,
+        stale: None,
     });
 
     assert_eq!(labelled.kept[0], 255);
     assert_eq!(labelled.kept[6], 255);
     assert_eq!(labelled.kept[18], 0);
+}
+
+fn label_marks(marks: Vec<u8>, width: u32, height: u32, stale: Option<u32>) -> Labelled {
+    backend().build(Label {
+        counted: marks.clone(),
+        marks,
+        width,
+        height,
+        minimum: 1,
+        stale,
+    })
+}
+
+/// Fails on the first label that differs, naming how many differ in all.
+fn assert_labels(actual: &[u32], expected: &[u32]) {
+    assert_eq!(actual.len(), expected.len());
+
+    let mismatches: Vec<usize> = actual
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .filter(|(_, (found, wanted))| found != wanted)
+        .map(|(index, _)| index)
+        .collect();
+
+    let Some(first) = mismatches.first() else {
+        return;
+    };
+
+    panic!(
+        "{} labels differ, the first at {first}: got {}, expected {}",
+        mismatches.len(),
+        actual[*first],
+        expected[*first],
+    );
+}
+
+/// A path that runs the full width along every even row, joined at alternating ends.
+fn serpentine(width: u32, height: u32) -> Vec<u8> {
+    let mut marks = vec![0u8; (width * height) as usize];
+
+    for row in 0..height {
+        for column in 0..width {
+            let along = row.is_multiple_of(2);
+            let right_turn = row % 4 == 1 && column == width - 1;
+            let left_turn = row % 4 == 3 && column == 0;
+            if along || right_turn || left_turn {
+                marks[(row * width + column) as usize] = 255;
+            }
+        }
+    }
+
+    marks
+}
+
+fn checkerboard(width: u32, height: u32) -> Vec<u8> {
+    (0..width * height)
+        .map(|index| {
+            let column = index % width;
+            let row = index / width;
+            if (column + row).is_multiple_of(2) { 255 } else { 0 }
+        })
+        .collect()
+}
+
+fn check_against_reference(marks: Vec<u8>, width: u32, height: u32) {
+    let expected = reference_labels(&marks, width, height);
+
+    let labelled = label_marks(marks, width, height, None);
+
+    assert_labels(&labelled.labels, &expected);
+}
+
+#[test]
+fn a_serpentine_matches_the_reference() {
+    let marks = serpentine(257, 255);
+
+    check_against_reference(marks, 257, 255);
+}
+
+#[test]
+fn a_checkerboard_joins_through_diagonals() {
+    let marks = checkerboard(64, 48);
+    let expected = reference_labels(&marks, 64, 48);
+
+    let labelled = label_marks(marks, 64, 48, None);
+
+    assert_labels(&labelled.labels, &expected);
+    assert_eq!(labelled.labels[0], 0);
+    assert_eq!(labelled.labels[64 * 48 - 1], 0);
+}
+
+#[test]
+fn a_full_plane_is_one_component() {
+    let marks = vec![255u8; 300 * 200];
+
+    let labelled = label_marks(marks, 300, 200, None);
+
+    assert!(labelled.labels.iter().all(|label| *label == 0));
+}
+
+#[test]
+fn an_empty_plane_is_all_unset() {
+    let marks = vec![0u8; 300 * 200];
+
+    let labelled = label_marks(marks, 300, 200, None);
+
+    assert!(labelled.labels.iter().all(|label| *label == UNSET));
+}
+
+#[test]
+fn a_single_row_matches_the_reference() {
+    let marks = vec![255, 255, 0, 255, 0, 0, 255, 255, 255];
+
+    check_against_reference(marks, 9, 1);
+}
+
+#[test]
+fn a_single_column_matches_the_reference() {
+    let marks = vec![255, 255, 0, 255, 0, 0, 255, 255, 255];
+
+    check_against_reference(marks, 1, 9);
+}
+
+#[test]
+fn stale_labels_are_overwritten() {
+    let mut random = SplitMix(0x57a1e);
+    let marks: Vec<u8> = (0..65 * 33)
+        .map(|_| if random.below(100) < 45 { 255 } else { 0 })
+        .collect();
+    let expected = reference_labels(&marks, 65, 33);
+
+    let from_zero = label_marks(marks.clone(), 65, 33, Some(0));
+    let from_unset = label_marks(marks, 65, 33, Some(UNSET));
+
+    assert_labels(&from_zero.labels, &expected);
+    assert_labels(&from_unset.labels, &expected);
+}
+
+#[test]
+fn a_random_mask_matches_the_reference() {
+    let width = 1921;
+    let height = 1081;
+    let mut random = SplitMix(0x1abe_11ed);
+    let marks: Vec<u8> = (0..width * height)
+        .map(|_| if random.below(100) < 45 { 255 } else { 0 })
+        .collect();
+
+    check_against_reference(marks, width, height);
 }
