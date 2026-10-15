@@ -2,16 +2,12 @@
 // by name.
 use cubecl::prelude::*;
 
-use super::{NeighbourPlanes, read};
-use crate::Dispatch;
+use super::NeighbourPlanes;
+use crate::{Dispatch, reflect};
 
 /// Paeth's median network for 9 values, as pairs whose smaller value goes to the first index.
 ///
 /// The median ends at [MEDIAN_OF_9_AT].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the kernel selects through these from the next change")
-)]
 pub(crate) const MEDIAN_OF_9: [(usize, usize); 19] = [
     (1, 2),
     (4, 5),
@@ -34,19 +30,11 @@ pub(crate) const MEDIAN_OF_9: [(usize, usize); 19] = [
     (4, 2),
 ];
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the kernel selects through these from the next change")
-)]
 pub(crate) const MEDIAN_OF_9_AT: usize = 4;
 
 /// Devillard's `opt_med25` median network for 25 values, as pairs whose smaller value goes to the first index.
 ///
 /// The median ends at [MEDIAN_OF_25_AT].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the kernel selects through these from the next change")
-)]
 pub(crate) const MEDIAN_OF_25: [(usize, usize); 99] = [
     (0, 1),
     (3, 4),
@@ -149,35 +137,19 @@ pub(crate) const MEDIAN_OF_25: [(usize, usize); 99] = [
     (10, 12),
 ];
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the kernel selects through these from the next change")
-)]
 pub(crate) const MEDIAN_OF_25_AT: usize = 12;
 
 /// Forgetful selection over 49 values, as pairs whose smaller value goes to the first index.
 ///
 /// The median ends at [MEDIAN_OF_49_AT].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the kernel selects through these from the next change")
-)]
 pub(crate) const MEDIAN_OF_49: [(usize, usize); 624] = forgetful_selection_of_49();
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the kernel selects through these from the next change")
-)]
 pub(crate) const MEDIAN_OF_49_AT: usize = 48;
 
 /// Builds forgetful selection over 49 values.
 ///
 /// It starts with the first 26 values. Each round moves the smallest of the values in play to the front and the
 /// largest to the slot after it, drops both, and brings in the next value, until one value is left.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the kernel selects through these from the next change")
-)]
 const fn forgetful_selection_of_49() -> [(usize, usize); 624] {
     let mut pairs = [(0usize, 0usize); 624];
     let mut written = 0;
@@ -213,62 +185,104 @@ const fn forgetful_selection_of_49() -> [(usize, usize); 624] {
     pairs
 }
 
+/// Puts the smaller of two window values at `first` and the larger at `second`.
 #[cube]
-fn window_value(
-    input: &Array<f32>,
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    size: u32,
-    radius: i32,
-    slot: u32,
-) -> f32 {
-    let offset_x = (slot % size) as i32 - radius;
-    let offset_y = (slot / size) as i32 - radius;
+fn exchange(window: &mut Array<f32>, #[comptime] first: usize, #[comptime] second: usize) {
+    let first_value = window[first];
+    let second_value = window[second];
 
-    read(input, width, height, x + offset_x, y + offset_y)
+    window[first] = f32::min(first_value, second_value);
+    window[second] = f32::max(first_value, second_value);
+}
+
+/// Runs the exchange network for a window `radius` samples each side, returning the median.
+#[expect(
+    clippy::needless_range_loop,
+    reason = "the unrolled loops read the exchange tables when the kernel compiles"
+)]
+#[cube]
+fn select_median(window: &mut Array<f32>, #[comptime] radius: u32) -> f32 {
+    if comptime!(radius == 1) {
+        #[unroll]
+        for step in 0..MEDIAN_OF_9.len() {
+            exchange(
+                window,
+                comptime!(MEDIAN_OF_9[step].0),
+                comptime!(MEDIAN_OF_9[step].1),
+            );
+        }
+
+        window[MEDIAN_OF_9_AT]
+    } else if comptime!(radius == 2) {
+        #[unroll]
+        for step in 0..MEDIAN_OF_25.len() {
+            exchange(
+                window,
+                comptime!(MEDIAN_OF_25[step].0),
+                comptime!(MEDIAN_OF_25[step].1),
+            );
+        }
+
+        window[MEDIAN_OF_25_AT]
+    } else {
+        #[unroll]
+        for step in 0..MEDIAN_OF_49.len() {
+            exchange(
+                window,
+                comptime!(MEDIAN_OF_49[step].0),
+                comptime!(MEDIAN_OF_49[step].1),
+            );
+        }
+
+        window[MEDIAN_OF_49_AT]
+    }
 }
 
 #[cube(launch_unchecked)]
-fn median_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, radius: u32) {
+fn median_kernel(
+    input: &Array<f32>,
+    output: &mut Array<f32>,
+    width: u32,
+    height: u32,
+    #[comptime] radius: u32,
+) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
 
+    let size = comptime!(2 * radius + 1);
     let position = ABSOLUTE_POS as u32;
     let x = (position % width) as i32;
     let y = (position / width) as i32;
-    let size = 2 * radius + 1;
-    let count = size * size;
-    let middle = count / 2;
-    let reach = radius as i32;
+    let reach = comptime!(radius as i32);
 
-    let mut chosen = 0.0f32;
-    let mut found: u32 = 0u32;
+    let mut columns = Array::<u32>::new(comptime!(size as usize));
+    let mut row_starts = Array::<u32>::new(comptime!(size as usize));
 
-    for candidate_slot in 0..count {
-        let candidate = window_value(input, width, height, x, y, size, reach, candidate_slot);
-        let mut below = 0u32;
-        let mut equal = 0u32;
+    #[unroll]
+    for offset in 0..size {
+        let shift = comptime!(offset as i32 - reach);
+        let column = reflect(x + shift, width as i32);
+        let row = reflect(y + shift, height as i32);
 
-        for other_slot in 0..count {
-            let other = window_value(input, width, height, x, y, size, reach, other_slot);
+        columns[offset as usize] = column as u32;
+        row_starts[offset as usize] = row as u32 * width;
+    }
 
-            if other < candidate {
-                below += 1;
-            } else if other == candidate {
-                equal += 1;
-            }
-        }
+    let mut window = Array::<f32>::new(comptime!((size * size) as usize));
 
-        if found == 0u32 && below <= middle && middle < below + equal {
-            chosen = candidate;
-            found = 1u32;
+    #[unroll]
+    for window_row in 0..size {
+        #[unroll]
+        for window_column in 0..size {
+            let index = row_starts[window_row as usize] + columns[window_column as usize];
+            let slot = comptime!((window_row * size + window_column) as usize);
+
+            window[slot] = input[index as usize];
         }
     }
 
-    output[ABSOLUTE_POS] = chosen;
+    output[ABSOLUTE_POS] = select_median(&mut window, radius);
 }
 
 /// Writes the median of each sample's square window reaching `radius` samples each side.
@@ -280,6 +294,8 @@ pub fn median<R: Runtime>(
     planes: NeighbourPlanes<'_>,
     radius: u32,
 ) {
+    assert!((1..=3).contains(&radius), "radius is 1, 2 or 3");
+
     let width = planes.input.width();
     let height = planes.input.height();
     let samples = planes.output.samples();
@@ -288,7 +304,8 @@ pub fn median<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
+    // Safety: both planes hold `samples` f32 values, every read is reflected inside the plane, and the window
+    // holds every slot the network for `radius` touches.
     unsafe {
         median_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, radius);
     }
