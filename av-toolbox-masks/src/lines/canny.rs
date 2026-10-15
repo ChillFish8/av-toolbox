@@ -12,7 +12,7 @@ use av_toolbox_core::{
     StreamType,
 };
 use av_toolbox_cubek::blur::{BlurPlanes, Gaussian};
-use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, Settled, count, keep, label};
+use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, count, keep, label};
 use av_toolbox_cubek::sobel::{SobelPlanes, sobel};
 use av_toolbox_gpu::{
     BuildContext,
@@ -29,7 +29,6 @@ use av_toolbox_gpu::{
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
-use cubecl::server::ServerError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -164,10 +163,6 @@ fn no_frame() -> StageError {
     StageError::msg("lines/canny expected a frame in slot 0")
 }
 
-fn unreadable_labels(error: ServerError) -> StageError {
-    StageError::with_source("lines/canny could not read back its edge labels", error)
-}
-
 impl<R: Runtime> Mask for CannyMask<R> {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
@@ -228,16 +223,11 @@ impl<R: Runtime> Mask for CannyMask<R> {
         }
 
         let labels = Scratch::new::<u32>(context, width, height);
-        let changed = Scratch::line::<u32>(context, 1);
         let label_planes = LabelPlanes {
             marks: candidates.plane(),
             labels: labels.plane(),
-            changed: changed.plane(),
         };
-        let settled = label(&self.client, &sizing, label_planes).map_err(unreadable_labels)?;
-        if let Settled::Capped { passes } = settled {
-            tracing::warn!("lines/canny stopped joining edges after {passes} passes, so some may be split");
-        }
+        label(&self.client, &sizing, label_planes);
 
         let counts = Scratch::new::<u32>(context, width, height);
         let count_planes = CountPlanes {

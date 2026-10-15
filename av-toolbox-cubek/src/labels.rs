@@ -1,30 +1,16 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
-use cubecl::server::ServerError;
 
 use crate::{DevicePlane, Dispatch};
 
 /// The label of a pixel that is not set.
 pub const UNSET: u32 = u32::MAX;
 
-/// How many propagate and jump passes run between reads of the changed flag.
-const BATCH: u32 = 4;
-
-/// How labelling finished.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Settled {
-    /// A batch of passes changed nothing.
-    Converged { passes: u32 },
-    /// The pass cap was reached first, so a component may still carry more than one label.
-    Capped { passes: u32 },
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct LabelPlanes<'a> {
     pub marks: DevicePlane<'a>,
     pub labels: DevicePlane<'a>,
-    pub changed: DevicePlane<'a>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,52 +49,100 @@ fn clear_u32(values: &mut Array<u32>) {
     values[ABSOLUTE_POS] = 0u32;
 }
 
-/// Takes the smallest label among a set pixel and its 8 neighbours.
-#[cube(launch_unchecked)]
-fn propagate(labels: &mut Array<u32>, changed: &mut Array<u32>, width: u32, height: u32) {
-    if ABSOLUTE_POS >= labels.len() {
-        terminate!();
+/// Follows the links from `start` until one points at itself.
+#[cube]
+fn root(labels: &Array<Atomic<u32>>, start: u32) -> u32 {
+    let mut current = start;
+    let mut parent = labels[current as usize].load();
+    while parent != current {
+        current = parent;
+        parent = labels[current as usize].load();
     }
 
-    let current = labels[ABSOLUTE_POS];
-    if current != u32::MAX {
-        let position = ABSOLUTE_POS as u32;
-        let column = (position % width) as i32;
-        let row = (position / width) as i32;
+    current
+}
 
-        let mut best = current;
-        for dy in 0..3u32 {
-            for dx in 0..3u32 {
-                let x = column + dx as i32 - 1;
-                let y = row + dy as i32 - 1;
-                if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
-                    let index = y as u32 * width + x as u32;
-                    best = u32::min(best, labels[index as usize]);
-                }
+/// Joins the trees holding `first` and `second`, linking the larger root to the smaller.
+///
+/// When another pixel already relinked the larger root, the join carries on from the link it found, so no link is
+/// ever lost.
+#[cube]
+fn join(labels: &Array<Atomic<u32>>, first: u32, second: u32) {
+    let mut left = first;
+    let mut right = second;
+    let mut joined = false;
+
+    while !joined {
+        let left_root = root(labels, left);
+        let right_root = root(labels, right);
+        let larger = u32::max(left_root, right_root);
+        let smaller = u32::min(left_root, right_root);
+
+        if larger == smaller {
+            joined = true;
+        } else {
+            let held = labels[larger as usize].fetch_min(smaller);
+            if held == larger {
+                joined = true;
+            } else {
+                left = held;
+                right = smaller;
             }
-        }
-
-        if best < current {
-            labels[ABSOLUTE_POS] = best;
-            changed[0] = 1u32;
         }
     }
 }
 
-/// Replaces each label with the label its root pixel holds, so long chains settle quickly.
+#[cube]
+fn join_if_set(marks: &Array<u8>, labels: &Array<Atomic<u32>>, position: u32, neighbour: u32) {
+    if u32::cast_from(marks[neighbour as usize]) != 0u32 {
+        join(labels, position, neighbour);
+    }
+}
+
+/// Joins each set pixel with its set neighbours to the left, above left, above and above right.
 #[cube(launch_unchecked)]
-fn jump(labels: &mut Array<u32>, changed: &mut Array<u32>) {
+fn merge(marks: &Array<u8>, labels: &mut Array<Atomic<u32>>, width: u32) {
     if ABSOLUTE_POS >= labels.len() {
         terminate!();
     }
 
-    let current = labels[ABSOLUTE_POS];
-    if current != u32::MAX {
-        let root = labels[current as usize];
-        if root < current {
-            labels[ABSOLUTE_POS] = root;
-            changed[0] = 1u32;
+    if u32::cast_from(marks[ABSOLUTE_POS]) != 0u32 {
+        let position = ABSOLUTE_POS as u32;
+        let column = position % width;
+        let row = position / width;
+
+        if column > 0 {
+            join_if_set(marks, labels, position, position - 1);
         }
+
+        if row > 0 {
+            let above = position - width;
+
+            if column > 0 {
+                join_if_set(marks, labels, position, above - 1);
+            }
+
+            join_if_set(marks, labels, position, above);
+
+            if column + 1 < width {
+                join_if_set(marks, labels, position, above + 1);
+            }
+        }
+    }
+}
+
+/// Points each set pixel straight at its root.
+#[cube(launch_unchecked)]
+fn compress(labels: &mut Array<Atomic<u32>>) {
+    if ABSOLUTE_POS >= labels.len() {
+        terminate!();
+    }
+
+    let current = labels[ABSOLUTE_POS].load();
+    if current != u32::MAX {
+        let position = ABSOLUTE_POS as u32;
+        let found = root(labels, position);
+        labels[ABSOLUTE_POS].store(found);
     }
 }
 
@@ -156,28 +190,13 @@ fn clear<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, plane:
     }
 }
 
-fn changed_flag<R: Runtime>(client: &ComputeClient<R>, changed: DevicePlane<'_>) -> Result<u32, ServerError> {
-    let handle = changed.handle().clone();
-    let bytes = client.read_one(handle)?;
-    let flag = u32::from_bytes(&bytes)[0];
-
-    Ok(flag)
-}
-
 /// Labels every 8-connected component of the set marks with the smallest index inside it.
 ///
-/// Unset pixels are labelled [UNSET]. The passes stop once a batch changes nothing, or at the
-/// plane's width plus height passes, whichever comes first. Fails if the device cannot hand back
-/// the flag that says whether a batch changed anything.
-pub fn label<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: LabelPlanes<'_>,
-) -> Result<Settled, ServerError> {
+/// Unset pixels are labelled [UNSET]. It runs a fixed three launches whatever the marks hold, and reads nothing
+/// back.
+pub fn label<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, planes: LabelPlanes<'_>) {
     let samples = planes.labels.samples();
     let width = planes.labels.width();
-    let height = planes.labels.height();
-    let cap = width + height;
 
     let marks = planes.marks.array::<R>();
     let labels = planes.labels.array::<R>();
@@ -189,42 +208,24 @@ pub fn label<R: Runtime>(
         seed::launch_unchecked::<R>(client, cubes, shape, marks, labels);
     }
 
-    let mut passes = 0;
-    loop {
-        clear(client, dispatch, planes.changed);
+    let marks = planes.marks.array::<R>();
+    let labels = planes.labels.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let shape = dispatch.cube_dim();
 
-        for _ in 0..BATCH {
-            let labels = planes.labels.array::<R>();
-            let changed = planes.changed.array::<R>();
-            let cubes = dispatch.cube_count(samples);
-            let shape = dispatch.cube_dim();
+    // Safety: the marks hold `samples` u8 values and the labels `samples` u32 values. Every link points at an
+    // index below `samples`, since it starts as a set pixel's own index and only ever falls to another set pixel's.
+    unsafe {
+        merge::launch_unchecked::<R>(client, cubes, shape, marks, labels, width);
+    }
 
-            // Safety: the labels hold `samples` u32 values and the flag one.
-            unsafe {
-                propagate::launch_unchecked::<R>(client, cubes, shape, labels, changed, width, height);
-            }
+    let labels = planes.labels.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let shape = dispatch.cube_dim();
 
-            let labels = planes.labels.array::<R>();
-            let changed = planes.changed.array::<R>();
-            let cubes = dispatch.cube_count(samples);
-            let shape = dispatch.cube_dim();
-
-            // Safety: the labels hold `samples` u32 values and the flag one.
-            unsafe {
-                jump::launch_unchecked::<R>(client, cubes, shape, labels, changed);
-            }
-        }
-
-        passes += BATCH;
-
-        let flag = changed_flag(client, planes.changed)?;
-        if flag == 0 {
-            return Ok(Settled::Converged { passes });
-        }
-
-        if passes >= cap {
-            return Ok(Settled::Capped { passes });
-        }
+    // Safety: the labels hold `samples` u32 values, each set one linking to an index below `samples`.
+    unsafe {
+        compress::launch_unchecked::<R>(client, cubes, shape, labels);
     }
 }
 

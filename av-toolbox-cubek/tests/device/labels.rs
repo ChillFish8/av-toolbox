@@ -1,4 +1,4 @@
-use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, Settled, UNSET, count, keep, label};
+use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, UNSET, count, keep, label};
 use av_toolbox_cubek::testing::{SplitMix, reference_labels};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -10,7 +10,6 @@ struct Labelled {
     labels: Vec<u32>,
     counts: Vec<u32>,
     kept: Vec<u8>,
-    settled: Settled,
 }
 
 /// Labels `marks`, counts each label's `counted` pixels, and keeps labels with `minimum` of them.
@@ -43,19 +42,15 @@ impl BuildTask for Label {
             None => empty(client, samples * size_of::<u32>()),
         };
         let counts = empty(client, samples * size_of::<u32>());
-        let changed = empty(client, size_of::<u32>());
         let kept = empty(client, samples);
 
         let marks_plane = plane(&marks, self.width, self.height);
         let labels_plane = plane(&labels, self.width, self.height);
-        let changed_plane = plane(&changed, 1, 1);
         let label_planes = LabelPlanes {
             marks: marks_plane,
             labels: labels_plane,
-            changed: changed_plane,
         };
-        let settled =
-            label(client, &sizing, label_planes).expect("the device should hand back the changed flag");
+        label(client, &sizing, label_planes);
 
         let labels_plane = plane(&labels, self.width, self.height);
         let counted_plane = plane(&counted, self.width, self.height);
@@ -81,12 +76,7 @@ impl BuildTask for Label {
         let counts = read_u32(client, &counts);
         let kept = read_u8(client, &kept);
 
-        Labelled {
-            labels,
-            counts,
-            kept,
-            settled,
-        }
+        Labelled { labels, counts, kept }
     }
 }
 
@@ -127,7 +117,6 @@ fn two_separate_blobs_get_two_labels() {
     assert_eq!(labelled.labels[6], first);
     assert_eq!(labelled.labels[19], second);
     assert_eq!(labelled.labels[2], UNSET);
-    assert!(matches!(labelled.settled, Settled::Converged { .. }));
 }
 
 #[test]
@@ -163,7 +152,6 @@ fn a_spiral_settles_into_one_label() {
         .filter(|label| *label != UNSET)
         .collect();
     assert!(spiral.iter().all(|label| *label == spiral[0]));
-    assert!(matches!(labelled.settled, Settled::Converged { .. }));
 }
 
 #[test]

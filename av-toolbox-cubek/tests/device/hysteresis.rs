@@ -1,5 +1,4 @@
 use av_toolbox_cubek::hysteresis::{HysteresisPlanes, hysteresis};
-use av_toolbox_cubek::labels::Settled;
 use av_toolbox_cubek::testing::reference_hysteresis;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -10,7 +9,6 @@ use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 /// What running hysteresis on the device gave.
 struct Hysteresised {
     output: Vec<f32>,
-    settled: Settled,
 }
 
 /// Runs hysteresis with `seeds_from` and `region` on the device.
@@ -36,7 +34,6 @@ impl BuildTask for Hysteresis {
         let marks = empty(client, samples);
         let seeds = empty(client, samples);
         let labels = empty(client, samples * size_of::<u32>());
-        let changed = empty(client, size_of::<u32>());
         let counts = empty(client, samples * size_of::<u32>());
         let kept = empty(client, samples);
         let output = empty(client, samples * size_of::<f32>());
@@ -47,17 +44,15 @@ impl BuildTask for Hysteresis {
             marks: plane(&marks, self.width, self.height),
             seeds: plane(&seeds, self.width, self.height),
             labels: plane(&labels, self.width, self.height),
-            changed: plane(&changed, 1, 1),
             counts: plane(&counts, self.width, self.height),
             kept: plane(&kept, self.width, self.height),
             output: plane(&output, self.width, self.height),
         };
-        let settled = hysteresis(client, &sizing, planes, self.peak)
-            .expect("the device should hand back the changed flag");
+        hysteresis(client, &sizing, planes, self.peak);
 
         let output = read_f32(client, &output);
 
-        Hysteresised { output, settled }
+        Hysteresised { output }
     }
 }
 
@@ -149,7 +144,6 @@ fn hysteresis_matches_the_reference() {
 
     let expected = reference_hysteresis(&seeds_from, &region, SCENE_WIDTH, SCENE_HEIGHT, peak);
     assert_eq!(hysteresised.output, expected);
-    assert!(matches!(hysteresised.settled, Settled::Converged { .. }));
 
     let kept = expected.iter().filter(|value| **value == peak).count();
     assert!(kept > 0, "no component was kept");

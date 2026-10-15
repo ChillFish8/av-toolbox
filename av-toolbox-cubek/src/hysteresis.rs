@@ -1,12 +1,11 @@
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
-use cubecl::server::ServerError;
 
-use crate::labels::{CountPlanes, KeepPlanes, LabelPlanes, Settled, count, keep, label};
+use crate::labels::{CountPlanes, KeepPlanes, LabelPlanes, count, keep, label};
 use crate::{DevicePlane, Dispatch};
 
-/// Every plane [hysteresis] touches. All are one size except `changed`.
+/// Every plane [hysteresis] touches, all one size.
 #[derive(Debug, Clone, Copy)]
 pub struct HysteresisPlanes<'a> {
     pub seeds_from: DevicePlane<'a>,
@@ -14,7 +13,6 @@ pub struct HysteresisPlanes<'a> {
     pub marks: DevicePlane<'a>,
     pub seeds: DevicePlane<'a>,
     pub labels: DevicePlane<'a>,
-    pub changed: DevicePlane<'a>,
     pub counts: DevicePlane<'a>,
     pub kept: DevicePlane<'a>,
     pub output: DevicePlane<'a>,
@@ -62,14 +60,13 @@ fn spread_kept(kept: &Array<u8>, output: &mut Array<f32>, peak: f32) {
 /// Keeps the 8-connected components of `region` that hold at least one seed.
 ///
 /// A seed only counts where it is set in both `seeds_from` and `region`. A kept component becomes
-/// `peak` in `output`, everything else 0. Fails if the device cannot hand back the flag labelling
-/// uses to detect convergence.
+/// `peak` in `output`, everything else 0.
 pub fn hysteresis<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: HysteresisPlanes<'_>,
     peak: f32,
-) -> Result<Settled, ServerError> {
+) {
     let samples = planes.region.samples();
 
     let region = planes.region.array::<R>();
@@ -96,9 +93,8 @@ pub fn hysteresis<R: Runtime>(
     let label_planes = LabelPlanes {
         marks: planes.marks,
         labels: planes.labels,
-        changed: planes.changed,
     };
-    let settled = label(client, dispatch, label_planes)?;
+    label(client, dispatch, label_planes);
 
     let count_planes = CountPlanes {
         labels: planes.labels,
@@ -123,6 +119,4 @@ pub fn hysteresis<R: Runtime>(
     unsafe {
         spread_kept::launch_unchecked::<R>(client, cubes, shape, kept, output, peak);
     }
-
-    Ok(settled)
 }

@@ -1,12 +1,10 @@
-use av_toolbox_core::StageError;
 use av_toolbox_cubek::blur::{BlurPlanes, Gaussian};
-use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, Settled, count, keep, label};
+use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, count, keep, label};
 use av_toolbox_cubek::{DevicePlane, reflect};
 use av_toolbox_gpu::FrameContext;
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
-use cubecl::server::ServerError;
 
 use super::Shadows;
 use super::clahe::{EqualisePlanes, equalise};
@@ -149,10 +147,6 @@ impl ShadowRecovery {
     }
 }
 
-fn unreadable_groups(error: ServerError) -> StageError {
-    StageError::with_source("lines/adaptive could not read back its line groups", error)
-}
-
 /// Copies `lines` into `output`, leaving out groups of fewer than `min_speck` line samples.
 pub(super) fn remove_specks<R: Runtime>(
     client: &ComputeClient<R>,
@@ -161,23 +155,16 @@ pub(super) fn remove_specks<R: Runtime>(
     lines: DevicePlane<'_>,
     output: DevicePlane<'_>,
     min_speck: u32,
-) -> Result<(), StageError> {
+) {
     let width = lines.width();
     let height = lines.height();
 
     let labels = Scratch::new::<u32>(context, width, height);
-    let changed = Scratch::line::<u32>(context, 1);
     let label_planes = LabelPlanes {
         marks: lines,
         labels: labels.plane(),
-        changed: changed.plane(),
     };
-    let settled = label(client, sizing, label_planes).map_err(unreadable_groups)?;
-    if let Settled::Capped { passes } = settled {
-        tracing::warn!(
-            "lines/adaptive stopped grouping lines after {passes} passes, so some specks may remain"
-        );
-    }
+    label(client, sizing, label_planes);
 
     let counts = Scratch::new::<u32>(context, width, height);
     let count_planes = CountPlanes {
@@ -193,6 +180,4 @@ pub(super) fn remove_specks<R: Runtime>(
         output,
     };
     keep(client, sizing, keep_planes, min_speck);
-
-    Ok(())
 }

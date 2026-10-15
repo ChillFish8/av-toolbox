@@ -26,7 +26,6 @@ use av_toolbox_cubek::dehalo::fine::RampPlanes;
 use av_toolbox_cubek::dehalo::{DifferencePlanes, MergePlanes, difference, merge_masked};
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::hysteresis::{HysteresisPlanes, hysteresis};
-use av_toolbox_cubek::labels::Settled;
 use av_toolbox_cubek::neighbourhood::{
     Extreme,
     MinBlurPlanes,
@@ -59,7 +58,6 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
-use cubecl::server::ServerError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -371,12 +369,6 @@ fn contra_sharpen<R: Runtime>(
     contra_limit(client, &sizing, contra_planes);
 }
 
-fn unreadable_labels(error: ServerError) -> StageError {
-    let message = format!("{STAGE} could not read back its ring mask labels");
-
-    StageError::with_source(message, error)
-}
-
 /// The seed-and-keep hysteresis pass that joins the ring mask's edges, `pm_median` seeding
 /// `pm`'s 8-connected components.
 fn ring_edges<R: Runtime>(
@@ -386,7 +378,7 @@ fn ring_edges<R: Runtime>(
     pm: DevicePlane<'_>,
     output: DevicePlane<'_>,
     peak: f32,
-) -> Result<(), StageError> {
+) {
     let sizing = Sizing(context);
     let width = pm.width();
     let height = pm.height();
@@ -396,7 +388,6 @@ fn ring_edges<R: Runtime>(
     let kept = Scratch::new::<u8>(context, width, height);
     let labels = Scratch::new::<u32>(context, width, height);
     let counts = Scratch::new::<u32>(context, width, height);
-    let changed = Scratch::new::<u32>(context, 1, 1);
 
     let hysteresis_planes = HysteresisPlanes {
         seeds_from: pm_median,
@@ -404,18 +395,11 @@ fn ring_edges<R: Runtime>(
         marks: marks.plane(),
         seeds: seeds.plane(),
         labels: labels.plane(),
-        changed: changed.plane(),
         counts: counts.plane(),
         kept: kept.plane(),
         output,
     };
-    let settled = hysteresis(client, &sizing, hysteresis_planes, peak).map_err(unreadable_labels)?;
-
-    if let Settled::Capped { passes } = settled {
-        tracing::warn!("{STAGE} stopped joining ring edges after {passes} passes, so some may be split");
-    }
-
-    Ok(())
+    hysteresis(client, &sizing, hysteresis_planes, peak);
 }
 
 /// Runs havsfunc's HQDeringmod on one f32 plane.
@@ -425,7 +409,7 @@ fn hq_dering<R: Runtime>(
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     params: &DeringParams,
-) -> Result<(), StageError> {
+) {
     let sizing = Sizing(context);
     let width = input.width();
     let height = input.height();
@@ -516,7 +500,7 @@ fn hq_dering<R: Runtime>(
 
     let fmask = Scratch::new::<f32>(context, width, height);
     let fmask_plane = fmask.plane();
-    ring_edges(client, context, pm_median_plane, pm_plane, fmask_plane, peak)?;
+    ring_edges(client, context, pm_median_plane, pm_plane, fmask_plane, peak);
 
     let outer_scratch = if params.mrad > 0 || params.msmooth > 0 {
         Some(Scratch::new::<f32>(context, width, height))
@@ -566,8 +550,6 @@ fn hq_dering<R: Runtime>(
         output,
     };
     merge_masked(client, &sizing, merge_planes, peak);
-
-    Ok(())
 }
 
 fn not_frames() -> StageError {
@@ -715,7 +697,9 @@ impl<R: Runtime> PlaneFilter for Deringer<R> {
         input: DevicePlane<'_>,
         output: DevicePlane<'_>,
     ) -> Result<(), StageError> {
-        hq_dering(&self.client, context, input, output, &self.params)
+        hq_dering(&self.client, context, input, output, &self.params);
+
+        Ok(())
     }
 }
 

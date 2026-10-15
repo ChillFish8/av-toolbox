@@ -281,7 +281,7 @@ impl<R: Runtime> Mask for AdaptiveMask<R> {
             lines_plane,
             output_plane,
             *min_speck,
-        )?;
+        );
 
         Ok(output)
     }
