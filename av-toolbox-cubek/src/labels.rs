@@ -192,8 +192,7 @@ fn clear<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, plane:
 
 /// Labels every 8-connected component of the set marks with the smallest index inside it.
 ///
-/// Unset pixels are labelled [UNSET]. It runs a fixed three launches whatever the marks hold, and reads nothing
-/// back.
+/// Unset pixels are labelled [UNSET]. It runs a fixed three launches whatever the marks hold.
 pub fn label<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, planes: LabelPlanes<'_>) {
     let samples = planes.labels.samples();
     let width = planes.labels.width();

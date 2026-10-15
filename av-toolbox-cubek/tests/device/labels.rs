@@ -128,7 +128,7 @@ fn diagonal_neighbours_join() {
 }
 
 #[test]
-fn a_spiral_settles_into_one_label() {
+fn a_spiral_joins_into_one_label() {
     let rows = [
         "###########",
         "..........#",
