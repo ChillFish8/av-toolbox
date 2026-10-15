@@ -177,7 +177,7 @@ pub fn reference_chain_with_edge(
     plane
 }
 
-/// Takes the median of each sample's window on the CPU, mirroring [median](crate::neighbourhood::median).
+/// Takes the median of each sample's window on the CPU, matching [median](crate::neighbourhood::median).
 pub fn reference_median(input: &[f32], width: u32, height: u32, radius: u32) -> Vec<f32> {
     let reach = radius as i32;
     let mut output = Vec::with_capacity(input.len());

@@ -8,7 +8,7 @@ use crate::{Dispatch, reflect};
 /// Paeth's median network for 9 values, as pairs whose smaller value goes to the first index.
 ///
 /// The median ends at [MEDIAN_OF_9_AT].
-pub(crate) const MEDIAN_OF_9: [(usize, usize); 19] = [
+pub(super) const MEDIAN_OF_9: [(usize, usize); 19] = [
     (1, 2),
     (4, 5),
     (7, 8),
@@ -30,12 +30,12 @@ pub(crate) const MEDIAN_OF_9: [(usize, usize); 19] = [
     (4, 2),
 ];
 
-pub(crate) const MEDIAN_OF_9_AT: usize = 4;
+pub(super) const MEDIAN_OF_9_AT: usize = 4;
 
 /// Devillard's `opt_med25` median network for 25 values, as pairs whose smaller value goes to the first index.
 ///
 /// The median ends at [MEDIAN_OF_25_AT].
-pub(crate) const MEDIAN_OF_25: [(usize, usize); 99] = [
+pub(super) const MEDIAN_OF_25: [(usize, usize); 99] = [
     (0, 1),
     (3, 4),
     (2, 4),
@@ -137,14 +137,14 @@ pub(crate) const MEDIAN_OF_25: [(usize, usize); 99] = [
     (10, 12),
 ];
 
-pub(crate) const MEDIAN_OF_25_AT: usize = 12;
+pub(super) const MEDIAN_OF_25_AT: usize = 12;
 
 /// Forgetful selection over 49 values, as pairs whose smaller value goes to the first index.
 ///
 /// The median ends at [MEDIAN_OF_49_AT].
-pub(crate) const MEDIAN_OF_49: [(usize, usize); 624] = forgetful_selection_of_49();
+pub(super) const MEDIAN_OF_49: [(usize, usize); 624] = forgetful_selection_of_49();
 
-pub(crate) const MEDIAN_OF_49_AT: usize = 48;
+pub(super) const MEDIAN_OF_49_AT: usize = 48;
 
 /// Builds forgetful selection over 49 values.
 ///
