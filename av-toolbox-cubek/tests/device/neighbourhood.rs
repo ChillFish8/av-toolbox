@@ -16,6 +16,7 @@ use av_toolbox_cubek::neighbourhood::{
     spread,
 };
 use av_toolbox_cubek::testing::{
+    SplitMix,
     reference_chain,
     reference_extreme,
     reference_median,
@@ -446,4 +447,44 @@ fn a_single_step_chain_lands_in_the_output_and_leaves_the_input() {
 
     assert_eq!(run.output, expected, "the output differs");
     assert_eq!(run.input_after, input, "the input changed");
+}
+
+fn check_median(input: &[f32], width: u32, height: u32) {
+    for radius in 1..=3 {
+        let operation = Operation::Median(radius);
+
+        let actual = on_device(input, width, height, operation);
+        let expected = reference_median(input, width, height, radius);
+
+        assert_eq!(actual, expected, "radius {radius} {width}x{height}");
+    }
+}
+
+#[test]
+fn a_random_median_matches_the_reference() {
+    let width = 1921;
+    let height = 1081;
+    let mut random = SplitMix(0x003e_d1a4);
+    let input: Vec<f32> = (0..width * height).map(|_| random.unit()).collect();
+
+    check_median(&input, width, height);
+}
+
+#[test]
+fn a_median_of_few_values_matches_the_reference() {
+    let width = 67;
+    let height = 45;
+    let mut random = SplitMix(0x7135);
+    let input: Vec<f32> = (0..width * height).map(|_| random.below(4) as f32).collect();
+
+    check_median(&input, width, height);
+}
+
+#[test]
+fn a_thin_plane_median_matches_the_reference() {
+    for (width, height) in [(1, 7), (7, 1), (2, 2)] {
+        let input = busy(width, height);
+
+        check_median(&input, width, height);
+    }
 }
