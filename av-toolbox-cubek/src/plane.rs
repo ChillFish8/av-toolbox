@@ -73,6 +73,18 @@ pub(crate) fn are_distinct(handles: &[&Handle]) -> bool {
 
 /// Asserts that `plane` is `width` by `height` and its buffer holds it as f32, naming it `name`.
 pub fn assert_plane(plane: &DevicePlane<'_>, width: u32, height: u32, name: &str) {
+    assert_plane_sized(plane, width, height, size_of::<f32>(), name);
+}
+
+/// Asserts that `plane` is `width` by `height` and its buffer holds it at `bytes_per_sample`, naming it
+/// `name`.
+pub fn assert_plane_sized(
+    plane: &DevicePlane<'_>,
+    width: u32,
+    height: u32,
+    bytes_per_sample: usize,
+    name: &str,
+) {
     assert!(
         plane.width() == width && plane.height() == height,
         "the {name} plane is {}x{}, expected {width}x{height}",
@@ -80,7 +92,7 @@ pub fn assert_plane(plane: &DevicePlane<'_>, width: u32, height: u32, name: &str
         plane.height(),
     );
 
-    let bytes = plane.samples() * size_of::<f32>();
+    let bytes = plane.samples() * bytes_per_sample;
     let label = format!("{name} plane");
     assert_holds(plane.handle(), bytes, &label);
 }

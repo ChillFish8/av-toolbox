@@ -74,4 +74,4 @@ pub mod words;
 
 pub use self::border::{Edge, mirror, reflect};
 pub use self::dispatch::Dispatch;
-pub use self::plane::{DevicePlane, assert_plane};
+pub use self::plane::{DevicePlane, assert_plane, assert_plane_sized};
