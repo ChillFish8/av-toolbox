@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-gpu",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-cubek",
  "av-toolbox-gpu",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-cubek"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-cubek",
  "av-toolbox-gpu",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-filters"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-denoise-core",
  "av-toolbox-core",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-gpu"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cubecl",
  "etcetera",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-graph"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-gpu",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-masks"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-cubek",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-models"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "etcetera",
  "semver",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-pipeline"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-cubek",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-providers"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-scenechange",
  "av-toolbox-core",
@@ -401,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-runtime"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-gpu",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-sinks"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-gpu",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "av-toolbox-sources"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "av-toolbox-core",
  "av-toolbox-cubek",
@@ -451,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "avtbx-bestsource"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "avtbx-vship"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bindgen 0.73.2",
  "cc",
