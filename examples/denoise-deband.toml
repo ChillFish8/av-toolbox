@@ -15,9 +15,15 @@ choices = ["veryfast", "fast", "base", "slow", "veryslow"]
 type = "ffms2/file"
 args.path = "{{ input }}"
 
+# Debanding at 10-bit keeps the smoothed gradient from snapping back into 8-bit steps.
+[filter.ten_bit]
+type = "resample/min_depth"
+inputs = ["input"]
+args.depth = 10
+
 [filter.denoise]
 type = "av-denoise/nl4d"
-inputs = ["input"]
+inputs = ["ten_bit"]
 args.preset = "{{ preset }}"
 
 [filter.deband]

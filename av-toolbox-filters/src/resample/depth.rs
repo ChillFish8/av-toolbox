@@ -70,50 +70,52 @@ pub(crate) struct DepthArgs {
     pub(crate) dither: Dither,
 }
 
-fn not_frames() -> StageError {
-    let message = format!("{STAGE} converts frames, not masks");
+pub(super) fn not_frames(stage: &str) -> StageError {
+    let message = format!("{stage} converts frames, not masks");
 
     StageError::msg(message)
 }
 
-fn missing_input() -> StageError {
-    let message = format!("{STAGE} needs its input bound");
+fn missing_input(stage: &str) -> StageError {
+    let message = format!("{stage} needs its input bound");
 
     StageError::msg(message)
 }
 
-fn missing_channel() -> StageError {
-    let message = format!("{STAGE} was handed a frame missing a channel");
+fn missing_channel(stage: &str) -> StageError {
+    let message = format!("{stage} was handed a frame missing a channel");
 
     StageError::msg(message)
 }
 
-fn bad_depth(depth: u8) -> StageError {
-    let message = format!("{STAGE} needs depth between 8 and 16, got {depth}");
+fn bad_depth(stage: &str, depth: u8) -> StageError {
+    let message = format!("{stage} needs depth between 8 and 16, got {depth}");
 
     StageError::msg(message)
 }
 
 /// The input format, once it is known to be frames.
-fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
+pub(super) fn checked_input(stage: &str, chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
     let Some(input) = chosen.first().copied().flatten() else {
-        return Err(missing_input());
+        return Err(missing_input(stage));
     };
 
     let Some(format) = input.as_frames() else {
-        return Err(not_frames());
+        return Err(not_frames(stage));
     };
 
     Ok(*format)
 }
 
 /// The sample format `depth` describes, or an error when it is outside 8..=16.
-fn target_sample(depth: u8) -> Result<SampleFormat, StageError> {
+pub(super) fn target_sample(stage: &str, depth: u8) -> Result<SampleFormat, StageError> {
     if depth == 8 {
         return Ok(SampleFormat::U8);
     }
 
-    let depth = BitDepth::new(depth).map_err(|_| bad_depth(depth))?;
+    let Ok(depth) = BitDepth::new(depth) else {
+        return Err(bad_depth(stage, depth));
+    };
 
     Ok(SampleFormat::U16 { depth })
 }
@@ -173,7 +175,7 @@ impl FilterDefinition for Depth {
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
         let Some(format) = offered.as_frames() else {
-            return Err(not_frames());
+            return Err(not_frames(STAGE));
         };
 
         if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
@@ -188,8 +190,8 @@ impl FilterDefinition for Depth {
         args: &Self::Args,
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
-        let input = checked_input(chosen)?;
-        let target = target_sample(args.depth)?;
+        let input = checked_input(STAGE, chosen)?;
+        let target = target_sample(STAGE, args.depth)?;
         let output = FrameFormat {
             sample: target,
             ..input
@@ -209,38 +211,53 @@ impl FilterDefinition for Depth {
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter>, StageError> {
         let inputs = formats.inputs();
-        let input = checked_input(inputs)?;
-        let target = target_sample(args.depth)?;
-        let output = FrameFormat {
-            sample: target,
-            ..input
-        };
-        let identity = input.sample == output.sample;
+        let input = checked_input(STAGE, inputs)?;
+        let target = target_sample(STAGE, args.depth)?;
+        let converter = converter(context, STAGE, input, target, args.dither);
 
-        let input_bits = bits_of(input.sample);
-        let output_bits = bits_of(output.sample);
-        let full_range = input.colour.range == ColourRange::Full;
-        let conversion = Conversion::new(input_bits, output_bits, full_range);
-
-        let lowering = output_bits < input_bits;
-        let thresholds = thresholds(args.dither, lowering);
-        let client = context.client().clone();
-        let pattern = upload_pattern(&client, &thresholds);
-        let converter = Converter {
-            client,
-            output,
-            conversion,
-            pattern,
-            identity,
-        };
-
-        Ok(Box::new(converter))
+        Ok(converter)
     }
+}
+
+/// A filter converting every frame of `input` to `target`, handing frames already there straight back.
+pub(super) fn converter<R: Runtime>(
+    context: &BuildContext<R>,
+    stage: &'static str,
+    input: FrameFormat,
+    target: SampleFormat,
+    dither: Dither,
+) -> Box<dyn Filter> {
+    let output = FrameFormat {
+        sample: target,
+        ..input
+    };
+    let identity = input.sample == output.sample;
+
+    let input_bits = bits_of(input.sample);
+    let output_bits = bits_of(output.sample);
+    let full_range = input.colour.range == ColourRange::Full;
+    let conversion = Conversion::new(input_bits, output_bits, full_range);
+
+    let lowering = output_bits < input_bits;
+    let thresholds = thresholds(dither, lowering);
+    let client = context.client().clone();
+    let pattern = upload_pattern(&client, &thresholds);
+    let converter = Converter {
+        client,
+        stage,
+        output,
+        conversion,
+        pattern,
+        identity,
+    };
+
+    Box::new(converter)
 }
 
 /// Converts every plane of a frame from one bit depth to another.
 struct Converter<R: Runtime> {
     client: ComputeClient<R>,
+    stage: &'static str,
     output: FrameFormat,
     conversion: Conversion,
     pattern: Pattern,
@@ -284,7 +301,7 @@ impl<R: Runtime> StageInstance for Converter<R> {}
 impl<R: Runtime> Filter for Converter<R> {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
-            return Err(missing_input());
+            return Err(missing_input(self.stage));
         };
 
         if self.identity {
@@ -296,11 +313,11 @@ impl<R: Runtime> Filter for Converter<R> {
 
         for (index, channel) in self.output.channels().iter().enumerate() {
             let Some(input_plane) = input.plane(*channel) else {
-                return Err(missing_channel());
+                return Err(missing_channel(self.stage));
             };
 
             let Some(output_plane) = output.plane(*channel) else {
-                return Err(missing_channel());
+                return Err(missing_channel(self.stage));
             };
 
             self.convert_plane(context, input_plane, output_plane, index as u32);

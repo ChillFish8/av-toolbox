@@ -43,6 +43,7 @@
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
+//! - `resample/min_depth` raises a clip to at least a given bit depth.
 //! - `resample/chroma` changes a YUV clip's chroma subsampling and siting.
 //! - `resample/matrix` converts a 4:4:4 YUV clip to RGB and back.
 //! - `planes/extract` pulls one plane, or the chroma pair, out of a clip.
@@ -89,7 +90,7 @@ mod warp;
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
 use self::denoise::{Denoise, Nl4dArgs, NlmeansArgs, NlmeansHqArgs};
-use self::resample::{Chroma, Depth, Matrix};
+use self::resample::{Chroma, Depth, Matrix, MinDepth};
 use self::resize::{Bicubic, Bilinear, Lanczos, Point, Resize, Spline16, Spline36, Spline64};
 
 /// Registers every filter this crate provides.
@@ -131,6 +132,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<Resize<Spline36>>()?;
     registry.register_filter::<Resize<Spline64>>()?;
     registry.register_filter::<Depth>()?;
+    registry.register_filter::<MinDepth>()?;
     registry.register_filter::<Chroma>()?;
     registry.register_filter::<Matrix>()?;
     registry.register_filter::<planes::Extract>()?;
@@ -200,6 +202,7 @@ mod tests {
         assert!(registered("resize/spline36"));
         assert!(registered("resize/spline64"));
         assert!(registered("resample/depth"));
+        assert!(registered("resample/min_depth"));
         assert!(registered("resample/chroma"));
         assert!(registered("resample/matrix"));
         assert!(registered("planes/extract"));

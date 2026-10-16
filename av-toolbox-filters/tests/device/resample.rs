@@ -145,6 +145,62 @@ fn an_unchanged_depth_hands_back_the_input() {
 }
 
 #[test]
+fn raising_to_a_minimum_depth_matches_the_reference_in_either_range() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let narrow = frame(32, 16, layout, SampleFormat::U8, ChromaLocation::Left);
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+
+    for range in [ColourRange::Limited, ColourRange::Full] {
+        let colour = ColourInfo {
+            range,
+            ..narrow.colour
+        };
+        let input = FrameFormat { colour, ..narrow };
+        let output = FrameFormat {
+            sample: ten_bit,
+            ..input
+        };
+        let args = json!({ "depth": 10 });
+
+        let planes = eight_bit_values(&input);
+        let raised = run_once("resample/min_depth", input, output, args, &planes);
+
+        let full_range = range == ColourRange::Full;
+        let conversion = Conversion::new(8, 10, full_range);
+        let thresholds = Thresholds::rounding();
+        for (index, channel) in input.channels().iter().enumerate() {
+            let (width, _) = input.channel_dimensions(*channel).expect("carried");
+            let shift = plane_shift(index as u32);
+            let values = widen_u8(&planes[index]);
+            let expected = reference_depth(&values, width, &conversion, &thresholds, shift);
+            let actual = unwiden(&raised[index]);
+
+            assert_eq!(actual, expected, "{range:?} {channel}");
+        }
+    }
+}
+
+#[test]
+fn a_depth_at_or_above_the_minimum_hands_back_the_input() {
+    let twelve_bit = Depth::new(12).expect("valid");
+    let kept = [
+        SampleFormat::U16 { depth: Depth::TEN },
+        SampleFormat::U16 { depth: twelve_bit },
+    ];
+
+    for sample in kept {
+        let input = frame(16, 16, FrameLayout::Grey, sample, ChromaLocation::Left);
+        let args = json!({ "depth": 10 });
+
+        let same = passes_through("resample/min_depth", input, input, args);
+
+        assert!(same, "{sample:?}");
+    }
+}
+
+#[test]
 fn every_kernel_matches_the_reference_between_subsamplings() {
     let kernels = [
         ("point", Kernel::Point),
