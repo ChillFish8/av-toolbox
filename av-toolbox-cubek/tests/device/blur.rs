@@ -1,4 +1,11 @@
-use av_toolbox_cubek::blur::{BlurPlanes, Gaussian, Storage, TILED_MAX_RADIUS, gaussian_weights};
+use av_toolbox_cubek::blur::{
+    BlurPlanes,
+    Gaussian,
+    STAGED_MAX_RADIUS,
+    Storage,
+    TILED_MAX_RADIUS,
+    gaussian_weights,
+};
 use av_toolbox_cubek::testing::reference_blur;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -186,4 +193,34 @@ fn a_tiled_blur_matches_in_f16() {
     let input = seeded_plane(1921, 1081);
 
     check_as(input, 1921, 1081, 1.0, 4, Storage::F16, 2e-3);
+}
+
+#[test]
+fn every_staged_radius_matches_the_reference() {
+    for radius in [TILED_MAX_RADIUS + 1, 24, 48, 100, STAGED_MAX_RADIUS] {
+        let input = seeded_plane(1921, 1081);
+        let sigma = radius as f32 / 4.0;
+
+        check(input, 1921, 1081, sigma, radius);
+    }
+}
+
+#[test]
+fn a_staged_blur_of_a_tiny_plane_folds_back_inside() {
+    for radius in [100, STAGED_MAX_RADIUS] {
+        let sigma = radius as f32 / 4.0;
+
+        for (width, height) in [(7, 5), (1, 7), (7, 1)] {
+            let input = seeded_plane(width, height);
+
+            check(input, width, height, sigma, radius);
+        }
+    }
+}
+
+#[test]
+fn a_staged_blur_matches_in_f16() {
+    let input = seeded_plane(1921, 1081);
+
+    check_as(input, 1921, 1081, 12.0, 48, Storage::F16, 2e-3);
 }

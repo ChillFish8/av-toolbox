@@ -2,7 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
-use super::{BlurPlanes, Storage, TILED_MAX_RADIUS};
+use super::{BlurPlanes, MAX_CUBES_PER_AXIS, MAX_SHARED_BYTES, Storage, TILED_MAX_RADIUS};
 use crate::reflect;
 
 /// The units along a cube's rows.
@@ -17,10 +17,6 @@ const OUTPUTS_DOWN: u32 = 2;
 const TILE_WIDTH: u32 = UNITS_ACROSS * OUTPUTS_ACROSS;
 /// The height of the output tile a cube writes.
 const TILE_HEIGHT: u32 = UNITS_DOWN * OUTPUTS_DOWN;
-/// The most cubes every device allows along one axis.
-const MAX_CUBES_PER_AXIS: u32 = 65535;
-/// The shared memory a cube may take, the most that common devices allow.
-const MAX_SHARED_BYTES: u32 = 32 * 1024;
 
 /// The width of the bordered tile a cube loads at `radius`.
 ///

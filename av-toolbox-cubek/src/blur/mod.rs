@@ -1,4 +1,5 @@
 mod plain;
+mod staged;
 #[cfg(test)]
 mod tests;
 mod tiled;
@@ -59,22 +60,36 @@ impl Storage {
     }
 }
 
+/// The most cubes every device allows along one axis.
+pub(super) const MAX_CUBES_PER_AXIS: u32 = 65535;
+
+/// The shared memory budget, per cube, that the tiled and staged kernels are built for.
+pub(super) const MAX_SHARED_BYTES: u32 = 32 * 1024;
+
 /// The widest radius the tiled tier takes.
 ///
 /// It is the widest whose tile and border still fit in 32 KiB of shared memory.
 pub const TILED_MAX_RADIUS: u32 = 16;
+
+/// The widest radius the staged tier takes.
+pub const STAGED_MAX_RADIUS: u32 = 193;
 
 /// The kernel family a blur runs on.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Tier {
     Plain,
     Tiled,
+    Staged,
 }
 
 /// The tier that blurs fastest for a gaussian of `sigma` reaching `radius`.
 pub(crate) fn tier_for(_sigma: f32, radius: u32) -> Tier {
     if radius <= TILED_MAX_RADIUS {
         return Tier::Tiled;
+    }
+
+    if radius <= STAGED_MAX_RADIUS {
+        return Tier::Staged;
     }
 
     Tier::Plain
@@ -111,7 +126,10 @@ impl Gaussian {
     }
 
     pub fn with_radius<R: Runtime>(client: &ComputeClient<R>, sigma: f32, radius: u32) -> Self {
-        let weights = gaussian_weights(sigma, radius);
+        let mut weights = gaussian_weights(sigma, radius);
+        let padded_taps = staged::padded_tap_count(radius);
+        weights.resize(padded_taps as usize, 0.0);
+
         let bytes = f32::as_bytes(&weights);
         let weights = client.create_from_slice(bytes);
         let tier = tier_for(sigma, radius);
@@ -135,7 +153,16 @@ impl Gaussian {
         let taps = 2 * self.radius as usize + 1;
         let handle = self.weights.clone();
 
-        // Safety: the weights buffer was made from exactly `taps` f32 values.
+        // Safety: the weights buffer was made from at least `taps` f32 values.
+        unsafe { ArrayArg::from_raw_parts(handle, taps) }
+    }
+
+    /// The weights, followed by the zeros that pad them to the staged tier's tap count.
+    fn padded_weights<R: Runtime>(&self) -> ArrayArg<R> {
+        let taps = staged::padded_tap_count(self.radius) as usize;
+        let handle = self.weights.clone();
+
+        // Safety: the weights buffer was padded to exactly `taps` f32 values.
         unsafe { ArrayArg::from_raw_parts(handle, taps) }
     }
 
@@ -170,16 +197,21 @@ impl Gaussian {
                 let weights = self.weights::<R>();
                 tiled::blur_tiled(client, weights, planes, self.radius, storage);
             },
+            Tier::Staged => staged::blur_staged(client, self, planes, storage),
         }
     }
 
     /// The tier a `width` by `height` plane runs on.
     ///
-    /// It is the plain tier when the plane needs more tiles than a device allows cubes.
+    /// It is the plain tier when the plane needs more cubes than a device allows.
     fn launch_tier(&self, width: u32, height: u32) -> Tier {
         let tier = self.tier();
-        let tiles = tiled::tile_cubes(width, height);
-        if tier == Tier::Tiled && tiles.is_none() {
+        let fits = match tier {
+            Tier::Plain => true,
+            Tier::Tiled => tiled::tile_cubes(width, height).is_some(),
+            Tier::Staged => staged::staged_cubes(width, height).is_some(),
+        };
+        if !fits {
             return Tier::Plain;
         }
 

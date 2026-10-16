@@ -34,3 +34,27 @@ fn a_small_radius_is_tiled() {
 fn the_adaptive_pre_smooth_is_tiled() {
     assert_eq!(tier_for(0.8, 1), Tier::Tiled);
 }
+
+#[test]
+fn the_first_radius_past_the_tile_is_staged() {
+    let radius = TILED_MAX_RADIUS + 1;
+
+    assert_eq!(tier_for(4.25, radius), Tier::Staged);
+}
+
+#[test]
+fn a_medium_radius_is_staged() {
+    assert_eq!(tier_for(6.0, 24), Tier::Staged);
+}
+
+#[test]
+fn a_truncated_wide_blur_is_staged() {
+    assert_eq!(tier_for(64.0, 193), Tier::Staged);
+}
+
+#[test]
+fn a_radius_past_the_staged_tier_is_plain() {
+    let radius = STAGED_MAX_RADIUS + 1;
+
+    assert_eq!(tier_for(64.0, radius), Tier::Plain);
+}
