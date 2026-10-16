@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
-use av_toolbox_cubek::blur::{BlurPlanes, Gaussian};
+use av_toolbox_cubek::blur::{BlurPlanes, Gaussian, Storage};
 use av_toolbox_cubek::lineart;
 use av_toolbox_cubek::neighbourhood::{self, NeighbourPlanes, Smooth};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::{ComputeClient, Runtime};
 
-use crate::support::{Sizing, backend, empty, plane, upload_f32};
+use crate::support::{Sizing, backend, empty, plane, upload_f16, upload_f32};
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
@@ -74,26 +74,46 @@ impl BuildTask for TimeKernels {
         let output = empty(client, bytes);
         let mut lines = Vec::new();
 
+        let half_bytes = samples * Storage::F16.bytes();
+        let half_input = upload_f16(client, &data);
+        let half_scratch = empty(client, half_bytes);
+        let half_output = empty(client, half_bytes);
+
         let radii = [
             (1u32, 0.8f32),
+            (2, 0.5),
+            (3, 0.75),
             (4, 1.0),
+            (5, 1.25),
+            (6, 1.5),
             (7, 1.75),
+            (8, 2.0),
+            (10, 2.5),
+            (12, 3.0),
             (15, 3.75),
+            (20, 5.0),
+            (24, 6.0),
             (48, 12.0),
             (100, 25.0),
         ];
-        for (radius, sigma) in radii {
-            let gaussian = Gaussian::with_radius(client, sigma, radius);
-            let launch = || {
-                let planes = BlurPlanes {
-                    input: plane(&input, WIDTH, HEIGHT),
-                    scratch: plane(&scratch, WIDTH, HEIGHT),
-                    output: plane(&output, WIDTH, HEIGHT),
+        let storages = [
+            (Storage::F32, "f32", &input, &scratch, &output),
+            (Storage::F16, "f16", &half_input, &half_scratch, &half_output),
+        ];
+        for (storage, storage_name, input, scratch, output) in storages {
+            for (radius, sigma) in radii {
+                let gaussian = Gaussian::with_radius(client, sigma, radius);
+                let launch = || {
+                    let planes = BlurPlanes {
+                        input: plane(input, WIDTH, HEIGHT),
+                        scratch: plane(scratch, WIDTH, HEIGHT),
+                        output: plane(output, WIDTH, HEIGHT),
+                    };
+                    gaussian.apply_as(client, &sizing, planes, storage);
                 };
-                gaussian.apply(client, &sizing, planes);
-            };
-            let millis = median_ms(client, launch);
-            lines.push(format!("gaussian {radius} f32 {millis:.4}"));
+                let millis = median_ms(client, launch);
+                lines.push(format!("gaussian {radius} {storage_name} {millis:.4}"));
+            }
         }
 
         for (name, smooth) in [("smooth_binomial", Smooth::Binomial), ("smooth_box", Smooth::Box)] {

@@ -1,6 +1,7 @@
 mod plain;
 #[cfg(test)]
 mod tests;
+mod tiled;
 
 use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
 use cubecl::server::Handle;
@@ -58,14 +59,24 @@ impl Storage {
     }
 }
 
+/// The widest radius the tiled tier takes.
+///
+/// It is the widest whose tile and border still fit in 32 KiB of shared memory.
+pub const TILED_MAX_RADIUS: u32 = 16;
+
 /// The kernel family a blur runs on.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Tier {
     Plain,
+    Tiled,
 }
 
 /// The tier that blurs fastest for a gaussian of `sigma` reaching `radius`.
-pub(crate) fn tier_for(_sigma: f32, _radius: u32) -> Tier {
+pub(crate) fn tier_for(_sigma: f32, radius: u32) -> Tier {
+    if radius <= TILED_MAX_RADIUS {
+        return Tier::Tiled;
+    }
+
     Tier::Plain
 }
 
@@ -152,8 +163,26 @@ impl Gaussian {
         assert_plane_sized(&planes.scratch, width, height, bytes, "blur scratch");
         assert_plane_sized(&planes.output, width, height, bytes, "blur output");
 
-        match self.tier() {
+        let tier = self.launch_tier(width, height);
+        match tier {
             Tier::Plain => plain::apply(client, dispatch, self, planes, storage),
+            Tier::Tiled => {
+                let weights = self.weights::<R>();
+                tiled::blur_tiled(client, weights, planes, self.radius, storage);
+            },
         }
+    }
+
+    /// The tier a `width` by `height` plane runs on.
+    ///
+    /// It is the plain tier when the plane needs more tiles than a device allows cubes.
+    fn launch_tier(&self, width: u32, height: u32) -> Tier {
+        let tier = self.tier();
+        let tiles = tiled::tile_cubes(width, height);
+        if tier == Tier::Tiled && tiles.is_none() {
+            return Tier::Plain;
+        }
+
+        tier
     }
 }

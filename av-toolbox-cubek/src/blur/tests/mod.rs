@@ -21,3 +21,16 @@ fn the_radius_reaches_four_deviations() {
 fn the_widest_sigma_reaches_the_widest_radius() {
     assert_eq!(radius_for(MAX_SIGMA), MAX_RADIUS);
 }
+
+#[test]
+fn a_small_radius_is_tiled() {
+    let radius = radius_for(1.0);
+
+    assert_eq!(radius, 4);
+    assert_eq!(tier_for(1.0, radius), Tier::Tiled);
+}
+
+#[test]
+fn the_adaptive_pre_smooth_is_tiled() {
+    assert_eq!(tier_for(0.8, 1), Tier::Tiled);
+}

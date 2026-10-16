@@ -1,4 +1,4 @@
-use av_toolbox_cubek::blur::{BlurPlanes, Gaussian, Storage, gaussian_weights};
+use av_toolbox_cubek::blur::{BlurPlanes, Gaussian, Storage, TILED_MAX_RADIUS, gaussian_weights};
 use av_toolbox_cubek::testing::reference_blur;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -57,6 +57,19 @@ impl BuildTask for Blur {
             Storage::F16 => read_f16(client, &output),
         }
     }
+}
+
+fn seeded_plane(width: u32, height: u32) -> Vec<f32> {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+
+    (0..width * height)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        })
+        .collect()
 }
 
 fn check(input: Vec<f32>, width: u32, height: u32, sigma: f32, radius: u32) {
@@ -145,4 +158,32 @@ fn an_f16_zero_plane_stays_zero() {
     });
 
     assert!(blurred.iter().all(|sample| *sample == 0.0));
+}
+
+#[test]
+fn every_tiled_radius_matches_the_reference() {
+    for radius in 1..=TILED_MAX_RADIUS {
+        let input = seeded_plane(1921, 1081);
+        let sigma = radius as f32 / 4.0;
+
+        check(input, 1921, 1081, sigma, radius);
+    }
+}
+
+#[test]
+fn a_tiled_blur_of_a_tiny_plane_folds_back_inside() {
+    let sigma = TILED_MAX_RADIUS as f32 / 4.0;
+
+    for (width, height) in [(1, 7), (7, 1), (3, 3)] {
+        let input = seeded_plane(width, height);
+
+        check(input, width, height, sigma, TILED_MAX_RADIUS);
+    }
+}
+
+#[test]
+fn a_tiled_blur_matches_in_f16() {
+    let input = seeded_plane(1921, 1081);
+
+    check_as(input, 1921, 1081, 1.0, 4, Storage::F16, 2e-3);
 }
