@@ -1,4 +1,5 @@
 mod fixed;
+mod lines;
 mod plain;
 mod staged;
 #[cfg(test)]
@@ -10,6 +11,7 @@ use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
 use cubecl::server::Handle;
 
 pub use self::fixed::{Smooth, smooth, vertical_121};
+use crate::plane::are_distinct;
 use crate::{DevicePlane, Dispatch, assert_plane_sized};
 
 /// The widest radius a blur reaches, in samples either side of its centre.
@@ -66,7 +68,7 @@ impl Storage {
 /// The most cubes every device allows along one axis.
 pub(super) const MAX_CUBES_PER_AXIS: u32 = 65535;
 
-/// The shared memory budget, per cube, that the tiled and staged kernels are built for.
+/// The shared memory budget, per cube, that the blur kernels are built for.
 pub(super) const MAX_SHARED_BYTES: u32 = 32 * 1024;
 
 /// The widest radius the tiled tier takes.
@@ -91,10 +93,10 @@ pub(crate) enum Tier {
     Wide,
 }
 
-/// The tier that blurs fastest for a gaussian of `sigma` reaching `radius`.
+/// The tier a gaussian of `sigma` reaching `radius` runs on.
 ///
-/// The wide tier approximates a whole gaussian, so it only takes kernels that reach their full four
-/// deviations.
+/// Narrow radii take the tiled tier and wide ones the wide tier, which approximates a whole gaussian
+/// and so only takes kernels that reach their full four deviations. The rest take the staged tier.
 pub(crate) fn tier_for(sigma: f32, radius: u32) -> Tier {
     if radius <= TILED_MAX_RADIUS {
         return Tier::Tiled;
@@ -119,7 +121,9 @@ pub struct FilterPlanes<'a> {
     pub output: DevicePlane<'a>,
 }
 
-/// The planes one blur reads, passes through and writes. All are of one size and one [Storage].
+/// The planes one blur reads, passes through and writes.
+///
+/// All are of one size and one [Storage]. The input and output must be distinct buffers.
 #[derive(Debug, Clone, Copy)]
 pub struct BlurPlanes<'a> {
     pub input: DevicePlane<'a>,
@@ -202,6 +206,12 @@ impl Gaussian {
         planes: BlurPlanes<'_>,
         storage: Storage,
     ) {
+        let handles = [planes.input.handle(), planes.output.handle()];
+        assert!(
+            are_distinct(&handles),
+            "the blur input and output must be distinct buffers"
+        );
+
         let width = planes.output.width();
         let height = planes.output.height();
         let bytes = storage.bytes();

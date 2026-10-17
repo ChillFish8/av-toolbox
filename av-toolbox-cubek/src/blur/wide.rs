@@ -2,6 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
+use super::lines::{both_pass_cubes, line_shape, sample_index};
 use super::{BlurPlanes, MAX_CUBES_PER_AXIS, MAX_SHARED_BYTES, Storage};
 use crate::reflect;
 
@@ -166,30 +167,6 @@ fn advance(state: &mut Complex, pole: Complex, sample: f32) {
 #[cube]
 fn weigh(state: Complex, weight: Complex) -> f32 {
     weight.real * state.real - weight.imaginary * state.imaginary
-}
-
-/// The index in a plane `width` samples wide of the sample at `position` along `line`.
-#[cube]
-fn sample_index(line: u32, position: u32, width: u32, #[comptime] along_rows: bool) -> u32 {
-    let mut index = position * width + line;
-
-    if along_rows {
-        index = line * width + position;
-    }
-
-    index
-}
-
-/// The length of a line and the count of lines in a `width` by `height` plane.
-#[cube]
-fn line_shape(width: u32, height: u32, #[comptime] along_rows: bool) -> (u32, u32) {
-    let mut shape = (height, width);
-
-    if along_rows {
-        shape = (width, height);
-    }
-
-    shape
 }
 
 /// Loads the `BATCH` samples of `line` from `first_position` on into `samples`.
@@ -462,10 +439,7 @@ fn pass_cubes(line_length: u32, line_count: u32) -> Option<CubeCount> {
 ///
 /// It is `None` when either pass needs more cubes along an axis than every device allows.
 pub(super) fn wide_cubes(width: u32, height: u32) -> Option<(CubeCount, CubeCount)> {
-    let row_cubes = pass_cubes(width, height)?;
-    let column_cubes = pass_cubes(height, width)?;
-
-    Some((row_cubes, column_cubes))
+    both_pass_cubes(width, height, pass_cubes)
 }
 
 /// Blurs `planes.input` across into `planes.scratch`, then down into `planes.output`.

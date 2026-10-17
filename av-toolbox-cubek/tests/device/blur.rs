@@ -304,6 +304,33 @@ fn a_wide_blur_matches_in_f16() {
     check_as(input, 1921, 1081, 25.0, 100, Storage::F16, 2e-3);
 }
 
+/// A plane too long for any tier's cube grid, so the blur falls back to the plain tier.
+const LONG_PLANE: (u32, u32) = (1, 2_100_000);
+
+#[test]
+fn a_plane_too_long_for_the_tile_grids_blurs_like_the_reference() {
+    let (width, height) = LONG_PLANE;
+    let cases = [(1.0, 4), (truncated_sigma(100), 100), (25.0, 100)];
+
+    for (sigma, radius) in cases {
+        let input = seeded_plane(width, height);
+
+        check_as(input, width, height, sigma, radius, Storage::F32, 1e-5);
+    }
+}
+
+#[test]
+fn a_plane_too_long_for_the_tile_grids_blurs_like_the_reference_in_f16() {
+    let (width, height) = LONG_PLANE;
+    let cases = [(1.0, 4), (truncated_sigma(100), 100), (25.0, 100)];
+
+    for (sigma, radius) in cases {
+        let input = seeded_plane(width, height);
+
+        check_as(input, width, height, sigma, radius, Storage::F16, 2e-3);
+    }
+}
+
 /// One of the fixed filters.
 #[derive(Debug, Clone, Copy)]
 enum Fixed {
@@ -394,8 +421,16 @@ fn the_vertical_121_matches_the_reference_at_each_edge() {
 }
 
 #[test]
-fn a_smooth_matches_in_f16() {
-    let filter = Fixed::Smooth(Smooth::Binomial);
+fn every_fixed_filter_matches_in_f16_at_each_edge() {
+    let filters = [
+        Fixed::Smooth(Smooth::Binomial),
+        Fixed::Smooth(Smooth::Box),
+        Fixed::Vertical121,
+    ];
 
-    check_fixed(filter, 1921, 1081, Edge::Reflect, Storage::F16, 2e-3);
+    for filter in filters {
+        for edge in [Edge::Reflect, Edge::Clamp] {
+            check_fixed(filter, 1921, 1081, edge, Storage::F16, 2e-3);
+        }
+    }
 }
