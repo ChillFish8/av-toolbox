@@ -1,3 +1,4 @@
+use av_toolbox_cubek::neighbourhood::Smooth;
 use av_toolbox_cubek::rgvs::{
     GrainBorder,
     RemoveGrainMode,
@@ -7,12 +8,12 @@ use av_toolbox_cubek::rgvs::{
     remove_grain,
     repair,
 };
-use av_toolbox_cubek::testing::{reference_remove_grain, reference_repair};
+use av_toolbox_cubek::testing::{reference_remove_grain, reference_repair, reference_smooth};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
 use crate::neighbourhood::busy;
-use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
+use crate::support::{Sizing, backend, empty, plane, read_f32, seeded_plane, upload_f32};
 
 struct Repair {
     clip: Vec<f32>,
@@ -198,6 +199,46 @@ fn every_remove_grain_mode_and_border_matches_the_reference() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn mode_eleven_keeps_the_border_when_copying() {
+    for (width, height) in [(33u32, 17u32), (2, 5), (5, 2)] {
+        check_mode_eleven_border(width, height);
+    }
+}
+
+fn check_mode_eleven_border(width: u32, height: u32) {
+    let input = seeded_plane(width, height);
+    let smoothed = reference_smooth(&input, width, height, Smooth::Binomial);
+
+    let output = backend().build(RemoveGrain {
+        input: input.clone(),
+        width,
+        height,
+        mode: RemoveGrainMode::Eleven,
+        border: GrainBorder::Copy,
+    });
+
+    for (index, sample) in output.iter().enumerate() {
+        let x = index as u32 % width;
+        let y = index as u32 / width;
+        let at_border = x == 0 || y == 0 || x + 1 == width || y + 1 == height;
+
+        if at_border {
+            assert_eq!(
+                *sample, input[index],
+                "border sample {x}, {y} of {width}x{height}"
+            );
+        } else {
+            let error = (sample - smoothed[index]).abs();
+            assert!(
+                error <= 1e-6,
+                "sample {x}, {y} was {sample}, expected {}",
+                smoothed[index]
+            );
         }
     }
 }

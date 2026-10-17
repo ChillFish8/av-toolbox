@@ -2,7 +2,8 @@
 // by name.
 use cubecl::prelude::*;
 
-use crate::{DevicePlane, Dispatch, reflect};
+use crate::blur::{self, FilterPlanes, Smooth, Storage};
+use crate::{DevicePlane, Dispatch, Edge, reflect};
 
 /// Which RemoveGrain Repair mode runs.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -325,12 +326,7 @@ fn remove_grain_kernel(
         let mi_four = f32::min(left, right);
         let ma_four = f32::max(left, right);
 
-        if mode == 11u32 {
-            let sum_edges = top + left + right + bottom;
-            let sum_corners = top_left + top_right + bottom_left + bottom_right;
-
-            output[ABSOLUTE_POS] = (4.0 * centre + 2.0 * sum_edges + sum_corners) / 16.0;
-        } else if mode == 22u32 {
+        if mode == 22u32 {
             let average_one = (top_left + bottom_right) / 2.0;
             let average_two = (top + bottom) / 2.0;
             let average_three = (top_right + bottom_left) / 2.0;
@@ -397,6 +393,41 @@ fn remove_grain_kernel(
     }
 }
 
+/// Copies each sample of the first and last row and column from `input` into `output`.
+///
+/// The first `width` units take the top row and the next `width` the bottom row. The rest alternate
+/// between the first and last column of each row between them.
+#[cube(launch_unchecked)]
+fn copy_border_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, ring: u32) {
+    let position = ABSOLUTE_POS as u32;
+    if position >= ring {
+        terminate!();
+    }
+
+    let mut column = position;
+    let mut row = 0u32;
+    if position >= 2 * width {
+        let side = position - 2 * width;
+        column = (side % 2) * (width - 1);
+        row = 1 + side / 2;
+    } else if position >= width {
+        column = position - width;
+        row = height - 1;
+    }
+
+    let index = row * width + column;
+    output[index as usize] = input[index as usize];
+}
+
+/// The samples in the outer ring of a `width` by `height` plane, counting a one-sample-wide column twice.
+fn ring_samples(width: u32, height: u32) -> u32 {
+    if height == 1 {
+        return width;
+    }
+
+    2 * width + 2 * (height - 2)
+}
+
 /// Repairs `clip` from `reference` with RemoveGrain's `mode`.
 ///
 /// The first and last row and column of the clip are copied unchanged, as rgvs does.
@@ -444,6 +475,11 @@ pub fn remove_grain<R: Runtime>(
     mode: RemoveGrainMode,
     border: GrainBorder,
 ) {
+    if mode == RemoveGrainMode::Eleven {
+        remove_grain_eleven(client, dispatch, planes, border);
+        return;
+    }
+
     let width = planes.input.width();
     let height = planes.input.height();
     let samples = planes.output.samples();
@@ -466,5 +502,52 @@ pub fn remove_grain<R: Runtime>(
             mode.number(),
             border.code(),
         );
+    }
+}
+
+/// RemoveGrain's mode 11, the 3x3 binomial blur, with its border kept as `border` says.
+fn remove_grain_eleven<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: RemoveGrainPlanes<'_>,
+    border: GrainBorder,
+) {
+    let filter_planes = FilterPlanes {
+        input: planes.input,
+        output: planes.output,
+    };
+
+    blur::smooth(
+        client,
+        dispatch,
+        filter_planes,
+        Smooth::Binomial,
+        Edge::Reflect,
+        Storage::F32,
+    );
+
+    if border == GrainBorder::Copy {
+        copy_border(client, dispatch, planes);
+    }
+}
+
+/// Copies the first and last row and column of `planes.input` into `planes.output`.
+fn copy_border<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: RemoveGrainPlanes<'_>,
+) {
+    let width = planes.input.width();
+    let height = planes.input.height();
+    let ring = ring_samples(width, height);
+    let input = planes.input.array::<R>();
+    let output = planes.output.array::<R>();
+    let cubes = dispatch.cube_count(ring as usize);
+    let unit = dispatch.cube_dim();
+
+    // Safety: both planes hold `width` by `height` f32 values, and every unit writes one sample of
+    // the plane's outer ring.
+    unsafe {
+        copy_border_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, ring);
     }
 }

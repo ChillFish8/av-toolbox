@@ -1,15 +1,24 @@
+use av_toolbox_cubek::Edge;
 use av_toolbox_cubek::blur::{
     BlurPlanes,
+    FilterPlanes,
     Gaussian,
     MAX_RADIUS,
     MAX_SIGMA,
     STAGED_MAX_RADIUS,
+    Smooth,
     Storage,
     TILED_MAX_RADIUS,
     WIDE_MIN_RADIUS,
     gaussian_weights,
+    smooth,
+    vertical_121,
 };
-use av_toolbox_cubek::testing::reference_blur;
+use av_toolbox_cubek::testing::{
+    reference_blur,
+    reference_smooth_with_edge,
+    reference_vertical_121_with_edge,
+};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -21,6 +30,7 @@ use crate::support::{
     plane,
     read_f16,
     read_f32,
+    seeded_plane,
     upload_f16,
     upload_f32,
 };
@@ -67,19 +77,6 @@ impl BuildTask for Blur {
             Storage::F16 => read_f16(client, &output),
         }
     }
-}
-
-fn seeded_plane(width: u32, height: u32) -> Vec<f32> {
-    let mut state = 0x9E37_79B9_7F4A_7C15u64;
-
-    (0..width * height)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            (state >> 40) as f32 / (1u64 << 24) as f32
-        })
-        .collect()
 }
 
 fn step_edge_plane(width: u32, height: u32) -> Vec<f32> {
@@ -305,4 +302,100 @@ fn a_wide_blur_matches_in_f16() {
     let input = seeded_plane(1921, 1081);
 
     check_as(input, 1921, 1081, 25.0, 100, Storage::F16, 2e-3);
+}
+
+/// One of the fixed filters.
+#[derive(Debug, Clone, Copy)]
+enum Fixed {
+    Smooth(Smooth),
+    Vertical121,
+}
+
+/// Runs one fixed filter on the device.
+struct FixedFilter {
+    input: Vec<f32>,
+    width: u32,
+    height: u32,
+    filter: Fixed,
+    edge: Edge,
+    storage: Storage,
+}
+
+impl BuildTask for FixedFilter {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let bytes = self.input.len() * self.storage.bytes();
+
+        let input = match self.storage {
+            Storage::F32 => upload_f32(client, &self.input),
+            Storage::F16 => upload_f16(client, &self.input),
+        };
+        let output = empty(client, bytes);
+        let planes = FilterPlanes {
+            input: plane(&input, self.width, self.height),
+            output: plane(&output, self.width, self.height),
+        };
+
+        match self.filter {
+            Fixed::Smooth(kind) => smooth(client, &sizing, planes, kind, self.edge, self.storage),
+            Fixed::Vertical121 => vertical_121(client, &sizing, planes, self.edge, self.storage),
+        }
+
+        match self.storage {
+            Storage::F32 => read_f32(client, &output),
+            Storage::F16 => read_f16(client, &output),
+        }
+    }
+}
+
+fn check_fixed(filter: Fixed, width: u32, height: u32, edge: Edge, storage: Storage, tolerance: f32) {
+    let input = seeded_plane(width, height);
+    let expected = match filter {
+        Fixed::Smooth(kind) => reference_smooth_with_edge(&input, width, height, kind, edge),
+        Fixed::Vertical121 => reference_vertical_121_with_edge(&input, width, height, edge),
+    };
+
+    let filtered = backend().build(FixedFilter {
+        input,
+        width,
+        height,
+        filter,
+        edge,
+        storage,
+    });
+
+    assert_close(&filtered, &expected, tolerance);
+}
+
+const FIXED_SIZES: [(u32, u32); 3] = [(1921, 1081), (1, 7), (7, 1)];
+
+#[test]
+fn every_smooth_matches_the_reference_at_each_edge() {
+    for kind in [Smooth::Binomial, Smooth::Box] {
+        for edge in [Edge::Reflect, Edge::Clamp] {
+            for (width, height) in FIXED_SIZES {
+                check_fixed(Fixed::Smooth(kind), width, height, edge, Storage::F32, 1e-6);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_vertical_121_matches_the_reference_at_each_edge() {
+    for edge in [Edge::Reflect, Edge::Clamp] {
+        for (width, height) in FIXED_SIZES {
+            check_fixed(Fixed::Vertical121, width, height, edge, Storage::F32, 1e-6);
+        }
+    }
+}
+
+#[test]
+fn a_smooth_matches_in_f16() {
+    let filter = Fixed::Smooth(Smooth::Binomial);
+
+    check_fixed(filter, 1921, 1081, Edge::Reflect, Storage::F16, 2e-3);
 }

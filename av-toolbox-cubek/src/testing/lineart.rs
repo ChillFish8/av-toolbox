@@ -1,4 +1,5 @@
 use super::{reference_binarize, reference_chain, reference_edges, reference_padded_warp, reflect};
+use crate::Edge;
 use crate::edges::{EdgeLimits, Operator};
 use crate::lineart::{DarkenSettings, ThinSettings, ToonSettings};
 use crate::neighbourhood::{Extreme, Shape, Spread, Step};
@@ -36,12 +37,17 @@ pub fn reference_clamped_merge(
 
 /// The vertical `1 2 1` blur on the CPU, mirroring [vertical_121](crate::lineart::vertical_121).
 pub fn reference_vertical_121(input: &[f32], width: u32, height: u32) -> Vec<f32> {
+    reference_vertical_121_with_edge(input, width, height, Edge::Reflect)
+}
+
+/// The same as [reference_vertical_121], reading past the top and bottom as `edge` says.
+pub fn reference_vertical_121_with_edge(input: &[f32], width: u32, height: u32, edge: Edge) -> Vec<f32> {
     let rows = height as i32;
     let mut output = Vec::with_capacity(input.len());
 
     for row in 0..rows {
-        let above = reflect(row - 1, rows) as u32;
-        let below = reflect(row + 1, rows) as u32;
+        let above = edge_row(row - 1, rows, edge);
+        let below = edge_row(row + 1, rows, edge);
 
         for column in 0..width {
             let top = f64::from(input[(above * width + column) as usize]);
@@ -54,6 +60,15 @@ pub fn reference_vertical_121(input: &[f32], width: u32, height: u32) -> Vec<f32
     }
 
     output
+}
+
+fn edge_row(row: i32, rows: i32, edge: Edge) -> u32 {
+    let folded = match edge {
+        Edge::Reflect => reflect(row, rows),
+        Edge::Clamp => row.clamp(0, rows - 1),
+    };
+
+    folded as u32
 }
 
 /// Runs vinverse on the CPU in f64, mirroring [vinverse](crate::lineart::vinverse).

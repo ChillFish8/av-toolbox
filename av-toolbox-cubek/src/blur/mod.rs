@@ -1,3 +1,4 @@
+mod fixed;
 mod plain;
 mod staged;
 #[cfg(test)]
@@ -8,6 +9,7 @@ mod wide;
 use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
 use cubecl::server::Handle;
 
+pub use self::fixed::{Smooth, smooth, vertical_121};
 use crate::{DevicePlane, Dispatch, assert_plane_sized};
 
 /// The widest radius a blur reaches, in samples either side of its centre.

@@ -1,8 +1,7 @@
 use std::time::{Duration, Instant};
 
-use av_toolbox_cubek::blur::{BlurPlanes, Gaussian, Storage};
-use av_toolbox_cubek::lineart;
-use av_toolbox_cubek::neighbourhood::{self, NeighbourPlanes, Smooth};
+use av_toolbox_cubek::Edge;
+use av_toolbox_cubek::blur::{self, BlurPlanes, FilterPlanes, Gaussian, Smooth, Storage};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::{ComputeClient, Runtime};
 
@@ -114,27 +113,51 @@ impl BuildTask for TimeKernels {
             }
         }
 
-        for (name, smooth) in [("smooth_binomial", Smooth::Binomial), ("smooth_box", Smooth::Box)] {
-            let launch = || {
-                let planes = NeighbourPlanes {
-                    input: plane(&input, WIDTH, HEIGHT),
-                    output: plane(&output, WIDTH, HEIGHT),
+        let fixed_storages = [
+            (Storage::F32, "f32", &input, &output),
+            (Storage::F16, "f16", &half_input, &half_output),
+        ];
+        for (storage, storage_name, input, output) in fixed_storages {
+            for (name, kind) in [("smooth_binomial", Smooth::Binomial), ("smooth_box", Smooth::Box)] {
+                for edge in [Edge::Reflect, Edge::Clamp] {
+                    let launch = || {
+                        let planes = FilterPlanes {
+                            input: plane(input, WIDTH, HEIGHT),
+                            output: plane(output, WIDTH, HEIGHT),
+                        };
+                        blur::smooth(client, &sizing, planes, kind, edge, storage);
+                    };
+                    let millis = median_ms(client, launch);
+                    lines.push(format!("{name} {edge:?} {storage_name} {millis:.4}"));
+                }
+            }
+
+            for edge in [Edge::Reflect, Edge::Clamp] {
+                let launch = || {
+                    let planes = FilterPlanes {
+                        input: plane(input, WIDTH, HEIGHT),
+                        output: plane(output, WIDTH, HEIGHT),
+                    };
+                    blur::vertical_121(client, &sizing, planes, edge, storage);
                 };
-                neighbourhood::smooth(client, &sizing, planes, smooth);
-            };
-            let millis = median_ms(client, launch);
-            lines.push(format!("{name} 1 f32 {millis:.4}"));
+                let millis = median_ms(client, launch);
+                lines.push(format!("vertical_121 {edge:?} {storage_name} {millis:.4}"));
+            }
         }
 
-        let launch = || {
-            let planes = NeighbourPlanes {
-                input: plane(&input, WIDTH, HEIGHT),
-                output: plane(&output, WIDTH, HEIGHT),
+        for (storage, storage_name, input, scratch, output) in storages {
+            let gaussian = Gaussian::with_radius(client, 0.5, 1);
+            let launch = || {
+                let planes = BlurPlanes {
+                    input: plane(input, WIDTH, HEIGHT),
+                    scratch: plane(scratch, WIDTH, HEIGHT),
+                    output: plane(output, WIDTH, HEIGHT),
+                };
+                gaussian.apply_as(client, &sizing, planes, storage);
             };
-            lineart::vertical_121(client, &sizing, planes);
-        };
-        let millis = median_ms(client, launch);
-        lines.push(format!("vertical_121 1 f32 {millis:.4}"));
+            let millis = median_ms(client, launch);
+            lines.push(format!("gaussian 1 {storage_name} {millis:.4}"));
+        }
 
         lines
     }

@@ -14,6 +14,8 @@ pub use self::median::median;
 pub use self::min_blur::{MinBlurPlanes, median_of_three, median_of_three_sample, min_blur};
 pub use self::prewitt::prewitt;
 pub use crate::Edge;
+pub use crate::blur::Smooth;
+use crate::blur::{self, FilterPlanes, Storage};
 use crate::{DevicePlane, Dispatch, assert_plane, reflect};
 
 /// The plane one neighbourhood operation reads and the plane it writes, both f32 and one size.
@@ -54,15 +56,6 @@ impl Shape {
             Self::Corners => 4,
         }
     }
-}
-
-/// A 3x3 blur.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Smooth {
-    /// `1 2 1 / 2 4 2 / 1 2 1` over 16.
-    Binomial,
-    /// Every weight 1, over 9.
-    Box,
 }
 
 /// Moves a sample toward the mean of its 8 neighbours, as havsfunc's `std.Inflate`/`std.Deflate` do.
@@ -185,49 +178,6 @@ fn extreme_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn smooth_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    height: u32,
-    binomial: u32,
-    clamp: u32,
-) {
-    if ABSOLUTE_POS >= output.len() {
-        terminate!();
-    }
-
-    let position = ABSOLUTE_POS as u32;
-    let x = (position % width) as i32;
-    let y = (position / width) as i32;
-    let mut total = 0.0f32;
-
-    for step_y in 0..3u32 {
-        for step_x in 0..3u32 {
-            let offset_x = step_x as i32 - 1;
-            let offset_y = step_y as i32 - 1;
-            let value = read_edge(input, width, height, x + offset_x, y + offset_y, clamp);
-
-            let mut weight = 1.0f32;
-            if binomial == 1u32 {
-                let across = 2 - i32::abs(offset_x);
-                let down = 2 - i32::abs(offset_y);
-                weight = f32::cast_from(across * down);
-            }
-
-            total += value * weight;
-        }
-    }
-
-    let mut divisor = 9.0f32;
-    if binomial == 1u32 {
-        divisor = 16.0;
-    }
-
-    output[ABSOLUTE_POS] = total / divisor;
-}
-
-#[cube(launch_unchecked)]
 fn spread_kernel(
     input: &Array<f32>,
     output: &mut Array<f32>,
@@ -313,25 +263,12 @@ pub fn smooth_with_edge<R: Runtime>(
     smooth: Smooth,
     edge: Edge,
 ) {
-    let clamp = u32::from(edge == Edge::Clamp);
-    let width = planes.input.width();
-    let height = planes.input.height();
-    assert_plane(&planes.input, width, height, "input");
-    assert_plane(&planes.output, width, height, "output");
-    let samples = planes.output.samples();
-    let binomial = u32::from(smooth == Smooth::Binomial);
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
-    let cubes = dispatch.cube_count(samples);
-    let unit = dispatch.cube_dim();
+    let filter_planes = FilterPlanes {
+        input: planes.input,
+        output: planes.output,
+    };
 
-    // Safety: both planes hold `width` by `height` f32 samples, and every read is folded inside the
-    // plane.
-    unsafe {
-        smooth_kernel::launch_unchecked::<R>(
-            client, cubes, unit, input, output, width, height, binomial, clamp,
-        );
-    }
+    blur::smooth(client, dispatch, filter_planes, smooth, edge, Storage::F32);
 }
 
 /// Moves each sample to the mean of its 8 neighbours when the mean is larger for inflate, or

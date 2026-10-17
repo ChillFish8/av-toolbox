@@ -5,10 +5,11 @@ mod tests;
 // by name.
 use cubecl::prelude::*;
 
+use crate::blur::{self, FilterPlanes, Storage};
 use crate::dehalo::{DifferencePlanes, difference};
 use crate::neighbourhood::{Extreme, NeighbourPlanes, Shape, Smooth, extreme, smooth};
 use crate::warp::WarpParams;
-use crate::{DevicePlane, Dispatch, reflect};
+use crate::{DevicePlane, Dispatch, Edge};
 
 /// The planes one merge reads and writes, all f32 and one size.
 #[derive(Debug, Clone, Copy)]
@@ -59,25 +60,6 @@ fn clamped_merge_kernel(
     let taken = target * share;
 
     filtered[ABSOLUTE_POS] = kept + taken;
-}
-
-#[cube(launch_unchecked)]
-fn vertical_121_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32) {
-    if ABSOLUTE_POS >= output.len() {
-        terminate!();
-    }
-
-    let position = ABSOLUTE_POS as u32;
-    let column = position % width;
-    let row = (position / width) as i32;
-    let above = reflect(row - 1, height as i32) as u32;
-    let below = reflect(row + 1, height as i32) as u32;
-
-    let top = input[(above * width + column) as usize];
-    let centre = input[ABSOLUTE_POS];
-    let bottom = input[(below * width + column) as usize];
-
-    output[ABSOLUTE_POS] = (top + 2.0 * centre + bottom) / 4.0;
 }
 
 /// Writes `input + (filtered - input) * weight / weight_peak` into `filtered`.
@@ -139,18 +121,12 @@ pub fn vertical_121<R: Runtime>(
     dispatch: &impl Dispatch,
     planes: NeighbourPlanes<'_>,
 ) {
-    let width = planes.input.width();
-    let height = planes.input.height();
-    let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
-    let cubes = dispatch.cube_count(samples);
-    let unit = dispatch.cube_dim();
+    let filter_planes = FilterPlanes {
+        input: planes.input,
+        output: planes.output,
+    };
 
-    // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
-    unsafe {
-        vertical_121_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height);
-    }
+    blur::vertical_121(client, dispatch, filter_planes, Edge::Reflect, Storage::F32);
 }
 
 /// The settings of one vinverse pass.

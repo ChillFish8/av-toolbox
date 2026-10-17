@@ -161,6 +161,7 @@ pub use self::lineart::{
     reference_thin,
     reference_toon,
     reference_vertical_121,
+    reference_vertical_121_with_edge,
     reference_vinverse,
 };
 pub use self::matrix::{

@@ -2,27 +2,8 @@
 // by name.
 use cubecl::prelude::*;
 
-use crate::{DevicePlane, Dispatch, assert_plane};
-
-#[cube(launch_unchecked)]
-fn vertical_blur_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32) {
-    if ABSOLUTE_POS >= output.len() {
-        terminate!();
-    }
-
-    let position = ABSOLUTE_POS as u32;
-    let column = position % width;
-    let row = (position / width) as i32;
-
-    let last = height as i32 - 1;
-    let above = i32::clamp(row - 1, 0, last) as u32;
-    let below = i32::clamp(row + 1, 0, last) as u32;
-    let top = input[(above * width + column) as usize];
-    let centre = input[ABSOLUTE_POS];
-    let bottom = input[(below * width + column) as usize];
-
-    output[ABSOLUTE_POS] = (top + 2.0f32 * centre + bottom) * 0.25f32;
-}
+use crate::blur::{self, FilterPlanes, Storage};
+use crate::{DevicePlane, Dispatch, Edge, assert_plane};
 
 #[cube(launch_unchecked)]
 fn repair_blend_kernel(
@@ -49,28 +30,9 @@ pub fn vertical_blur<R: Runtime>(
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
 ) {
-    let (width, height) = (output.width(), output.height());
-    assert_plane(&input, width, height, "input");
-    assert_plane(&output, width, height, "output");
+    let planes = FilterPlanes { input, output };
 
-    let cubes = dispatch.cube_count(output.samples());
-    let unit = dispatch.cube_dim();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
-
-    // Safety: both planes hold `width` by `height` f32 samples, and every row read is clamped inside
-    // the plane.
-    unsafe {
-        vertical_blur_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            input_array,
-            output_array,
-            width,
-            height,
-        );
-    }
+    blur::vertical_121(client, dispatch, planes, Edge::Clamp, Storage::F32);
 }
 
 /// `original + (rebuilt − original) × mask`.

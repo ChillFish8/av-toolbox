@@ -124,3 +124,17 @@ pub fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
         );
     }
 }
+
+/// A plane of seeded pseudo-random samples between 0 and 1.
+pub fn seeded_plane(width: u32, height: u32) -> Vec<f32> {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+
+    (0..width * height)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        })
+        .collect()
+}
