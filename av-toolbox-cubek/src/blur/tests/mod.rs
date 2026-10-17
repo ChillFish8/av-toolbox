@@ -48,13 +48,41 @@ fn a_medium_radius_is_staged() {
 }
 
 #[test]
+fn the_widest_full_kernel_below_the_wide_minimum_is_staged() {
+    assert_eq!(tier_for(12.0, 48), Tier::Staged);
+}
+
+#[test]
+fn the_first_full_kernel_from_the_wide_minimum_is_wide() {
+    assert_eq!(tier_for(12.25, WIDE_MIN_RADIUS), Tier::Wide);
+}
+
+#[test]
 fn a_truncated_wide_blur_is_staged() {
     assert_eq!(tier_for(64.0, 193), Tier::Staged);
 }
 
 #[test]
-fn a_radius_past_the_staged_tier_is_plain() {
-    let radius = STAGED_MAX_RADIUS + 1;
+fn the_widest_truncated_kernel_is_staged() {
+    let radius = MAX_RADIUS - 1;
 
-    assert_eq!(tier_for(64.0, radius), Tier::Plain);
+    assert_eq!(tier_for(MAX_SIGMA, radius), Tier::Staged);
+}
+
+#[test]
+fn the_widest_blur_is_wide() {
+    assert_eq!(tier_for(MAX_SIGMA, MAX_RADIUS), Tier::Wide);
+}
+
+#[test]
+fn shadow_lighting_is_wide() {
+    let radius = radius_for(25.0);
+
+    assert_eq!(tier_for(25.0, radius), Tier::Wide);
+}
+
+#[test]
+fn a_truncated_kernel_is_never_wide() {
+    assert_ne!(tier_for(64.0, 193), Tier::Wide);
+    assert_ne!(tier_for(2.6, 7), Tier::Wide);
 }

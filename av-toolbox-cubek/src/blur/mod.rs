@@ -3,6 +3,7 @@ mod staged;
 #[cfg(test)]
 mod tests;
 mod tiled;
+mod wide;
 
 use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
 use cubecl::server::Handle;
@@ -72,7 +73,12 @@ pub(super) const MAX_SHARED_BYTES: u32 = 32 * 1024;
 pub const TILED_MAX_RADIUS: u32 = 16;
 
 /// The widest radius the staged tier takes.
-pub const STAGED_MAX_RADIUS: u32 = 193;
+pub const STAGED_MAX_RADIUS: u32 = MAX_RADIUS;
+
+/// The narrowest radius the wide tier takes.
+///
+/// Narrower blurs stay exact on the tiled and staged tiers.
+pub const WIDE_MIN_RADIUS: u32 = 49;
 
 /// The kernel family a blur runs on.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -80,12 +86,21 @@ pub(crate) enum Tier {
     Plain,
     Tiled,
     Staged,
+    Wide,
 }
 
 /// The tier that blurs fastest for a gaussian of `sigma` reaching `radius`.
-pub(crate) fn tier_for(_sigma: f32, radius: u32) -> Tier {
+///
+/// The wide tier approximates a whole gaussian, so it only takes kernels that reach their full four
+/// deviations.
+pub(crate) fn tier_for(sigma: f32, radius: u32) -> Tier {
     if radius <= TILED_MAX_RADIUS {
         return Tier::Tiled;
+    }
+
+    let full_reach = radius >= radius_for(sigma);
+    if radius >= WIDE_MIN_RADIUS && full_reach {
+        return Tier::Wide;
     }
 
     if radius <= STAGED_MAX_RADIUS {
@@ -114,6 +129,7 @@ pub struct BlurPlanes<'a> {
 #[derive(Debug)]
 pub struct Gaussian {
     weights: Handle,
+    sigma: f32,
     radius: u32,
     tier: Tier,
 }
@@ -136,6 +152,7 @@ impl Gaussian {
 
         Self {
             weights,
+            sigma,
             radius,
             tier,
         }
@@ -198,6 +215,7 @@ impl Gaussian {
                 tiled::blur_tiled(client, weights, planes, self.radius, storage);
             },
             Tier::Staged => staged::blur_staged(client, self, planes, storage),
+            Tier::Wide => wide::blur_wide(client, planes, self.sigma, storage),
         }
     }
 
@@ -210,6 +228,7 @@ impl Gaussian {
             Tier::Plain => true,
             Tier::Tiled => tiled::tile_cubes(width, height).is_some(),
             Tier::Staged => staged::staged_cubes(width, height).is_some(),
+            Tier::Wide => wide::wide_cubes(width, height).is_some(),
         };
         if !fits {
             return Tier::Plain;
