@@ -4,7 +4,6 @@ mod aa;
 mod artcnn;
 mod bilateral;
 mod blur;
-mod blur_timing;
 mod cnn;
 mod deband;
 mod deblock;
