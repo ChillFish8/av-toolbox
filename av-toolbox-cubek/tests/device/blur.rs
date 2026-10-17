@@ -6,6 +6,7 @@ use av_toolbox_cubek::blur::{
     MAX_RADIUS,
     MAX_SIGMA,
     STAGED_MAX_RADIUS,
+    Separable,
     Smooth,
     Storage,
     TILED_MAX_RADIUS,
@@ -16,6 +17,7 @@ use av_toolbox_cubek::blur::{
 };
 use av_toolbox_cubek::testing::{
     reference_blur,
+    reference_blur_with_edge,
     reference_smooth_with_edge,
     reference_vertical_121_with_edge,
 };
@@ -433,4 +435,110 @@ fn every_fixed_filter_matches_in_f16_at_each_edge() {
             check_fixed(filter, 1921, 1081, edge, Storage::F16, 2e-3);
         }
     }
+}
+
+/// Runs a [Separable] on the device.
+struct SeparableBlur {
+    input: Vec<f32>,
+    width: u32,
+    height: u32,
+    weights: Vec<f32>,
+    edge: Edge,
+    storage: Storage,
+}
+
+impl BuildTask for SeparableBlur {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let bytes = self.input.len() * self.storage.bytes();
+
+        let input = match self.storage {
+            Storage::F32 => upload_f32(client, &self.input),
+            Storage::F16 => upload_f16(client, &self.input),
+        };
+        let output = empty(client, bytes);
+        let planes = FilterPlanes {
+            input: plane(&input, self.width, self.height),
+            output: plane(&output, self.width, self.height),
+        };
+
+        let separable = Separable::new(client, &self.weights);
+        separable.apply_as(client, &sizing, planes, self.edge, self.storage);
+
+        match self.storage {
+            Storage::F32 => read_f32(client, &output),
+            Storage::F16 => read_f16(client, &output),
+        }
+    }
+}
+
+fn check_separable(weights: &[f32], width: u32, height: u32, edge: Edge, storage: Storage, tolerance: f32) {
+    let input = seeded_plane(width, height);
+    let total: f32 = weights.iter().sum();
+    let normalised: Vec<f32> = weights.iter().map(|weight| weight / total).collect();
+    let expected = reference_blur_with_edge(&input, width, height, &normalised, edge);
+
+    let blurred = backend().build(SeparableBlur {
+        input,
+        width,
+        height,
+        weights: weights.to_vec(),
+        edge,
+        storage,
+    });
+
+    assert_close(&blurred, &expected, tolerance);
+}
+
+const SEPARABLE_WEIGHTS: [&[f32]; 4] = [
+    &[1.0, 2.0, 1.0],
+    &[1.0, 3.0, 4.0, 3.0, 1.0],
+    &[1.0, 4.0, 8.0, 10.0, 8.0, 4.0, 1.0],
+    &[1.0, 2.0, 3.0, 2.0, 1.0],
+];
+
+const SEPARABLE_SIZES: [(u32, u32); 4] = [(1921, 1081), (1, 7), (7, 1), (3, 3)];
+
+#[test]
+fn every_separable_matches_the_reference_at_each_edge() {
+    for weights in SEPARABLE_WEIGHTS {
+        for edge in [Edge::Reflect, Edge::Clamp] {
+            for (width, height) in SEPARABLE_SIZES {
+                check_separable(weights, width, height, edge, Storage::F32, 1e-6);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_separable_matches_in_f16() {
+    let weights = [1.0, 3.0, 4.0, 3.0, 1.0];
+
+    check_separable(&weights, 1921, 1081, Edge::Reflect, Storage::F16, 2e-3);
+}
+
+/// Planes too long for the tile grid along one axis, so the separable falls back to the plain path.
+const SEPARABLE_LONG_PLANES: [(u32, u32); 2] = [(1, 2_100_000), (2_100_000, 1)];
+
+#[test]
+fn a_separable_on_a_plane_too_long_for_the_tiles_matches() {
+    let weights = [1.0, 3.0, 4.0, 3.0, 1.0];
+
+    for (width, height) in SEPARABLE_LONG_PLANES {
+        for edge in [Edge::Reflect, Edge::Clamp] {
+            check_separable(&weights, width, height, edge, Storage::F32, 1e-6);
+        }
+    }
+}
+
+#[test]
+fn a_separable_on_a_plane_too_long_for_the_tiles_matches_in_f16() {
+    let (width, height) = LONG_PLANE;
+    let weights = [1.0, 3.0, 4.0, 3.0, 1.0];
+
+    check_separable(&weights, width, height, Edge::Clamp, Storage::F16, 2e-3);
 }

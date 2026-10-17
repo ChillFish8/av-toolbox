@@ -310,6 +310,7 @@ pub use self::sangnom::{
     reference_sangnom_field,
 };
 pub use self::tuning::{failing_kernels, fresh_tune_label};
+use crate::Edge;
 use crate::deband::{DebandParams, advance, unit};
 use crate::depth::{Conversion, Shift, Thresholds, convert_sample};
 pub use crate::ivtc::{FieldSums, MatchSums};
@@ -343,6 +344,25 @@ pub fn transposed_plane<T: Copy + Default>(values: &[T], width: u32, height: u32
 
 /// A separable blur on the CPU with `weights` along each axis and reflect-101 borders.
 pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -> Vec<f32> {
+    reference_blur_with_edge(input, width, height, weights, Edge::Reflect)
+}
+
+/// `index` folded into `0..length` as `edge` says.
+fn fold_index(index: i32, length: i32, edge: Edge) -> i32 {
+    match edge {
+        Edge::Reflect => reflect(index, length),
+        Edge::Clamp => index.clamp(0, length - 1),
+    }
+}
+
+/// A separable blur on the CPU with `weights` along each axis, reading past the edge as `edge` says.
+pub fn reference_blur_with_edge(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    weights: &[f32],
+    edge: Edge,
+) -> Vec<f32> {
     let radius = (weights.len() / 2) as i32;
     let width = width as i32;
     let height = height as i32;
@@ -352,7 +372,7 @@ pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -
         for column in 0..width {
             let mut total = 0.0f32;
             for (tap, weight) in weights.iter().enumerate() {
-                let source = reflect(column + tap as i32 - radius, width);
+                let source = fold_index(column + tap as i32 - radius, width, edge);
                 total += input[(row * width + source) as usize] * weight;
             }
 
@@ -365,7 +385,7 @@ pub fn reference_blur(input: &[f32], width: u32, height: u32, weights: &[f32]) -
         for column in 0..width {
             let mut total = 0.0f32;
             for (tap, weight) in weights.iter().enumerate() {
-                let source = reflect(row + tap as i32 - radius, height);
+                let source = fold_index(row + tap as i32 - radius, height, edge);
                 total += rows[(source * width + column) as usize] * weight;
             }
 

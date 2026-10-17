@@ -48,6 +48,23 @@ pub fn mirror(index: i32, length: i32) -> i32 {
     folded
 }
 
+/// Folds `index` into `0..length`, reflecting or clamping it when it falls outside.
+#[cube]
+pub(crate) fn fold(index: i32, length: u32, #[comptime] clamp: bool) -> u32 {
+    let last = length as i32 - 1;
+    let mut folded = index;
+
+    if index < 0 || index > last {
+        if clamp {
+            folded = i32::clamp(index, 0, last);
+        } else {
+            folded = reflect(index, length as i32);
+        }
+    }
+
+    folded as u32
+}
+
 /// What a pass reads past the edge of a plane.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Edge {

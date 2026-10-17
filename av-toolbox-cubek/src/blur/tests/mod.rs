@@ -1,3 +1,4 @@
+use super::separable::checked_radius;
 use super::*;
 
 #[test]
@@ -85,4 +86,30 @@ fn shadow_lighting_is_wide() {
 fn a_truncated_kernel_is_never_wide() {
     assert_ne!(tier_for(64.0, 193), Tier::Wide);
     assert_ne!(tier_for(2.6, 7), Tier::Wide);
+}
+
+#[test]
+#[should_panic(expected = "odd count")]
+fn uneven_weights_are_refused() {
+    checked_radius(&[1.0, 2.0]);
+}
+
+#[test]
+#[should_panic(expected = "symmetric")]
+fn lopsided_weights_are_refused() {
+    checked_radius(&[1.0, 2.0, 3.0]);
+}
+
+#[test]
+#[should_panic(expected = "at most 3")]
+fn a_radius_past_three_is_refused() {
+    checked_radius(&[1.0; 9]);
+}
+
+#[test]
+fn symmetric_weights_give_their_radius_and_sum() {
+    let (radius, total) = checked_radius(&[1.0, 4.0, 8.0, 10.0, 8.0, 4.0, 1.0]);
+
+    assert_eq!(radius, SEPARABLE_MAX_RADIUS);
+    assert_eq!(total, 36.0);
 }

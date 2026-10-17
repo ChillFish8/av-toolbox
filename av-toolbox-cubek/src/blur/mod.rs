@@ -1,6 +1,7 @@
 mod fixed;
 mod lines;
 mod plain;
+mod separable;
 mod staged;
 #[cfg(test)]
 mod tests;
@@ -11,8 +12,9 @@ use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
 use cubecl::server::Handle;
 
 pub use self::fixed::{Smooth, smooth, vertical_121};
+pub use self::separable::{SEPARABLE_MAX_RADIUS, Separable};
 use crate::plane::are_distinct;
-use crate::{DevicePlane, Dispatch, assert_plane_sized};
+use crate::{DevicePlane, Dispatch, Edge, assert_plane_sized};
 
 /// The widest radius a blur reaches, in samples either side of its centre.
 pub const MAX_RADIUS: u32 = 4096;
@@ -224,7 +226,18 @@ impl Gaussian {
             Tier::Plain => plain::apply(client, dispatch, self, planes, storage),
             Tier::Tiled => {
                 let weights = self.weights::<R>();
-                tiled::blur_tiled(client, weights, planes, self.radius, storage);
+                let filter_planes = FilterPlanes {
+                    input: planes.input,
+                    output: planes.output,
+                };
+                tiled::blur_tiled(
+                    client,
+                    weights,
+                    filter_planes,
+                    self.radius,
+                    Edge::Reflect,
+                    storage,
+                );
             },
             Tier::Staged => staged::blur_staged(client, self, planes, storage),
             Tier::Wide => wide::blur_wide(client, planes, self.sigma, storage),

@@ -3,7 +3,8 @@
 use cubecl::prelude::*;
 
 use super::{FilterPlanes, MAX_CUBES_PER_AXIS, Storage};
-use crate::{Dispatch, Edge, assert_plane_sized, reflect};
+use crate::border::fold;
+use crate::{Dispatch, Edge, assert_plane_sized};
 
 /// The units along a cube's rows.
 const UNITS_ACROSS: u32 = 32;
@@ -23,23 +24,6 @@ pub enum Smooth {
     Binomial,
     /// Every weight 1, over 9.
     Box,
-}
-
-/// Folds `index` into `0..length`, reflecting or clamping it when it falls outside.
-#[cube]
-fn fold(index: i32, length: u32, #[comptime] clamp: bool) -> u32 {
-    let last = length as i32 - 1;
-    let mut folded = index;
-
-    if index < 0 || index > last {
-        if clamp {
-            folded = i32::clamp(index, 0, last);
-        } else {
-            folded = reflect(index, length as i32);
-        }
-    }
-
-    folded as u32
 }
 
 /// The weighted sum of the three samples at `left`, `centre` and `right` in `row`.

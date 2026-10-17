@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use av_toolbox_cubek::blur::{BlurPlanes, FilterPlanes, Gaussian, Separable, Storage};
 use av_toolbox_cubek::dehalo::{DifferencePlanes, difference};
 use av_toolbox_cubek::deinterlace::qtgmc::fmtc_gauss_taps;
 use av_toolbox_cubek::lineart::{self, VinverseParams, VinversePlanes};
@@ -11,7 +12,7 @@ use av_toolbox_cubek::{DevicePlane, Edge};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::{ComputeClient, Runtime};
 
-use crate::support::{Sizing, backend, empty, plane, upload_f32, upload_u32};
+use crate::support::{Sizing, backend, empty, plane, upload_f16, upload_f32, upload_u32};
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
@@ -110,6 +111,52 @@ impl BuildTask for TimeRemainingBlurs {
         ];
         for (name, steps) in min_blur_chains {
             record(&mut lines, client, name, || smooth_chain(steps));
+        }
+
+        // The tiled gaussian, at sigma 0.8 for radius 1 and radius / 4 otherwise.
+        let half_input = upload_f16(client, &data);
+        let half_scratch = empty(client, samples * 2);
+        let half_output = empty(client, samples * 2);
+        let storages = [
+            (Storage::F32, &input, &first, &second, "f32"),
+            (Storage::F16, &half_input, &half_scratch, &half_output, "f16"),
+        ];
+        for radius in [1u32, 4, 7] {
+            let sigma = if radius == 1 { 0.8 } else { radius as f32 / 4.0 };
+            let gaussian = Gaussian::with_radius(client, sigma, radius);
+
+            for (storage, source, scratch, target, label) in storages {
+                let name = format!("gaussian r{radius} {label}");
+                record(&mut lines, client, &name, || {
+                    let planes = BlurPlanes {
+                        input: sample_plane(source),
+                        scratch: sample_plane(scratch),
+                        output: sample_plane(target),
+                    };
+                    gaussian.apply_as(client, &sizing, planes, storage);
+                });
+            }
+        }
+
+        // The separable kernels each chain above and fine_dehalo's box_box add up to.
+        let separable_kernels: [(&str, &[f32]); 4] = [
+            ("separable [1,2,1]", &[1.0, 2.0, 1.0]),
+            ("separable [1,3,4,3,1]", &[1.0, 3.0, 4.0, 3.0, 1.0]),
+            (
+                "separable [1,4,8,10,8,4,1]",
+                &[1.0, 4.0, 8.0, 10.0, 8.0, 4.0, 1.0],
+            ),
+            ("separable [1,2,3,2,1]", &[1.0, 2.0, 3.0, 2.0, 1.0]),
+        ];
+        for (name, weights) in separable_kernels {
+            let separable = Separable::new(client, weights);
+            record(&mut lines, client, name, || {
+                let planes = FilterPlanes {
+                    input: sample_plane(&input),
+                    output: sample_plane(&first),
+                };
+                separable.apply_as(client, &sizing, planes, Edge::Reflect, Storage::F32);
+            });
         }
 
         // The blur chain of contra_sharpen after its median: Binomial, then sharp - 1 Box passes.
