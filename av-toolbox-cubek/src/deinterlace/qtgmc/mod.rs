@@ -8,7 +8,7 @@
 //! - [search_clip] builds the clip motion is searched on.
 //! - [resharpen], [subtract], [clamp_between] and [merge] are QTGMC's other per-pixel steps.
 //! - [search_clip_from_repaired], [smode2_resharpen] and [back_blend] compose those into QTGMC's steps.
-//! - [QtgmcTables] holds the tables those steps resize with.
+//! - [QtgmcTables] holds the bob and gaussian tables those steps read.
 //! - [blur_and_spread] blurs with the 3x3 binomial and then the gaussian of a [GaussTables].
 //! - [vertical_midpoint] builds the plane SMode 2 blurs before resharpening.
 //! - [vertical_blur] and [repair_blend] are the steps repair mode adds.

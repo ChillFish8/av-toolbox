@@ -102,14 +102,21 @@ fn the_fused_blur_matches_on_short_lines() {
     assert_matches_the_chain(cases);
 }
 
-// Wide enough that each cube across walks more than one tile.
+// Two tiles more than the grid holds along one axis, so the first two cubes on it walk a second tile.
 #[test]
 fn the_fused_blur_matches_when_a_plane_walks_the_grid() {
-    let cases = vec![SpreadCase {
-        width: 65535 * 32 + 37,
-        height: 3,
-        sharpness: 2.0,
-    }];
+    let cases = vec![
+        SpreadCase {
+            width: 65535 * 32 + 37,
+            height: 3,
+            sharpness: 2.0,
+        },
+        SpreadCase {
+            width: 3,
+            height: 65535 * 32 + 37,
+            sharpness: 2.0,
+        },
+    ];
 
     assert_matches_the_chain(cases);
 }

@@ -50,8 +50,7 @@ pub fn reference_resize_float(
     reference_resize_float_with_edge(input, width, height, across, down, Edge::Reflect)
 }
 
-/// The same as [reference_resize_float], mirroring
-/// [apply_float_with_edge](crate::resize::apply_float_with_edge).
+/// The same as [reference_resize_float], reading taps past the plane's edge as `edge` says.
 pub fn reference_resize_float_with_edge(
     input: &[f32],
     width: u32,

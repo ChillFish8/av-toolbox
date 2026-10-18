@@ -7,8 +7,7 @@ use av_toolbox_cubek::deinterlace::qtgmc::{
     subtract,
     vertical_midpoint,
 };
-use av_toolbox_cubek::neighbourhood::{Edge, Extreme, Shape};
-use av_toolbox_cubek::resize::{ResizePlanes, apply_float_with_edge, upload};
+use av_toolbox_cubek::neighbourhood::{Extreme, Shape};
 use av_toolbox_cubek::testing::{
     QtgmcFixture,
     assert_plane_within,
@@ -17,7 +16,6 @@ use av_toolbox_cubek::testing::{
     reference_clamp,
     reference_extreme,
     reference_resharpen,
-    reference_resize_float_with_edge,
     reference_search_clip,
     reference_search_inputs,
 };
@@ -397,59 +395,6 @@ fn the_device_merge_weighs_the_second_plane_by_the_weight() {
     let found = backend().build(task);
 
     assert_plane_within(&found, &expected, DEVICE_TOLERANCE, 2, "merge");
-}
-
-/// One axis of a plane resized on the device with the gaussian taps and a clamped edge.
-struct GaussianRun {
-    input: Vec<f32>,
-    width: u32,
-    height: u32,
-}
-
-impl BuildTask for GaussianRun {
-    type Output = Vec<f32>;
-
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
-        let client = build.client();
-        let sizing = Sizing(build.frame_context());
-        let bytes = self.input.len() * size_of::<f32>();
-
-        let input = upload_f32(client, &self.input);
-        let scratch = empty(client, bytes);
-        let output = empty(client, bytes);
-        let across = upload(client, &fmtc_gauss_taps(self.width, 2.0));
-        let down = upload(client, &fmtc_gauss_taps(self.height, 2.0));
-
-        let planes = ResizePlanes {
-            input: plane(&input, self.width, self.height),
-            scratch: plane(&scratch, self.width, self.height),
-            output: plane(&output, self.width, self.height),
-        };
-        apply_float_with_edge(client, &sizing, planes, &across, &down, Edge::Clamp);
-
-        cubecl::future::block_on(client.sync()).expect("the device should finish");
-
-        read_f32(client, &output)
-    }
-}
-
-#[test]
-fn the_device_gaussian_matches_the_reference_with_a_clamped_edge() {
-    let input = pan_frame("average", "tr2_yuv").remove(0);
-    let (width, height) = PAN_SIZE;
-    let across = fmtc_gauss_taps(width as u32, 2.0);
-    let down = fmtc_gauss_taps(height as u32, 2.0);
-    let expected =
-        reference_resize_float_with_edge(&input, width as u32, height as u32, &across, &down, Edge::Clamp);
-
-    let task = GaussianRun {
-        input,
-        width: width as u32,
-        height: height as u32,
-    };
-    let found = backend().build(task);
-
-    assert_plane_within(&found, &expected, DEVICE_TOLERANCE, width as u32, "gaussian");
 }
 
 #[test]
