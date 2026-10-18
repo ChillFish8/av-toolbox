@@ -6,7 +6,7 @@ use av_toolbox_cubek::deinterlace::qtgmc::{GaussTables, blur_and_spread};
 use av_toolbox_cubek::lineart::{self, VinverseParams, VinversePlanes};
 use av_toolbox_cubek::neighbourhood::{self, BinomialChain, NeighbourPlanes, Smooth};
 use av_toolbox_cubek::retinex::{RecursiveGaussian, RecursivePlanes, recursive_gaussian};
-use av_toolbox_cubek::warp::{BlurKind, blur_mask};
+use av_toolbox_cubek::warp::{BlurKind, blur_mask, blur_mask_passes};
 use av_toolbox_cubek::{DevicePlane, Edge};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::{ComputeClient, Runtime};
@@ -275,21 +275,28 @@ impl BuildTask for TimeRemainingBlurs {
         let mask = upload_u32(client, &mask_values);
         let mask_scratch = empty(client, bytes);
         let blur_passes = [
-            ("blur_mask R2 1pass", BlurKind::R2, 1),
-            ("blur_mask R6 1pass", BlurKind::R6, 1),
-            ("blur_mask R6 3pass", BlurKind::R6, 3),
+            (BlurKind::R2, 1),
+            (BlurKind::R2, 3),
+            (BlurKind::R2, 100),
+            (BlurKind::R6, 1),
+            (BlurKind::R6, 3),
+            (BlurKind::R6, 100),
         ];
-        for (name, kind, passes) in blur_passes {
-            record(&mut lines, client, name, || {
-                for _ in 0..passes {
-                    blur_mask(
-                        client,
-                        &sizing,
-                        sample_plane(&mask),
-                        sample_plane(&mask_scratch),
-                        kind,
-                    );
-                }
+        for (kind, passes) in blur_passes {
+            let name = format!("blur_mask_passes {kind:?} {passes}pass");
+            record(&mut lines, client, &name, || {
+                let mask = sample_plane(&mask);
+                let scratch = sample_plane(&mask_scratch);
+                blur_mask_passes(client, &sizing, mask, scratch, kind, passes);
+            });
+        }
+
+        for kind in [BlurKind::R2, BlurKind::R6] {
+            let name = format!("blur_mask {kind:?} 1pass");
+            record(&mut lines, client, &name, || {
+                let mask = sample_plane(&mask);
+                let scratch = sample_plane(&mask_scratch);
+                blur_mask(client, &sizing, mask, scratch, kind);
             });
         }
 

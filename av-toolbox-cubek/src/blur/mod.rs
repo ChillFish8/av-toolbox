@@ -72,7 +72,7 @@ impl Storage {
 pub(crate) const MAX_CUBES_PER_AXIS: u32 = 65535;
 
 /// The shared memory budget, per cube, that the blur kernels are built for.
-pub(super) const MAX_SHARED_BYTES: u32 = 32 * 1024;
+pub(crate) const MAX_SHARED_BYTES: u32 = 32 * 1024;
 
 /// The widest radius the tiled tier takes.
 ///

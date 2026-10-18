@@ -6,7 +6,7 @@ mod tests;
 // by name.
 use cubecl::prelude::*;
 
-pub use self::blur::blur_mask;
+pub use self::blur::{blur_mask, blur_mask_passes};
 use crate::depth::Element;
 use crate::{DevicePlane, Dispatch};
 
@@ -314,7 +314,8 @@ fn launch_warp<E: Int, R: Runtime>(
 
 /// Runs the whole aWarpSharp2 warp on one plane.
 ///
-/// It builds the edge mask, blurs it `params.passes` times, then warps the input along it.
+/// It builds the edge mask, blurs it `params.passes` times, then warps the input along it. The blurred
+/// mask may end in either `mask` or `scratch`.
 pub fn warp_sharp<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -323,9 +324,14 @@ pub fn warp_sharp<R: Runtime>(
 ) {
     edge_mask(client, dispatch, planes.input, planes.mask, params);
 
-    for _ in 0..params.passes {
-        blur_mask(client, dispatch, planes.mask, planes.scratch, params.blur);
-    }
+    let blurred = blur_mask_passes(
+        client,
+        dispatch,
+        planes.mask,
+        planes.scratch,
+        params.blur,
+        params.passes,
+    );
 
-    warp_plane(client, dispatch, planes.input, planes.mask, planes.output, params);
+    warp_plane(client, dispatch, planes.input, blurred, planes.output, params);
 }
