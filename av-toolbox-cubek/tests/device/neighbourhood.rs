@@ -306,7 +306,7 @@ fn every_min_blur_radius_matches_the_reference() {
 }
 
 #[test]
-fn min_blur_needs_no_scratch_plane() {
+fn min_blur_on_a_narrow_plane_matches_the_reference() {
     let input = seeded_plane(7, 1);
 
     for radius in 1..=3 {

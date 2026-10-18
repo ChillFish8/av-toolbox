@@ -61,7 +61,7 @@ fn pick_kernel(input: &Array<f32>, blurred: &Array<f32>, median: &Array<f32>, ou
     output[ABSOLUTE_POS] = picked;
 }
 
-/// A 3x3 binomial blur followed by `radius - 1` 3x3 box blurs, in one launch.
+/// A 3x3 binomial blur followed by `radius - 1` 3x3 box blurs, as a single pass.
 ///
 /// Radius 1 runs the binomial alone. Radius 2 and 3 run the 5 and 7 tap
 /// [Separable](crate::blur::Separable) the chain adds up to. Edges reflect.
@@ -73,6 +73,8 @@ pub struct BinomialChain {
 
 impl BinomialChain {
     /// Builds the chain for `radius`, which is 1, 2 or 3.
+    ///
+    /// It panics when `radius` is outside 1..=3.
     pub fn new<R: Runtime>(client: &ComputeClient<R>, radius: u32) -> Self {
         let separable = match radius {
             1 => None,

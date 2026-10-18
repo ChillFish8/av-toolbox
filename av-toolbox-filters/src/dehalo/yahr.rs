@@ -121,14 +121,14 @@ fn min_blur_then_smooth<R: Runtime>(
     let height = input.height();
 
     let picked = Scratch::new::<f32>(context, width, height);
-    let blur_chain = Scratch::new::<f32>(context, width, height);
+    let blur_leg = Scratch::new::<f32>(context, width, height);
     let median = Scratch::new::<f32>(context, width, height);
     let picked_plane = picked.plane();
-    let blur_chain_plane = blur_chain.plane();
+    let blur_leg_plane = blur_leg.plane();
     let median_plane = median.plane();
     let min_blur_planes = MinBlurPlanes {
         input,
-        blurred: blur_chain_plane,
+        blurred: blur_leg_plane,
         median: median_plane,
         output: picked_plane,
     };
