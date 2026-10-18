@@ -38,6 +38,8 @@
       <sourceFolder url="file://$MODULE_DIR$/thirdparty/bestsource/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/scratchpad/vs-bench/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
+      <excludeFolder url="file://$MODULE_DIR$/thirdparty/bestsource/vendor" />
+      <excludeFolder url="file://$MODULE_DIR$/thirdparty/vship/vendor" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
