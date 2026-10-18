@@ -11,6 +11,7 @@ mod wide;
 use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
 use cubecl::server::Handle;
 
+pub(crate) use self::fixed::{OUTPUTS_DOWN, TILE_HEIGHT, TILE_WIDTH, UNITS_ACROSS, UNITS_DOWN, fixed_cubes};
 pub use self::fixed::{Smooth, smooth, vertical_121};
 pub use self::separable::{SEPARABLE_MAX_RADIUS, Separable};
 use crate::plane::are_distinct;

@@ -5,11 +5,21 @@ mod tests;
 // by name.
 use cubecl::prelude::*;
 
-use crate::blur::{self, FilterPlanes, Storage};
-use crate::dehalo::{DifferencePlanes, difference};
+use crate::blur::{
+    self,
+    FilterPlanes,
+    OUTPUTS_DOWN,
+    Storage,
+    TILE_HEIGHT,
+    TILE_WIDTH,
+    UNITS_ACROSS,
+    UNITS_DOWN,
+    fixed_cubes,
+};
+use crate::border::fold;
 use crate::neighbourhood::{Extreme, NeighbourPlanes, Shape, Smooth, extreme, smooth};
 use crate::warp::WarpParams;
-use crate::{DevicePlane, Dispatch, Edge};
+use crate::{DevicePlane, Dispatch, Edge, assert_plane_sized};
 
 /// The planes one merge reads and writes, all f32 and one size.
 #[derive(Debug, Clone, Copy)]
@@ -146,21 +156,29 @@ pub struct VinversePlanes<'a> {
     pub input: DevicePlane<'a>,
     pub output: DevicePlane<'a>,
     pub blurred: DevicePlane<'a>,
-    pub diff: DevicePlane<'a>,
-    pub diff_blurred: DevicePlane<'a>,
     pub sbr: DevicePlane<'a>,
 }
 
-/// Takes off the part of the comb a second blur removes, unless it points against the comb.
-#[cube(launch_unchecked)]
-fn sbr_kernel(input: &Array<f32>, diff: &Array<f32>, diff_blurred: &Array<f32>, sbr: &mut Array<f32>) {
-    if ABSOLUTE_POS >= sbr.len() {
-        terminate!();
-    }
+/// The sample of `input` at `column` and `row`, reading past the top and bottom through reflect.
+#[cube]
+fn column_sample(input: &Array<f32>, width: u32, height: u32, column: u32, row: i32) -> f32 {
+    let folded = fold(row, height, false);
 
-    let value = input[ABSOLUTE_POS];
-    let comb = diff[ABSOLUTE_POS];
-    let residual = comb - diff_blurred[ABSOLUTE_POS];
+    input[(folded * width + column) as usize]
+}
+
+/// The comb at the middle of three samples down a column, the part a vertical `1 2 1` removes.
+#[cube]
+fn comb_of(above: f32, centre: f32, below: f32) -> f32 {
+    let blurred = (above + 2.0 * centre + below) / 4.0;
+
+    centre - blurred
+}
+
+/// Takes off the part of `comb` a second blur removes, unless it points against the comb.
+#[cube]
+fn without_comb(value: f32, comb: f32, comb_blurred: f32) -> f32 {
+    let residual = comb - comb_blurred;
 
     let mut removed = comb;
     if f32::abs(residual) < f32::abs(comb) {
@@ -172,7 +190,83 @@ fn sbr_kernel(input: &Array<f32>, diff: &Array<f32>, diff_blurred: &Array<f32>, 
         result = value;
     }
 
-    sbr[ABSOLUTE_POS] = result;
+    result
+}
+
+/// Writes the outputs of one unit of the comb removal, a short run down one column of one tile.
+///
+/// The comb and its vertical `1 2 1` are worked out from the 5 samples around each row. Each row's
+/// sample and comb are found once and slide down the run.
+#[cube]
+fn sbr_run(input: &Array<f32>, sbr: &mut Array<f32>, width: u32, height: u32, column: u32, first_row: u32) {
+    let first = first_row as i32;
+    let two_above = column_sample(input, width, height, column, first - 2);
+    let one_above = column_sample(input, width, height, column, first - 1);
+    let mut centre = column_sample(input, width, height, column, first);
+    let mut below = column_sample(input, width, height, column, first + 1);
+    let mut comb_above = comb_of(two_above, one_above, centre);
+    let mut comb_centre = comb_of(one_above, centre, below);
+
+    #[unroll]
+    for step in 0..OUTPUTS_DOWN {
+        let row = first_row + step;
+        let two_below = column_sample(input, width, height, column, row as i32 + 2);
+        let comb_below = comb_of(centre, below, two_below);
+
+        if row < height {
+            let comb_blurred = (comb_above + 2.0 * comb_centre + comb_below) / 4.0;
+            let result = without_comb(centre, comb_centre, comb_blurred);
+            sbr[(row * width + column) as usize] = result;
+        }
+
+        comb_above = comb_centre;
+        comb_centre = comb_below;
+        centre = below;
+        below = two_below;
+    }
+}
+
+/// Takes off the part of the comb a second blur removes, unless it points against the comb.
+///
+/// Each cube walks the tiles its grid position lands on.
+#[cube(launch_unchecked)]
+fn sbr_kernel(input: &Array<f32>, sbr: &mut Array<f32>, width: u32, height: u32) {
+    let mut tile_down = CUBE_POS_Y;
+    while tile_down * TILE_HEIGHT < height {
+        let first_row = tile_down * TILE_HEIGHT + UNIT_POS_Y * OUTPUTS_DOWN;
+        let mut tile_across = CUBE_POS_X;
+
+        while tile_across * TILE_WIDTH < width {
+            let column = tile_across * TILE_WIDTH + UNIT_POS_X;
+            if column < width && first_row < height {
+                sbr_run(input, sbr, width, height, column, first_row);
+            }
+
+            tile_across += CUBE_COUNT_X;
+        }
+
+        tile_down += CUBE_COUNT_Y;
+    }
+}
+
+/// Writes `input` into `sbr` with part of its comb taken off, in one launch.
+fn remove_comb<R: Runtime>(client: &ComputeClient<R>, input: DevicePlane<'_>, sbr: DevicePlane<'_>) {
+    let width = sbr.width();
+    let height = sbr.height();
+    let bytes = size_of::<f32>();
+    assert_plane_sized(&input, width, height, bytes, "vinverse input");
+    assert_plane_sized(&sbr, width, height, bytes, "vinverse sbr");
+
+    let cubes = fixed_cubes(width, height);
+    let unit = CubeDim::new_2d(UNITS_ACROSS, UNITS_DOWN);
+    let input = input.array::<R>();
+    let sbr = sbr.array::<R>();
+
+    // Safety: both planes hold `width * height` f32 values, every read is folded into the plane and
+    // every write is guarded to it.
+    unsafe {
+        sbr_kernel::launch_unchecked::<R>(client, cubes, unit, input, sbr, width, height);
+    }
 }
 
 /// Adds the contra-sharpening step onto `sbr` and limits the result to `limit` around `input`.
@@ -222,37 +316,7 @@ pub fn vinverse<R: Runtime>(
     planes: VinversePlanes<'_>,
     params: &VinverseParams,
 ) {
-    let blur_input = NeighbourPlanes {
-        input: planes.input,
-        output: planes.blurred,
-    };
-    vertical_121(client, dispatch, blur_input);
-
-    let comb = DifferencePlanes {
-        first: planes.input,
-        second: planes.blurred,
-        output: planes.diff,
-    };
-    difference(client, dispatch, comb);
-
-    let blur_comb = NeighbourPlanes {
-        input: planes.diff,
-        output: planes.diff_blurred,
-    };
-    vertical_121(client, dispatch, blur_comb);
-
-    let samples = planes.output.samples();
-    let cubes = dispatch.cube_count(samples);
-    let unit = dispatch.cube_dim();
-    let input = planes.input.array::<R>();
-    let diff = planes.diff.array::<R>();
-    let diff_blurred = planes.diff_blurred.array::<R>();
-    let sbr = planes.sbr.array::<R>();
-
-    // Safety: every plane holds `samples` f32 values.
-    unsafe {
-        sbr_kernel::launch_unchecked::<R>(client, cubes, unit, input, diff, diff_blurred, sbr);
-    }
+    remove_comb(client, planes.input, planes.sbr);
 
     let blur_sbr = NeighbourPlanes {
         input: planes.sbr,
@@ -260,7 +324,9 @@ pub fn vinverse<R: Runtime>(
     };
     vertical_121(client, dispatch, blur_sbr);
 
+    let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
     let input = planes.input.array::<R>();
     let sbr = planes.sbr.array::<R>();
     let sbr_blurred = planes.blurred.array::<R>();

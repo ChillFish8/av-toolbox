@@ -322,21 +322,48 @@ impl BuildTask for Vinverse {
         let input = upload_f32(client, &self.input);
         let output = empty(client, bytes);
         let blurred = empty(client, bytes);
-        let diff = empty(client, bytes);
-        let diff_blurred = empty(client, bytes);
         let sbr = empty(client, bytes);
         let planes = VinversePlanes {
             input: plane(&input, self.width, self.height),
             output: plane(&output, self.width, self.height),
             blurred: plane(&blurred, self.width, self.height),
-            diff: plane(&diff, self.width, self.height),
-            diff_blurred: plane(&diff_blurred, self.width, self.height),
             sbr: plane(&sbr, self.width, self.height),
         };
         vinverse(client, &sizing, planes, &self.params);
 
         read_f32(client, &output)
     }
+}
+
+/// Checks the device vinverse against the reference on a busy plane, returning the largest difference.
+fn vinverse_difference(width: u32, height: u32, amnt: Option<f32>) -> f32 {
+    let input: Vec<f32> = busy(width, height)
+        .iter()
+        .map(|value| value * 0.37 + 0.1)
+        .collect();
+    let params = VinverseParams {
+        contra_str: 2.7,
+        scl: 0.25,
+        amnt,
+    };
+    let task = Vinverse {
+        input: input.clone(),
+        width,
+        height,
+        params,
+    };
+
+    let actual = backend().build(task);
+    let expected = reference_vinverse(&input, width, height, 2.7, 0.25, amnt);
+    let difference = largest_difference(&actual, &expected);
+
+    println!("vinverse {width}x{height} amnt {amnt:?}: largest difference {difference}");
+    assert!(
+        difference <= VINVERSE_TOLERANCE,
+        "vinverse {width}x{height} amnt {amnt:?} differs by {difference}",
+    );
+
+    difference
 }
 
 #[test]
@@ -346,35 +373,27 @@ fn vinverse_matches_the_reference() {
 
     for (width, height) in SIZES {
         for amnt in limits {
-            let input: Vec<f32> = busy(width, height)
-                .iter()
-                .map(|value| value * 0.37 + 0.1)
-                .collect();
-            let params = VinverseParams {
-                contra_str: 2.7,
-                scl: 0.25,
-                amnt,
-            };
-            let task = Vinverse {
-                input: input.clone(),
-                width,
-                height,
-                params,
-            };
-
-            let actual = backend().build(task);
-            let expected = reference_vinverse(&input, width, height, 2.7, 0.25, amnt);
-            let difference = largest_difference(&actual, &expected);
-
-            println!("vinverse {width}x{height} amnt {amnt:?}: largest difference {difference}");
-            assert!(
-                difference <= VINVERSE_TOLERANCE,
-                "vinverse {width}x{height} amnt {amnt:?} differs by {difference}",
-            );
-
+            let difference = vinverse_difference(width, height, amnt);
             worst = worst.max(difference);
         }
     }
 
     println!("vinverse: largest difference over every size {worst}");
+}
+
+#[test]
+fn vinverse_matches_the_reference_on_short_planes() {
+    for height in [1, 2, 3, 5] {
+        for amnt in [None, Some(9.0)] {
+            vinverse_difference(7, height, amnt);
+        }
+    }
+}
+
+/// Crosses a tile both ways, then walks more tiles across and down than a grid holds.
+#[test]
+fn vinverse_matches_the_reference_on_planes_that_cross_tiles() {
+    for (width, height) in [(37, 130), (2_100_000, 2), (1, 4_200_000)] {
+        vinverse_difference(width, height, None);
+    }
 }

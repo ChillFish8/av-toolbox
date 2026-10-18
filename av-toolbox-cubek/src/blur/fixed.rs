@@ -7,15 +7,15 @@ use crate::border::fold;
 use crate::{Dispatch, Edge, assert_plane_sized};
 
 /// The units along a cube's rows.
-const UNITS_ACROSS: u32 = 32;
+pub(crate) const UNITS_ACROSS: u32 = 32;
 /// The units down a cube's columns.
-const UNITS_DOWN: u32 = 8;
+pub(crate) const UNITS_DOWN: u32 = 8;
 /// The outputs each unit writes down its column.
-const OUTPUTS_DOWN: u32 = 8;
+pub(crate) const OUTPUTS_DOWN: u32 = 8;
 /// The width of the output tile a cube writes.
-const TILE_WIDTH: u32 = UNITS_ACROSS;
+pub(crate) const TILE_WIDTH: u32 = UNITS_ACROSS;
 /// The height of the output tile a cube writes.
-const TILE_HEIGHT: u32 = UNITS_DOWN * OUTPUTS_DOWN;
+pub(crate) const TILE_HEIGHT: u32 = UNITS_DOWN * OUTPUTS_DOWN;
 
 /// A 3x3 blur.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -184,7 +184,7 @@ fn vertical_kernel<F: Float>(
 }
 
 /// The cubes covering a `width` by `height` plane, one tile each, capped at what every device allows.
-fn fixed_cubes(width: u32, height: u32) -> CubeCount {
+pub(crate) fn fixed_cubes(width: u32, height: u32) -> CubeCount {
     let tiles_across = width.div_ceil(TILE_WIDTH);
     let tiles_down = height.div_ceil(TILE_HEIGHT);
     let cubes_across = tiles_across.min(MAX_CUBES_PER_AXIS);

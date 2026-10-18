@@ -218,15 +218,11 @@ impl<R: Runtime> PlaneFilter for Cleaner<R> {
         let height = input.height();
 
         let blurred = Scratch::new::<f32>(context, width, height);
-        let diff = Scratch::new::<f32>(context, width, height);
-        let diff_blurred = Scratch::new::<f32>(context, width, height);
         let sbr = Scratch::new::<f32>(context, width, height);
         let planes = VinversePlanes {
             input,
             output,
             blurred: blurred.plane(),
-            diff: diff.plane(),
-            diff_blurred: diff_blurred.plane(),
             sbr: sbr.plane(),
         };
         let sizing = Sizing(context);

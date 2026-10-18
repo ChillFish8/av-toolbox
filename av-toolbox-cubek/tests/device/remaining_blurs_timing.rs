@@ -84,7 +84,6 @@ impl BuildTask for TimeRemainingBlurs {
         let first = empty(client, bytes);
         let second = empty(client, bytes);
         let third = empty(client, bytes);
-        let fourth = empty(client, bytes);
         let fifth = empty(client, bytes);
         let sample_plane = |handle| plane(handle, WIDTH, HEIGHT);
         let mut lines = Vec::new();
@@ -231,13 +230,11 @@ impl BuildTask for TimeRemainingBlurs {
             scl: 0.25,
             amnt: None,
         };
-        record(&mut lines, client, "vinverse_whole", || {
+        record(&mut lines, client, "vinverse_whole now", || {
             let planes = VinversePlanes {
                 input: sample_plane(&input),
                 output: sample_plane(&first),
                 blurred: sample_plane(&second),
-                diff: sample_plane(&third),
-                diff_blurred: sample_plane(&fourth),
                 sbr: sample_plane(&fifth),
             };
             lineart::vinverse(client, &sizing, planes, &params);
