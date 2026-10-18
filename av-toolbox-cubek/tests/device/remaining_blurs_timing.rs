@@ -4,7 +4,7 @@ use av_toolbox_cubek::blur::{BlurPlanes, FilterPlanes, Gaussian, Separable, Stor
 use av_toolbox_cubek::dehalo::{DifferencePlanes, difference};
 use av_toolbox_cubek::deinterlace::qtgmc::fmtc_gauss_taps;
 use av_toolbox_cubek::lineart::{self, VinverseParams, VinversePlanes};
-use av_toolbox_cubek::neighbourhood::{self, NeighbourPlanes, Smooth};
+use av_toolbox_cubek::neighbourhood::{self, BinomialChain, NeighbourPlanes, Smooth};
 use av_toolbox_cubek::resize::{ResizePlanes, apply_float_with_edge, upload};
 use av_toolbox_cubek::retinex::{RecursiveGaussian, RecursivePlanes, recursive_gaussian};
 use av_toolbox_cubek::warp::{BlurKind, blur_mask};
@@ -113,6 +113,19 @@ impl BuildTask for TimeRemainingBlurs {
             record(&mut lines, client, name, || smooth_chain(steps));
         }
 
+        // The blur leg of min_blur and contra_sharpen as they run now, one BinomialChain launch.
+        for radius in 1..=3u32 {
+            let chain = BinomialChain::new(client, radius);
+            let name = format!("binomial_chain r{radius} now");
+            record(&mut lines, client, &name, || {
+                let planes = NeighbourPlanes {
+                    input: sample_plane(&input),
+                    output: sample_plane(&first),
+                };
+                chain.apply(client, &sizing, planes);
+            });
+        }
+
         // The tiled gaussian, at sigma 0.8 for radius 1 and radius / 4 otherwise.
         let half_input = upload_f16(client, &data);
         let half_scratch = empty(client, samples * 2);
@@ -175,6 +188,15 @@ impl BuildTask for TimeRemainingBlurs {
 
         record(&mut lines, client, "fine_dehalo box_box", || {
             smooth_chain(&[Smooth::Box, Smooth::Box]);
+        });
+
+        let shrink_blur = Separable::new(client, &[1.0, 2.0, 3.0, 2.0, 1.0]);
+        record(&mut lines, client, "fine_dehalo box_box now", || {
+            let planes = FilterPlanes {
+                input: sample_plane(&input),
+                output: sample_plane(&first),
+            };
+            shrink_blur.apply_as(client, &sizing, planes, Edge::Reflect, Storage::F32);
         });
 
         // sbr_kernel is private, so the public pieces before it are timed, then the whole pass.

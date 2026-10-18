@@ -15,7 +15,14 @@ use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::dehalo::yahr::{YahrParams, YahrPlanes, yahr_combine};
 use av_toolbox_cubek::dehalo::{DifferencePlanes, difference};
 use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::neighbourhood::{MinBlurPlanes, NeighbourPlanes, Smooth, min_blur, smooth};
+use av_toolbox_cubek::neighbourhood::{
+    BinomialChain,
+    MinBlurPlanes,
+    NeighbourPlanes,
+    Smooth,
+    min_blur,
+    smooth,
+};
 use av_toolbox_cubek::rgvs::{RepairMode, RepairPlanes, repair};
 use av_toolbox_gpu::{
     BuildContext,
@@ -106,6 +113,7 @@ pub(crate) fn yahr_params(args: &YahrArgs, sample: SampleFormat) -> Result<YahrP
 fn min_blur_then_smooth<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
+    min_blur_chain: &BinomialChain,
     input: DevicePlane<'_>,
 ) -> Scratch {
     let sizing = Sizing(context);
@@ -115,19 +123,16 @@ fn min_blur_then_smooth<R: Runtime>(
     let picked = Scratch::new::<f32>(context, width, height);
     let blur_chain = Scratch::new::<f32>(context, width, height);
     let median = Scratch::new::<f32>(context, width, height);
-    let blur_scratch = Scratch::new::<f32>(context, width, height);
     let picked_plane = picked.plane();
     let blur_chain_plane = blur_chain.plane();
     let median_plane = median.plane();
-    let blur_scratch_plane = blur_scratch.plane();
     let min_blur_planes = MinBlurPlanes {
         input,
         blurred: blur_chain_plane,
         median: median_plane,
-        scratch: blur_scratch_plane,
         output: picked_plane,
     };
-    min_blur(client, &sizing, min_blur_planes, 2);
+    min_blur(client, &sizing, min_blur_planes, min_blur_chain);
 
     let blurred = Scratch::new::<f32>(context, width, height);
     let blurred_plane = blurred.plane();
@@ -144,6 +149,7 @@ fn min_blur_then_smooth<R: Runtime>(
 fn yahr<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
+    min_blur_chain: &BinomialChain,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     params: &YahrParams,
@@ -152,7 +158,7 @@ fn yahr<R: Runtime>(
     let width = input.width();
     let height = input.height();
 
-    let blurred = min_blur_then_smooth(client, context, input);
+    let blurred = min_blur_then_smooth(client, context, min_blur_chain, input);
     let blurred_plane = blurred.plane();
     let detail = Scratch::new::<f32>(context, width, height);
     let detail_plane = detail.plane();
@@ -168,7 +174,7 @@ fn yahr<R: Runtime>(
     let warp_params = params.warp_params();
     padded_warp(client, context, input, warped_plane, &warp_params);
 
-    let warped_blurred = min_blur_then_smooth(client, context, warped_plane);
+    let warped_blurred = min_blur_then_smooth(client, context, min_blur_chain, warped_plane);
     let warped_blurred_plane = warped_blurred.plane();
     let warped_detail = Scratch::new::<f32>(context, width, height);
     let warped_detail_plane = warped_detail.plane();
@@ -305,6 +311,7 @@ impl FilterDefinition for Yahr {
         let client = context.client().clone();
         let element = params.element;
         let peak = params.warp_params().peak() as f32;
+        let min_blur_chain = BinomialChain::new(&client, 2);
 
         let planewise = Planewise {
             stage: STAGE,
@@ -317,6 +324,7 @@ impl FilterDefinition for Yahr {
             client,
             planewise,
             params,
+            min_blur_chain,
         };
 
         Ok(Box::new(cleaner))
@@ -328,6 +336,7 @@ struct Cleaner<R: Runtime> {
     client: ComputeClient<R>,
     planewise: Planewise,
     params: YahrParams,
+    min_blur_chain: BinomialChain,
 }
 
 impl<R: Runtime> PlaneFilter for Cleaner<R> {
@@ -338,7 +347,14 @@ impl<R: Runtime> PlaneFilter for Cleaner<R> {
         input: DevicePlane<'_>,
         output: DevicePlane<'_>,
     ) -> Result<(), StageError> {
-        yahr(&self.client, context, input, output, &self.params);
+        yahr(
+            &self.client,
+            context,
+            &self.min_blur_chain,
+            input,
+            output,
+            &self.params,
+        );
 
         Ok(())
     }

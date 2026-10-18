@@ -27,17 +27,16 @@ use av_toolbox_cubek::dehalo::{DifferencePlanes, MergePlanes, difference, merge_
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::hysteresis::{HysteresisPlanes, hysteresis};
 use av_toolbox_cubek::neighbourhood::{
+    BinomialChain,
     Extreme,
     MinBlurPlanes,
     NeighbourPlanes,
     Shape,
-    Smooth,
     Spread,
     extreme,
     median,
     min_blur,
     prewitt,
-    smooth,
     spread,
 };
 use av_toolbox_cubek::rgvs::{RepairMode, RepairPlanes, repair};
@@ -220,7 +219,6 @@ enum Step {
     Maximum,
     Minimum,
     Inflate,
-    Box,
 }
 
 /// Runs `steps` from `input` into `output`, through two ping-pong scratch planes.
@@ -260,7 +258,6 @@ fn ping_pong<R: Runtime>(
             Step::Maximum => extreme(client, &sizing, planes, Extreme::Maximum, Shape::Square),
             Step::Minimum => extreme(client, &sizing, planes, Extreme::Minimum, Shape::Square),
             Step::Inflate => spread(client, &sizing, planes, Spread::Inflate),
-            Step::Box => smooth(client, &sizing, planes, Smooth::Box),
         }
 
         source = target;
@@ -287,14 +284,14 @@ fn inner_steps(minp: u32) -> Vec<Step> {
     }
 }
 
-/// Contrasharpens `min_blurred` against `input`, `sharp` passes deep, into `output`.
+/// Contrasharpens `min_blurred` against `input`, as deep as `sharp_chain` reaches, into `output`.
 fn contra_sharpen<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
+    sharp_chain: &BinomialChain,
     input: DevicePlane<'_>,
     min_blurred: DevicePlane<'_>,
     output: DevicePlane<'_>,
-    sharp: u32,
 ) {
     let sizing = Sizing(context);
     let width = input.width();
@@ -308,30 +305,13 @@ fn contra_sharpen<R: Runtime>(
     };
     median(client, &sizing, pre_planes, 1);
 
-    let binomial = Scratch::new::<f32>(context, width, height);
-    let binomial_plane = binomial.plane();
-    let binomial_planes = NeighbourPlanes {
+    let method = Scratch::new::<f32>(context, width, height);
+    let method_plane = method.plane();
+    let method_planes = NeighbourPlanes {
         input: pre_plane,
-        output: binomial_plane,
+        output: method_plane,
     };
-    smooth(client, &sizing, binomial_planes, Smooth::Binomial);
-
-    let box_passes = sharp.saturating_sub(1);
-    let method_scratch = if box_passes > 0 {
-        Some(Scratch::new::<f32>(context, width, height))
-    } else {
-        None
-    };
-    let method_plane = match &method_scratch {
-        Some(scratch) => {
-            let target = scratch.plane();
-            let steps = vec![Step::Box; box_passes as usize];
-            ping_pong(client, context, binomial_plane, target, &steps);
-
-            target
-        },
-        None => binomial_plane,
-    };
+    sharp_chain.apply(client, &sizing, method_planes);
 
     let sharpened = Scratch::new::<f32>(context, width, height);
     let sharpened_plane = sharpened.plane();
@@ -406,6 +386,7 @@ fn ring_edges<R: Runtime>(
 fn hq_dering<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
+    chains: &DeringChains,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     params: &DeringParams,
@@ -417,27 +398,24 @@ fn hq_dering<R: Runtime>(
 
     let blurred = Scratch::new::<f32>(context, width, height);
     let min_median = Scratch::new::<f32>(context, width, height);
-    let min_blur_scratch = Scratch::new::<f32>(context, width, height);
     let min_blurred = Scratch::new::<f32>(context, width, height);
     let min_blurred_plane = min_blurred.plane();
     let min_blur_planes = MinBlurPlanes {
         input,
         blurred: blurred.plane(),
         median: min_median.plane(),
-        scratch: min_blur_scratch.plane(),
         output: min_blurred_plane,
     };
-    min_blur(client, &sizing, min_blur_planes, params.nrmode);
+    min_blur(client, &sizing, min_blur_planes, &chains.min_blur);
 
-    let smoothed_scratch = if params.sharp > 0 {
-        Some(Scratch::new::<f32>(context, width, height))
-    } else {
-        None
-    };
+    let smoothed_scratch = chains
+        .sharp
+        .as_ref()
+        .map(|sharp_chain| (Scratch::new::<f32>(context, width, height), sharp_chain));
     let smoothed_plane = match &smoothed_scratch {
-        Some(scratch) => {
+        Some((scratch, sharp_chain)) => {
             let target = scratch.plane();
-            contra_sharpen(client, context, input, min_blurred_plane, target, params.sharp);
+            contra_sharpen(client, context, sharp_chain, input, min_blurred_plane, target);
 
             target
         },
@@ -672,13 +650,35 @@ impl FilterDefinition for Hq {
             element,
             peak,
         };
+        let chains = DeringChains::new(&client, &params);
         let deringer = Deringer {
             client,
             planewise,
             params,
+            chains,
         };
 
         Ok(Box::new(deringer))
+    }
+}
+
+/// The blurs `dering/hq` runs for MinBlur at `nrmode` and for contra-sharpening at `sharp`.
+struct DeringChains {
+    min_blur: BinomialChain,
+    /// Absent when `sharp` is 0.
+    sharp: Option<BinomialChain>,
+}
+
+impl DeringChains {
+    fn new<R: Runtime>(client: &ComputeClient<R>, params: &DeringParams) -> Self {
+        let min_blur = BinomialChain::new(client, params.nrmode);
+        let sharp = if params.sharp > 0 {
+            Some(BinomialChain::new(client, params.sharp))
+        } else {
+            None
+        };
+
+        Self { min_blur, sharp }
     }
 }
 
@@ -687,6 +687,7 @@ struct Deringer<R: Runtime> {
     client: ComputeClient<R>,
     planewise: Planewise,
     params: DeringParams,
+    chains: DeringChains,
 }
 
 impl<R: Runtime> PlaneFilter for Deringer<R> {
@@ -697,7 +698,7 @@ impl<R: Runtime> PlaneFilter for Deringer<R> {
         input: DevicePlane<'_>,
         output: DevicePlane<'_>,
     ) -> Result<(), StageError> {
-        hq_dering(&self.client, context, input, output, &self.params);
+        hq_dering(&self.client, context, &self.chains, input, output, &self.params);
 
         Ok(())
     }

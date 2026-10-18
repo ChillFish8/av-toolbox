@@ -11,7 +11,7 @@ use av_toolbox_core::{
     StageInstance,
     StreamType,
 };
-use av_toolbox_cubek::DevicePlane;
+use av_toolbox_cubek::blur::{FilterPlanes, Separable, Storage};
 use av_toolbox_cubek::dehalo::alpha::AlphaParams;
 use av_toolbox_cubek::dehalo::fine::{
     ContrastPlanes,
@@ -38,6 +38,7 @@ use av_toolbox_cubek::neighbourhood::{
     smooth,
 };
 use av_toolbox_cubek::rgvs::{RepairMode, RepairPlanes, repair};
+use av_toolbox_cubek::{DevicePlane, Edge};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -76,6 +77,9 @@ use crate::selection::{PlaneDefault, selected_planes};
 use crate::sizing::Sizing;
 
 const STAGE: &str = "dehalo/fine";
+
+/// The 5 taps two 3x3 box passes add up to, which shrink the edge band.
+const SHRINK_WEIGHTS: [f32; 5] = [1.0, 2.0, 3.0, 2.0, 1.0];
 
 fn default_thmi() -> f32 {
     80.0
@@ -235,6 +239,7 @@ fn fine_dehalo<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
     tables: &AlphaTables,
+    shrink_blur: &Separable,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     params: &FineParams,
@@ -382,21 +387,13 @@ fn fine_dehalo<R: Runtime>(
         Extreme::Minimum,
     );
 
-    let once = Scratch::new::<f32>(context, width, height);
-    let once_plane = once.plane();
-    let once_planes = NeighbourPlanes {
-        input: thinned_plane,
-        output: once_plane,
-    };
-    smooth(client, &sizing, once_planes, Smooth::Box);
-
     let shrink = Scratch::new::<f32>(context, width, height);
     let shrink_plane = shrink.plane();
-    let shrink_planes = NeighbourPlanes {
-        input: once_plane,
+    let shrink_planes = FilterPlanes {
+        input: thinned_plane,
         output: shrink_plane,
     };
-    smooth(client, &sizing, shrink_planes, Smooth::Box);
+    shrink_blur.apply_as(client, &sizing, shrink_planes, Edge::Reflect, Storage::F32);
 
     let band = Scratch::new::<f32>(context, width, height);
     let band_plane = band.plane();
@@ -579,11 +576,13 @@ impl FilterDefinition for Fine {
             element,
             peak,
         };
+        let shrink_blur = Separable::new(&client, &SHRINK_WEIGHTS);
         let dehaloer = FineDehaloer {
             client,
             planewise,
             params,
             tables,
+            shrink_blur,
         };
 
         Ok(Box::new(dehaloer))
@@ -597,6 +596,7 @@ struct FineDehaloer<R: Runtime> {
     params: FineParams,
     /// One set of tables per plane, for the selected planes only.
     tables: Vec<Option<AlphaTables>>,
+    shrink_blur: Separable,
 }
 
 fn missing_tables(plane_index: usize) -> StageError {
@@ -617,7 +617,15 @@ impl<R: Runtime> PlaneFilter for FineDehaloer<R> {
             return Err(missing_tables(plane_index));
         };
 
-        fine_dehalo(&self.client, context, tables, input, output, &self.params);
+        fine_dehalo(
+            &self.client,
+            context,
+            tables,
+            &self.shrink_blur,
+            input,
+            output,
+            &self.params,
+        );
 
         Ok(())
     }

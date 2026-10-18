@@ -3,8 +3,14 @@
 use cubecl::prelude::*;
 
 use super::{NeighbourPlanes, Smooth, median, smooth};
+use crate::blur::{FilterPlanes, Separable, Storage};
 use crate::plane::assert_plane;
-use crate::{DevicePlane, Dispatch};
+use crate::{DevicePlane, Dispatch, Edge};
+
+/// The 5 taps a binomial then one box pass add up to.
+const RADIUS_2_WEIGHTS: [f32; 5] = [1.0, 3.0, 4.0, 3.0, 1.0];
+/// The 7 taps a binomial then two box passes add up to.
+const RADIUS_3_WEIGHTS: [f32; 7] = [1.0, 4.0, 8.0, 10.0, 8.0, 4.0, 1.0];
 
 /// The planes one MinBlur reads, passes through and writes, all f32 and one size.
 #[derive(Debug, Clone, Copy)]
@@ -12,7 +18,6 @@ pub struct MinBlurPlanes<'a> {
     pub input: DevicePlane<'a>,
     pub blurred: DevicePlane<'a>,
     pub median: DevicePlane<'a>,
-    pub scratch: DevicePlane<'a>,
     pub output: DevicePlane<'a>,
 }
 
@@ -56,67 +61,74 @@ fn pick_kernel(input: &Array<f32>, blurred: &Array<f32>, median: &Array<f32>, ou
     output[ABSOLUTE_POS] = picked;
 }
 
+/// A 3x3 binomial blur followed by `radius - 1` 3x3 box blurs, in one launch.
+///
+/// Radius 1 runs the binomial alone. Radius 2 and 3 run the 5 and 7 tap
+/// [Separable](crate::blur::Separable) the chain adds up to. Edges reflect.
+#[derive(Debug)]
+pub struct BinomialChain {
+    radius: u32,
+    separable: Option<Separable>,
+}
+
+impl BinomialChain {
+    /// Builds the chain for `radius`, which is 1, 2 or 3.
+    pub fn new<R: Runtime>(client: &ComputeClient<R>, radius: u32) -> Self {
+        let separable = match radius {
+            1 => None,
+            2 => Some(Separable::new(client, &RADIUS_2_WEIGHTS)),
+            3 => Some(Separable::new(client, &RADIUS_3_WEIGHTS)),
+            _ => panic!("a binomial chain has radius 1, 2 or 3, not {radius}"),
+        };
+
+        Self { radius, separable }
+    }
+
+    pub const fn radius(&self) -> u32 {
+        self.radius
+    }
+
+    /// Blurs `planes.input` into `planes.output`, both f32.
+    pub fn apply<R: Runtime>(
+        &self,
+        client: &ComputeClient<R>,
+        dispatch: &impl Dispatch,
+        planes: NeighbourPlanes<'_>,
+    ) {
+        let Some(separable) = &self.separable else {
+            smooth(client, dispatch, planes, Smooth::Binomial);
+            return;
+        };
+
+        let filter_planes = FilterPlanes {
+            input: planes.input,
+            output: planes.output,
+        };
+        separable.apply_as(client, dispatch, filter_planes, Edge::Reflect, Storage::F32);
+    }
+}
+
 /// Runs havsfunc's MinBlur, picking the median of each sample, its blur and its median.
 ///
-/// `radius` is 1, 2 or 3. The blur chain runs into `blurred`, using `scratch` as the plane between
-/// its passes. It runs Binomial alone for radius 1, Binomial then Box for radius 2, and Binomial
-/// then Box twice for radius 3. The median runs over the same radius, into `median`.
+/// `blur` sets the radius and runs into `blurred`. The median runs over the same radius, into
+/// `median`.
 pub fn min_blur<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: MinBlurPlanes<'_>,
-    radius: u32,
+    blur: &BinomialChain,
 ) {
-    debug_assert!((1..=3).contains(&radius));
-
-    match radius {
-        1 => {
-            let blur_planes = NeighbourPlanes {
-                input: planes.input,
-                output: planes.blurred,
-            };
-            smooth(client, dispatch, blur_planes, Smooth::Binomial);
-        },
-        2 => {
-            let binomial_planes = NeighbourPlanes {
-                input: planes.input,
-                output: planes.scratch,
-            };
-            smooth(client, dispatch, binomial_planes, Smooth::Binomial);
-
-            let box_planes = NeighbourPlanes {
-                input: planes.scratch,
-                output: planes.blurred,
-            };
-            smooth(client, dispatch, box_planes, Smooth::Box);
-        },
-        3 => {
-            let binomial_planes = NeighbourPlanes {
-                input: planes.input,
-                output: planes.blurred,
-            };
-            smooth(client, dispatch, binomial_planes, Smooth::Binomial);
-
-            let first_box_planes = NeighbourPlanes {
-                input: planes.blurred,
-                output: planes.scratch,
-            };
-            smooth(client, dispatch, first_box_planes, Smooth::Box);
-
-            let second_box_planes = NeighbourPlanes {
-                input: planes.scratch,
-                output: planes.blurred,
-            };
-            smooth(client, dispatch, second_box_planes, Smooth::Box);
-        },
-        _ => unreachable!("radius is 1, 2 or 3"),
-    }
+    let blur_planes = NeighbourPlanes {
+        input: planes.input,
+        output: planes.blurred,
+    };
+    blur.apply(client, dispatch, blur_planes);
 
     let median_planes = NeighbourPlanes {
         input: planes.input,
         output: planes.median,
     };
-    median(client, dispatch, median_planes, radius);
+    median(client, dispatch, median_planes, blur.radius());
 
     median_of_three(
         client,

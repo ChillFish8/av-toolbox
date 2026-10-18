@@ -1,4 +1,5 @@
 use av_toolbox_cubek::neighbourhood::{
+    BinomialChain,
     ChainPlanes,
     Extreme,
     MinBlurPlanes,
@@ -28,7 +29,7 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
-use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, upload_f32};
+use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, seeded_plane, upload_f32};
 
 /// Which neighbourhood operation a device run performs.
 #[derive(Debug, Clone, Copy)]
@@ -38,6 +39,7 @@ pub enum Operation {
     Median(u32),
     Prewitt(f32),
     MinBlur(u32),
+    BinomialChain(u32),
     Spread(Spread),
 }
 
@@ -94,15 +96,22 @@ impl BuildTask for Neighbours {
             Operation::MinBlur(radius) => {
                 let blurred = empty(client, bytes);
                 let median_plane = empty(client, bytes);
-                let scratch = empty(client, bytes);
                 let planes = MinBlurPlanes {
                     input: input_plane,
                     blurred: plane(&blurred, self.width, self.height),
                     median: plane(&median_plane, self.width, self.height),
-                    scratch: plane(&scratch, self.width, self.height),
                     output: output_plane,
                 };
-                min_blur(client, &sizing, planes, radius);
+                let blur = BinomialChain::new(client, radius);
+                min_blur(client, &sizing, planes, &blur);
+            },
+            Operation::BinomialChain(radius) => {
+                let planes = NeighbourPlanes {
+                    input: input_plane,
+                    output: output_plane,
+                };
+                let blur = BinomialChain::new(client, radius);
+                blur.apply(client, &sizing, planes);
             },
             Operation::Spread(which) => {
                 let planes = NeighbourPlanes {
@@ -294,6 +303,47 @@ fn every_min_blur_radius_matches_the_reference() {
     assert!(source_share >= 0.05, "source branch was only {source_share}");
     assert!(blurred_share >= 0.05, "blurred branch was only {blurred_share}");
     assert!(median_share >= 0.05, "median branch was only {median_share}");
+}
+
+#[test]
+fn min_blur_needs_no_scratch_plane() {
+    let input = seeded_plane(7, 1);
+
+    for radius in 1..=3 {
+        let operation = Operation::MinBlur(radius);
+
+        let actual = on_device(&input, 7, 1, operation);
+        let expected = reference_min_blur(&input, 7, 1, radius);
+
+        assert_close(&actual, &expected, 1e-6);
+    }
+}
+
+/// A binomial then `radius - 1` box passes on the CPU.
+fn reference_binomial_chain(input: &[f32], width: u32, height: u32, radius: u32) -> Vec<f32> {
+    let mut blurred = reference_smooth(input, width, height, Smooth::Binomial);
+    for _ in 1..radius {
+        blurred = reference_smooth(&blurred, width, height, Smooth::Box);
+    }
+
+    blurred
+}
+
+#[test]
+fn every_binomial_chain_matches_the_smooth_chain() {
+    let sizes = [(37, 23), (1, 7), (7, 1), (2, 9), (3, 3)];
+
+    for radius in 1..=3 {
+        for (width, height) in sizes {
+            let input = seeded_plane(width, height);
+            let operation = Operation::BinomialChain(radius);
+
+            let actual = on_device(&input, width, height, operation);
+            let expected = reference_binomial_chain(&input, width, height, radius);
+
+            assert_close(&actual, &expected, 1e-6);
+        }
+    }
 }
 
 /// How many samples of `expected` differ from `input` by more than `tolerance`, out of the total.

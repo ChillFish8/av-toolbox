@@ -11,7 +11,7 @@ use cubecl::prelude::*;
 
 pub use self::chain::{ChainPlanes, Step, chain, chain_with_edge};
 pub use self::median::median;
-pub use self::min_blur::{MinBlurPlanes, median_of_three, median_of_three_sample, min_blur};
+pub use self::min_blur::{BinomialChain, MinBlurPlanes, median_of_three, median_of_three_sample, min_blur};
 pub use self::prewitt::prewitt;
 pub use crate::Edge;
 pub use crate::blur::Smooth;
