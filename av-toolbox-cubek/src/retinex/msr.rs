@@ -3,15 +3,29 @@
 use cubecl::prelude::*;
 
 use super::recursive::{RecursiveGaussian, RecursivePlanes, recursive_gaussian};
+use crate::blur::{BlurPlanes, Gaussian, MAX_SIGMA, Storage};
 use crate::histogram::{PercentilePlanes, percentile};
 use crate::reduce::{ReducePlanes, extremes};
-use crate::{DevicePlane, Dispatch};
+use crate::{DevicePlane, Dispatch, Edge};
+
+/// The widest sigma retinex blurs with the shared [Gaussian](crate::blur::Gaussian).
+///
+/// Wider sigmas run the [RecursiveGaussian](crate::retinex::RecursiveGaussian), whose cost does not
+/// grow with sigma.
+pub const GAUSSIAN_MAX_SIGMA: f32 = 500.0;
+
+const _: () = assert!(GAUSSIAN_MAX_SIGMA <= MAX_SIGMA);
+
+/// Whether retinex blurs at `sigma` with the shared [Gaussian](crate::blur::Gaussian) rather than the
+/// [RecursiveGaussian](crate::retinex::RecursiveGaussian).
+pub fn uses_gaussian(sigma: f32) -> bool {
+    sigma <= GAUSSIAN_MAX_SIGMA
+}
 
 /// The multi-scale retinex's settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetinexSettings {
     sigmas: Vec<f32>,
-    filters: Vec<RecursiveGaussian>,
     /// The fraction of samples clipped from the dark end of the response, not a percent.
     pub lower: f32,
     /// The fraction of samples clipped from the bright end of the response, not a percent.
@@ -21,19 +35,13 @@ pub struct RetinexSettings {
 }
 
 impl RetinexSettings {
-    /// Settings that blur at each of `sigmas`, building each sigma's recursive Gaussian once.
+    /// Settings that blur at each of `sigmas`.
     ///
     /// `lower` and `upper` are the fractions of samples clipped from each end of the response, and
     /// `scale` is the value the stretched response is scaled up to.
     pub fn new(sigmas: Vec<f32>, lower: f32, upper: f32, scale: f32) -> Self {
-        let filters = sigmas
-            .iter()
-            .map(|sigma| RecursiveGaussian::new(*sigma))
-            .collect();
-
         Self {
             sigmas,
-            filters,
             lower,
             upper,
             scale,
@@ -44,6 +52,47 @@ impl RetinexSettings {
     pub fn sigmas(&self) -> &[f32] {
         &self.sigmas
     }
+}
+
+/// How retinex blurs at one sigma.
+#[derive(Debug)]
+enum ScaleBlur {
+    Gaussian(Gaussian),
+    Recursive(RecursiveGaussian),
+}
+
+/// The blurs retinex runs, one for each of its settings' sigmas, built once for the device.
+///
+/// Each sigma up to [GAUSSIAN_MAX_SIGMA] blurs with the shared [Gaussian](crate::blur::Gaussian) and
+/// replicate edges. Wider ones run the [RecursiveGaussian](crate::retinex::RecursiveGaussian).
+#[derive(Debug)]
+pub struct RetinexBlurs {
+    sigmas: Vec<f32>,
+    blurs: Vec<ScaleBlur>,
+}
+
+impl RetinexBlurs {
+    pub fn new<R: Runtime>(client: &ComputeClient<R>, settings: &RetinexSettings) -> Self {
+        let blurs = settings
+            .sigmas
+            .iter()
+            .map(|sigma| scale_blur(client, *sigma))
+            .collect();
+        let sigmas = settings.sigmas.clone();
+
+        Self { sigmas, blurs }
+    }
+}
+
+fn scale_blur<R: Runtime>(client: &ComputeClient<R>, sigma: f32) -> ScaleBlur {
+    if uses_gaussian(sigma) {
+        let gaussian = Gaussian::new(client, sigma);
+        return ScaleBlur::Gaussian(gaussian);
+    }
+
+    let recursive = RecursiveGaussian::new(sigma);
+
+    ScaleBlur::Recursive(recursive)
 }
 
 /// Every plane the retinex works through. Plane-sized planes are f32 and the input's size.
@@ -136,19 +185,52 @@ fn stretch(msr: &Array<f32>, low: &Array<f32>, high: &Array<f32>, output: &mut A
     output[ABSOLUTE_POS] = stretched * scale;
 }
 
+/// Blurs `planes.normalised` into `planes.blurred` with `blur`.
+///
+/// The gaussian passes through `planes.output`, which is free until the response is stretched.
+fn blur_scale<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: RetinexPlanes<'_>,
+    blur: &ScaleBlur,
+) {
+    match blur {
+        ScaleBlur::Gaussian(gaussian) => {
+            let blur_planes = BlurPlanes {
+                input: planes.normalised,
+                scratch: planes.output,
+                output: planes.blurred,
+            };
+            gaussian.apply_with_edge(client, dispatch, blur_planes, Edge::Clamp, Storage::F32);
+        },
+        ScaleBlur::Recursive(filter) => {
+            let recursive_planes = RecursivePlanes {
+                input: planes.normalised,
+                output: planes.blurred,
+            };
+            recursive_gaussian(client, dispatch, recursive_planes, *filter);
+        },
+    }
+}
+
 /// Runs the multi-scale retinex of `planes.input` into `planes.output`.
 ///
-/// The input is normalised by its own extremes, then blurred at each of the settings' sigmas and
-/// combined into a log response. The response is stretched between its `settings.lower` and
-/// `settings.upper` percentiles and scaled by `settings.scale`. A flat input or crossed
-/// percentiles give 0 everywhere.
+/// The input is normalised by its own extremes, then blurred with each of `blurs` and combined into
+/// a log response. The response is stretched between its `settings.lower` and `settings.upper`
+/// percentiles and scaled by `settings.scale`. A flat input or crossed percentiles give 0
+/// everywhere. `blurs` must be built from `settings`.
 pub fn retinex<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: RetinexPlanes<'_>,
     settings: &RetinexSettings,
+    blurs: &RetinexBlurs,
 ) {
     debug_assert!(!settings.sigmas.is_empty(), "sigmas must not be empty");
+    assert_eq!(
+        settings.sigmas, blurs.sigmas,
+        "the blurs must be built from the settings"
+    );
 
     let samples = planes.input.samples();
 
@@ -180,12 +262,8 @@ pub fn retinex<R: Runtime>(
         fill::launch_unchecked::<R>(client, cubes, unit, msr, 0.0);
     }
 
-    for filter in &settings.filters {
-        let gaussian_planes = RecursivePlanes {
-            input: planes.normalised,
-            output: planes.blurred,
-        };
-        recursive_gaussian(client, dispatch, gaussian_planes, *filter);
+    for blur in &blurs.blurs {
+        blur_scale(client, dispatch, planes, blur);
 
         let normalised = planes.normalised.array::<R>();
         let blurred = planes.blurred.array::<R>();

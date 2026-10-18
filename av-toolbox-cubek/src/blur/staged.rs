@@ -4,7 +4,8 @@ use cubecl::prelude::*;
 
 use super::lines::{both_pass_cubes, line_shape, sample_index};
 use super::{BlurPlanes, Gaussian, MAX_CUBES_PER_AXIS, MAX_SHARED_BYTES, Storage};
-use crate::reflect;
+use crate::Edge;
+use crate::border::fold;
 
 /// The lines, rows or columns, a cube blurs side by side.
 const LANES: u32 = 16;
@@ -71,7 +72,8 @@ fn moved_slot(step: u32, #[comptime] along_rows: bool) -> (u32, u32) {
 
 /// Copies `count` samples of each of the cube's lines, from `first_position` on, into `staged`.
 ///
-/// Positions are reflected into the line and lines past the plane repeat its last line.
+/// Positions are folded into the line, clamped when `clamp` is set and reflected otherwise. Lines
+/// past the plane repeat its last line.
 #[cube]
 fn load_lines<F: Float>(
     input: &Array<F>,
@@ -81,6 +83,7 @@ fn load_lines<F: Float>(
     width: u32,
     height: u32,
     #[comptime] along_rows: bool,
+    #[comptime] clamp: bool,
 ) {
     let (line_length, line_count) = line_shape(width, height, along_rows);
     let first_line = CUBE_POS_Y * LANES;
@@ -91,8 +94,8 @@ fn load_lines<F: Float>(
         let (local_line, local_position) = moved_slot(step, along_rows);
         if local_position < count {
             let line = min(first_line + local_line, last_line);
-            let position = reflect(first_position + local_position as i32, line_length as i32);
-            let index = sample_index(line, position as u32, width, along_rows);
+            let position = fold(first_position + local_position as i32, line_length, clamp);
+            let index = sample_index(line, position, width, along_rows);
             let sample = f32::cast_from(input[index as usize]);
             staged[(local_position * STRIDE + local_line) as usize] = sample;
         }
@@ -178,6 +181,7 @@ fn blur_lines<F: Float>(
     height: u32,
     radius: u32,
     #[comptime] along_rows: bool,
+    #[comptime] clamp: bool,
 ) {
     let mut staged = SharedMemory::<f32>::new(comptime!((CHUNK * STRIDE) as usize));
     let mut totals = Array::<f32>::new(comptime!(RUN as usize));
@@ -207,6 +211,7 @@ fn blur_lines<F: Float>(
             width,
             height,
             along_rows,
+            clamp,
         );
 
         sync_cube();
@@ -230,12 +235,13 @@ fn blur_lines<F: Float>(
 
 /// Blurs `planes.input` across into `planes.scratch`, then down into `planes.output`.
 ///
-/// Each pass stages its lines through shared memory. It panics when the plane needs more cubes than
-/// [staged_cubes](crate::blur::staged::staged_cubes) allows.
+/// Each pass stages its lines through shared memory, reading past the edge as `edge` says. It panics
+/// when the plane needs more cubes than [staged_cubes](crate::blur::staged::staged_cubes) allows.
 pub(super) fn blur_staged<R: Runtime>(
     client: &ComputeClient<R>,
     gaussian: &Gaussian,
     planes: BlurPlanes<'_>,
+    edge: Edge,
     storage: Storage,
 ) {
     let width = planes.output.width();
@@ -244,6 +250,7 @@ pub(super) fn blur_staged<R: Runtime>(
     let (row_cubes, column_cubes) = cubes.expect("the plane should fit the staged blur's cube count");
     let shape = CubeDim::new_2d(LANES, GROUPS);
     let radius = gaussian.radius();
+    let clamp = edge == Edge::Clamp;
 
     let weights = gaussian.padded_weights::<R>();
     let input = planes.input.array::<R>();
@@ -254,10 +261,10 @@ pub(super) fn blur_staged<R: Runtime>(
     unsafe {
         match storage {
             Storage::F32 => blur_lines::launch_unchecked::<f32, R>(
-                client, row_cubes, shape, input, weights, scratch, width, height, radius, true,
+                client, row_cubes, shape, input, weights, scratch, width, height, radius, true, clamp,
             ),
             Storage::F16 => blur_lines::launch_unchecked::<half::f16, R>(
-                client, row_cubes, shape, input, weights, scratch, width, height, radius, true,
+                client, row_cubes, shape, input, weights, scratch, width, height, radius, true, clamp,
             ),
         }
     }
@@ -281,6 +288,7 @@ pub(super) fn blur_staged<R: Runtime>(
                 height,
                 radius,
                 false,
+                clamp,
             ),
             Storage::F16 => blur_lines::launch_unchecked::<half::f16, R>(
                 client,
@@ -293,6 +301,7 @@ pub(super) fn blur_staged<R: Runtime>(
                 height,
                 radius,
                 false,
+                clamp,
             ),
         }
     }

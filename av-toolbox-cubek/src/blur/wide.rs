@@ -4,7 +4,8 @@ use cubecl::prelude::*;
 
 use super::lines::{both_pass_cubes, line_shape, sample_index};
 use super::{BlurPlanes, MAX_CUBES_PER_AXIS, MAX_SHARED_BYTES, Storage};
-use crate::reflect;
+use crate::Edge;
+use crate::border::fold;
 
 /// The lines a cube blurs side by side, two units each.
 const LANES: u32 = 64;
@@ -29,7 +30,7 @@ const _: () = assert!(2 * SEGMENT * STRIDE * size_of::<f32>() as u32 <= MAX_SHAR
 /// exp(-decay * x)`, with `x` in standard deviations.
 const WAVES: [(f64, f64, f64, f64); 2] = [(1.680, 3.735, 1.783, 0.6318), (-0.6803, -0.2598, 1.723, 1.997)];
 
-/// The standard deviations a recursion runs over the reflected line before its first output.
+/// The standard deviations a recursion runs over the extended line before its first output.
 ///
 /// The fit has faded to about 3e-5 of its weight by then.
 const WARM_UP_SIGMAS: f32 = 6.0;
@@ -171,7 +172,8 @@ fn weigh(state: Complex, weight: Complex) -> f32 {
 
 /// Loads the `BATCH` samples of `line` from `first_position` on into `samples`.
 ///
-/// Positions outside the line are reflected back inside it.
+/// Positions outside the line are folded back inside it, clamped when `clamp` is set and reflected
+/// otherwise.
 #[cube]
 fn load_batch<F: Float>(
     input: &Array<F>,
@@ -181,6 +183,7 @@ fn load_batch<F: Float>(
     line_length: u32,
     width: u32,
     #[comptime] along_rows: bool,
+    #[comptime] clamp: bool,
 ) {
     let inside = first_position >= 0 && first_position + BATCH as i32 <= line_length as i32;
 
@@ -194,8 +197,8 @@ fn load_batch<F: Float>(
     } else {
         #[unroll]
         for slot in 0..BATCH {
-            let position = reflect(first_position + slot as i32, line_length as i32);
-            let index = sample_index(line, position as u32, width, along_rows);
+            let position = fold(first_position + slot as i32, line_length, clamp);
+            let index = sample_index(line, position, width, along_rows);
             samples[slot as usize] = f32::cast_from(input[index as usize]);
         }
     }
@@ -215,6 +218,7 @@ fn run_ahead<F: Float>(
     width: u32,
     warm_up: u32,
     #[comptime] along_rows: bool,
+    #[comptime] clamp: bool,
 ) {
     let first_pole = recursion.first_pole;
     let second_pole = recursion.second_pole;
@@ -238,6 +242,7 @@ fn run_ahead<F: Float>(
             line_length,
             width,
             along_rows,
+            clamp,
         );
 
         #[unroll]
@@ -258,6 +263,7 @@ fn run_ahead<F: Float>(
             line_length,
             width,
             along_rows,
+            clamp,
         );
 
         #[unroll]
@@ -287,6 +293,7 @@ fn run_behind<F: Float>(
     width: u32,
     warm_up: u32,
     #[comptime] along_rows: bool,
+    #[comptime] clamp: bool,
 ) {
     let first_pole = recursion.first_pole;
     let second_pole = recursion.second_pole;
@@ -311,6 +318,7 @@ fn run_behind<F: Float>(
             line_length,
             width,
             along_rows,
+            clamp,
         );
 
         #[unroll]
@@ -332,6 +340,7 @@ fn run_behind<F: Float>(
             line_length,
             width,
             along_rows,
+            clamp,
         );
 
         #[unroll]
@@ -362,6 +371,7 @@ fn recurse_lines<F: Float>(
     height: u32,
     warm_up: u32,
     #[comptime] along_rows: bool,
+    #[comptime] clamp: bool,
 ) {
     let (line_length, line_count) = line_shape(width, height, along_rows);
     let first_line = CUBE_POS_X * LANES;
@@ -384,6 +394,7 @@ fn recurse_lines<F: Float>(
             width,
             warm_up,
             along_rows,
+            clamp,
         );
     } else {
         run_behind(
@@ -397,6 +408,7 @@ fn recurse_lines<F: Float>(
             width,
             warm_up,
             along_rows,
+            clamp,
         );
     }
 
@@ -444,13 +456,14 @@ pub(super) fn wide_cubes(width: u32, height: u32) -> Option<(CubeCount, CubeCoun
 
 /// Blurs `planes.input` across into `planes.scratch`, then down into `planes.output`.
 ///
-/// Each pass runs Deriche's recursive gaussian along a reflected extension of every line. Its cost
-/// grows with `sigma` through each segment's warm-up. It panics when the plane needs more cubes than
-/// [wide_cubes](crate::blur::wide::wide_cubes) allows.
+/// Each pass runs Deriche's recursive gaussian along every line, extended past its ends as `edge`
+/// says. Its cost grows with `sigma` through each segment's warm-up. It panics when the plane needs
+/// more cubes than [wide_cubes](crate::blur::wide::wide_cubes) allows.
 pub(super) fn blur_wide<R: Runtime>(
     client: &ComputeClient<R>,
     planes: BlurPlanes<'_>,
     sigma: f32,
+    edge: Edge,
     storage: Storage,
 ) {
     let width = planes.output.width();
@@ -460,12 +473,13 @@ pub(super) fn blur_wide<R: Runtime>(
     let shape = CubeDim::new_2d(LANES, 2);
     let reach = (WARM_UP_SIGMAS * sigma).ceil() as u32;
     let warm_up = reach.div_ceil(BATCH) * BATCH;
+    let clamp = edge == Edge::Clamp;
 
     let row_recursion = recursion::<R>(sigma);
     let input = planes.input.array::<R>();
     let scratch = planes.scratch.array::<R>();
 
-    // Safety: every plane holds `width * height` values of `storage`, every read is reflected into
+    // Safety: every plane holds `width * height` values of `storage`, every read is folded into
     // its line, units past the last line read the last line and every write is guarded to the plane.
     unsafe {
         match storage {
@@ -480,6 +494,7 @@ pub(super) fn blur_wide<R: Runtime>(
                 height,
                 warm_up,
                 true,
+                clamp,
             ),
             Storage::F16 => recurse_lines::launch_unchecked::<half::f16, R>(
                 client,
@@ -492,6 +507,7 @@ pub(super) fn blur_wide<R: Runtime>(
                 height,
                 warm_up,
                 true,
+                clamp,
             ),
         }
     }
@@ -500,7 +516,7 @@ pub(super) fn blur_wide<R: Runtime>(
     let scratch = planes.scratch.array::<R>();
     let output = planes.output.array::<R>();
 
-    // Safety: every plane holds `width * height` values of `storage`, every read is reflected into
+    // Safety: every plane holds `width * height` values of `storage`, every read is folded into
     // its line, units past the last line read the last line and every write is guarded to the plane.
     unsafe {
         match storage {
@@ -515,6 +531,7 @@ pub(super) fn blur_wide<R: Runtime>(
                 height,
                 warm_up,
                 false,
+                clamp,
             ),
             Storage::F16 => recurse_lines::launch_unchecked::<half::f16, R>(
                 client,
@@ -527,6 +544,7 @@ pub(super) fn blur_wide<R: Runtime>(
                 height,
                 warm_up,
                 false,
+                clamp,
             ),
         }
     }

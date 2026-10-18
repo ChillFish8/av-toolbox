@@ -1,5 +1,8 @@
+use super::reference_blur_with_edge;
+use crate::Edge;
+use crate::blur::{gaussian_weights, radius_for};
 use crate::histogram::BINS;
-use crate::retinex::{RecursiveGaussian, RetinexSettings, sections, settling_length};
+use crate::retinex::{RecursiveGaussian, RetinexSettings, sections, settling_length, uses_gaussian};
 
 /// Runs the recursive Gaussian's sections along `values` in f64, first-order then second-order,
 /// walking backward when `backward` is set, in place.
@@ -228,6 +231,21 @@ pub fn reference_percentile(values: &[f32], percentile: f32) -> f32 {
     high
 }
 
+/// Blurs `normalised` at `sigma` on the CPU, as [retinex](crate::retinex::retinex) picks its blur.
+///
+/// A sigma that [uses_gaussian](crate::retinex::uses_gaussian) takes the exact gaussian with replicate
+/// edges. Any other takes the recursive Gaussian.
+fn reference_scale_blur(normalised: &[f32], width: u32, height: u32, sigma: f32) -> Vec<f32> {
+    if !uses_gaussian(sigma) {
+        return reference_recursive_gaussian(normalised, width, height, sigma);
+    }
+
+    let radius = radius_for(sigma);
+    let weights = gaussian_weights(sigma, radius);
+
+    reference_blur_with_edge(normalised, width, height, &weights, Edge::Clamp)
+}
+
 /// The multi-scale log response of a normalised plane on the CPU.
 ///
 /// Each of `sigmas` blurs the plane and contributes a factor at every sample, and the response is
@@ -238,7 +256,7 @@ pub fn reference_percentile(values: &[f32], percentile: f32) -> f32 {
 pub fn reference_log_response(normalised: &[f32], width: u32, height: u32, sigmas: &[f32]) -> Vec<f32> {
     let mut msr = vec![0.0f32; normalised.len()];
     for sigma in sigmas {
-        let blurred = reference_recursive_gaussian(normalised, width, height, *sigma);
+        let blurred = reference_scale_blur(normalised, width, height, *sigma);
 
         for index in 0..msr.len() {
             let intensity = normalised[index];

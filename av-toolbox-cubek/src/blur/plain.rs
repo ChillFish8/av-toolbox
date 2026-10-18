@@ -4,7 +4,7 @@ use cubecl::prelude::*;
 
 use super::{BlurPlanes, FilterPlanes, Gaussian, Storage};
 use crate::border::fold;
-use crate::{Dispatch, Edge, reflect};
+use crate::{Dispatch, Edge};
 
 #[cube(launch_unchecked)]
 fn blur_rows<F: Float>(
@@ -13,6 +13,7 @@ fn blur_rows<F: Float>(
     output: &mut Array<F>,
     width: u32,
     radius: u32,
+    #[comptime] clamp: bool,
 ) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
@@ -25,8 +26,8 @@ fn blur_rows<F: Float>(
     let mut total = 0.0f32;
     for tap in 0..2 * radius + 1 {
         let offset = tap as i32 - radius as i32;
-        let source = reflect(column as i32 + offset, width as i32);
-        let index = row_start + source as u32;
+        let source = fold(column as i32 + offset, width, clamp);
+        let index = row_start + source;
         total += f32::cast_from(input[index as usize]) * weights[tap as usize];
     }
 
@@ -41,6 +42,7 @@ fn blur_columns<F: Float>(
     width: u32,
     height: u32,
     radius: u32,
+    #[comptime] clamp: bool,
 ) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
@@ -53,8 +55,8 @@ fn blur_columns<F: Float>(
     let mut total = 0.0f32;
     for tap in 0..2 * radius + 1 {
         let offset = tap as i32 - radius as i32;
-        let source = reflect(row as i32 + offset, height as i32);
-        let index = source as u32 * width + column;
+        let source = fold(row as i32 + offset, height, clamp);
+        let index = source * width + column;
         total += f32::cast_from(input[index as usize]) * weights[tap as usize];
     }
 
@@ -62,11 +64,14 @@ fn blur_columns<F: Float>(
 }
 
 /// Blurs rows then columns with one thread a sample, reading the taps straight from memory.
+///
+/// It reads past the edge as `edge` says.
 pub(super) fn apply<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     gaussian: &Gaussian,
     planes: BlurPlanes<'_>,
+    edge: Edge,
     storage: Storage,
 ) {
     let samples = planes.output.samples();
@@ -76,6 +81,7 @@ pub(super) fn apply<R: Runtime>(
     let shape = dispatch.cube_dim();
 
     let radius = gaussian.radius();
+    let clamp = edge == Edge::Clamp;
     let input = planes.input.array::<R>();
     let scratch = planes.scratch.array::<R>();
     let weights = gaussian.weights::<R>();
@@ -93,6 +99,7 @@ pub(super) fn apply<R: Runtime>(
                 scratch,
                 width,
                 radius,
+                clamp,
             ),
             Storage::F16 => blur_rows::launch_unchecked::<half::f16, R>(
                 client,
@@ -103,6 +110,7 @@ pub(super) fn apply<R: Runtime>(
                 scratch,
                 width,
                 radius,
+                clamp,
             ),
         }
     }
@@ -116,10 +124,10 @@ pub(super) fn apply<R: Runtime>(
     unsafe {
         match storage {
             Storage::F32 => blur_columns::launch_unchecked::<f32, R>(
-                client, cubes, shape, scratch, weights, output, width, height, radius,
+                client, cubes, shape, scratch, weights, output, width, height, radius, clamp,
             ),
             Storage::F16 => blur_columns::launch_unchecked::<half::f16, R>(
-                client, cubes, shape, scratch, weights, output, width, height, radius,
+                client, cubes, shape, scratch, weights, output, width, height, radius, clamp,
             ),
         }
     }

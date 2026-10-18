@@ -209,6 +209,20 @@ impl Gaussian {
         planes: BlurPlanes<'_>,
         storage: Storage,
     ) {
+        self.apply_with_edge(client, dispatch, planes, Edge::Reflect, storage);
+    }
+
+    /// Blurs `planes.input` into `planes.output`, reading past the edge as `edge` says.
+    ///
+    /// Every plane holds samples of `storage`.
+    pub fn apply_with_edge<R: Runtime>(
+        &self,
+        client: &ComputeClient<R>,
+        dispatch: &impl Dispatch,
+        planes: BlurPlanes<'_>,
+        edge: Edge,
+        storage: Storage,
+    ) {
         let handles = [planes.input.handle(), planes.output.handle()];
         assert!(
             are_distinct(&handles),
@@ -224,24 +238,17 @@ impl Gaussian {
 
         let tier = self.launch_tier(width, height);
         match tier {
-            Tier::Plain => plain::apply(client, dispatch, self, planes, storage),
+            Tier::Plain => plain::apply(client, dispatch, self, planes, edge, storage),
             Tier::Tiled => {
                 let weights = self.weights::<R>();
                 let filter_planes = FilterPlanes {
                     input: planes.input,
                     output: planes.output,
                 };
-                tiled::blur_tiled(
-                    client,
-                    weights,
-                    filter_planes,
-                    self.radius,
-                    Edge::Reflect,
-                    storage,
-                );
+                tiled::blur_tiled(client, weights, filter_planes, self.radius, edge, storage);
             },
-            Tier::Staged => staged::blur_staged(client, self, planes, storage),
-            Tier::Wide => wide::blur_wide(client, planes, self.sigma, storage),
+            Tier::Staged => staged::blur_staged(client, self, planes, edge, storage),
+            Tier::Wide => wide::blur_wide(client, planes, self.sigma, edge, storage),
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::retinex::RetinexSettings;
+use crate::retinex::{GAUSSIAN_MAX_SIGMA, RetinexSettings, uses_gaussian};
 use crate::testing::{reference_log_response, reference_percentile, reference_retinex};
 
 #[test]
@@ -98,4 +98,16 @@ fn reference_log_response_of_wide_sigmas_on_an_isolated_sample_stays_finite() {
         assert!(value.is_finite(), "{value}");
     }
     assert!(response.iter().any(|value| *value != 0.0));
+}
+
+#[test]
+fn the_widest_gaussian_sigma_uses_the_gaussian() {
+    assert!(uses_gaussian(GAUSSIAN_MAX_SIGMA));
+}
+
+#[test]
+fn a_sigma_just_past_the_widest_gaussian_uses_the_recursive_gaussian() {
+    let wider = GAUSSIAN_MAX_SIGMA.next_up();
+
+    assert!(!uses_gaussian(wider));
 }

@@ -1,6 +1,6 @@
 use av_toolbox_cubek::histogram::BINS;
 use av_toolbox_cubek::reduce::scratch_len;
-use av_toolbox_cubek::retinex::{RetinexPlanes, RetinexSettings, retinex};
+use av_toolbox_cubek::retinex::{RetinexBlurs, RetinexPlanes, RetinexSettings, retinex};
 use av_toolbox_cubek::testing::reference_retinex;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -71,7 +71,8 @@ impl BuildTask for Retinex {
             high: high_plane,
         };
 
-        retinex(client, &sizing, planes, &self.settings);
+        let blurs = RetinexBlurs::new(client, &self.settings);
+        retinex(client, &sizing, planes, &self.settings, &blurs);
 
         let output_values = read_f32(client, &output);
         let msr_values = read_f32(client, &msr);

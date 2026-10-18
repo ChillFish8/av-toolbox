@@ -12,6 +12,7 @@ use av_toolbox_cubek::blur::{
     TILED_MAX_RADIUS,
     WIDE_MIN_RADIUS,
     gaussian_weights,
+    radius_for,
     smooth,
     vertical_121,
 };
@@ -44,6 +45,7 @@ struct Blur {
     height: u32,
     sigma: f32,
     radius: u32,
+    edge: Edge,
     storage: Storage,
 }
 
@@ -72,7 +74,7 @@ impl BuildTask for Blur {
         };
 
         let gaussian = Gaussian::with_radius(client, self.sigma, self.radius);
-        gaussian.apply_as(client, &sizing, planes, self.storage);
+        gaussian.apply_with_edge(client, &sizing, planes, self.edge, self.storage);
 
         match self.storage {
             Storage::F32 => read_f32(client, &output),
@@ -109,7 +111,26 @@ fn check_as(
         height,
         sigma,
         radius,
+        edge: Edge::Reflect,
         storage,
+    });
+
+    assert_close(&blurred, &expected, tolerance);
+}
+
+/// The same as [check_as] in f32, with the plane's edge samples repeated past its ends.
+fn check_clamped(input: Vec<f32>, width: u32, height: u32, sigma: f32, radius: u32, tolerance: f32) {
+    let weights = gaussian_weights(sigma, radius);
+    let expected = reference_blur_with_edge(&input, width, height, &weights, Edge::Clamp);
+
+    let blurred = backend().build(Blur {
+        input,
+        width,
+        height,
+        sigma,
+        radius,
+        edge: Edge::Clamp,
+        storage: Storage::F32,
     });
 
     assert_close(&blurred, &expected, tolerance);
@@ -177,6 +198,7 @@ fn an_f16_zero_plane_stays_zero() {
         height: 16,
         sigma: 1.0,
         radius: 3,
+        edge: Edge::Reflect,
         storage: Storage::F16,
     });
 
@@ -330,6 +352,75 @@ fn a_plane_too_long_for_the_tile_grids_blurs_like_the_reference_in_f16() {
         let input = seeded_plane(width, height);
 
         check_as(input, width, height, sigma, radius, Storage::F16, 2e-3);
+    }
+}
+
+/// The exact tiers' limit for a clamped blur.
+const EXACT_LIMIT: f32 = 1e-5;
+
+/// The wide tier's limit for a clamped blur.
+const WIDE_LIMIT: f32 = 1e-3;
+
+/// A sigma and radius on each tier, with the limit each must stay within.
+const CLAMPED_TIERS: [(f32, u32, f32); 3] = [
+    (1.0, 4, EXACT_LIMIT),
+    (8.0, 24, EXACT_LIMIT),
+    (25.0, 100, WIDE_LIMIT),
+];
+
+#[test]
+fn every_tier_clamps_like_the_reference() {
+    for (sigma, radius, limit) in CLAMPED_TIERS {
+        let input = seeded_plane(1921, 1081);
+
+        check_clamped(input, 1921, 1081, sigma, radius, limit);
+    }
+
+    let (width, height) = LONG_PLANE;
+    for (sigma, radius, _) in CLAMPED_TIERS {
+        let input = seeded_plane(width, height);
+
+        check_clamped(input, width, height, sigma, radius, EXACT_LIMIT);
+    }
+}
+
+#[test]
+fn every_tier_clamps_a_tiny_plane_like_the_reference() {
+    let sizes = [(1, 7), (7, 1), (3, 3), (1, 1), (2, 5)];
+
+    for (sigma, radius, limit) in CLAMPED_TIERS {
+        for (width, height) in sizes {
+            let input = seeded_plane(width, height);
+
+            check_clamped(input, width, height, sigma, radius, limit);
+        }
+    }
+}
+
+/// The wider sigmas run on a plane longer than their reach across, but short down, to keep the CPU
+/// reference quick.
+#[test]
+fn the_wide_blur_clamps_within_the_limit() {
+    let cases = [(50.0, 1921, 1081), (200.0, 1501, 41), (350.0, 1501, 41)];
+
+    for (sigma, width, height) in cases {
+        let input = seeded_plane(width, height);
+        let radius = radius_for(sigma);
+
+        check_clamped(input, width, height, sigma, radius, WIDE_LIMIT);
+    }
+}
+
+#[test]
+fn the_wide_blur_clamps_lines_far_shorter_than_its_warm_up() {
+    let sigma = 350.0;
+    let radius = radius_for(sigma);
+    let sizes = [(1, 1081), (1081, 1), (1, 1), (7, 1), (33, 65)];
+
+    for (width, height) in sizes {
+        let input = seeded_plane(width, height);
+
+        check_clamped(input, width, height, sigma, radius, WIDE_LIMIT);
     }
 }
 

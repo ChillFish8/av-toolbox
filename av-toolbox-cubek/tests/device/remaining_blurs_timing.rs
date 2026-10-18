@@ -3,9 +3,19 @@ use std::time::{Duration, Instant};
 use av_toolbox_cubek::blur::{BlurPlanes, FilterPlanes, Gaussian, Separable, Storage};
 use av_toolbox_cubek::dehalo::{DifferencePlanes, difference};
 use av_toolbox_cubek::deinterlace::qtgmc::{GaussTables, blur_and_spread};
+use av_toolbox_cubek::histogram::BINS;
 use av_toolbox_cubek::lineart::{self, VinverseParams, VinversePlanes};
 use av_toolbox_cubek::neighbourhood::{self, BinomialChain, NeighbourPlanes, Smooth};
-use av_toolbox_cubek::retinex::{RecursiveGaussian, RecursivePlanes, recursive_gaussian};
+use av_toolbox_cubek::reduce::scratch_len;
+use av_toolbox_cubek::retinex::{
+    RecursiveGaussian,
+    RecursivePlanes,
+    RetinexBlurs,
+    RetinexPlanes,
+    RetinexSettings,
+    recursive_gaussian,
+    retinex,
+};
 use av_toolbox_cubek::warp::{BlurKind, blur_mask, blur_mask_passes};
 use av_toolbox_cubek::{DevicePlane, Edge};
 use av_toolbox_gpu::{BuildContext, BuildTask};
@@ -270,6 +280,54 @@ impl BuildTask for TimeRemainingBlurs {
                 },
             );
         }
+
+        for sigma in [50.0f32, 200.0, 350.0] {
+            let gaussian = Gaussian::new(client, sigma);
+            record(
+                &mut lines,
+                client,
+                &format!("gaussian clamp sigma{sigma}"),
+                || {
+                    let planes = BlurPlanes {
+                        input: sample_plane(&input),
+                        scratch: sample_plane(&second),
+                        output: sample_plane(&first),
+                    };
+                    gaussian.apply_with_edge(client, &sizing, planes, Edge::Clamp, Storage::F32);
+                },
+            );
+        }
+
+        // The whole retinex at its default sigmas.
+        let scratch_length = scratch_len(samples);
+        let normalised = empty(client, bytes);
+        let blurred = empty(client, bytes);
+        let msr = empty(client, bytes);
+        let retinex_output = empty(client, bytes);
+        let reduce_first = empty(client, scratch_length * size_of::<f32>());
+        let reduce_second = empty(client, scratch_length * size_of::<f32>());
+        let range = empty(client, 2 * size_of::<f32>());
+        let bins = empty(client, BINS as usize * size_of::<u32>());
+        let low = empty(client, size_of::<f32>());
+        let high = empty(client, size_of::<f32>());
+        let settings = RetinexSettings::new(vec![50.0, 200.0, 350.0], 0.001, 0.005, 1.0);
+        let blurs = RetinexBlurs::new(client, &settings);
+        record(&mut lines, client, "retinex now", || {
+            let planes = RetinexPlanes {
+                input: sample_plane(&input),
+                normalised: sample_plane(&normalised),
+                blurred: sample_plane(&blurred),
+                msr: sample_plane(&msr),
+                output: sample_plane(&retinex_output),
+                first: plane(&reduce_first, scratch_length as u32, 1),
+                second: plane(&reduce_second, scratch_length as u32, 1),
+                range: plane(&range, 2, 1),
+                bins: plane(&bins, BINS, 1),
+                low: plane(&low, 1, 1),
+                high: plane(&high, 1, 1),
+            };
+            retinex(client, &sizing, planes, &settings, &blurs);
+        });
 
         let mask_values: Vec<u32> = data.iter().map(|value| (value * 65535.0) as u32).collect();
         let mask = upload_u32(client, &mask_values);

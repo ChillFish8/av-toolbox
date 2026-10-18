@@ -16,7 +16,7 @@ use av_toolbox_cubek::edges::{EdgeLimits, Operator, add_capped, binarize, edges}
 use av_toolbox_cubek::histogram::BINS;
 use av_toolbox_cubek::neighbourhood::{Extreme, NeighbourPlanes, Shape, extreme};
 use av_toolbox_cubek::reduce::scratch_len;
-use av_toolbox_cubek::retinex::{RetinexPlanes, RetinexSettings, retinex};
+use av_toolbox_cubek::retinex::{RetinexBlurs, RetinexPlanes, RetinexSettings, retinex};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -153,6 +153,7 @@ struct RetinexMask<R: Runtime> {
     client: ComputeClient<R>,
     luma: Luma,
     settings: RetinexSettings,
+    retinex_blurs: RetinexBlurs,
     blur: Option<Gaussian>,
     binarize_threshold: Option<f32>,
 }
@@ -199,7 +200,13 @@ impl<R: Runtime> Mask for RetinexMask<R> {
             low: low_scratch.plane(),
             high: high_scratch.plane(),
         };
-        retinex(&self.client, &sizing, retinex_planes, &self.settings);
+        retinex(
+            &self.client,
+            &sizing,
+            retinex_planes,
+            &self.settings,
+            &self.retinex_blurs,
+        );
 
         let ret_plane = ret_scratch.plane();
         let mut blurred_ret_scratch = None;
@@ -364,11 +371,13 @@ impl MaskDefinition for Retinex {
         let blur = gaussian_radius.map(|radius| Gaussian::with_radius(&client, args.sigma, radius));
         let binarize_threshold = binarize_threshold(args.brz, peak);
         let settings = RetinexSettings::new(args.sigmas, args.lower_thr, args.upper_thr, peak);
+        let retinex_blurs = RetinexBlurs::new(&client, &settings);
 
         Ok(Box::new(RetinexMask {
             client,
             luma,
             settings,
+            retinex_blurs,
             blur,
             binarize_threshold,
         }))
