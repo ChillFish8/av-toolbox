@@ -1,6 +1,6 @@
 use cubecl::prelude::*;
 
-use super::{Parity, bob_taps, fmtc_gauss_taps};
+use super::{GaussTables, Parity, bob_taps};
 use crate::resize::{Weights, upload};
 
 /// The bob taps of one plane height and parity, on the device.
@@ -39,25 +39,6 @@ impl BobWeights {
 
     pub(crate) const fn taps(&self) -> &Weights {
         &self.weights
-    }
-}
-
-/// The gaussian tables of one luma plane for each sharpness QTGMC blurs with.
-#[derive(Debug)]
-pub(crate) struct GaussTables {
-    pub(crate) across: Weights,
-    pub(crate) down: Weights,
-}
-
-impl GaussTables {
-    fn new<R: Runtime>(client: &ComputeClient<R>, size: (u32, u32), sharpness: f32) -> Self {
-        let across = fmtc_gauss_taps(size.0, sharpness);
-        let down = fmtc_gauss_taps(size.1, sharpness);
-
-        Self {
-            across: upload(client, &across),
-            down: upload(client, &down),
-        }
     }
 }
 

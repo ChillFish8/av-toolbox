@@ -22,6 +22,7 @@ pub use self::fields::{FieldClip, ProgressiveClip, badly_clips, field_clips};
 pub use self::fixtures::{FixturePlane, QtgmcFixture, qtgmc_fixture, write_qtgmc_inputs};
 pub use self::reference::{
     reference_back_blend,
+    reference_blur_and_spread,
     reference_bob,
     reference_clamp,
     reference_clamped_difference,

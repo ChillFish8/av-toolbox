@@ -64,7 +64,6 @@ impl BuildTask for StepRun {
 
         let first = empty(client, bytes);
         let second = empty(client, bytes);
-        let third = empty(client, bytes);
         let output = empty(client, bytes);
 
         let mut results = Vec::with_capacity(self.frames.len());
@@ -74,7 +73,6 @@ impl BuildTask for StepRun {
             let scratch = StepScratch {
                 first: plane(&first, width, height),
                 second: plane(&second, width, height),
-                third: plane(&third, width, height),
             };
             let output_plane = plane(&output, width, height);
 

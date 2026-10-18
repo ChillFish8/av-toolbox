@@ -130,16 +130,15 @@ impl<R: Runtime> Device<'_, R> {
         plane(handle, width, height)
     }
 
-    fn scratch<'h>(&self, handles: &'h [Handle; 3], plane_index: usize) -> StepScratch<'h> {
+    fn scratch<'h>(&self, handles: &'h [Handle; 2], plane_index: usize) -> StepScratch<'h> {
         StepScratch {
             first: self.plane(&handles[0], plane_index),
             second: self.plane(&handles[1], plane_index),
-            third: self.plane(&handles[2], plane_index),
         }
     }
 
-    fn scratch_handles(&self, plane_index: usize) -> [Handle; 3] {
-        [0, 1, 2].map(|_| self.empty(plane_index))
+    fn scratch_handles(&self, plane_index: usize) -> [Handle; 2] {
+        [0, 1].map(|_| self.empty(plane_index))
     }
 
     fn read(&self, handle: &Handle) -> Vec<f32> {

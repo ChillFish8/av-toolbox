@@ -6,6 +6,7 @@ mod limits;
 mod pointwise;
 mod repair;
 mod shimmer;
+mod spread;
 mod steps;
 
 use av_toolbox_cubek::testing::QtgmcFixture;

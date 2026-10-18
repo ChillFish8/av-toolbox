@@ -148,12 +148,17 @@ pub fn reference_shimmer(
     output
 }
 
-/// Blurs a plane with fmtc's gaussian of `a1 = sharpness` on both axes.
-fn gaussian(input: &[f32], width: usize, height: usize, sharpness: f32) -> Vec<f32> {
-    let across = fmtc_gauss_taps(width as u32, sharpness);
-    let down = fmtc_gauss_taps(height as u32, sharpness);
+/// Blurs a plane with the 3x3 binomial and then fmtc's gaussian of `a1 = sharpness` on the CPU, mirroring
+/// [blur_and_spread](crate::deinterlace::qtgmc::blur_and_spread).
+///
+/// Both blurs clamp at the border.
+pub fn reference_blur_and_spread(input: &[f32], width: usize, height: usize, sharpness: f32) -> Vec<f32> {
+    let (columns, rows) = (width as u32, height as u32);
+    let blurred = reference_smooth_with_edge(input, columns, rows, Smooth::Binomial, Edge::Clamp);
+    let across = fmtc_gauss_taps(columns, sharpness);
+    let down = fmtc_gauss_taps(rows, sharpness);
 
-    reference_resize_float_with_edge(input, width as u32, height as u32, &across, &down, Edge::Clamp)
+    reference_resize_float_with_edge(&blurred, columns, rows, &across, &down, Edge::Clamp)
 }
 
 /// The two clips the search clip's final expressions compare, as `(blur, tweaked)`.
@@ -172,14 +177,7 @@ pub fn reference_search_inputs(
     let peak = ((1u32 << bits) - 1) as f32;
     let (tolerance, _, _) = search_levels(bits);
 
-    let blurred = reference_smooth_with_edge(
-        repaired,
-        width as u32,
-        height as u32,
-        Smooth::Binomial,
-        Edge::Clamp,
-    );
-    let spread = gaussian(&blurred, width, height, 2.0);
+    let spread = reference_blur_and_spread(repaired, width, height, 2.0);
     let blur = merge(&spread, repaired, 0.1);
 
     let tweaked = repaired
@@ -270,14 +268,7 @@ pub fn reference_back_blend(
     let peak = ((1u32 << bits) - 1) as f32;
 
     let difference = reference_clamped_difference(sharpened, unsharpened, bits);
-    let blurred = reference_smooth_with_edge(
-        &difference,
-        width as u32,
-        height as u32,
-        Smooth::Binomial,
-        Edge::Clamp,
-    );
-    let spread = gaussian(&blurred, width, height, 5.0);
+    let spread = reference_blur_and_spread(&difference, width, height, 5.0);
 
     sharpened
         .iter()

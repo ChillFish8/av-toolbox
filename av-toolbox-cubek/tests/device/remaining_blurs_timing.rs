@@ -2,10 +2,9 @@ use std::time::{Duration, Instant};
 
 use av_toolbox_cubek::blur::{BlurPlanes, FilterPlanes, Gaussian, Separable, Storage};
 use av_toolbox_cubek::dehalo::{DifferencePlanes, difference};
-use av_toolbox_cubek::deinterlace::qtgmc::fmtc_gauss_taps;
+use av_toolbox_cubek::deinterlace::qtgmc::{GaussTables, blur_and_spread};
 use av_toolbox_cubek::lineart::{self, VinverseParams, VinversePlanes};
 use av_toolbox_cubek::neighbourhood::{self, BinomialChain, NeighbourPlanes, Smooth};
-use av_toolbox_cubek::resize::{ResizePlanes, apply_float_with_edge, upload};
 use av_toolbox_cubek::retinex::{RecursiveGaussian, RecursivePlanes, recursive_gaussian};
 use av_toolbox_cubek::warp::{BlurKind, blur_mask};
 use av_toolbox_cubek::{DevicePlane, Edge};
@@ -240,29 +239,19 @@ impl BuildTask for TimeRemainingBlurs {
             lineart::vinverse(client, &sizing, planes, &params);
         });
 
-        let gauss_weights = |sharpness: f32| {
-            let across = fmtc_gauss_taps(WIDTH, sharpness);
-            let down = fmtc_gauss_taps(HEIGHT, sharpness);
-            (upload(client, &across), upload(client, &down))
-        };
         for (name, sharpness) in [
-            ("qtgmc_blur_and_spread p2", 2.0f32),
-            ("qtgmc_blur_and_spread p5", 5.0),
+            ("qtgmc_blur_and_spread p2 now", 2.0f32),
+            ("qtgmc_blur_and_spread p5 now", 5.0),
         ] {
-            let (across, down) = gauss_weights(sharpness);
+            let gauss = GaussTables::new(client, (WIDTH, HEIGHT), sharpness);
             record(&mut lines, client, name, || {
-                let smoothing = NeighbourPlanes {
-                    input: sample_plane(&input),
-                    output: sample_plane(&first),
-                };
-                neighbourhood::smooth_with_edge(client, &sizing, smoothing, Smooth::Binomial, Edge::Clamp);
-
-                let resizing = ResizePlanes {
-                    input: sample_plane(&first),
-                    scratch: sample_plane(&second),
-                    output: sample_plane(&third),
-                };
-                apply_float_with_edge(client, &sizing, resizing, &across, &down, Edge::Clamp);
+                blur_and_spread(
+                    client,
+                    &sizing,
+                    &gauss,
+                    sample_plane(&input),
+                    sample_plane(&first),
+                );
             });
         }
 

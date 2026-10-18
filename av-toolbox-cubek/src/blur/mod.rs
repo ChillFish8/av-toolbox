@@ -69,7 +69,7 @@ impl Storage {
 }
 
 /// The most cubes every device allows along one axis.
-pub(super) const MAX_CUBES_PER_AXIS: u32 = 65535;
+pub(crate) const MAX_CUBES_PER_AXIS: u32 = 65535;
 
 /// The shared memory budget, per cube, that the blur kernels are built for.
 pub(super) const MAX_SHARED_BYTES: u32 = 32 * 1024;

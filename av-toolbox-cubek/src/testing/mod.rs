@@ -272,6 +272,7 @@ pub use self::qtgmc::{
     qtgmc_deltas,
     qtgmc_fixture,
     reference_back_blend,
+    reference_blur_and_spread,
     reference_bob,
     reference_clamp,
     reference_clamped_difference,

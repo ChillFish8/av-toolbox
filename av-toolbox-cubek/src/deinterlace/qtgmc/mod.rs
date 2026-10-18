@@ -9,6 +9,7 @@
 //! - [resharpen], [subtract], [clamp_between] and [merge] are QTGMC's other per-pixel steps.
 //! - [search_clip_from_repaired], [smode2_resharpen] and [back_blend] compose those into QTGMC's steps.
 //! - [QtgmcTables] holds the tables those steps resize with.
+//! - [blur_and_spread] blurs with the 3x3 binomial and then the gaussian of a [GaussTables].
 //! - [vertical_midpoint] builds the plane SMode 2 blurs before resharpening.
 //! - [vertical_blur] and [repair_blend] are the steps repair mode adds.
 //! - [sharpness_strength] gives the strength [resharpen] is run with.
@@ -22,6 +23,7 @@ mod limits;
 mod pointwise;
 mod repair;
 mod shimmer;
+mod spread;
 mod steps;
 mod tables;
 
@@ -45,6 +47,7 @@ pub use self::repair::{repair_blend, vertical_blur};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use self::shimmer::{NEGATIVE_STEPS, POSITIVE_STEPS, restore_limits};
 pub use self::shimmer::{ShimmerPlanes, shimmer};
+pub use self::spread::{GaussTables, blur_and_spread};
 pub use self::steps::{
     BackBlendPlanes,
     SearchPlanes,

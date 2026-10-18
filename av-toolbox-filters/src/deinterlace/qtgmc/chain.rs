@@ -315,15 +315,14 @@ impl<R: Runtime> Chain<R> {
         };
         shimmer(client, &sizing, repair, self.bits);
 
-        let [blurred, rows, spread] = self.scratches(context, 0);
+        let [spread, merged] = self.scratches(context, 0);
         let search_clip = self.scratch(context, 0);
         let searching = SearchPlanes {
             repaired: repaired.plane(),
             bob: centre_bob,
             scratch: StepScratch {
-                first: blurred.plane(),
-                second: rows.plane(),
-                third: spread.plane(),
+                first: spread.plane(),
+                second: merged.plane(),
             },
             output: search_clip.plane(),
         };
@@ -651,12 +650,11 @@ impl<R: Runtime> Chain<R> {
         let client = self.rebuilder.client();
         let sizing = Sizing(context);
 
-        let [first, second, third] = self.scratches(context, plane);
+        let [first, second] = self.scratches(context, plane);
         let resharpened = self.scratch(context, plane);
         let scratch = StepScratch {
             first: first.plane(),
             second: second.plane(),
-            third: third.plane(),
         };
         smode2_resharpen(
             client,
@@ -679,7 +677,6 @@ impl<R: Runtime> Chain<R> {
             scratch: StepScratch {
                 first: first.plane(),
                 second: second.plane(),
-                third: third.plane(),
             },
             output: back_blended.plane(),
         };
