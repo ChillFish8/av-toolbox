@@ -66,10 +66,6 @@ impl Separable {
         Self { weights, radius }
     }
 
-    pub const fn radius(&self) -> u32 {
-        self.radius
-    }
-
     fn weights<R: Runtime>(&self) -> ArrayArg<R> {
         let taps = 2 * self.radius as usize + 1;
         let handle = self.weights.clone();

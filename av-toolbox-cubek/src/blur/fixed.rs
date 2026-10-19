@@ -2,7 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
-use super::{FilterPlanes, MAX_CUBES_PER_AXIS, Storage};
+use super::{FilterPlanes, Storage, capped_tile_cubes};
 use crate::border::fold;
 use crate::{Dispatch, Edge, assert_plane_sized};
 
@@ -185,12 +185,7 @@ fn vertical_kernel<F: Float>(
 
 /// The cubes covering a `width` by `height` plane, one tile each, capped at what every device allows.
 pub(crate) fn fixed_cubes(width: u32, height: u32) -> CubeCount {
-    let tiles_across = width.div_ceil(TILE_WIDTH);
-    let tiles_down = height.div_ceil(TILE_HEIGHT);
-    let cubes_across = tiles_across.min(MAX_CUBES_PER_AXIS);
-    let cubes_down = tiles_down.min(MAX_CUBES_PER_AXIS);
-
-    CubeCount::Static(cubes_across, cubes_down, 1)
+    capped_tile_cubes(width, height, TILE_WIDTH, TILE_HEIGHT)
 }
 
 fn assert_filter_planes(planes: &FilterPlanes<'_>, storage: Storage) {

@@ -8,7 +8,7 @@ mod tests;
 mod tiled;
 mod wide;
 
-use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
+use cubecl::prelude::{ArrayArg, ComputeClient, CubeCount, CubeElement, Runtime};
 use cubecl::server::Handle;
 
 pub(crate) use self::fixed::{OUTPUTS_DOWN, TILE_HEIGHT, TILE_WIDTH, UNITS_ACROSS, UNITS_DOWN, fixed_cubes};
@@ -70,6 +70,17 @@ impl Storage {
 
 /// The most cubes every device allows along one axis.
 pub(crate) const MAX_CUBES_PER_AXIS: u32 = 65535;
+
+/// One cube per tile of `tile_width` by `tile_height`, capped at
+/// [MAX_CUBES_PER_AXIS](crate::blur::MAX_CUBES_PER_AXIS) on each axis.
+pub(crate) fn capped_tile_cubes(width: u32, height: u32, tile_width: u32, tile_height: u32) -> CubeCount {
+    let tiles_across = width.div_ceil(tile_width);
+    let tiles_down = height.div_ceil(tile_height);
+    let cubes_across = tiles_across.min(MAX_CUBES_PER_AXIS);
+    let cubes_down = tiles_down.min(MAX_CUBES_PER_AXIS);
+
+    CubeCount::Static(cubes_across, cubes_down, 1)
+}
 
 /// The shared memory budget, per cube, that the blur kernels are built for.
 pub(crate) const MAX_SHARED_BYTES: u32 = 32 * 1024;

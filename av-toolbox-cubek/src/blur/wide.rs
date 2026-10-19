@@ -5,7 +5,7 @@ use cubecl::prelude::*;
 use super::lines::{both_pass_cubes, line_shape, sample_index};
 use super::{BlurPlanes, MAX_CUBES_PER_AXIS, MAX_SHARED_BYTES, Storage};
 use crate::Edge;
-use crate::border::fold;
+use crate::border::fold_always;
 
 /// The lines a cube blurs side by side, two units each.
 const LANES: u32 = 64;
@@ -197,7 +197,7 @@ fn load_batch<F: Float>(
     } else {
         #[unroll]
         for slot in 0..BATCH {
-            let position = fold(first_position + slot as i32, line_length, clamp);
+            let position = fold_always(first_position + slot as i32, line_length, clamp);
             let index = sample_index(line, position, width, along_rows);
             samples[slot as usize] = f32::cast_from(input[index as usize]);
         }

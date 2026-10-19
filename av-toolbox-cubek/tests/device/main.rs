@@ -23,7 +23,6 @@ mod motion;
 mod neighbourhood;
 mod padding;
 mod reduce;
-mod remaining_blurs_timing;
 mod resize;
 mod retinex;
 mod rgvs;

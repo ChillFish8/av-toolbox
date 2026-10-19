@@ -3,8 +3,9 @@
 use cubecl::prelude::*;
 
 use super::fmtc_gauss_taps;
-use crate::blur::MAX_CUBES_PER_AXIS;
+use crate::blur::capped_tile_cubes;
 use crate::border::fold;
+use crate::plane::are_distinct;
 use crate::resize::{Taps, Weights, upload};
 use crate::{DevicePlane, Dispatch, assert_plane_sized};
 
@@ -272,12 +273,7 @@ fn spread_kernel(
 
 /// The cubes covering a `width` by `height` plane, one tile each, capped at what every device allows.
 fn spread_cubes(width: u32, height: u32) -> CubeCount {
-    let tiles_across = width.div_ceil(TILE_WIDTH);
-    let tiles_down = height.div_ceil(TILE_HEIGHT);
-    let cubes_across = tiles_across.min(MAX_CUBES_PER_AXIS);
-    let cubes_down = tiles_down.min(MAX_CUBES_PER_AXIS);
-
-    CubeCount::Static(cubes_across, cubes_down, 1)
+    capped_tile_cubes(width, height, TILE_WIDTH, TILE_HEIGHT)
 }
 
 /// Blurs `input` into `output` with the 3x3 binomial and then fmtc's gaussian from `gauss`, in one launch.
@@ -297,7 +293,7 @@ pub fn blur_and_spread<R: Runtime>(
     assert_plane_sized(&input, width, height, bytes, "spread input");
     assert_plane_sized(&output, width, height, bytes, "spread output");
     assert!(
-        !std::ptr::eq(input.handle(), output.handle()),
+        are_distinct(&[input.handle(), output.handle()]),
         "the spread input and output must be separate planes"
     );
     assert_eq!(

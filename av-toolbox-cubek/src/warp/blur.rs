@@ -3,7 +3,8 @@
 use cubecl::prelude::*;
 
 use super::{BlurKind, average};
-use crate::blur::{MAX_CUBES_PER_AXIS, MAX_SHARED_BYTES};
+use crate::blur::{MAX_SHARED_BYTES, capped_tile_cubes};
+use crate::plane::are_distinct;
 use crate::{DevicePlane, Dispatch, assert_plane_sized};
 
 /// The width of the output tile a cube writes.
@@ -461,7 +462,7 @@ fn launch_staged<R: Runtime>(
     assert_plane_sized(&input, width, height, bytes, "mask blur input");
     assert_plane_sized(&output, width, height, bytes, "mask blur output");
     assert!(
-        !std::ptr::eq(input.handle(), output.handle()),
+        are_distinct(&[input.handle(), output.handle()]),
         "the mask blur input and output must be separate planes"
     );
     assert!(
@@ -471,11 +472,7 @@ fn launch_staged<R: Runtime>(
 
     let wide = kind == BlurKind::R6;
     let tile_height = tile_height_of(wide, passes);
-    let tiles_across = width.div_ceil(TILE_WIDTH);
-    let tiles_down = height.div_ceil(tile_height);
-    let cubes_across = tiles_across.min(MAX_CUBES_PER_AXIS);
-    let cubes_down = tiles_down.min(MAX_CUBES_PER_AXIS);
-    let cubes = CubeCount::Static(cubes_across, cubes_down, 1);
+    let cubes = capped_tile_cubes(width, height, TILE_WIDTH, tile_height);
     let unit = CubeDim::new_1d(UNITS);
     let input = input.array::<R>();
     let output = output.array::<R>();

@@ -4,7 +4,7 @@ use cubecl::prelude::*;
 
 use super::{FilterPlanes, MAX_CUBES_PER_AXIS, MAX_SHARED_BYTES, Storage, TILED_MAX_RADIUS};
 use crate::Edge;
-use crate::border::fold;
+use crate::border::fold_always;
 
 /// The units along a cube's rows.
 const UNITS_ACROSS: u32 = 16;
@@ -83,13 +83,13 @@ fn load_tile<F: Float>(
     #[unroll]
     for row_step in 0..comptime!(loaded_height / UNITS_DOWN) {
         let local_row = UNIT_POS_Y + row_step * UNITS_DOWN;
-        let source_row = fold(first_row + local_row as i32, height, clamp);
+        let source_row = fold_always(first_row + local_row as i32, height, clamp);
         let row_start = source_row * width;
 
         #[unroll]
         for column_step in 0..comptime!(loaded_width / UNITS_ACROSS) {
             let local_column = UNIT_POS_X + column_step * UNITS_ACROSS;
-            let source_column = fold(first_column + local_column as i32, width, clamp);
+            let source_column = fold_always(first_column + local_column as i32, width, clamp);
             let sample = input[(row_start + source_column) as usize];
             let slot = local_row * loaded_width + local_column;
             loaded[slot as usize] = f32::cast_from(sample);

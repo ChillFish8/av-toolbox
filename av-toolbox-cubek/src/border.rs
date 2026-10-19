@@ -49,6 +49,8 @@ pub fn mirror(index: i32, length: i32) -> i32 {
 }
 
 /// Folds `index` into `0..length`, reflecting or clamping it when it falls outside.
+///
+/// An index already inside skips the fold. Use it in loops that read mostly inside samples.
 #[cube]
 pub(crate) fn fold(index: i32, length: u32, #[comptime] clamp: bool) -> u32 {
     let last = length as i32 - 1;
@@ -61,6 +63,21 @@ pub(crate) fn fold(index: i32, length: u32, #[comptime] clamp: bool) -> u32 {
             folded = reflect(index, length as i32);
         }
     }
+
+    folded as u32
+}
+
+/// Folds `index` into `0..length`, reflecting or clamping it, without first testing whether it is inside.
+///
+/// It gives the same answer as [fold](crate::border::fold) but skips the inside test, so an unrolled loop of
+/// reads stays one straight run the device can issue back to back. Use it in unrolled loads.
+#[cube]
+pub(crate) fn fold_always(index: i32, length: u32, #[comptime] clamp: bool) -> u32 {
+    let folded = if clamp {
+        i32::clamp(index, 0, length as i32 - 1)
+    } else {
+        reflect(index, length as i32)
+    };
 
     folded as u32
 }
