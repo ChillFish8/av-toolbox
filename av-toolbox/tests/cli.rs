@@ -51,7 +51,7 @@ fn every_example_explains_without_a_device() {
     let names = [&names[..], &["bestsource.toml"]].concat();
 
     #[cfg(feature = "vship")]
-    let names = [&names[..], &["vship.toml"]].concat();
+    let names = [&names[..], &["vship.toml", "cvvdp-map.toml"]].concat();
 
     for name in names {
         let path = example(name);

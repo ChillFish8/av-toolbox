@@ -3,12 +3,13 @@ use av_toolbox_cubek::depth::{
     DepthPlanes,
     Element,
     Shift,
+    Source,
     Thresholds,
     convert,
     plane_shift,
     upload_pattern,
 };
-use av_toolbox_cubek::testing::reference_depth;
+use av_toolbox_cubek::testing::{reference_depth, reference_float_depth};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -53,10 +54,6 @@ impl BuildTask for Depth {
     }
 }
 
-fn widen(samples: &[u16]) -> Vec<u8> {
-    samples.iter().flat_map(|sample| sample.to_le_bytes()).collect()
-}
-
 fn unwiden(bytes: &[u8]) -> Vec<u16> {
     let (pairs, _) = bytes.as_chunks::<2>();
 
@@ -85,6 +82,10 @@ fn block_mean(values: &[u16], width: u32, start_x: u32, start_y: u32, size: u32)
     total as f64 / f64::from(size * size)
 }
 
+fn float_bytes(samples: &[f32]) -> Vec<u8> {
+    samples.iter().flat_map(|sample| sample.to_le_bytes()).collect()
+}
+
 fn convert_on_device(
     input: &[u16],
     width: u32,
@@ -93,9 +94,27 @@ fn convert_on_device(
     thresholds: &Thresholds,
     shift: Shift,
 ) -> Vec<u16> {
+    let floats: Vec<f32> = input.iter().map(|value| f32::from(*value)).collect();
+
+    convert_float_on_device(&floats, width, height, conversion, thresholds, shift)
+}
+
+/// Converts `input` on the device, stored as the conversion's input samples.
+fn convert_float_on_device(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    conversion: &Conversion,
+    thresholds: &Thresholds,
+    shift: Shift,
+) -> Vec<u16> {
     let bytes = match conversion.input {
-        Element::U8 => input.iter().map(|value| *value as u8).collect(),
-        Element::U16 => widen(input),
+        Source::U8 => input.iter().map(|value| *value as u8).collect(),
+        Source::U16 => input
+            .iter()
+            .flat_map(|value| (*value as u16).to_le_bytes())
+            .collect(),
+        Source::F32 => float_bytes(input),
     };
 
     let output = backend().build(Depth {
@@ -166,6 +185,61 @@ fn blue_noise_keeps_a_flat_areas_mean() {
                     "{value}: {mean} against {true_mean}"
                 );
             }
+        }
+    }
+}
+
+/// A float plane running a little past both ends of `low..=low + 1`, with a NaN every 97 samples.
+fn float_gradient(width: u32, height: u32, low: f32) -> Vec<f32> {
+    (0..width * height)
+        .map(|index| {
+            if index % 97 == 0 {
+                return f32::NAN;
+            }
+
+            let step = (index * 7) % 300;
+            step as f32 / 256.0 - 0.1 + low
+        })
+        .collect()
+}
+
+/// Asserts every sample is within one of the reference.
+///
+/// The device may fuse the multiply and add of a float conversion into one rounding, which moves a
+/// sample sitting right on a rounding step by one.
+fn assert_within_one(converted: &[u16], expected: &[u16], label: &str) {
+    assert_eq!(converted.len(), expected.len(), "{label}");
+
+    for (index, (found, wanted)) in converted.iter().zip(expected).enumerate() {
+        assert!(
+            found.abs_diff(*wanted) <= 1,
+            "{label}: sample {index} was {found}, expected {wanted}"
+        );
+    }
+}
+
+/// Every rounding mode, on float luma and chroma, against the CPU reference.
+#[test]
+fn every_float_conversion_matches_the_reference() {
+    let modes = [
+        Thresholds::rounding(),
+        Thresholds::ordered(),
+        Thresholds::blue_noise(),
+    ];
+    let changes = [(8, false), (8, true), (10, false), (16, true)];
+
+    for thresholds in &modes {
+        for (output_bits, chroma) in changes {
+            let conversion = Conversion::from_float(output_bits, chroma);
+            let low = if chroma { -0.5 } else { 0.0 };
+            let input = float_gradient(96, 80, low);
+            let shift = plane_shift(1);
+
+            let expected = reference_float_depth(&input, 96, &conversion, thresholds, shift);
+            let converted = convert_float_on_device(&input, 96, 80, &conversion, thresholds, shift);
+
+            let label = format!("{output_bits} bits, chroma {chroma}");
+            assert_within_one(&converted, &expected, &label);
         }
     }
 }

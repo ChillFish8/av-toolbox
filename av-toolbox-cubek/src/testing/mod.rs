@@ -405,6 +405,19 @@ pub fn reference_depth(
     thresholds: &Thresholds,
     shift: Shift,
 ) -> Vec<u16> {
+    let values: Vec<f32> = input.iter().map(|value| f32::from(*value)).collect();
+
+    reference_float_depth(&values, width, conversion, thresholds, shift)
+}
+
+/// Converts a float plane `width` samples across on the CPU, mirroring [convert](crate::depth::convert).
+pub fn reference_float_depth(
+    input: &[f32],
+    width: u32,
+    conversion: &Conversion,
+    thresholds: &Thresholds,
+    shift: Shift,
+) -> Vec<u16> {
     input
         .iter()
         .enumerate()
@@ -413,7 +426,7 @@ pub fn reference_depth(
             let row = index as u32 / width;
             let threshold = thresholds.at(column, row, shift);
 
-            convert_sample(*value, conversion.multiplier, threshold, conversion.largest)
+            convert_sample(*value, conversion, threshold)
         })
         .collect()
 }

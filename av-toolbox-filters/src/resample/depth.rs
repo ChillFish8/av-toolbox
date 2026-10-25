@@ -24,6 +24,7 @@ use av_toolbox_cubek::depth::{
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
+    Channel,
     ColourRange,
     ComputeClient,
     Depth as BitDepth,
@@ -45,6 +46,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::bits::bits_of;
+use crate::checks::accepts_integer_or_f32_frames;
 use crate::sizing::Sizing;
 
 const STAGE: &str = "resample/depth";
@@ -150,7 +152,8 @@ impl StageDefinition for Depth {
     }
 
     fn description() -> &'static str {
-        "Converts a clip to a different bit depth, dithering when the depth is lowered."
+        "Converts a clip to a different bit depth, dithering when the depth is lowered.\n\n\
+         A float clip is read as running between 0 and 1, so 1 becomes the largest output value."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -174,15 +177,11 @@ impl FilterDefinition for Depth {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        let Some(format) = offered.as_frames() else {
+        let Some(samples) = accepts_integer_or_f32_frames(offered) else {
             return Err(not_frames(STAGE));
         };
 
-        if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-            return Ok(FormatSet::new());
-        }
-
-        Ok(FormatSet::of([format.sample]))
+        Ok(samples)
     }
 
     fn produces(
@@ -192,10 +191,7 @@ impl FilterDefinition for Depth {
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(STAGE, chosen)?;
         let target = target_sample(STAGE, args.depth)?;
-        let output = FrameFormat {
-            sample: target,
-            ..input
-        };
+        let output = converted_format(input, target);
         let format = StreamFormat::Frames(output);
 
         Ok(OutputFormats {
@@ -227,31 +223,75 @@ pub(super) fn converter<R: Runtime>(
     target: SampleFormat,
     dither: Dither,
 ) -> Box<dyn Filter> {
-    let output = FrameFormat {
-        sample: target,
-        ..input
-    };
+    let output = converted_format(input, target);
     let identity = input.sample == output.sample;
 
-    let input_bits = bits_of(input.sample);
     let output_bits = bits_of(output.sample);
-    let full_range = input.colour.range == ColourRange::Full;
-    let conversion = Conversion::new(input_bits, output_bits, full_range);
-
-    let lowering = output_bits < input_bits;
-    let thresholds = thresholds(dither, lowering);
+    let plan = plan_conversion(input, output_bits);
+    let thresholds = thresholds(dither, plan.lowering);
     let client = context.client().clone();
     let pattern = upload_pattern(&client, &thresholds);
     let converter = Converter {
         client,
         stage,
         output,
-        conversion,
+        conversion: plan.conversion,
+        chroma_conversion: plan.chroma_conversion,
         pattern,
         identity,
     };
 
     Box::new(converter)
+}
+
+/// The format of `input` converted to `target`.
+///
+/// Float samples are always full range, so a float clip comes out labelled full range.
+fn converted_format(input: FrameFormat, target: SampleFormat) -> FrameFormat {
+    let mut output = FrameFormat {
+        sample: target,
+        ..input
+    };
+
+    if input.sample == SampleFormat::F32 {
+        output.colour.range = ColourRange::Full;
+    }
+
+    output
+}
+
+/// How each plane of a clip changes depth.
+struct ConversionPlan {
+    conversion: Conversion,
+    chroma_conversion: Conversion,
+    lowering: bool,
+}
+
+/// The conversions from `input` to `output_bits`, and whether they lose precision.
+///
+/// Float chroma is centred on zero, so it takes its own conversion. Float samples always lose
+/// precision when they become integers.
+fn plan_conversion(input: FrameFormat, output_bits: u32) -> ConversionPlan {
+    if input.sample == SampleFormat::F32 {
+        let conversion = Conversion::from_float(output_bits, false);
+        let chroma_conversion = Conversion::from_float(output_bits, true);
+
+        return ConversionPlan {
+            conversion,
+            chroma_conversion,
+            lowering: true,
+        };
+    }
+
+    let input_bits = bits_of(input.sample);
+    let full_range = input.colour.range == ColourRange::Full;
+    let conversion = Conversion::new(input_bits, output_bits, full_range);
+
+    ConversionPlan {
+        conversion,
+        chroma_conversion: conversion,
+        lowering: output_bits < input_bits,
+    }
 }
 
 /// Converts every plane of a frame from one bit depth to another.
@@ -260,12 +300,20 @@ struct Converter<R: Runtime> {
     stage: &'static str,
     output: FrameFormat,
     conversion: Conversion,
+    chroma_conversion: Conversion,
     pattern: Pattern,
     identity: bool,
 }
 
 impl<R: Runtime> Converter<R> {
-    fn convert_plane(&self, context: &FrameContext, input: &Plane, output: &Plane, index: u32) {
+    fn convert_plane(
+        &self,
+        context: &FrameContext,
+        input: &Plane,
+        output: &Plane,
+        channel: Channel,
+        index: u32,
+    ) {
         let (in_width, in_height) = input.dimensions();
         let (out_width, out_height) = output.dimensions();
 
@@ -284,15 +332,12 @@ impl<R: Runtime> Converter<R> {
         };
         let sizing = Sizing(context);
         let shift = plane_shift(index);
+        let conversion = match channel {
+            Channel::U | Channel::V => &self.chroma_conversion,
+            _ => &self.conversion,
+        };
 
-        convert(
-            &self.client,
-            &sizing,
-            planes,
-            &self.conversion,
-            &self.pattern,
-            shift,
-        );
+        convert(&self.client, &sizing, planes, conversion, &self.pattern, shift);
     }
 }
 
@@ -320,7 +365,7 @@ impl<R: Runtime> Filter for Converter<R> {
                 return Err(missing_channel(self.stage));
             };
 
-            self.convert_plane(context, input_plane, output_plane, index as u32);
+            self.convert_plane(context, input_plane, output_plane, *channel, index as u32);
         }
 
         Ok(vec![output])

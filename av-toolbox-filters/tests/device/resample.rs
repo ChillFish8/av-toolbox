@@ -5,6 +5,7 @@ use av_toolbox_cubek::testing::{
     decode_samples,
     encode_samples,
     reference_depth,
+    reference_float_depth,
     reference_matrix,
     reference_resize,
 };
@@ -96,6 +97,64 @@ fn lowering_a_ten_bit_frame_matches_the_reference() {
         let actual = widen_u8(&converted[index]);
 
         assert_eq!(actual, expected, "{channel}");
+    }
+}
+
+/// Every plane of `format`, luma between 0 and 1 and chroma between -0.5 and 0.5.
+fn float_values(format: &FrameFormat) -> Vec<Vec<f32>> {
+    format
+        .channels()
+        .iter()
+        .map(|channel| {
+            let samples = format.channel_samples(*channel).expect("a listed channel");
+            let low = match channel {
+                Channel::U | Channel::V => -0.5,
+                _ => 0.0,
+            };
+
+            (0..samples)
+                .map(|index| (index * 13 % 256) as f32 / 255.0 + low)
+                .collect()
+        })
+        .collect()
+}
+
+fn float_bytes(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|value| value.to_le_bytes()).collect()
+}
+
+#[test]
+fn a_float_frame_centres_its_chroma() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(32, 16, layout, SampleFormat::F32, ChromaLocation::Left);
+    let colour = ColourInfo {
+        range: ColourRange::Full,
+        ..input.colour
+    };
+    let output = FrameFormat {
+        sample: SampleFormat::U8,
+        colour,
+        ..input
+    };
+    let args = json!({ "depth": 8, "dither": "none" });
+
+    let values = float_values(&input);
+    let planes: Vec<Vec<u8>> = values.iter().map(|plane| float_bytes(plane)).collect();
+    let converted = run_once("resample/depth", input, output, args, &planes);
+
+    let thresholds = Thresholds::rounding();
+    for (index, channel) in input.channels().iter().enumerate() {
+        let (width, _) = input.channel_dimensions(*channel).expect("carried");
+        let chroma = matches!(channel, Channel::U | Channel::V);
+        let conversion = Conversion::from_float(8, chroma);
+        let shift = plane_shift(index as u32);
+        let expected = reference_float_depth(&values[index], width, &conversion, &thresholds, shift);
+        let expected: Vec<u8> = expected.iter().map(|value| *value as u8).collect();
+        let label = format!("{channel}");
+
+        assert_within_one(&converted[index], &expected, &label);
     }
 }
 

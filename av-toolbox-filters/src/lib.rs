@@ -42,7 +42,8 @@
 //! - `lineart/vinverse` removes residual combing, as vs-jetpack's vinverse does.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
-//! - `resample/depth` changes a clip's bit depth, dithering when it lowers it.
+//! - `resample/depth` changes a clip's bit depth, or turns a float clip into integers, dithering when it
+//!   lowers precision.
 //! - `resample/min_depth` raises a clip to at least a given bit depth.
 //! - `resample/chroma` changes a YUV clip's chroma subsampling and siting.
 //! - `resample/matrix` converts a 4:4:4 YUV clip to RGB and back.

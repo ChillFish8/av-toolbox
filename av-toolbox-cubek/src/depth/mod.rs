@@ -8,6 +8,7 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 
 pub use self::pattern::{Shift, Thresholds, bayer_ranks, blue_noise_ranks, plane_shift};
+use crate::matrix::{MatrixSamples, SampleRange, scaling};
 use crate::{DevicePlane, Dispatch};
 
 /// How a plane's samples are stored.
@@ -23,13 +24,32 @@ impl Element {
     }
 }
 
+/// How the samples a conversion reads are stored.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Source {
+    U8,
+    U16,
+    F32,
+}
+
+impl From<Element> for Source {
+    fn from(element: Element) -> Self {
+        match element {
+            Element::U8 => Self::U8,
+            Element::U16 => Self::U16,
+        }
+    }
+}
+
 /// Everything one change of depth needs besides its rounding.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Conversion {
-    pub input: Element,
+    pub input: Source,
     pub output: Element,
     /// What each input sample is multiplied by before rounding.
     pub multiplier: f32,
+    /// What is added to each sample after multiplying.
+    pub offset: f32,
     /// The largest output sample.
     pub largest: f32,
 }
@@ -50,21 +70,47 @@ impl Conversion {
             2f32.powi(difference)
         };
 
+        let input = Element::for_bits(input_bits);
+
         Self {
-            input: Element::for_bits(input_bits),
+            input: Source::from(input),
             output: Element::for_bits(output_bits),
             multiplier,
+            offset: 0.0,
+            largest: output_peak,
+        }
+    }
+
+    /// A change from full range float samples to full range `output_bits`.
+    ///
+    /// Float samples run between 0 and 1, or between -0.5 and 0.5 for `chroma`, which is centred on
+    /// the middle output value. A NaN sample reads as 0.
+    pub fn from_float(output_bits: u32, chroma: bool) -> Self {
+        let output = Element::for_bits(output_bits);
+        let samples = match output {
+            Element::U8 => MatrixSamples::U8,
+            Element::U16 => MatrixSamples::U16 { bits: output_bits },
+        };
+        let (offset, scale) = scaling(samples, SampleRange::Full, chroma);
+        let output_peak = ((1u32 << output_bits) - 1) as f32;
+
+        Self {
+            input: Source::F32,
+            output,
+            multiplier: scale as f32,
+            offset: offset as f32,
             largest: output_peak,
         }
     }
 }
 
 /// Converts one sample on the CPU, exactly as the kernel does.
-pub fn convert_sample(value: u16, multiplier: f32, threshold: f32, largest: f32) -> u16 {
-    let scaled = f32::from(value) * multiplier;
+pub fn convert_sample(value: f32, conversion: &Conversion, threshold: f32) -> u16 {
+    let defined = if value.is_nan() { 0.0 } else { value };
+    let scaled = defined * conversion.multiplier + conversion.offset;
     let rounded = (scaled + threshold).floor();
 
-    rounded.clamp(0.0, largest) as u16
+    rounded.clamp(0.0, conversion.largest) as u16
 }
 
 /// A threshold grid on the device.
@@ -102,7 +148,7 @@ pub struct DepthPlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn convert_depth<I: Int, O: Int>(
+fn convert_depth<I: Numeric, O: Int>(
     input: &Array<I>,
     pattern: &Array<f32>,
     output: &mut Array<O>,
@@ -111,6 +157,7 @@ fn convert_depth<I: Int, O: Int>(
     across: u32,
     down: u32,
     multiplier: f32,
+    offset: f32,
     largest: f32,
 ) {
     if ABSOLUTE_POS >= output.len() {
@@ -124,7 +171,9 @@ fn convert_depth<I: Int, O: Int>(
     let pattern_row = (row + down) % size;
     let threshold = pattern[(pattern_row * size + pattern_column) as usize];
 
-    let scaled = f32::cast_from(input[ABSOLUTE_POS]) * multiplier;
+    let value = f32::cast_from(input[ABSOLUTE_POS]);
+    let defined = select(f32::is_nan(value), 0.0, value);
+    let scaled = defined * multiplier + offset;
     let rounded = f32::floor(scaled + threshold);
     output[ABSOLUTE_POS] = O::cast_from(f32::clamp(rounded, 0.0, largest));
 }
@@ -139,22 +188,28 @@ pub fn convert<R: Runtime>(
     shift: Shift,
 ) {
     match (conversion.input, conversion.output) {
-        (Element::U8, Element::U8) => {
+        (Source::U8, Element::U8) => {
             launch::<u8, u8, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Element::U8, Element::U16) => {
+        (Source::U8, Element::U16) => {
             launch::<u8, u16, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Element::U16, Element::U8) => {
+        (Source::U16, Element::U8) => {
             launch::<u16, u8, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Element::U16, Element::U16) => {
+        (Source::U16, Element::U16) => {
             launch::<u16, u16, R>(client, dispatch, planes, conversion, pattern, shift)
+        },
+        (Source::F32, Element::U8) => {
+            launch::<f32, u8, R>(client, dispatch, planes, conversion, pattern, shift)
+        },
+        (Source::F32, Element::U16) => {
+            launch::<f32, u16, R>(client, dispatch, planes, conversion, pattern, shift)
         },
     }
 }
 
-fn launch<I: Int, O: Int, R: Runtime>(
+fn launch<I: Numeric, O: Int, R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: DepthPlanes<'_>,
@@ -185,6 +240,7 @@ fn launch<I: Int, O: Int, R: Runtime>(
             shift.across,
             shift.down,
             conversion.multiplier,
+            conversion.offset,
             conversion.largest,
         );
     }

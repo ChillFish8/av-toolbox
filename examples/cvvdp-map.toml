@@ -30,6 +30,7 @@ args.output = "map"
 type = "resample/depth"
 inputs = ["score"]
 args.depth = 8
+args.dither = "none"
 
 [sink.output]
 type = "y4m/stdout"

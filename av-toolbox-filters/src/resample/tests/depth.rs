@@ -2,6 +2,7 @@ use av_toolbox_core::FilterDefinition;
 use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
+    ColourRange,
     Depth as BitDepth,
     FrameFormat,
     FrameLayout,
@@ -135,7 +136,7 @@ fn a_depth_outside_eight_to_sixteen_is_refused() {
 }
 
 #[test]
-fn floats_are_left_out_and_masks_refused() {
+fn floats_are_accepted_and_masks_refused() {
     let capabilities = capabilities();
     let arguments = args(json!({ "depth": 10 })).expect("parses");
     let inputs = [Offered::Unknown];
@@ -151,6 +152,25 @@ fn floats_are_left_out_and_masks_refused() {
         Depth::accepts_input(&capabilities, &arguments, 0, float, &inputs).expect("frames are readable");
     let refused = Depth::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
 
-    assert!(accepted.is_empty());
+    assert!(accepted.accepts(SampleFormat::F32));
     assert!(refused.is_err());
+}
+
+#[test]
+fn a_float_grey_clip_becomes_eight_bit() {
+    let input = frames(FrameLayout::Grey, SampleFormat::F32);
+    let output = produced(input, json!({ "depth": 8, "dither": "none" })).expect("converts");
+    let converted = output.as_frames().expect("frames");
+
+    assert_eq!(converted.sample, SampleFormat::U8);
+    assert_eq!(converted.layout, FrameLayout::Grey);
+}
+
+#[test]
+fn a_float_clip_comes_out_full_range() {
+    let input = yuv420(SampleFormat::F32);
+    let output = produced(input, json!({ "depth": 10 })).expect("converts");
+    let converted = output.as_frames().expect("frames");
+
+    assert_eq!(converted.colour.range, ColourRange::Full);
 }
