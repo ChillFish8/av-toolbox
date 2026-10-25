@@ -31,7 +31,7 @@ vcpkg_triplet := env("AVTB_VCPKG_TRIPLET", if os() == "macos" { "arm64-osx-relea
 static_features := if os() == "macos" { "metal" } else { "vulkan" }
 
 # The backend features used for the `run` alias
-run_features := static_features + ",ffms2,bestsource"
+run_features := static_features + ",ffms2,bestsource,vship"
 
 # Formats the whole workspace.
 format:
