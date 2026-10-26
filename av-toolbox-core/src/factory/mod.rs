@@ -56,6 +56,7 @@ pub struct StageInfo<'a> {
     schema: &'a Value,
     inputs: &'static InputSignature,
     artefacts: StageArtefacts,
+    wants_output_depth: bool,
 }
 
 impl<'a> StageInfo<'a> {
@@ -77,6 +78,11 @@ impl<'a> StageInfo<'a> {
 
     pub fn tags(&self) -> &'static [Tag] {
         self.tags
+    }
+
+    /// Whether the graph converts this stage's input to the output depth before it.
+    pub fn wants_output_depth(&self) -> bool {
+        self.wants_output_depth
     }
 
     /// What this stage does, its summary line then any explanation.

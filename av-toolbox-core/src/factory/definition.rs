@@ -89,6 +89,7 @@ impl<D: StageDefinition> Definition<D> {
             schema: &self.schema,
             inputs: D::inputs(),
             artefacts: StageArtefacts::of::<D>(),
+            wants_output_depth: D::wants_output_depth(),
         }
     }
 

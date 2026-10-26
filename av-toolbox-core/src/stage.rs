@@ -250,6 +250,11 @@ pub trait StageDefinition: 'static {
         &[]
     }
 
+    /// Whether the graph converts this stage's input to the output depth before it.
+    fn wants_output_depth() -> bool {
+        false
+    }
+
     /// The smallest unit of a stream this stage can be given on its own.
     ///
     /// The whole stream is always safe, so that is the default. A stage that can take less

@@ -47,6 +47,10 @@ impl StageDefinition for Pipe {
     fn inputs() -> &'static InputSignature {
         INPUTS
     }
+
+    fn wants_output_depth() -> bool {
+        true
+    }
 }
 
 impl SinkDefinition for Pipe {

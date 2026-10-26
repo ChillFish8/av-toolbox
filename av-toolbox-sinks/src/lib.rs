@@ -22,3 +22,26 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn y4m_sinks_want_the_output_depth() {
+        let mut registry = PipelineRegistry::new();
+        register(&mut registry).expect("should register");
+
+        let wants = |identifier: &str| {
+            registry
+                .stages()
+                .find(|info| info.full_identifier() == identifier)
+                .expect("should be registered")
+                .wants_output_depth()
+        };
+
+        assert!(wants("y4m/pipe"));
+        assert!(wants("y4m/stdout"));
+        assert!(!wants("null/discard"));
+    }
+}

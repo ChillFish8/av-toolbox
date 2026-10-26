@@ -844,6 +844,18 @@ mod tests {
     }
 
     #[test]
+    fn a_stage_does_not_want_the_output_depth_by_default() {
+        let registry = registry_with_denoise();
+
+        let wanting: Vec<bool> = registry
+            .stages()
+            .map(|info| info.wants_output_depth())
+            .collect();
+
+        assert_eq!(wanting, vec![false]);
+    }
+
+    #[test]
     fn an_unregistered_identifier_reports_the_kind_looked_in() {
         let registry = registry_with_denoise();
         let args = serde_json::json!({});
