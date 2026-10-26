@@ -109,6 +109,7 @@ fn oversized_format(units_per_cube: usize, axis_limit: usize) -> MaskFormat {
     let height = bytes_needed.div_ceil(OVERSIZED_WIDTH);
 
     MaskFormat {
+        frame_rate: None,
         width: OVERSIZED_WIDTH as u32,
         height: height as u32,
         sample: SampleFormat::U8,
@@ -196,6 +197,7 @@ impl BuildTask for WriteAddedChroma {
     fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
         let frames = context.frame_context();
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,

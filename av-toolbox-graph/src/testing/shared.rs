@@ -49,6 +49,7 @@ pub(super) fn fixture_format() -> StreamFormat {
 /// because nothing reads a fixture's allocated output.
 pub(super) fn fixture_mask_format() -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width: 64,
         height: 64,
         sample: SampleFormat::U8,
@@ -65,6 +66,7 @@ pub(super) fn frames_template(chosen: StreamFormat) -> StreamTemplate {
 /// A mask stage emits a mask, so it cannot pass a frames template straight through.
 pub(super) fn mask_template(chosen: StreamFormat) -> StreamTemplate {
     StreamTemplate::Mask(MaskFormat {
+        frame_rate: None,
         width: 64,
         height: 64,
         sample: chosen.sample(),

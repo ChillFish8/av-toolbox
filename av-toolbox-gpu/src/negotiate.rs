@@ -294,6 +294,7 @@ mod tests {
     #[test]
     fn the_sample_can_be_swapped_without_losing_chroma() {
         let format = MaskFormat {
+            frame_rate: None,
             width: 7,
             height: 5,
             sample: SampleFormat::U8,
@@ -314,6 +315,7 @@ mod tests {
     #[test]
     fn a_mask_template_stays_a_mask() {
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 32,
             height: 16,
             sample: SampleFormat::U8,

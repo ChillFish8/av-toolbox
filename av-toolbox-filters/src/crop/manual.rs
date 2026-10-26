@@ -234,6 +234,7 @@ mod tests {
     fn a_mask_is_refused() {
         let capabilities = capabilities();
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 8,
             height: 8,
             sample: SampleFormat::U8,

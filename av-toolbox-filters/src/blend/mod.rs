@@ -300,6 +300,7 @@ mod tests {
 
     fn mask_sample(width: u32, height: u32, sample: SampleFormat) -> StreamFormat {
         StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width,
             height,
             sample,

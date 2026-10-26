@@ -274,6 +274,7 @@ mod tests {
 
     fn masks(count: usize) -> Vec<Option<StreamFormat>> {
         let format = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 4,
             height: 4,
             sample: SampleFormat::U8,

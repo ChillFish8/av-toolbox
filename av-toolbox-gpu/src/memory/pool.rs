@@ -519,6 +519,8 @@ mod tests {
         FrameFormat,
         FrameLayout,
         FrameMeta,
+        FrameRate,
+        HostPool,
         MaskChroma,
         MaskFormat,
         SampleFormat,
@@ -677,6 +679,7 @@ mod tests {
         let pool = pool(allocator.clone());
 
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 32,
             sample: SampleFormat::U8,
@@ -689,8 +692,35 @@ mod tests {
         assert!(mask.chroma_plane().is_none());
     }
 
+    #[test]
+    fn a_mask_keeps_its_frame_rate_across_host_and_device() {
+        let allocator = Arc::new(CountingAllocator::new(64));
+        let pool = pool(allocator);
+        let host_pool = HostPool::new();
+        let frame_rate = FrameRate::new(24000, 1001);
+        let format = MaskFormat {
+            frame_rate,
+            ..plain_mask_format()
+        };
+        let allocated = pool.alloc_mask(&format, FrameMeta::at(0));
+        assert_eq!(allocated.format().frame_rate, frame_rate);
+
+        let host_mask = host_pool.alloc_mask(&format, FrameMeta::at(0)).freeze();
+        assert_eq!(host_mask.format().frame_rate, frame_rate);
+
+        let planes = HostPlanes::zeroed(&StreamFormat::Mask(format));
+        let uploaded = pool
+            .load_mask(0, &format, &planes, FrameMeta::at(0))
+            .expect("the planes match the format");
+        assert_eq!(uploaded.format().frame_rate, frame_rate);
+
+        let with_chroma = pool.add_chroma(uploaded, chroma());
+        assert_eq!(with_chroma.format().frame_rate, frame_rate);
+    }
+
     fn chroma_mask_format() -> MaskFormat {
         MaskFormat {
+            frame_rate: None,
             width: 7,
             height: 5,
             sample: SampleFormat::U8,
@@ -855,6 +885,7 @@ mod tests {
         let allocator = Arc::new(CountingAllocator::new(64));
         let pool = pool(allocator);
         let mask_format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -877,12 +908,14 @@ mod tests {
         let allocator = Arc::new(CountingAllocator::new(64));
         let pool = pool(allocator);
         let short = MaskFormat {
+            frame_rate: None,
             width: 8,
             height: 8,
             sample: SampleFormat::U8,
             chroma: None,
         };
         let target = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -1022,6 +1055,7 @@ mod tests {
     fn an_allocation_past_the_limit_waits_for_a_dropped_frame_to_credit_room() {
         let allocator = Arc::new(CountingAllocator::new(64));
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,

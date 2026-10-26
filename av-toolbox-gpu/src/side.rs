@@ -263,6 +263,7 @@ mod tests {
     fn a_mask_is_not_taken_as_a_frame() {
         let mask = testing_context().alloc_mask(
             &MaskFormat {
+                frame_rate: None,
                 width: 8,
                 height: 8,
                 sample: SampleFormat::U8,

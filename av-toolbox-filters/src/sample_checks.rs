@@ -29,6 +29,7 @@ pub(crate) fn assert_integers_and_floats_accepted_and_mask_refused(
     ];
     let half = frame_format(layout, SampleFormat::F16);
     let mask = StreamFormat::Mask(MaskFormat {
+        frame_rate: None,
         width: 16,
         height: 8,
         sample: SampleFormat::U8,

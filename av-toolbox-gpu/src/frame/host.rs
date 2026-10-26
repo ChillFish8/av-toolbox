@@ -190,6 +190,7 @@ mod tests {
     #[test]
     fn a_mask_has_exactly_one_plane() {
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 32,
             sample: SampleFormat::U8,
@@ -207,6 +208,7 @@ mod tests {
     #[test]
     fn a_mask_with_chroma_answers_luma_with_the_full_plane_and_chroma_with_the_second() {
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 7,
             height: 5,
             sample: SampleFormat::U8,
@@ -231,6 +233,7 @@ mod tests {
     #[test]
     fn a_mask_without_chroma_answers_no_chroma_channel() {
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 7,
             height: 5,
             sample: SampleFormat::U8,

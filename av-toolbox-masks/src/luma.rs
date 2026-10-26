@@ -66,6 +66,7 @@ pub(crate) fn produces_luma_mask(
     let first = chosen.first().copied().flatten();
     let format = bound_frames(stage, first)?;
     let mask = MaskFormat {
+        frame_rate: None,
         width: format.width,
         height: format.height,
         sample: SampleFormat::U8,
@@ -120,6 +121,7 @@ impl Luma {
 
     pub(crate) const fn mask_format(&self) -> MaskFormat {
         MaskFormat {
+            frame_rate: None,
             width: self.width,
             height: self.height,
             sample: SampleFormat::U8,
@@ -305,6 +307,7 @@ mod tests {
         let produced = produces_luma_mask("lines/test", &chosen).expect("yuv is readable");
 
         let expected = MaskFormat {
+            frame_rate: None,
             width: 9,
             height: 7,
             sample: SampleFormat::U8,

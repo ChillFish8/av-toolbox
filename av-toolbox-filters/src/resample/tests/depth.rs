@@ -142,6 +142,7 @@ fn floats_are_accepted_and_masks_refused() {
     let inputs = [Offered::Unknown];
     let float = yuv420(SampleFormat::F32);
     let mask = StreamFormat::Mask(MaskFormat {
+        frame_rate: None,
         width: 16,
         height: 8,
         sample: SampleFormat::U8,

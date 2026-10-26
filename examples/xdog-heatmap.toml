@@ -1,0 +1,39 @@
+# Shows where XDoG detects lines in a video as a heatmap.
+#
+# The picture is the clip in grey. Colour marks the lines, with stronger colour where XDoG is more confident
+# that a pixel is part of a line.
+
+[variable.input]
+type = "path"
+description = "The clip to detect lines in"
+default = "input.mkv"
+
+[variable.style]
+type = "string"
+description = "The colours of the heatmap"
+default = "blue"
+choices = ["blue", "heat"]
+
+[source.input]
+type = "ffms2/file"
+args.path = "{{ input }}"
+
+[mask.lines]
+type = "lines/xdog"
+inputs = ["input"]
+
+[filter.confidence]
+type = "mask/to_frames"
+inputs = ["lines"]
+
+[filter.heatmap]
+type = "blend/heatmap"
+inputs = ["input", "confidence"]
+args.style = "{{ style }}"
+args.scale = 1.0
+args.smooth = false
+args.floor = 0.0
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["heatmap"]

@@ -722,6 +722,7 @@ mod tests {
     #[test]
     fn a_mask_is_one_plane_and_reports_its_dimensions() {
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -735,6 +736,7 @@ mod tests {
 
     fn chroma_mask(chroma: Option<Plane>) -> Mask {
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -751,6 +753,7 @@ mod tests {
 
     fn plain_mask() -> Mask {
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -827,6 +830,7 @@ mod tests {
 
     fn mask_with_chroma_at(subsampling: Subsampling, chroma: Plane) -> Mask {
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -912,6 +916,7 @@ mod tests {
     #[test]
     fn a_frame_and_a_mask_convert_into_stream_items() {
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -1084,6 +1089,7 @@ mod tests {
     #[test]
     fn renumbering_a_mask_leaves_its_chunk_and_timestamp_alone() {
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -1127,6 +1133,7 @@ mod tests {
     #[test]
     fn renumbering_a_stream_item_holding_a_mask_reaches_it() {
         let format = MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,

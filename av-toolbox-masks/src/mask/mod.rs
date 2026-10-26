@@ -55,6 +55,7 @@ pub(crate) fn produces_mask(
     };
 
     let format = MaskFormat {
+        frame_rate: None,
         width,
         height,
         sample: SampleFormat::U8,
@@ -75,6 +76,7 @@ mod tests {
 
     fn mask(width: u32, height: u32, sample: SampleFormat) -> StreamFormat {
         StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width,
             height,
             sample,
@@ -130,6 +132,7 @@ mod tests {
         let produced = produces_mask("mask/test", &chosen).expect("the inputs agree");
 
         let expected = MaskFormat {
+            frame_rate: None,
             width: 7,
             height: 5,
             sample: SampleFormat::U8,

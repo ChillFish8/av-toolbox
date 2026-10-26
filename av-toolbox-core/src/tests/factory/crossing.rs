@@ -7,6 +7,7 @@ use crate::{Crossing, Parallelism, PreparedStage, Residency, StageKind};
 fn a_crossing_passes_its_one_input_through_and_runs_frame_by_frame() {
     let crossing = PreparedStage::Crossing(Crossing::Unload);
     let format = StreamFormat::Mask(av_toolbox_gpu::MaskFormat {
+        frame_rate: None,
         width: 8,
         height: 8,
         sample: av_toolbox_gpu::SampleFormat::U8,

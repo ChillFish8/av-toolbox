@@ -69,6 +69,7 @@ fn capabilities() -> Capabilities {
 
 fn mask_format(width: u32, height: u32) -> StreamFormat {
     StreamFormat::Mask(MaskFormat {
+        frame_rate: None,
         width,
         height,
         sample: SampleFormat::U8,

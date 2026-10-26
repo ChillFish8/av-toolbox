@@ -73,6 +73,7 @@ fn pattern() -> Vec<u8> {
 
 fn mask_format(chroma: Option<MaskChroma>) -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width: WIDTH,
         height: HEIGHT,
         sample: SampleFormat::U8,

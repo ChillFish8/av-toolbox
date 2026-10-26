@@ -652,6 +652,7 @@ fn mask_chroma_for(layout: FrameLayout) -> Option<MaskChroma> {
 
 pub(crate) fn mask_format(format: &FrameFormat) -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width: format.width,
         height: format.height,
         sample: SampleFormat::U8,

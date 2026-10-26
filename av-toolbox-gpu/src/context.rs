@@ -443,6 +443,7 @@ mod tests {
 
     fn mask_format() -> MaskFormat {
         MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,
@@ -624,6 +625,7 @@ mod tests {
         let allocator = Arc::new(CountingAllocator::new(64));
         let context = FrameContext::for_testing(allocator, capabilities());
         let smaller_mask = MaskFormat {
+            frame_rate: None,
             width: 32,
             height: 32,
             sample: SampleFormat::U8,
@@ -971,6 +973,7 @@ mod tests {
         let mask_chroma = chroma();
 
         MaskFormat {
+            frame_rate: None,
             width: 7,
             height: 5,
             sample: SampleFormat::U8,

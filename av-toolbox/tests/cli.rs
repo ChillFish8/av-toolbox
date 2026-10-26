@@ -39,6 +39,7 @@ fn every_example_explains_without_a_device() {
         "image.toml",
         "crop.toml",
         "recolour-lines.toml",
+        "xdog-heatmap.toml",
         "artcnn.toml",
         "deblock-dpir.toml",
         "deblock-h264.toml",

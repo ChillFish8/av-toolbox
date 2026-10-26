@@ -435,6 +435,7 @@ mod tests {
     #[test]
     fn a_mask_is_refused() {
         let offered = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 4,
             height: 2,
             sample: SampleFormat::U8,

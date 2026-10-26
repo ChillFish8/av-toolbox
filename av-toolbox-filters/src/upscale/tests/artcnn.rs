@@ -207,6 +207,7 @@ fn floats_are_left_out_and_a_mask_is_refused() {
     let float_input = format(16, 8, FrameLayout::Grey, SampleFormat::F32);
     let floats = StreamFormat::Frames(float_input);
     let mask = StreamFormat::Mask(MaskFormat {
+        frame_rate: None,
         width: 16,
         height: 8,
         sample: SampleFormat::U8,

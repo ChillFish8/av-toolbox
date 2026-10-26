@@ -156,6 +156,7 @@ fn a_mask_is_refused() {
     let arguments = ExtractArgs { plane: PlaneName::Y };
     let inputs = [Offered::Unknown];
     let mask = StreamFormat::Mask(MaskFormat {
+        frame_rate: None,
         width: 16,
         height: 8,
         sample: SampleFormat::U8,

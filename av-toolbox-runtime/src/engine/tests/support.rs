@@ -42,6 +42,7 @@ pub(crate) fn testing_capabilities() -> Capabilities {
 
 pub(crate) fn mask_format() -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width: 512,
         height: 512,
         sample: SampleFormat::U8,

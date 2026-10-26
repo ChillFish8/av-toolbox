@@ -96,6 +96,7 @@ fn frame() -> Frame {
 
 fn mask() -> Mask {
     let format = MaskFormat {
+        frame_rate: None,
         width: 4,
         height: 4,
         sample: SampleFormat::U8,

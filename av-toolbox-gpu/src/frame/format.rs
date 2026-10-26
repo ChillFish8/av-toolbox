@@ -217,6 +217,8 @@ pub struct MaskFormat {
     pub sample: SampleFormat,
     /// The chroma plane this mask carries, `None` when it has only the full plane.
     pub chroma: Option<MaskChroma>,
+    /// How many masks a second the stream carries, when known.
+    pub frame_rate: Option<FrameRate>,
 }
 
 impl MaskFormat {
@@ -431,6 +433,7 @@ mod tests {
     #[test]
     fn a_mask_is_one_plane_at_its_own_dimensions() {
         let mask = MaskFormat {
+            frame_rate: None,
             width: 1920,
             height: 1080,
             sample: SampleFormat::U8,
@@ -460,6 +463,7 @@ mod tests {
     #[test]
     fn a_stream_format_sizes_either_kind() {
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 32,
             sample: SampleFormat::U8,
@@ -477,6 +481,7 @@ mod tests {
     fn a_stream_format_reports_which_kind_it_is() {
         let frames = StreamFormat::Frames(yuv420(SampleFormat::U8));
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 8,
             height: 8,
             sample: SampleFormat::U8,
@@ -488,6 +493,7 @@ mod tests {
         assert_eq!(mask.dimensions(), (8, 8));
 
         let wide = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 8,
             height: 8,
             sample: SampleFormat::U16 { depth: Depth::TEN },
@@ -501,6 +507,7 @@ mod tests {
         let inner = yuv420(SampleFormat::U8);
         let frames = StreamFormat::Frames(inner);
         let mask_format = MaskFormat {
+            frame_rate: None,
             width: 8,
             height: 8,
             sample: SampleFormat::U8,
@@ -516,6 +523,7 @@ mod tests {
 
     fn chroma_mask(width: u32, height: u32, subsampling: Subsampling) -> MaskFormat {
         MaskFormat {
+            frame_rate: None,
             width,
             height,
             sample: SampleFormat::U8,
@@ -601,6 +609,7 @@ mod tests {
         assert_eq!(frames.to_string(), "1920x1080 yuv 4:2:0 u8");
 
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 32,
             sample: SampleFormat::U8,

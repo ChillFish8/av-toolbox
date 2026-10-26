@@ -64,6 +64,7 @@ fn frames_format() -> StreamFormat {
 
 fn mask_format(width: u32, height: u32) -> StreamFormat {
     StreamFormat::Mask(MaskFormat {
+        frame_rate: None,
         width,
         height,
         sample: SampleFormat::U8,
@@ -225,6 +226,7 @@ fn a_host_frame_keeps_its_bytes_and_place_through_an_upload_and_unload() {
 
 fn chroma_mask_format() -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width: 37,
         height: 23,
         sample: SampleFormat::U8,

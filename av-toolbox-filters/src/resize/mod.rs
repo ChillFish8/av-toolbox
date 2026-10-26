@@ -337,6 +337,7 @@ mod tests {
         let capabilities = capabilities();
         let arguments = args(json!({ "width": 8, "height": 8 }));
         let mask = StreamFormat::Mask(MaskFormat {
+            frame_rate: None,
             width: 8,
             height: 8,
             sample: SampleFormat::U8,

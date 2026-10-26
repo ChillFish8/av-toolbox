@@ -29,6 +29,7 @@ fn copy_values(input: &Array<u32>, output: &mut Array<u32>) {
 
 fn mask_format() -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width: 256,
         height: 64,
         sample: SampleFormat::U8,
@@ -39,6 +40,7 @@ fn mask_format() -> MaskFormat {
 /// A smaller mask than [mask_format], so the pool never hands one out in place of the other.
 fn copy_format() -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width: 128,
         height: 64,
         sample: SampleFormat::U8,

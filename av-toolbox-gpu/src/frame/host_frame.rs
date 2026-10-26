@@ -374,6 +374,7 @@ mod tests {
 
     fn mask_format() -> MaskFormat {
         MaskFormat {
+            frame_rate: None,
             width: 64,
             height: 64,
             sample: SampleFormat::U8,

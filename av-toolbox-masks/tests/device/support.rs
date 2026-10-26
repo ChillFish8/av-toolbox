@@ -41,6 +41,7 @@ pub fn backend() -> Backend {
 
 pub fn mask_format(width: u32, height: u32) -> MaskFormat {
     MaskFormat {
+        frame_rate: None,
         width,
         height,
         sample: SampleFormat::U8,

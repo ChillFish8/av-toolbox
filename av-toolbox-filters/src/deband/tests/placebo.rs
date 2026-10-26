@@ -340,6 +340,7 @@ fn floats_are_left_out_and_masks_refused() {
         ..input
     });
     let mask = StreamFormat::Mask(MaskFormat {
+        frame_rate: None,
         width: 16,
         height: 8,
         sample: SampleFormat::U8,
