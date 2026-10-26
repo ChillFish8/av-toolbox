@@ -30,6 +30,11 @@ pub(crate) fn produces_mask(
     chosen: &[Option<StreamFormat>],
 ) -> Result<OutputFormats, StageError> {
     let mut dimensions: Option<(u32, u32)> = None;
+    let frame_rate = chosen
+        .iter()
+        .flatten()
+        .find_map(|format| format.as_mask())
+        .and_then(|mask| mask.frame_rate);
 
     for format in chosen.iter().flatten() {
         let current = format.dimensions();
@@ -55,7 +60,7 @@ pub(crate) fn produces_mask(
     };
 
     let format = MaskFormat {
-        frame_rate: None,
+        frame_rate,
         width,
         height,
         sample: SampleFormat::U8,
@@ -70,7 +75,7 @@ pub(crate) fn produces_mask(
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{ColourInfo, Depth, FrameFormat, FrameLayout};
+    use av_toolbox_gpu::{ColourInfo, Depth, FrameFormat, FrameLayout, FrameRate};
 
     use super::*;
 
@@ -140,6 +145,26 @@ mod tests {
         };
         assert_eq!(produced.template, StreamTemplate::Mask(expected));
         assert_eq!(produced.samples, FormatSet::of([SampleFormat::U8]));
+    }
+
+    #[test]
+    fn a_combined_mask_keeps_its_first_inputs_rate() {
+        let rate = FrameRate::new(30, 1);
+        let StreamFormat::Mask(plain) = mask(7, 5, SampleFormat::U8) else {
+            unreachable!("mask builds masks");
+        };
+        let rated = StreamFormat::Mask(MaskFormat {
+            frame_rate: rate,
+            ..plain
+        });
+        let chosen = [Some(rated), Some(rated)];
+
+        let produced = produces_mask("mask/test", &chosen).expect("the inputs agree");
+
+        let StreamTemplate::Mask(output) = produced.template else {
+            panic!("expected a mask template");
+        };
+        assert_eq!(output.frame_rate, rate);
     }
 
     #[test]

@@ -186,7 +186,7 @@ fn checked_output(args: &ToFramesArgs, chosen: &[Option<StreamFormat>]) -> Resul
         layout: FrameLayout::Grey,
         sample: SampleFormat::F32,
         colour,
-        frame_rate: None,
+        frame_rate: mask.frame_rate,
         field_order: None,
     })
 }
@@ -276,7 +276,7 @@ impl<R: Runtime> Filter for MaskToFrames<R> {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{ChromaLocation, Depth, MaskChroma, Subsampling};
+    use av_toolbox_gpu::{ChromaLocation, Depth, FrameRate, MaskChroma, Subsampling};
 
     use super::*;
 
@@ -332,6 +332,23 @@ mod tests {
         let refused = accepts_mask(offered);
 
         assert!(refused.is_err());
+    }
+
+    #[test]
+    fn the_frames_run_at_the_masks_rate() {
+        let rate = FrameRate::new(24000, 1001);
+        let StreamFormat::Mask(plain) = mask(12, 6, SampleFormat::U8, None) else {
+            unreachable!("mask builds masks");
+        };
+        let rated = MaskFormat {
+            frame_rate: rate,
+            ..plain
+        };
+        let chosen = [Some(StreamFormat::Mask(rated))];
+
+        let output = checked_output(&args(MaskPlane::Full), &chosen).expect("the mask is readable");
+
+        assert_eq!(output.frame_rate, rate);
     }
 
     #[test]

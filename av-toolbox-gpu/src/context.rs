@@ -373,6 +373,7 @@ mod tests {
         ColourInfo,
         FrameBudget,
         FrameLayout,
+        FrameRate,
         HostStreamItem,
         LayerId,
         MetaRecord,
@@ -1011,6 +1012,22 @@ mod tests {
         assert_eq!(chroma_plane.dimensions(), (4, 3));
         assert_eq!(with_chroma.format().chroma, Some(mask_chroma));
         assert_eq!(with_chroma.meta().index, 2);
+    }
+
+    #[test]
+    fn a_mask_given_chroma_keeps_its_rate() {
+        let (_allocator, context) = counting_context();
+        let rate = FrameRate::new(24000, 1001);
+        let plain = MaskFormat {
+            frame_rate: rate,
+            chroma: None,
+            ..chroma_mask_format()
+        };
+
+        let mask = context.alloc_mask(&plain, FrameMeta::at(0));
+        let with_chroma = context.add_chroma(mask, chroma());
+
+        assert_eq!(with_chroma.format().frame_rate, rate);
     }
 
     #[test]

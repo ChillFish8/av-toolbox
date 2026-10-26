@@ -6,6 +6,7 @@ use av_toolbox_gpu::{
     Frame,
     FrameFormat,
     FrameLayout,
+    FrameRate,
     MaskFormat,
     OutputFormats,
     ResolvedFormats,
@@ -66,7 +67,7 @@ pub(crate) fn produces_luma_mask(
     let first = chosen.first().copied().flatten();
     let format = bound_frames(stage, first)?;
     let mask = MaskFormat {
-        frame_rate: None,
+        frame_rate: format.frame_rate,
         width: format.width,
         height: format.height,
         sample: SampleFormat::U8,
@@ -84,6 +85,7 @@ pub(crate) fn produces_luma_mask(
 pub(crate) struct Luma {
     pub(crate) width: u32,
     pub(crate) height: u32,
+    frame_rate: Option<FrameRate>,
     /// The largest sample value, which maps to 1.
     largest: f32,
     wide: bool,
@@ -110,6 +112,7 @@ impl Luma {
         Ok(Self {
             width: format.width,
             height: format.height,
+            frame_rate: format.frame_rate,
             largest,
             wide,
         })
@@ -121,7 +124,7 @@ impl Luma {
 
     pub(crate) const fn mask_format(&self) -> MaskFormat {
         MaskFormat {
-            frame_rate: None,
+            frame_rate: self.frame_rate,
             width: self.width,
             height: self.height,
             sample: SampleFormat::U8,
@@ -251,7 +254,7 @@ pub(crate) fn binarize_threshold(fraction: f32, peak: f32) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{ColourInfo, Subsampling};
+    use av_toolbox_gpu::{ColourInfo, FrameRate, Subsampling};
 
     use super::*;
 
@@ -314,6 +317,52 @@ mod tests {
             chroma: None,
         };
         assert_eq!(produced.template, StreamTemplate::Mask(expected));
+    }
+
+    fn rated_frames(frame_rate: Option<FrameRate>) -> StreamFormat {
+        let layout = FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv420,
+        };
+        let StreamFormat::Frames(format) = frames(layout, SampleFormat::U8) else {
+            unreachable!("frames builds frames");
+        };
+
+        StreamFormat::Frames(FrameFormat { frame_rate, ..format })
+    }
+
+    #[test]
+    fn a_luma_mask_runs_at_its_frames_rate() {
+        let rate = FrameRate::new(24000, 1001);
+        let chosen = [Some(rated_frames(rate))];
+
+        let produced = produces_luma_mask("lines/test", &chosen).expect("yuv is readable");
+
+        let StreamTemplate::Mask(mask) = produced.template else {
+            panic!("expected a mask template");
+        };
+        assert_eq!(mask.frame_rate, rate);
+    }
+
+    #[test]
+    fn a_luma_mask_of_rateless_frames_has_no_rate() {
+        let chosen = [Some(rated_frames(None))];
+
+        let produced = produces_luma_mask("lines/test", &chosen).expect("yuv is readable");
+
+        let StreamTemplate::Mask(mask) = produced.template else {
+            panic!("expected a mask template");
+        };
+        assert_eq!(mask.frame_rate, None);
+    }
+
+    #[test]
+    fn the_luma_mask_format_keeps_the_frames_rate() {
+        let rate = FrameRate::new(24000, 1001);
+        let resolved = ResolvedFormats::new(vec![Some(rated_frames(rate))], None);
+
+        let luma = Luma::from_formats("lines/test", &resolved).expect("yuv is readable");
+
+        assert_eq!(luma.mask_format().frame_rate, rate);
     }
 
     #[test]
