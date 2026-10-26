@@ -15,7 +15,9 @@ use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::depth::{
     Conversion,
     DepthPlanes,
+    Destination,
     Pattern,
+    Source,
     Thresholds,
     convert,
     plane_shift,
@@ -62,12 +64,30 @@ pub(crate) enum Dither {
     BlueNoise,
 }
 
+/// The float sample format a clip can be converted to.
+#[derive(Debug, Deserialize, JsonSchema, Copy, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FloatTarget {
+    F32,
+}
+
+/// The sample format a clip is converted to.
+#[derive(Debug, Deserialize, JsonSchema, Copy, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub(crate) enum DepthTarget {
+    Bits(u8),
+    Float(FloatTarget),
+}
+
 /// Arguments for `resample/depth`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DepthArgs {
-    /// The output bit depth, between 8 and 16.
-    pub(crate) depth: u8,
+    /// The output depth, between 8 and 16, or `"f32"`.
+    pub(crate) depth: DepthTarget,
+    /// Whether any deeper integer depth the reader takes will do.
+    #[serde(default)]
+    pub(crate) at_least: bool,
     /// How a lowered depth rounds.
     #[serde(default)]
     pub(crate) dither: Dither,
@@ -91,8 +111,20 @@ fn missing_channel(stage: &str) -> StageError {
     StageError::msg(message)
 }
 
+fn missing_output(stage: &str) -> StageError {
+    let message = format!("{stage} was built without a frame output format");
+
+    StageError::msg(message)
+}
+
 fn bad_depth(stage: &str, depth: u8) -> StageError {
     let message = format!("{stage} needs depth between 8 and 16, got {depth}");
+
+    StageError::msg(message)
+}
+
+fn float_floor(stage: &str) -> StageError {
+    let message = format!("{stage} takes at_least only with an integer depth");
 
     StageError::msg(message)
 }
@@ -121,6 +153,43 @@ pub(super) fn target_sample(stage: &str, depth: u8) -> Result<SampleFormat, Stag
     };
 
     Ok(SampleFormat::U16 { depth })
+}
+
+/// The sample formats `args` lets the output take, narrowest first.
+///
+/// With `at_least`, every integer depth from the one asked for up to 16 will do.
+fn offered_samples(args: &DepthArgs) -> Result<Vec<SampleFormat>, StageError> {
+    let depth = match args.depth {
+        DepthTarget::Float(FloatTarget::F32) if args.at_least => return Err(float_floor(STAGE)),
+        DepthTarget::Float(FloatTarget::F32) => return Ok(vec![SampleFormat::F32]),
+        DepthTarget::Bits(depth) => depth,
+    };
+
+    let target = target_sample(STAGE, depth)?;
+    if !args.at_least {
+        return Ok(vec![target]);
+    }
+
+    let mut samples = vec![target];
+    for deeper in depth + 1..=16 {
+        let sample = target_sample(STAGE, deeper)?;
+        samples.push(sample);
+    }
+
+    Ok(samples)
+}
+
+/// The output format the solver settled on.
+fn settled_output(stage: &str, formats: &ResolvedFormats) -> Result<FrameFormat, StageError> {
+    let Some(output) = formats.output() else {
+        return Err(missing_output(stage));
+    };
+
+    let Some(format) = output.as_frames() else {
+        return Err(missing_output(stage));
+    };
+
+    Ok(*format)
 }
 
 /// The thresholds a conversion rounds through.
@@ -153,8 +222,9 @@ impl StageDefinition for Depth {
     }
 
     fn description() -> &'static str {
-        "Converts a clip to a different bit depth, dithering when the depth is lowered.\n\n\
-         A float clip is read as running between 0 and 1, so 1 becomes the largest output value."
+        "Converts a clip to a different bit depth or to float, dithering when the depth is lowered.\n\n\
+         A float clip is full range, running between 0 and 1. It returns to the range it is labelled \
+         with when it becomes integers again."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -191,13 +261,16 @@ impl FilterDefinition for Depth {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(STAGE, chosen)?;
-        let target = target_sample(STAGE, args.depth)?;
-        let output = converted_format(input, target);
+        let samples = offered_samples(args)?;
+        let output = FrameFormat {
+            sample: samples[0],
+            ..input
+        };
         let format = StreamFormat::Frames(output);
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([target]),
+            samples: FormatSet::of(samples),
         })
     }
 
@@ -209,8 +282,8 @@ impl FilterDefinition for Depth {
     ) -> Result<Box<dyn Filter>, StageError> {
         let inputs = formats.inputs();
         let input = checked_input(STAGE, inputs)?;
-        let target = target_sample(STAGE, args.depth)?;
-        let converter = converter(context, STAGE, input, target, args.dither);
+        let output = settled_output(STAGE, formats)?;
+        let converter = converter(context, STAGE, input, output.sample, args.dither);
 
         Ok(converter)
     }
@@ -224,11 +297,13 @@ pub(super) fn converter<R: Runtime>(
     target: SampleFormat,
     dither: Dither,
 ) -> Box<dyn Filter> {
-    let output = converted_format(input, target);
+    let output = FrameFormat {
+        sample: target,
+        ..input
+    };
     let identity = input.sample == output.sample;
 
-    let output_bits = bits_of(output.sample);
-    let plan = plan_conversion(input, output_bits);
+    let plan = plan_conversion(input, target);
     let thresholds = thresholds(dither, plan.lowering);
     let client = context.client().clone();
     let pattern = upload_pattern(&client, &thresholds);
@@ -245,22 +320,6 @@ pub(super) fn converter<R: Runtime>(
     Box::new(converter)
 }
 
-/// The format of `input` converted to `target`.
-///
-/// Float samples are always full range, so a float clip comes out labelled full range.
-fn converted_format(input: FrameFormat, target: SampleFormat) -> FrameFormat {
-    let mut output = FrameFormat {
-        sample: target,
-        ..input
-    };
-
-    if input.sample == SampleFormat::F32 {
-        output.colour.range = ColourRange::Full;
-    }
-
-    output
-}
-
 /// How each plane of a clip changes depth.
 struct ConversionPlan {
     conversion: Conversion,
@@ -268,14 +327,50 @@ struct ConversionPlan {
     lowering: bool,
 }
 
-/// The conversions from `input` to `output_bits`, and whether they lose precision.
+/// The integer range a clip labelled `range` uses. Anything not labelled full range is limited.
+fn sample_range(range: ColourRange) -> SampleRange {
+    match range {
+        ColourRange::Full => SampleRange::Full,
+        _ => SampleRange::Limited,
+    }
+}
+
+/// A conversion handing float samples back unchanged.
+fn float_identity() -> Conversion {
+    Conversion {
+        input: Source::F32,
+        output: Destination::F32,
+        multiplier: 1.0,
+        offset: 0.0,
+        divisor: 1.0,
+        largest: 1.0,
+    }
+}
+
+/// The conversions from `input` to `output`, and whether they lose precision.
 ///
-/// Float chroma is centred on zero, so it takes its own conversion. Float samples always lose
-/// precision when they become integers.
-fn plan_conversion(input: FrameFormat, output_bits: u32) -> ConversionPlan {
-    if input.sample == SampleFormat::F32 {
-        let conversion = Conversion::from_float(output_bits, SampleRange::Full, false);
-        let chroma_conversion = Conversion::from_float(output_bits, SampleRange::Full, true);
+/// Float samples are full range and centre chroma on zero, so the clip's range label decides how
+/// integers stretch into floats and back, and chroma takes its own conversion. Float samples always
+/// lose precision when they become integers.
+fn plan_conversion(input: FrameFormat, output: SampleFormat) -> ConversionPlan {
+    let range = sample_range(input.colour.range);
+    let input_float = input.sample == SampleFormat::F32;
+    let output_float = output == SampleFormat::F32;
+
+    if input_float && output_float {
+        let conversion = float_identity();
+
+        return ConversionPlan {
+            conversion,
+            chroma_conversion: conversion,
+            lowering: false,
+        };
+    }
+
+    if input_float {
+        let output_bits = bits_of(output);
+        let conversion = Conversion::from_float(output_bits, range, false);
+        let chroma_conversion = Conversion::from_float(output_bits, range, true);
 
         return ConversionPlan {
             conversion,
@@ -285,7 +380,19 @@ fn plan_conversion(input: FrameFormat, output_bits: u32) -> ConversionPlan {
     }
 
     let input_bits = bits_of(input.sample);
-    let full_range = input.colour.range == ColourRange::Full;
+    if output_float {
+        let conversion = Conversion::to_float(input_bits, range, false);
+        let chroma_conversion = Conversion::to_float(input_bits, range, true);
+
+        return ConversionPlan {
+            conversion,
+            chroma_conversion,
+            lowering: false,
+        };
+    }
+
+    let output_bits = bits_of(output);
+    let full_range = range == SampleRange::Full;
     let conversion = Conversion::new(input_bits, output_bits, full_range);
 
     ConversionPlan {

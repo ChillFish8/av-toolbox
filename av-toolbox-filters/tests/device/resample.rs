@@ -128,14 +128,14 @@ fn a_float_frame_centres_its_chroma() {
     let layout = FrameLayout::Yuv {
         subsampling: Subsampling::Yuv420,
     };
-    let input = frame(32, 16, layout, SampleFormat::F32, ChromaLocation::Left);
+    let float = frame(32, 16, layout, SampleFormat::F32, ChromaLocation::Left);
     let colour = ColourInfo {
         range: ColourRange::Full,
-        ..input.colour
+        ..float.colour
     };
+    let input = FrameFormat { colour, ..float };
     let output = FrameFormat {
         sample: SampleFormat::U8,
-        colour,
         ..input
     };
     let args = json!({ "depth": 8, "dither": "none" });
@@ -156,6 +156,55 @@ fn a_float_frame_centres_its_chroma() {
 
         assert_within_one(&converted[index], &expected, &label);
     }
+}
+
+fn limited_grey(sample: SampleFormat) -> FrameFormat {
+    let grey = frame(16, 16, FrameLayout::Grey, sample, ChromaLocation::Left);
+    let colour = ColourInfo {
+        range: ColourRange::Limited,
+        ..grey.colour
+    };
+
+    FrameFormat { colour, ..grey }
+}
+
+#[test]
+fn an_eight_bit_round_trip_through_float_matches_a_direct_shift() {
+    let eight_bit = limited_grey(SampleFormat::U8);
+    let float = limited_grey(SampleFormat::F32);
+    let ten_bit = limited_grey(SampleFormat::U16 { depth: Depth::TEN });
+    let raised = json!({ "depth": "f32" });
+    let lowered = json!({ "depth": 10, "dither": "none" });
+
+    let levels = [16u8, 128, 235];
+    let plane: Vec<u8> = (0..16 * 16).map(|index| levels[index % 3]).collect();
+    let planes = vec![plane];
+
+    let floats = run_once("resample/depth", eight_bit, float, raised, &planes);
+    let round_trip = run_once("resample/depth", float, ten_bit, lowered.clone(), &floats);
+    let direct = run_once("resample/depth", eight_bit, ten_bit, lowered, &planes);
+
+    let round_trip = unwiden(&round_trip[0]);
+    let direct = unwiden(&direct[0]);
+
+    assert_eq!(round_trip, direct);
+    assert_eq!(&round_trip[..3], [64, 512, 940]);
+}
+
+#[test]
+fn build_converts_to_the_settled_sample() {
+    let input = limited_grey(SampleFormat::U8);
+    let twelve_bit = Depth::new(12).expect("valid");
+    let output = limited_grey(SampleFormat::U16 { depth: twelve_bit });
+    let args = json!({ "depth": 10, "at_least": true });
+
+    let planes = eight_bit_values(&input);
+    let converted = run_once("resample/depth", input, output, args, &planes);
+
+    let expected: Vec<u16> = planes[0].iter().map(|value| u16::from(*value) << 4).collect();
+    let actual = unwiden(&converted[0]);
+
+    assert_eq!(actual, expected);
 }
 
 #[test]
