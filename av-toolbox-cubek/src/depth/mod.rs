@@ -41,15 +41,34 @@ impl From<Element> for Source {
     }
 }
 
+/// How the samples a conversion writes are stored.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Destination {
+    U8,
+    U16,
+    F32,
+}
+
+impl From<Element> for Destination {
+    fn from(element: Element) -> Self {
+        match element {
+            Element::U8 => Self::U8,
+            Element::U16 => Self::U16,
+        }
+    }
+}
+
 /// Everything one change of depth needs besides its rounding.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Conversion {
     pub input: Source,
-    pub output: Element,
-    /// What each input sample is multiplied by before rounding.
+    pub output: Destination,
+    /// What each input sample is multiplied by.
     pub multiplier: f32,
     /// What is added to each sample after multiplying.
     pub offset: f32,
+    /// What each sample is divided by after the offset. It is 1 unless the output is `F32`.
+    pub divisor: f32,
     /// The largest output sample.
     pub largest: f32,
 }
@@ -74,33 +93,59 @@ impl Conversion {
 
         Self {
             input: Source::from(input),
-            output: Element::for_bits(output_bits),
+            output: Destination::from(Element::for_bits(output_bits)),
             multiplier,
             offset: 0.0,
+            divisor: 1.0,
             largest: output_peak,
         }
     }
 
-    /// A change from full range float samples to full range `output_bits`.
+    /// A change from full range float samples to `output_bits` integers in `range`.
     ///
     /// Float samples run between 0 and 1, or between -0.5 and 0.5 for `chroma`, which is centred on
     /// the middle output value. A NaN sample reads as 0.
-    pub fn from_float(output_bits: u32, chroma: bool) -> Self {
-        let output = Element::for_bits(output_bits);
-        let samples = match output {
-            Element::U8 => MatrixSamples::U8,
-            Element::U16 => MatrixSamples::U16 { bits: output_bits },
-        };
-        let (offset, scale) = scaling(samples, SampleRange::Full, chroma);
+    pub fn from_float(output_bits: u32, range: SampleRange, chroma: bool) -> Self {
+        let element = Element::for_bits(output_bits);
+        let samples = integer_samples(element, output_bits);
+        let (offset, scale) = scaling(samples, range, chroma);
         let output_peak = ((1u32 << output_bits) - 1) as f32;
 
         Self {
             input: Source::F32,
-            output,
+            output: Destination::from(element),
             multiplier: scale as f32,
             offset: offset as f32,
+            divisor: 1.0,
             largest: output_peak,
         }
+    }
+
+    /// A change from `input_bits` integers in `range` to full range float samples.
+    ///
+    /// Floats run between 0 and 1, or between -0.5 and 0.5 for `chroma`. The result is neither
+    /// rounded nor clamped. Dividing by the range's span, rather than multiplying by its
+    /// inverse, keeps black and white exactly on 0 and 1.
+    pub fn to_float(input_bits: u32, range: SampleRange, chroma: bool) -> Self {
+        let element = Element::for_bits(input_bits);
+        let samples = integer_samples(element, input_bits);
+        let (offset, scale) = scaling(samples, range, chroma);
+
+        Self {
+            input: Source::from(element),
+            output: Destination::F32,
+            multiplier: 1.0,
+            offset: -offset as f32,
+            divisor: scale as f32,
+            largest: 1.0,
+        }
+    }
+}
+
+fn integer_samples(element: Element, bits: u32) -> MatrixSamples {
+    match element {
+        Element::U8 => MatrixSamples::U8,
+        Element::U16 => MatrixSamples::U16 { bits },
     }
 }
 
@@ -111,6 +156,11 @@ pub fn convert_sample(value: f32, conversion: &Conversion, threshold: f32) -> u1
     let rounded = (scaled + threshold).floor();
 
     rounded.clamp(0.0, conversion.largest) as u16
+}
+
+/// Converts one sample to a float on the CPU, exactly as the kernel does.
+pub fn convert_to_float_sample(value: f32, conversion: &Conversion) -> f32 {
+    (value * conversion.multiplier + conversion.offset) / conversion.divisor
 }
 
 /// A threshold grid on the device.
@@ -178,6 +228,22 @@ fn convert_depth<I: Numeric, O: Int>(
     output[ABSOLUTE_POS] = O::cast_from(f32::clamp(rounded, 0.0, largest));
 }
 
+#[cube(launch_unchecked)]
+fn convert_to_float<I: Numeric>(
+    input: &Array<I>,
+    output: &mut Array<f32>,
+    multiplier: f32,
+    offset: f32,
+    divisor: f32,
+) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let value = f32::cast_from(input[ABSOLUTE_POS]);
+    output[ABSOLUTE_POS] = (value * multiplier + offset) / divisor;
+}
+
 /// Converts `planes.input` into `planes.output`, rounding through `pattern` moved by `shift`.
 pub fn convert<R: Runtime>(
     client: &ComputeClient<R>,
@@ -188,24 +254,54 @@ pub fn convert<R: Runtime>(
     shift: Shift,
 ) {
     match (conversion.input, conversion.output) {
-        (Source::U8, Element::U8) => {
+        (Source::U8, Destination::U8) => {
             launch::<u8, u8, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Source::U8, Element::U16) => {
+        (Source::U8, Destination::U16) => {
             launch::<u8, u16, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Source::U16, Element::U8) => {
+        (Source::U16, Destination::U8) => {
             launch::<u16, u8, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Source::U16, Element::U16) => {
+        (Source::U16, Destination::U16) => {
             launch::<u16, u16, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Source::F32, Element::U8) => {
+        (Source::F32, Destination::U8) => {
             launch::<f32, u8, R>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Source::F32, Element::U16) => {
+        (Source::F32, Destination::U16) => {
             launch::<f32, u16, R>(client, dispatch, planes, conversion, pattern, shift)
         },
+        (Source::U8, Destination::F32) => launch_to_float::<u8, R>(client, dispatch, planes, conversion),
+        (Source::U16, Destination::F32) => launch_to_float::<u16, R>(client, dispatch, planes, conversion),
+        (Source::F32, Destination::F32) => launch_to_float::<f32, R>(client, dispatch, planes, conversion),
+    }
+}
+
+fn launch_to_float<I: Numeric, R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: DepthPlanes<'_>,
+    conversion: &Conversion,
+) {
+    let input = planes.input.array::<R>();
+    let output = planes.output.array::<R>();
+    let samples = planes.output.samples();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the input and output hold the same number of samples of `I` and `f32`.
+    unsafe {
+        convert_to_float::launch_unchecked::<I, R>(
+            client,
+            cubes,
+            unit,
+            input,
+            output,
+            conversion.multiplier,
+            conversion.offset,
+            conversion.divisor,
+        );
     }
 }
 

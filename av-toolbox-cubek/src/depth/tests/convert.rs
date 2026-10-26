@@ -1,4 +1,5 @@
-use crate::depth::{Conversion, Element, Source, convert_sample};
+use crate::depth::{Conversion, Destination, Source, convert_sample, convert_to_float_sample};
+use crate::matrix::SampleRange;
 
 fn through(value: u16, conversion: &Conversion) -> u16 {
     let value = f32::from(value);
@@ -53,27 +54,27 @@ fn eight_bits_is_stored_as_u8_and_more_as_u16() {
     let conversion = Conversion::new(8, 12, false);
 
     assert_eq!(conversion.input, Source::U8);
-    assert_eq!(conversion.output, Element::U16);
+    assert_eq!(conversion.output, Destination::U16);
     assert_eq!(conversion.largest, 4095.0);
 }
 
 #[test]
 fn floats_stretch_one_to_the_largest_value() {
-    let eight_bit = Conversion::from_float(8, false);
-    let ten_bit = Conversion::from_float(10, false);
+    let eight_bit = Conversion::from_float(8, SampleRange::Full, false);
+    let ten_bit = Conversion::from_float(10, SampleRange::Full, false);
 
     assert_eq!(eight_bit.input, Source::F32);
-    assert_eq!(eight_bit.output, Element::U8);
+    assert_eq!(eight_bit.output, Destination::U8);
     assert_eq!(through_float(0.0, &eight_bit), 0);
     assert_eq!(through_float(1.0, &eight_bit), 255);
-    assert_eq!(ten_bit.output, Element::U16);
+    assert_eq!(ten_bit.output, Destination::U16);
     assert_eq!(through_float(1.0, &ten_bit), 1023);
 }
 
 #[test]
 fn float_chroma_centres_zero_on_the_middle_value() {
-    let eight_bit = Conversion::from_float(8, true);
-    let ten_bit = Conversion::from_float(10, true);
+    let eight_bit = Conversion::from_float(8, SampleRange::Full, true);
+    let ten_bit = Conversion::from_float(10, SampleRange::Full, true);
 
     assert_eq!(through_float(0.0, &eight_bit), 128);
     assert_eq!(through_float(-0.5, &eight_bit), 1);
@@ -83,7 +84,7 @@ fn float_chroma_centres_zero_on_the_middle_value() {
 
 #[test]
 fn floats_outside_the_range_clamp() {
-    let conversion = Conversion::from_float(8, false);
+    let conversion = Conversion::from_float(8, SampleRange::Full, false);
 
     assert_eq!(through_float(-0.5, &conversion), 0);
     assert_eq!(through_float(1.5, &conversion), 255);
@@ -91,9 +92,47 @@ fn floats_outside_the_range_clamp() {
 
 #[test]
 fn a_nan_float_reads_as_zero() {
-    let luma = Conversion::from_float(8, false);
-    let chroma = Conversion::from_float(8, true);
+    let luma = Conversion::from_float(8, SampleRange::Full, false);
+    let chroma = Conversion::from_float(8, SampleRange::Full, true);
 
     assert_eq!(through_float(f32::NAN, &luma), 0);
     assert_eq!(through_float(f32::NAN, &chroma), 128);
+}
+
+#[test]
+fn limited_luma_stretches_to_full_range_floats() {
+    let conversion = Conversion::to_float(8, SampleRange::Limited, false);
+
+    assert_eq!(convert_to_float_sample(16.0, &conversion), 0.0);
+    assert_eq!(convert_to_float_sample(235.0, &conversion), 1.0);
+}
+
+#[test]
+fn limited_chroma_centres_on_zero_as_a_float() {
+    let conversion = Conversion::to_float(10, SampleRange::Limited, true);
+
+    assert_eq!(convert_to_float_sample(512.0, &conversion), 0.0);
+}
+
+#[test]
+fn a_float_round_trip_lands_where_a_shift_would() {
+    let widen = Conversion::to_float(8, SampleRange::Limited, false);
+    let narrow = Conversion::from_float(10, SampleRange::Limited, false);
+    let shift = Conversion::new(8, 10, false);
+
+    for code in [16.0, 128.0, 235.0] {
+        let float = convert_to_float_sample(code, &widen);
+        let through_float = convert_sample(float, &narrow, 0.5);
+        let shifted = convert_sample(code, &shift, 0.5);
+
+        assert_eq!(through_float, shifted);
+    }
+}
+
+#[test]
+fn full_range_floats_compress_into_limited_range() {
+    let conversion = Conversion::from_float(10, SampleRange::Limited, false);
+
+    assert_eq!(convert_sample(1.0, &conversion, 0.5), 940);
+    assert_eq!(convert_sample(0.0, &conversion, 0.5), 64);
 }

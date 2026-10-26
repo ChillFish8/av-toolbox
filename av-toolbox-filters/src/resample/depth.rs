@@ -21,6 +21,7 @@ use av_toolbox_cubek::depth::{
     plane_shift,
     upload_pattern,
 };
+use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -273,8 +274,8 @@ struct ConversionPlan {
 /// precision when they become integers.
 fn plan_conversion(input: FrameFormat, output_bits: u32) -> ConversionPlan {
     if input.sample == SampleFormat::F32 {
-        let conversion = Conversion::from_float(output_bits, false);
-        let chroma_conversion = Conversion::from_float(output_bits, true);
+        let conversion = Conversion::from_float(output_bits, SampleRange::Full, false);
+        let chroma_conversion = Conversion::from_float(output_bits, SampleRange::Full, true);
 
         return ConversionPlan {
             conversion,

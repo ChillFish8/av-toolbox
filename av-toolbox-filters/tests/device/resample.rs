@@ -148,7 +148,7 @@ fn a_float_frame_centres_its_chroma() {
     for (index, channel) in input.channels().iter().enumerate() {
         let (width, _) = input.channel_dimensions(*channel).expect("carried");
         let chroma = matches!(channel, Channel::U | Channel::V);
-        let conversion = Conversion::from_float(8, chroma);
+        let conversion = Conversion::from_float(8, SampleRange::Full, chroma);
         let shift = plane_shift(index as u32);
         let expected = reference_float_depth(&values[index], width, &conversion, &thresholds, shift);
         let expected: Vec<u8> = expected.iter().map(|value| *value as u8).collect();

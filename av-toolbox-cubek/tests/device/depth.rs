@@ -1,14 +1,16 @@
 use av_toolbox_cubek::depth::{
     Conversion,
     DepthPlanes,
-    Element,
+    Destination,
     Shift,
     Source,
     Thresholds,
     convert,
+    convert_to_float_sample,
     plane_shift,
     upload_pattern,
 };
+use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_cubek::testing::{reference_depth, reference_float_depth};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
@@ -33,8 +35,9 @@ impl BuildTask for Depth {
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
         let output_sample_bytes = match self.conversion.output {
-            Element::U8 => 1,
-            Element::U16 => 2,
+            Destination::U8 => 1,
+            Destination::U16 => 2,
+            Destination::F32 => 4,
         };
         let samples = (self.width * self.height) as usize;
         let output_bytes = samples * output_sample_bytes;
@@ -127,8 +130,9 @@ fn convert_float_on_device(
     });
 
     match conversion.output {
-        Element::U8 => output.iter().map(|value| u16::from(*value)).collect(),
-        Element::U16 => unwiden(&output),
+        Destination::U8 => output.iter().map(|value| u16::from(*value)).collect(),
+        Destination::U16 => unwiden(&output),
+        Destination::F32 => panic!("float output is read with read_floats"),
     }
 }
 
@@ -230,7 +234,7 @@ fn every_float_conversion_matches_the_reference() {
 
     for thresholds in &modes {
         for (output_bits, chroma) in changes {
-            let conversion = Conversion::from_float(output_bits, chroma);
+            let conversion = Conversion::from_float(output_bits, SampleRange::Full, chroma);
             let low = if chroma { -0.5 } else { 0.0 };
             let input = float_gradient(96, 80, low);
             let shift = plane_shift(1);
@@ -241,5 +245,32 @@ fn every_float_conversion_matches_the_reference() {
             let label = format!("{output_bits} bits, chroma {chroma}");
             assert_within_one(&converted, &expected, &label);
         }
+    }
+}
+
+/// Converts a U8 plane to F32 on the device.
+#[test]
+fn u8_planes_convert_to_floats_like_the_reference() {
+    let conversion = Conversion::to_float(8, SampleRange::Limited, false);
+    let input: Vec<u8> = (0..=255).collect();
+    let thresholds = Thresholds::rounding();
+
+    let output = backend().build(Depth {
+        input: input.clone(),
+        width: 256,
+        height: 1,
+        conversion,
+        thresholds,
+        shift: plane_shift(0),
+    });
+
+    let (chunks, _) = output.as_chunks::<4>();
+    let converted: Vec<f32> = chunks.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect();
+    for (code, found) in input.iter().zip(&converted) {
+        let expected = convert_to_float_sample(f32::from(*code), &conversion);
+        assert!(
+            (found - expected).abs() <= 1e-6,
+            "code {code} was {found}, expected {expected}"
+        );
     }
 }
