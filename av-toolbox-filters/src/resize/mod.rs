@@ -19,14 +19,12 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     DeviceSide,
-    ElementType,
     FormatSet,
     FrameFormat,
     Offered,
     OutputFormats,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -121,7 +119,7 @@ impl<K: ResizeKernel> FilterDefinition for Resize<K> {
     type Side = DeviceSide;
 
     fn accepts_input(
-        capabilities: &Capabilities,
+        _capabilities: &Capabilities,
         _args: &Self::Args,
         _index: usize,
         offered: StreamFormat,
@@ -131,11 +129,6 @@ impl<K: ResizeKernel> FilterDefinition for Resize<K> {
         let Some(format) = offered.as_frames() else {
             return Err(not_frames(&stage));
         };
-
-        let half_float = format.sample == SampleFormat::F16;
-        if half_float && !capabilities.can_store(ElementType::F16) {
-            return Ok(FormatSet::new());
-        }
 
         Ok(FormatSet::of([format.sample]))
     }
@@ -179,7 +172,16 @@ impl<K: ResizeKernel> FilterDefinition for Resize<K> {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{ColourInfo, Depth, FrameLayout, MaskFormat, Subsampling, default_accelerators};
+    use av_toolbox_gpu::{
+        ColourInfo,
+        Depth,
+        ElementType,
+        FrameLayout,
+        MaskFormat,
+        SampleFormat,
+        Subsampling,
+        default_accelerators,
+    };
     use serde_json::json;
 
     use super::kernels::ResizeArgs;
@@ -306,7 +308,7 @@ mod tests {
         let capabilities = capabilities();
         let arguments = args(json!({ "width": 8, "height": 8 }));
         let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
-        let samples = [SampleFormat::U8, ten_bit, SampleFormat::F16, SampleFormat::F32];
+        let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
 
         for sample in samples {
             let offered = frames(16, 8, FrameLayout::Grey, sample);
@@ -316,20 +318,6 @@ mod tests {
 
             assert!(accepted.accepts(sample), "{sample}");
         }
-    }
-
-    #[test]
-    fn half_floats_are_left_out_on_a_device_that_cannot_store_them() {
-        let storable = [ElementType::U8, ElementType::U16, ElementType::F32];
-        let capabilities = capabilities_storing(&storable);
-        let arguments = args(json!({ "width": 8, "height": 8 }));
-        let offered = frames(16, 8, FrameLayout::Grey, SampleFormat::F16);
-        let inputs = [Offered::Unknown];
-
-        let accepted = Resize::<Point>::accepts_input(&capabilities, &arguments, 0, offered, &inputs)
-            .expect("frames are readable");
-
-        assert!(accepted.is_empty());
     }
 
     #[test]

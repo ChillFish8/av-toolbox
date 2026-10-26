@@ -280,8 +280,6 @@ pub enum Samples {
     },
     /// Samples held in `f32`, written back without rounding or clamping.
     F32,
-    /// Samples held in `f16`, resized in f32 and written back without clamping.
-    F16,
 }
 
 #[cube(launch_unchecked)]
@@ -365,7 +363,6 @@ pub fn apply<R: Runtime>(
             launch::<u16, R>(client, dispatch, planes, across, down, largest);
         },
         Samples::F32 => launch_float::<f32, R>(client, dispatch, planes, across, down),
-        Samples::F16 => launch_float::<half::f16, R>(client, dispatch, planes, across, down),
     }
 }
 

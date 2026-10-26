@@ -49,7 +49,7 @@ impl BuildTask for Resize {
         let sizing = Sizing(frame_context);
         let sample_bytes = match self.samples {
             Samples::U8 => 1,
-            Samples::U16 { .. } | Samples::F16 => 2,
+            Samples::U16 { .. } => 2,
             Samples::F32 => 4,
         };
         let out_width = self.across.starts.len() as u32;

@@ -12,8 +12,7 @@ use av_toolbox_gpu::{
     default_accelerators,
 };
 
-/// Checks that a stage accepts integer and F32 frames as they are, accepts no F16 frame, and refuses a mask
-/// by name.
+/// Checks that a stage accepts integer and F32 frames as they are, and refuses a mask by name.
 pub(crate) fn assert_integers_and_floats_accepted_and_mask_refused(
     stage: &str,
     layout: FrameLayout,
@@ -27,7 +26,6 @@ pub(crate) fn assert_integers_and_floats_accepted_and_mask_refused(
         },
         SampleFormat::F32,
     ];
-    let half = frame_format(layout, SampleFormat::F16);
     let mask = StreamFormat::Mask(MaskFormat {
         frame_rate: None,
         width: 16,
@@ -43,11 +41,9 @@ pub(crate) fn assert_integers_and_floats_accepted_and_mask_refused(
         assert_eq!(set, FormatSet::of([sample]));
     }
 
-    let half_set = accepted(StreamFormat::Frames(half)).expect("frames are readable");
     let mask_error = accepted(mask).expect_err("a mask is refused");
     let mask_message = mask_error.to_string();
 
-    assert!(half_set.is_empty());
     assert!(mask_message.contains(stage), "{mask_message}");
     assert!(mask_message.contains("mask"), "{mask_message}");
 }

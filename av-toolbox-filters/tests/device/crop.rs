@@ -99,7 +99,6 @@ fn every_layout_and_sample_keeps_exactly_its_window() {
     let samples = [
         SampleFormat::U8,
         SampleFormat::U16 { depth: Depth::TEN },
-        SampleFormat::F16,
         SampleFormat::F32,
     ];
 

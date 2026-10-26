@@ -146,7 +146,6 @@ fn samples_map_to_av_denoise_formats() {
         engine_sample(SampleFormat::F32),
         Some(av_denoise_core::SampleFormat::F32)
     );
-    assert_eq!(engine_sample(SampleFormat::F16), None);
 }
 
 #[test]

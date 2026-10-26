@@ -39,7 +39,7 @@ pub(crate) fn accepts_luma(stage: &str, offered: StreamFormat) -> Result<FormatS
 
     let accepted = match format.sample {
         SampleFormat::U8 | SampleFormat::U16 { .. } => FormatSet::of([format.sample]),
-        SampleFormat::F16 | SampleFormat::F32 => FormatSet::new(),
+        SampleFormat::F32 => FormatSet::new(),
     };
 
     Ok(accepted)
@@ -103,7 +103,7 @@ impl Luma {
 
                 (f32::from(max_value), true)
             },
-            SampleFormat::F16 | SampleFormat::F32 => {
+            SampleFormat::F32 => {
                 let message = format!("{stage} reads integer samples, not floats");
                 return Err(StageError::msg(message));
             },

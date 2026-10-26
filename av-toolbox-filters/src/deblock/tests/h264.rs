@@ -149,18 +149,6 @@ fn a_ten_bit_frame_is_deblocked_with_ten_bit_thresholds() {
 }
 
 #[test]
-fn a_half_float_frame_is_refused() {
-    let input = format(FrameLayout::Grey, SampleFormat::F16);
-    let arguments = args(json!({}));
-
-    let error = checked_deblocking(&arguments, &input).expect_err("f16 is refused");
-    let message = error.to_string();
-
-    assert!(message.contains(STAGE), "{message}");
-    assert!(message.contains("F16"), "{message}");
-}
-
-#[test]
 fn a_float_frame_is_deblocked_as_float() {
     let input = format(FrameLayout::Rgb, SampleFormat::F32);
     let arguments = args(json!({ "quant": 51 }));

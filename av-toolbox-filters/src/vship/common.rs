@@ -116,7 +116,6 @@ pub(crate) fn vship_sample(sample: SampleFormat) -> Option<SampleType> {
             16 => SampleType::Uint16,
             _ => return None,
         },
-        SampleFormat::F16 => SampleType::Half,
         SampleFormat::F32 => SampleType::Float,
     };
 
@@ -566,8 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn floats_map_to_half_and_float() {
-        assert_eq!(vship_sample(SampleFormat::F16), Some(SampleType::Half));
+    fn floats_map_to_float() {
         assert_eq!(vship_sample(SampleFormat::F32), Some(SampleType::Float));
     }
 

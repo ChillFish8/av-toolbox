@@ -115,7 +115,7 @@ impl<R: Runtime> Cropper<R> {
                         top,
                     );
                 },
-                SampleFormat::U16 { .. } | SampleFormat::F16 => {
+                SampleFormat::U16 { .. } => {
                     let input = input.array::<u16, R>();
                     let output = output.array::<u16, R>();
                     crop_kernel::launch_unchecked::<u16, R>(

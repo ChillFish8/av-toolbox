@@ -51,7 +51,6 @@ impl fmt::Display for Depth {
 pub enum SampleFormat {
     U8,
     U16 { depth: Depth },
-    F16,
     F32,
 }
 
@@ -60,7 +59,7 @@ impl SampleFormat {
     pub const fn bytes(self) -> usize {
         match self {
             Self::U8 => 1,
-            Self::U16 { .. } | Self::F16 => 2,
+            Self::U16 { .. } => 2,
             Self::F32 => 4,
         }
     }
@@ -73,7 +72,7 @@ impl SampleFormat {
         match self {
             Self::U8 => Some(u8::MAX as u16),
             Self::U16 { depth } => Some(depth.max_value()),
-            Self::F16 | Self::F32 => None,
+            Self::F32 => None,
         }
     }
 
@@ -84,7 +83,6 @@ impl SampleFormat {
         match self {
             Self::U8 => ElementType::U8,
             Self::U16 { .. } => ElementType::U16,
-            Self::F16 => ElementType::F16,
             Self::F32 => ElementType::F32,
         }
     }
@@ -95,7 +93,6 @@ impl fmt::Display for SampleFormat {
         match self {
             Self::U8 => formatter.write_str("u8"),
             Self::U16 { depth } => write!(formatter, "u16 {depth}"),
-            Self::F16 => formatter.write_str("f16"),
             Self::F32 => formatter.write_str("f32"),
         }
     }
@@ -131,7 +128,6 @@ mod tests {
     fn a_sample_format_knows_its_width() {
         assert_eq!(SampleFormat::U8.bytes(), 1);
         assert_eq!(SampleFormat::U16 { depth: Depth::TEN }.bytes(), 2);
-        assert_eq!(SampleFormat::F16.bytes(), 2);
         assert_eq!(SampleFormat::F32.bytes(), 4);
     }
 
@@ -152,7 +148,6 @@ mod tests {
     /// by.
     #[test]
     fn a_float_format_has_no_largest_value() {
-        assert_eq!(SampleFormat::F16.max_value(), None);
         assert_eq!(SampleFormat::F32.max_value(), None);
     }
 
@@ -163,7 +158,6 @@ mod tests {
             SampleFormat::U16 { depth: Depth::TEN }.element(),
             ElementType::U16
         );
-        assert_eq!(SampleFormat::F16.element(), ElementType::F16);
         assert_eq!(SampleFormat::F32.element(), ElementType::F32);
     }
 

@@ -237,19 +237,14 @@ fn float_luma_finds_the_same_cuts_as_integer_luma() {
 }
 
 #[test]
-fn rgb_and_half_float_frames_are_refused() {
+fn rgb_frames_are_refused() {
     let args = natural(SceneSpeed::Standard, 0, None);
     let rgb = FrameFormat {
         layout: FrameLayout::Rgb,
         ..grey8()
     };
-    let half_float = FrameFormat {
-        sample: SampleFormat::F16,
-        ..grey8()
-    };
 
     assert!(Settings::for_stream(&rgb, &args).is_err());
-    assert!(Settings::for_stream(&half_float, &args).is_err());
 }
 
 #[test]

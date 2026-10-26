@@ -9,7 +9,7 @@ pub(crate) fn bits_of(sample: SampleFormat) -> u32 {
     }
 }
 
-/// How a kernel that takes integers and F32 stores samples of `sample`, or `None` for F16.
+/// How a kernel that takes integers and F32 stores samples of `sample`.
 pub(crate) fn sample_kind(sample: SampleFormat) -> Option<MatrixSamples> {
     match sample {
         SampleFormat::U8 => Some(MatrixSamples::U8),
@@ -17,6 +17,5 @@ pub(crate) fn sample_kind(sample: SampleFormat) -> Option<MatrixSamples> {
             bits: u32::from(depth.bits()),
         }),
         SampleFormat::F32 => Some(MatrixSamples::F32),
-        SampleFormat::F16 => None,
     }
 }

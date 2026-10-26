@@ -218,7 +218,7 @@ mod tests {
     fn every_sample_is_accepted() {
         let capabilities = capabilities();
         let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
-        let samples = [SampleFormat::U8, ten_bit, SampleFormat::F16, SampleFormat::F32];
+        let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
 
         for sample in samples {
             let offered = frames(16, 8, FrameLayout::Grey, sample);

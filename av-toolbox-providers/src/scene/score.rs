@@ -28,7 +28,6 @@ use av_toolbox_gpu::{
     LayerId,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
 };
 
@@ -90,12 +89,7 @@ impl ProviderDefinition for SceneScoreProvider {
 
         check_layout(format)?;
 
-        let accepted = match format.sample {
-            SampleFormat::U8 | SampleFormat::U16 { .. } | SampleFormat::F32 => FormatSet::of([format.sample]),
-            SampleFormat::F16 => FormatSet::new(),
-        };
-
-        Ok(accepted)
+        Ok(FormatSet::of([format.sample]))
     }
 
     fn check(args: &Self::Args, _input: &FrameFormat) -> Result<(), StageError> {

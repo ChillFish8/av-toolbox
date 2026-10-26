@@ -6,26 +6,13 @@ use av_toolbox_core::{
     LayerDemand,
     PipelineRegistry,
     Provider,
-    ProviderDefinition,
     StageHandle,
     StageKind,
     StreamType,
 };
-use av_toolbox_gpu::{
-    Capabilities,
-    FrameContext,
-    FrameFormat,
-    HostFrame,
-    HostSide,
-    HostStreamItem,
-    LayerId,
-    SampleFormat,
-    StreamFormat,
-    default_accelerators,
-    testing_context,
-};
+use av_toolbox_gpu::{FrameContext, HostFrame, HostSide, HostStreamItem, LayerId, testing_context};
 
-use crate::scene::score::{SceneScoreProvider, ServeScores};
+use crate::scene::score::ServeScores;
 use crate::scene::{SceneCut, SceneScores, SceneSpeed, ScoreRequest};
 use crate::tests::clip::{THREE_SCENES, clip, grey8};
 
@@ -72,16 +59,6 @@ fn score(context: &mut FrameContext, layers: u32, frames: Vec<HostFrame>) -> Vec
     emitted
 }
 
-fn capabilities() -> Capabilities {
-    let accelerator = default_accelerators()[0];
-
-    Capabilities::builder(accelerator)
-        .plane_size(16, 16)
-        .max_units_per_cube(1024)
-        .max_cube_count(65535, 65535, 65535)
-        .build()
-}
-
 #[test]
 fn every_layer_gets_the_same_cut() {
     let mut context = testing_context();
@@ -104,24 +81,6 @@ fn every_layer_gets_the_same_cut() {
     }
 
     assert_eq!(starts, [0, 30, 60]);
-}
-
-#[test]
-fn half_floats_are_refused() {
-    let capabilities = capabilities();
-    let args = score_demands(1);
-    let half = FrameFormat {
-        sample: SampleFormat::F16,
-        ..grey8()
-    };
-
-    let half_offered = StreamFormat::Frames(half);
-    let byte_offered = StreamFormat::Frames(grey8());
-    let half_accepted = SceneScoreProvider::accepts_input(&capabilities, &args, half_offered);
-    let byte_accepted = SceneScoreProvider::accepts_input(&capabilities, &args, byte_offered);
-
-    assert!(half_accepted.expect("answers").is_empty());
-    assert!(byte_accepted.expect("answers").accepts(SampleFormat::U8));
 }
 
 #[test]

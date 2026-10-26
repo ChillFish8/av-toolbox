@@ -135,7 +135,6 @@ pub(crate) fn engine_sample(sample: SampleFormat) -> Option<av_denoise_core::Sam
             Some(av_denoise_core::SampleFormat::U16 { depth })
         },
         SampleFormat::F32 => Some(av_denoise_core::SampleFormat::F32),
-        SampleFormat::F16 => None,
     }
 }
 

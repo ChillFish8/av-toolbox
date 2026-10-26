@@ -178,7 +178,7 @@ fn bits_of(sample: SampleFormat) -> Option<u8> {
     match sample {
         SampleFormat::U8 => Some(8),
         SampleFormat::U16 { depth } => Some(depth.bits()),
-        SampleFormat::F16 | SampleFormat::F32 => None,
+        SampleFormat::F32 => None,
     }
 }
 
@@ -347,7 +347,6 @@ mod tests {
         };
         let refused = [
             format_of(yuv, SampleFormat::F32),
-            format_of(yuv, SampleFormat::F16),
             format_of(yuv, sixteen_bit),
             format_of(FrameLayout::Grey, ten_bit()),
             format_of(FrameLayout::Rgb, SampleFormat::U8),

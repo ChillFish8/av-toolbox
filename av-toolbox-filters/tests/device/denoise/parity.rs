@@ -216,7 +216,6 @@ fn reference(engines: Vec<ReferenceEngine>, format: &FrameFormat, clip: Vec<Inpu
         SampleFormat::U8 => av_denoise_core::SampleFormat::U8,
         SampleFormat::U16 { depth } => av_denoise_core::SampleFormat::U16 { depth: depth.bits() },
         SampleFormat::F32 => av_denoise_core::SampleFormat::F32,
-        SampleFormat::F16 => panic!("av-denoise cannot read f16"),
     };
     let task = Reference {
         engines,

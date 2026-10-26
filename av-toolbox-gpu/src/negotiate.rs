@@ -233,7 +233,7 @@ mod tests {
         let set = FormatSet::of([SampleFormat::U8, SampleFormat::F32]);
 
         assert!(set.accepts(SampleFormat::F32));
-        assert!(!set.accepts(SampleFormat::F16));
+        assert!(!set.accepts(SampleFormat::U16 { depth: Depth::TEN }));
         assert!(!set.is_empty());
         assert!(FormatSet::new().is_empty());
     }
@@ -242,29 +242,16 @@ mod tests {
     /// of its own preferences is narrowest.
     #[test]
     fn a_format_set_finds_its_narrowest_sample() {
-        let set = FormatSet::of([SampleFormat::F32, SampleFormat::U8, SampleFormat::F16]);
+        let set = FormatSet::of([SampleFormat::F32, SampleFormat::U8]);
 
         assert_eq!(set.narrowest(), Some(SampleFormat::U8));
         assert_eq!(FormatSet::new().narrowest(), None);
     }
 
-    /// F16 and a ten-bit U16 are both two bytes wide, so which one wins is decided by the order
-    /// they were pushed rather than by their width.
-    #[test]
-    fn a_tie_on_width_goes_to_the_more_preferred() {
-        let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
-
-        let float_first = FormatSet::of([SampleFormat::F16, ten_bit]);
-        assert_eq!(float_first.narrowest(), Some(SampleFormat::F16));
-
-        let integer_first = FormatSet::of([ten_bit, SampleFormat::F16]);
-        assert_eq!(integer_first.narrowest(), Some(ten_bit));
-    }
-
     #[test]
     fn two_format_sets_keep_only_what_both_hold() {
         let ours = FormatSet::of([SampleFormat::F32, SampleFormat::U8]);
-        let theirs = FormatSet::of([SampleFormat::U8, SampleFormat::F16]);
+        let theirs = FormatSet::of([SampleFormat::U8, SampleFormat::U16 { depth: Depth::TEN }]);
 
         assert_eq!(ours.intersect(&theirs).preferences(), &[SampleFormat::U8]);
     }
@@ -305,10 +292,10 @@ mod tests {
         };
         let template = StreamTemplate::Mask(format);
 
-        let swapped = template.with_sample(SampleFormat::F16);
+        let swapped = template.with_sample(SampleFormat::F32);
         let swapped_chroma = swapped.as_mask().and_then(|mask| mask.chroma);
 
-        assert_eq!(swapped.sample(), SampleFormat::F16);
+        assert_eq!(swapped.sample(), SampleFormat::F32);
         assert_eq!(swapped_chroma, format.chroma);
     }
 
@@ -322,7 +309,7 @@ mod tests {
             chroma: None,
         });
 
-        let chosen = StreamTemplate::from_format(&mask).with_sample(SampleFormat::F16);
+        let chosen = StreamTemplate::from_format(&mask).with_sample(SampleFormat::F32);
         assert!(matches!(chosen, StreamFormat::Mask(_)));
         assert_eq!(chosen.dimensions(), (32, 16));
     }

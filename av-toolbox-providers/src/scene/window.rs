@@ -67,13 +67,6 @@ impl Settings {
             SampleFormat::U8 => 8,
             SampleFormat::U16 { depth } => depth.bits(),
             SampleFormat::F32 => FLOAT_BITS,
-            SampleFormat::F16 => {
-                let message = format!(
-                    "scene detection reads integer or 32-bit float samples, not {:?}",
-                    format.sample
-                );
-                return Err(StageError::msg(message));
-            },
         };
 
         let max_scene_frames = options.max_scene_frames.map_or(usize::MAX, NonZeroUsize::get);

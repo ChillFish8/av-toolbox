@@ -39,7 +39,6 @@ pub(crate) fn samples_for(sample: SampleFormat) -> Samples {
             largest: depth.max_value(),
         },
         SampleFormat::U8 => Samples::U8,
-        SampleFormat::F16 => Samples::F16,
         SampleFormat::F32 => Samples::F32,
     }
 }

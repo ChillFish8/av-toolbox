@@ -168,17 +168,6 @@ fn integers_and_floats_are_accepted_and_a_mask_is_refused() {
 }
 
 #[test]
-fn a_half_float_frame_is_refused() {
-    let input = format(FrameLayout::Grey, SampleFormat::F16);
-    let arguments = args(json!({}));
-
-    let message = refusal(&arguments, input);
-
-    assert!(message.contains(STAGE), "{message}");
-    assert!(message.contains("F16"), "{message}");
-}
-
-#[test]
 fn deeper_and_float_frames_keep_their_sample_kind() {
     let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
     let deep = format(FrameLayout::Grey, ten_bit);
