@@ -12,6 +12,7 @@ mod dering;
 mod heatmap;
 mod ivtc;
 mod lineart;
+mod mask;
 mod planes;
 mod resample;
 mod resize;

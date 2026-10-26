@@ -41,6 +41,7 @@
 //! - `lineart/thin` warp-sharpens only on lines, to thin them.
 //! - `lineart/toon` darkens lines by a warp-thinned map of how dark they are, as havsfunc's Toon does.
 //! - `lineart/vinverse` removes residual combing, as vs-jetpack's vinverse does.
+//! - `mask/to_frames` turns one plane of a mask into float grey frames, so it can be painted or viewed.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, or turns a float clip into integers, dithering when it
@@ -71,6 +72,7 @@ mod denoise;
 mod dering;
 mod ivtc;
 mod lineart;
+mod mask;
 mod masked;
 mod padded_warp;
 mod planes;
@@ -106,6 +108,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<aa::Sangnom>()?;
     registry.register_filter::<blend::Heatmap>()?;
     registry.register_filter::<blend::Masked>()?;
+    registry.register_filter::<mask::ToFrames>()?;
     registry.register_filter::<crop::Auto>()?;
     registry.register_filter::<crop::Manual>()?;
     registry.register_probe::<crop::Crop>()?;
@@ -177,6 +180,7 @@ mod tests {
         assert!(registered("aa/eedi3"));
         assert!(registered("aa/sangnom"));
         assert!(registered("blend/masked"));
+        assert!(registered("mask/to_frames"));
         assert!(registered("crop/auto"));
         assert!(registered("crop/manual"));
         assert!(registered("deband/placebo"));
