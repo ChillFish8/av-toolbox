@@ -294,6 +294,7 @@ dependencies = [
  "av-toolbox-providers",
  "avtbx-vship",
  "cubecl",
+ "half",
  "schemars",
  "serde",
  "serde_json",

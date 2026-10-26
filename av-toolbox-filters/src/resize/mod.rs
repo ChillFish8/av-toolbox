@@ -19,6 +19,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     DeviceSide,
+    ElementType,
     FormatSet,
     FrameFormat,
     Offered,
@@ -48,10 +49,6 @@ use self::kernels::{ResizeKernel, stage_name};
 
 /// Resizes every plane of a clip through the kernel `K` names.
 pub(crate) struct Resize<K>(PhantomData<K>);
-
-fn resizable(sample: SampleFormat) -> bool {
-    matches!(sample, SampleFormat::U8 | SampleFormat::U16 { .. })
-}
 
 fn not_frames(stage: &str) -> StageError {
     let message = format!("{stage} resizes frames, not masks");
@@ -124,7 +121,7 @@ impl<K: ResizeKernel> FilterDefinition for Resize<K> {
     type Side = DeviceSide;
 
     fn accepts_input(
-        _capabilities: &Capabilities,
+        capabilities: &Capabilities,
         _args: &Self::Args,
         _index: usize,
         offered: StreamFormat,
@@ -135,7 +132,8 @@ impl<K: ResizeKernel> FilterDefinition for Resize<K> {
             return Err(not_frames(&stage));
         };
 
-        if !resizable(format.sample) {
+        let half_float = format.sample == SampleFormat::F16;
+        if half_float && !capabilities.can_store(ElementType::F16) {
             return Ok(FormatSet::new());
         }
 
@@ -188,12 +186,24 @@ mod tests {
     use super::*;
 
     fn capabilities() -> Capabilities {
+        let storable = [
+            ElementType::U8,
+            ElementType::U16,
+            ElementType::F16,
+            ElementType::F32,
+        ];
+
+        capabilities_storing(&storable)
+    }
+
+    fn capabilities_storing(storable: &[ElementType]) -> Capabilities {
         let accelerator = default_accelerators()[0];
 
         Capabilities::builder(accelerator)
             .plane_size(32, 32)
             .max_units_per_cube(1024)
             .max_cube_count(65535, 65535, 65535)
+            .storable(storable.iter().copied())
             .build()
     }
 
@@ -292,24 +302,34 @@ mod tests {
     }
 
     #[test]
-    fn u8_and_u16_are_accepted_and_floats_are_not() {
+    fn every_sample_format_is_accepted() {
         let capabilities = capabilities();
         let arguments = args(json!({ "width": 8, "height": 8 }));
         let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
-        let cases = [
-            (SampleFormat::U8, true),
-            (ten_bit, true),
-            (SampleFormat::F32, false),
-        ];
+        let samples = [SampleFormat::U8, ten_bit, SampleFormat::F16, SampleFormat::F32];
 
-        for (sample, expected) in cases {
+        for sample in samples {
             let offered = frames(16, 8, FrameLayout::Grey, sample);
             let inputs = [Offered::Unknown];
             let accepted = Resize::<Point>::accepts_input(&capabilities, &arguments, 0, offered, &inputs)
                 .expect("frames are readable");
 
-            assert_eq!(accepted.accepts(sample), expected, "{sample}");
+            assert!(accepted.accepts(sample), "{sample}");
         }
+    }
+
+    #[test]
+    fn half_floats_are_left_out_on_a_device_that_cannot_store_them() {
+        let storable = [ElementType::U8, ElementType::U16, ElementType::F32];
+        let capabilities = capabilities_storing(&storable);
+        let arguments = args(json!({ "width": 8, "height": 8 }));
+        let offered = frames(16, 8, FrameLayout::Grey, SampleFormat::F16);
+        let inputs = [Offered::Unknown];
+
+        let accepted = Resize::<Point>::accepts_input(&capabilities, &arguments, 0, offered, &inputs)
+            .expect("frames are readable");
+
+        assert!(accepted.is_empty());
     }
 
     #[test]

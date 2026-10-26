@@ -1,0 +1,78 @@
+# Compares a distorted video against its reference with CVVDP at a display's resolution and shows the distorted
+# video as a heatmap.
+#
+# CVVDP scales both clips to fit the display before scoring, so its map comes out at the display's size. The map is
+# scaled back to the clip's size before it is painted, so `width` and `height` must be the clip's size.
+# Needs the `vship` feature.
+
+[variable.reference]
+type = "path"
+description = "The original clip"
+default = "reference.mkv"
+
+[variable.distorted]
+type = "path"
+description = "The clip to compare against the original"
+default = "distorted.mkv"
+
+[variable.display]
+type = "string"
+description = "The display CVVDP models viewing on"
+default = "standard_4k"
+choices = [
+    "standard_4k",
+    "standard_fhd",
+    "standard_hdr_pq",
+    "standard_hdr_hlg",
+    "standard_hdr_dark",
+    "standard_hdr_linear_zoom",
+]
+
+[variable.width]
+type = "integer"
+description = "The clip's width"
+default = 1920
+min = 1
+
+[variable.height]
+type = "integer"
+description = "The clip's height"
+default = 1080
+min = 1
+
+[variable.style]
+type = "string"
+description = "The colours of the heatmap"
+default = "blue"
+choices = ["blue", "heat"]
+
+[source.reference]
+type = "ffms2/file"
+args.path = "{{ reference }}"
+
+[source.distorted]
+type = "ffms2/file"
+args.path = "{{ distorted }}"
+
+[filter.score]
+type = "vship/cvvdp"
+inputs = ["reference", "distorted"]
+args.display = "{{ display }}"
+args.resize_to_display = true
+args.output = "map"
+
+[filter.clip_sized]
+type = "resize/bilinear"
+inputs = ["score"]
+args.width = "{{ width }}"
+args.height = "{{ height }}"
+
+[filter.heatmap]
+type = "blend/heatmap"
+inputs = ["distorted", "clip_sized"]
+args.style = "{{ style }}"
+args.scale = 0.003
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["heatmap"]

@@ -1,6 +1,7 @@
 use av_toolbox_cubek::resize::{Kernel, Taps, taps};
-use av_toolbox_cubek::testing::{reference_resize, reference_resize_wide};
+use av_toolbox_cubek::testing::{reference_resize, reference_resize_float, reference_resize_wide};
 use av_toolbox_gpu::{ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
+use half::f16;
 use serde_json::json;
 
 use crate::support::{frame, run_once};
@@ -155,6 +156,115 @@ fn an_odd_sized_420_frame_resizes_every_plane() {
 
     assert_within_one(&found[0], &luma);
     assert_within_one(&found[1], &chroma);
+}
+
+fn float_bytes(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|value| value.to_le_bytes()).collect()
+}
+
+fn float_values(bytes: &[u8]) -> Vec<f32> {
+    let (words, _) = bytes.as_chunks::<4>();
+
+    words.iter().map(|word| f32::from_le_bytes(*word)).collect()
+}
+
+fn assert_floats_close(found: &[f32], expected: &[f32], tolerance: f32) {
+    assert_eq!(found.len(), expected.len());
+
+    for (index, (got, want)) in found.iter().zip(expected).enumerate() {
+        assert!(
+            (got - want).abs() <= tolerance,
+            "sample {index} was {got}, expected {want}"
+        );
+    }
+}
+
+#[test]
+fn a_float_420_frame_resizes_with_its_chroma_centred() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let input = frame(15, 9, layout, SampleFormat::F32, ChromaLocation::Left);
+    let output = resized_to(&input, 32, 18);
+    let luma: Vec<f32> = (0..15 * 9).map(|sample| (sample % 7) as f32 / 6.0).collect();
+    let chroma: Vec<f32> = (0..8 * 5).map(|sample| (sample % 5) as f32 / 4.0 - 0.5).collect();
+    let planes = [float_bytes(&luma), float_bytes(&chroma), float_bytes(&chroma)];
+    let args = json!({ "width": 32, "height": 18 });
+
+    let found = run_once("resize/lanczos", input, output, args, &planes);
+
+    let kernel = Kernel::Lanczos { taps: 3 };
+    let luma_across = axis_taps(0.0, 15.0, 32, 1, 0.0, &kernel);
+    let luma_down = axis_taps(0.0, 9.0, 18, 1, 0.0, &kernel);
+    let expected_luma = reference_resize_float(&luma, 15, 9, &luma_across, &luma_down);
+    let chroma_across = axis_taps(0.0, 15.0, 32, 2, 0.0, &kernel);
+    let chroma_down = axis_taps(0.0, 9.0, 18, 2, 0.5, &kernel);
+    let expected_chroma = reference_resize_float(&chroma, 8, 5, &chroma_across, &chroma_down);
+
+    let found_luma = float_values(&found[0]);
+    let found_u = float_values(&found[1]);
+    let found_v = float_values(&found[2]);
+    assert_floats_close(&found_luma, &expected_luma, 1e-5);
+    assert_floats_close(&found_u, &expected_chroma, 1e-5);
+    assert_floats_close(&found_v, &expected_chroma, 1e-5);
+}
+
+#[test]
+fn a_display_sized_float_map_scales_back_to_the_clip() {
+    let input = frame(
+        384,
+        216,
+        FrameLayout::Grey,
+        SampleFormat::F32,
+        ChromaLocation::Left,
+    );
+    let output = resized_to(&input, 192, 108);
+    let map: Vec<f32> = (0..384 * 216)
+        .map(|sample| if sample % 384 < 192 { 0.0 } else { 0.004 })
+        .collect();
+    let planes = [float_bytes(&map)];
+    let args = json!({ "width": 192, "height": 108 });
+
+    let found = run_once("resize/bilinear", input, output, args, &planes);
+
+    let kernel = Kernel::Bilinear;
+    let across = axis_taps(0.0, 384.0, 192, 1, 0.0, &kernel);
+    let down = axis_taps(0.0, 216.0, 108, 1, 0.0, &kernel);
+    let expected = reference_resize_float(&map, 384, 216, &across, &down);
+
+    let resized = float_values(&found[0]);
+    assert_floats_close(&resized, &expected, 1e-5);
+}
+
+#[test]
+fn a_half_float_frame_resizes_in_half_floats() {
+    let input = frame(16, 8, FrameLayout::Grey, SampleFormat::F16, ChromaLocation::Left);
+    let output = resized_to(&input, 24, 12);
+    let luma: Vec<f16> = (0..16 * 8)
+        .map(|sample| f16::from_f32((sample % 9) as f32 / 8.0))
+        .collect();
+    let bytes: Vec<u8> = luma.iter().flat_map(|value| value.to_le_bytes()).collect();
+    let args = json!({ "width": 24, "height": 12 });
+
+    let found = run_once("resize/bicubic", input, output, args, &[bytes]);
+
+    let kernel = Kernel::Bicubic {
+        b: 1.0 / 3.0,
+        c: 1.0 / 3.0,
+    };
+    let across = axis_taps(0.0, 16.0, 24, 1, 0.0, &kernel);
+    let down = axis_taps(0.0, 8.0, 12, 1, 0.0, &kernel);
+    let widened: Vec<f32> = luma.iter().map(|value| value.to_f32()).collect();
+    let expected = reference_resize_float(&widened, 16, 8, &across, &down);
+
+    let (pairs, _) = found[0].as_chunks::<2>();
+    let resized: Vec<f32> = pairs
+        .iter()
+        .map(|pair| f16::from_le_bytes(*pair).to_f32())
+        .collect();
+
+    // Bicubic overshoots a little past 1.0, where one f16 step is about 0.002.
+    assert_floats_close(&resized, &expected, 2e-3);
 }
 
 #[test]

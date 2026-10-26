@@ -22,6 +22,7 @@ av-denoise-core = { workspace = true }
 avtbx-vship = { workspace = true, optional = true }
 
 [dev-dependencies]
+half = { workspace = true }
 tempfile = { workspace = true }
 
 av-toolbox-cubek = { workspace = true, features = ["test-support"] }

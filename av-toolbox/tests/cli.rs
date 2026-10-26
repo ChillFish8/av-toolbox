@@ -53,7 +53,12 @@ fn every_example_explains_without_a_device() {
     #[cfg(feature = "vship")]
     let names = [
         &names[..],
-        &["vship.toml", "cvvdp-heatmap.toml", "butteraugli-heatmap.toml"],
+        &[
+            "vship.toml",
+            "cvvdp-heatmap.toml",
+            "cvvdp-heatmap-display.toml",
+            "butteraugli-heatmap.toml",
+        ],
     ]
     .concat();
 
