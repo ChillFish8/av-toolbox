@@ -721,22 +721,68 @@ fn a_known_rate_against_an_unknown_one_is_a_mismatch() {
     assert!(reported[0].message().contains("unknown"));
 }
 
-#[test]
-fn a_mask_input_takes_no_part_in_the_rate_check() {
+fn deband_with_mask(frames: &str, overlay: &str) -> StageSpec {
     let mut clean = testing::spec(StageKind::Filter, "clean", "test/deband");
     clean.inputs = vec![
-        testing::named("reference", "right"),
-        testing::named("overlay", "veil"),
+        testing::named("reference", frames),
+        testing::named("overlay", overlay),
     ];
+
+    clean
+}
+
+fn unrated_mask(name: &str) -> Vec<StageSpec> {
+    let mut file = source("plain", "test/file");
+    file.args = Spanned::unknown(json!({ "path": "a.mkv" }));
+
+    vec![file, mask(name, "test/merge", "plain", "plain")]
+}
+
+#[test]
+fn a_mask_from_another_rate_is_refused() {
     let specs = vec![
-        rated("left", 25, 1),
+        rated("left", 24, 1),
         rated("right", 30, 1),
         mask("veil", "test/merge", "left", "left"),
-        clean,
+        deband_with_mask("right", "veil"),
+        sink("out", "clean"),
+    ];
+
+    let reported = rate_mismatches(&specs);
+
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].path(), "filter.clean");
+    assert!(reported[0].message().contains("every frames and mask input"));
+
+    let notes = reported[0].notes();
+
+    assert_eq!(notes.len(), 2);
+    assert!(notes[1].message.contains("overlay reads veil at 24/1"));
+}
+
+#[test]
+fn a_mask_at_the_clips_rate_is_accepted() {
+    let specs = vec![
+        rated("left", 24, 1),
+        mask("veil", "test/merge", "left", "left"),
+        deband_with_mask("left", "veil"),
         sink("out", "clean"),
     ];
 
     assert!(solves(&specs));
+}
+
+#[test]
+fn a_mask_from_a_rateless_clip_is_refused_beside_a_rated_one() {
+    let mut specs = vec![rated("left", 24, 1)];
+    specs.extend(unrated_mask("veil"));
+    specs.push(deband_with_mask("left", "veil"));
+    specs.push(sink("out", "clean"));
+
+    let reported = rate_mismatches(&specs);
+
+    assert_eq!(reported.len(), 1);
+    assert!(reported[0].message().contains("unknown"));
 }
 
 #[test]

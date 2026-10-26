@@ -61,12 +61,17 @@ pub(super) fn frames_template(chosen: StreamFormat) -> StreamTemplate {
     StreamTemplate::from_format(&chosen)
 }
 
-/// A mask of the fixture dimensions, carrying whatever sample was chosen.
+/// A mask of the fixture dimensions, carrying the sample and frame rate that were chosen.
 ///
 /// A mask stage emits a mask, so it cannot pass a frames template straight through.
 pub(super) fn mask_template(chosen: StreamFormat) -> StreamTemplate {
+    let frame_rate = match chosen {
+        StreamFormat::Frames(format) => format.frame_rate,
+        StreamFormat::Mask(format) => format.frame_rate,
+    };
+
     StreamTemplate::Mask(MaskFormat {
-        frame_rate: None,
+        frame_rate,
         width: 64,
         height: 64,
         sample: chosen.sample(),

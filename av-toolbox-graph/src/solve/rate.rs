@@ -6,10 +6,9 @@ use crate::graph::NodeId;
 use crate::{Diagnostic, DiagnosticCode};
 
 impl Solver<'_> {
-    /// Whether every frames input of `id` runs at one frame rate, reporting the node when not.
+    /// Whether every frames and mask input of `id` runs at one frame rate, reporting the node when not.
     ///
-    /// Masks and unbound slots carry no rate and are skipped. An unknown rate only matches another
-    /// unknown rate.
+    /// Unbound slots are skipped. An unknown rate only matches another unknown rate.
     pub(super) fn rates_agree(&mut self, id: NodeId, inputs: &[Option<StreamFormat>]) -> bool {
         let rates = frame_rates(inputs);
 
@@ -23,7 +22,8 @@ impl Solver<'_> {
         }
 
         let listed = describe(&rates);
-        let message = format!("{listed}, but every frames input of a stage must share one frame rate");
+        let message =
+            format!("{listed}, but every frames and mask input of a stage must share one frame rate");
 
         let graph = self.graph;
         let node = graph.node(id);
@@ -60,14 +60,15 @@ fn describe_input(param: Option<&str>, producer: &str, rate: Option<FrameRate>) 
     }
 }
 
-/// The frame rate of every bound frames input, beside its signature slot.
+/// The frame rate of every bound frames or mask input, beside its signature slot.
 fn frame_rates(inputs: &[Option<StreamFormat>]) -> Vec<(usize, Option<FrameRate>)> {
     inputs
         .iter()
         .enumerate()
         .filter_map(|(slot, input)| match input {
             Some(StreamFormat::Frames(format)) => Some((slot, format.frame_rate)),
-            _ => None,
+            Some(StreamFormat::Mask(format)) => Some((slot, format.frame_rate)),
+            None => None,
         })
         .collect()
 }
