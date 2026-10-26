@@ -1,5 +1,6 @@
 mod based;
 mod h264;
+mod heatmap;
 mod matrix;
 mod pp7;
 mod qed;

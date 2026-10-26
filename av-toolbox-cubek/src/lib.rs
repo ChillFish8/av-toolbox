@@ -19,6 +19,7 @@
 //! - [deinterlace] for rebuilding one field of a frame from its neighbours, the way bwdif does.
 //! - [edges] for Prewitt, Sobel and Kirsch edge strength, and binarizing.
 //! - [reduce] for the extremes and sums of a plane.
+//! - [heatmap] for painting a per pixel distortion map over a clip.
 //! - [histogram] for percentiles.
 //! - [hysteresis] for keeping the connected regions of a mask that hold a seed.
 //! - [ivtc] for the weaves and metrics of inverse telecine, the way VIVTC's VFM and VDecimate compute them.
@@ -51,6 +52,7 @@ pub mod depth;
 mod dispatch;
 pub mod dpir;
 pub mod edges;
+pub mod heatmap;
 pub mod histogram;
 pub mod hysteresis;
 pub mod ivtc;

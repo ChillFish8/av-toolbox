@@ -11,6 +11,7 @@ mod edges;
 mod eedi2;
 mod eedi3;
 mod h264;
+mod heatmap;
 mod hysteresis;
 mod ivtc;
 mod labels;
@@ -121,6 +122,7 @@ pub use self::h264::{
     reference_h264_padded,
     split_planes,
 };
+pub use self::heatmap::{reference_colour, reference_heatmap, reference_strength};
 pub use self::hysteresis::reference_hysteresis;
 pub use self::ivtc::{
     DecimateDropFixture,
