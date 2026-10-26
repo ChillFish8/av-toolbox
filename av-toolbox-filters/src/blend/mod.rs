@@ -1,3 +1,4 @@
+mod heatmap;
 mod kernel;
 
 use av_toolbox_core::{
@@ -29,6 +30,7 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+pub(crate) use self::heatmap::Heatmap;
 use self::kernel::MaskedBlend;
 
 const BASE: usize = 0;

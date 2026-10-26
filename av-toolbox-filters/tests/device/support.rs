@@ -458,7 +458,7 @@ fn only_frame(mut frames: Vec<Frame>) -> Frame {
 
 /// Builds `stage` against one positional input per entry of `inputs`, working out its output
 /// format the way a pipeline would, by asking the stage what it produces.
-fn built_multi_filter(
+pub(crate) fn built_multi_filter(
     backend: &Backend,
     stage: &str,
     inputs: &[FrameFormat],

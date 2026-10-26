@@ -12,6 +12,7 @@
 //! - `aa/eedi3` anti-aliases by re-interpolating each field along the cheapest path of edge directions
 //!   across each row, the way EEDI3 does.
 //! - `aa/sangnom` anti-aliases by rebuilding each field along its edges, the way SangNom2 does.
+//! - `blend/heatmap` paints a distortion map over a greyscale copy of a clip.
 //! - `blend/masked` picks each pixel from one of two clips by a mask.
 //! - `crop/auto` finds the black bars around a clip's picture and removes them.
 //! - `crop/manual` removes a given number of samples from each edge of a clip.
@@ -103,6 +104,7 @@ pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_filter::<aa::Eedi2>()?;
     registry.register_filter::<aa::Eedi3>()?;
     registry.register_filter::<aa::Sangnom>()?;
+    registry.register_filter::<blend::Heatmap>()?;
     registry.register_filter::<blend::Masked>()?;
     registry.register_filter::<crop::Auto>()?;
     registry.register_filter::<crop::Manual>()?;

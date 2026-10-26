@@ -9,6 +9,7 @@ mod dehalo;
 mod deinterlace;
 mod denoise;
 mod dering;
+mod heatmap;
 mod ivtc;
 mod lineart;
 mod planes;
