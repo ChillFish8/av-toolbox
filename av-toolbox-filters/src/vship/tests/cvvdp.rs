@@ -334,6 +334,18 @@ mod device {
     }
 
     #[test]
+    fn map_values_are_jod_lost() {
+        let run = scored(json!({ "output": "map" }), blurred_luma);
+
+        let values = f32_plane(&run.frames[0]);
+        let largest = values.iter().copied().fold(f32::MIN, f32::max);
+        let rounding = 1e-6;
+        let range = -rounding..=10.0;
+        assert!(values.iter().all(|value| range.contains(value)));
+        assert!(largest > 0.0, "{largest}");
+    }
+
+    #[test]
     fn a_resized_map_is_at_the_display_size() {
         let args = json!({ "output": "map", "resize_to_display": true });
 

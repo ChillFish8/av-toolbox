@@ -43,6 +43,9 @@ const MAX_FPS: f64 = 1000.0;
 const REFERENCE: usize = 0;
 const DISTORTED: usize = 1;
 
+/// Vship's map holds `1 - JOD / 10`, so this turns it into the JOD lost.
+const JOD_LOST_PER_MAP_UNIT: f32 = 10.0;
+
 /// The built-in displays by name, as Vship knows them.
 const DISPLAYS: [(&str, DisplayModel); 6] = [
     ("standard_4k", DisplayModel::Standard4k),
@@ -68,7 +71,7 @@ pub(crate) struct CvvdpArgs {
     /// Scores the clip as a video. When false, each frame scores alone.
     #[serde(default = "default_temporal")]
     pub(crate) temporal: bool,
-    /// Outputs the distorted clip, or the distortion map.
+    /// Outputs the distorted clip, or a map of the JOD lost at each pixel.
     #[serde(default)]
     pub(crate) output: Output,
     /// The Vship device to score on, matching the pipeline's device by default.
@@ -88,7 +91,7 @@ fn default_temporal() -> bool {
 ///
 /// Each output frame carries `score` in JOD, where 10 means no visible difference. The score covers
 /// every frame so far, or with `temporal = false` only that frame. The output is the distorted
-/// frame, or with `output = "map"` the frame's distortion map. At the end of the stream it writes a
+/// frame, or with `output = "map"` the frame's map of the JOD lost at each pixel. At the end of the stream it writes a
 /// `summary` record of the final score.
 pub(crate) struct Cvvdp;
 
@@ -468,7 +471,7 @@ impl Filter<HostSide> for CvvdpInstance {
 
         let mut meta = distorted.meta().clone();
         meta.attach("score", MetaValue::Float(score));
-        let frame = map_frame(context, &output.format, meta, &output.map)?;
+        let frame = map_frame(context, &output.format, meta, &output.map, JOD_LOST_PER_MAP_UNIT)?;
 
         Ok(vec![frame])
     }

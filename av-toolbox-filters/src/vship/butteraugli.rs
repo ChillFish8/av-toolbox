@@ -49,7 +49,7 @@ pub(crate) struct ButteraugliArgs {
     /// The display brightness in nits.
     #[serde(default = "default_intensity")]
     pub(crate) intensity: f32,
-    /// Outputs the distorted clip, or the distortion map.
+    /// Outputs the distorted clip, or a map of the Butteraugli distance at each pixel.
     #[serde(default)]
     pub(crate) output: Output,
     /// The Vship device to score on, matching the pipeline's device by default.
@@ -68,7 +68,7 @@ fn default_intensity() -> f32 {
 /// Scores each distorted frame against its reference with Butteraugli, through Vship.
 ///
 /// Each output frame carries `norm_q`, `norm3` and `norm_inf`, where 0 means identical. The output
-/// is the distorted frame, or with `output = "map"` the per-pixel distortion map at the clip's size.
+/// is the distorted frame, or with `output = "map"` the per-pixel map of Butteraugli distance at the clip's size.
 /// At the end of the stream it writes a `summary` record of `norm_q` and the largest `norm_inf`.
 pub(crate) struct Butteraugli;
 
@@ -277,7 +277,7 @@ impl Filter<HostSide> for ButteraugliInstance {
 
         let mut meta = distorted.meta().clone();
         attach_score(&mut meta, &score);
-        let frame = map_frame(context, &output.format, meta, &output.map)?;
+        let frame = map_frame(context, &output.format, meta, &output.map, 1.0)?;
 
         Ok(vec![frame])
     }

@@ -72,25 +72,26 @@ pub(crate) fn declared_map(
     Ok(MapOutput { map, format })
 }
 
-/// A frame of `format` carrying `meta`, holding every value of `map` in its `Y` plane.
+/// A frame of `format` carrying `meta`, holding every value of `map` times `multiplier` in its `Y` plane.
 pub(crate) fn map_frame(
     context: &mut FrameContext,
     format: &FrameFormat,
     meta: FrameMeta,
     map: &DistortionMap,
+    multiplier: f32,
 ) -> Result<HostFrame, StageError> {
     let mut frame = context.alloc_host_frame(format, meta);
     let Some(plane) = frame.plane_mut(Channel::Y) else {
         return Err(missing_plane_error());
     };
 
-    write_values(plane, map.data())?;
+    write_values(plane, map.data(), multiplier)?;
 
     Ok(frame.freeze())
 }
 
-/// Writes `values` as little-endian `f32`s over the whole of `plane`.
-fn write_values(plane: &mut [u8], values: &[f32]) -> Result<(), StageError> {
+/// Writes `values` times `multiplier` as little-endian `f32`s over the whole of `plane`.
+fn write_values(plane: &mut [u8], values: &[f32], multiplier: f32) -> Result<(), StageError> {
     let needed = size_of_val(values);
     if plane.len() != needed {
         return Err(plane_size_error(plane.len(), needed));
@@ -98,7 +99,7 @@ fn write_values(plane: &mut [u8], values: &[f32]) -> Result<(), StageError> {
 
     let (slots, _) = plane.as_chunks_mut::<4>();
     for (slot, value) in slots.iter_mut().zip(values) {
-        *slot = value.to_le_bytes();
+        *slot = (value * multiplier).to_le_bytes();
     }
 
     Ok(())
@@ -173,7 +174,7 @@ mod tests {
         let mut plane = vec![0xAA; 12];
         let values = [1.5, -2.0, 0.0];
 
-        write_values(&mut plane, &values).expect("the plane fits");
+        write_values(&mut plane, &values, 1.0).expect("the plane fits");
 
         let mut expected = Vec::new();
         for value in values {
@@ -183,10 +184,22 @@ mod tests {
     }
 
     #[test]
+    fn values_are_multiplied_as_they_are_written() {
+        let mut plane = vec![0; 8];
+
+        write_values(&mut plane, &[0.25, -0.5], 10.0).expect("the plane fits");
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&f32::to_le_bytes(2.5));
+        expected.extend_from_slice(&f32::to_le_bytes(-5.0));
+        assert_eq!(plane, expected);
+    }
+
+    #[test]
     fn a_plane_of_the_wrong_size_is_refused() {
         let mut plane = vec![0; 8];
 
-        let error = write_values(&mut plane, &[1.0, 2.0, 3.0]).expect_err("the plane is short");
+        let error = write_values(&mut plane, &[1.0, 2.0, 3.0], 1.0).expect_err("the plane is short");
 
         assert!(error.to_string().contains("needs 12 bytes"), "{error}");
     }
