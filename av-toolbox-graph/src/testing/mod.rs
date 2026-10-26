@@ -20,7 +20,19 @@ use self::artefacts::{Files, Grain, Scenes};
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
 use self::endpoints::{Deep, File, Float, FloatFirst, Stdout, Wide, WideningSource};
-use self::filters::{Blur, Deband, Either, Failing, Narrow, Precise, Prefers16, Recording, Sparse, Temporal};
+use self::filters::{
+    Blur,
+    Deband,
+    Either,
+    Failing,
+    Narrow,
+    Precise,
+    Prefers16,
+    Recording,
+    ResampleDepth,
+    Sparse,
+    Temporal,
+};
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 pub(crate) use self::filters::{RECORDED_INPUT_WIDTH, TEMPORAL_BUILD_CALLS};
 pub(crate) use self::filters::{
@@ -130,6 +142,9 @@ pub(crate) fn registry_without_probe_kinds() -> PipelineRegistry {
     registry.register_source::<Seekable>().expect("should register");
     registry.register_filter::<Probing>().expect("should register");
     registry.register_filter::<Pair>().expect("should register");
+    registry
+        .register_filter::<ResampleDepth>()
+        .expect("should register");
 
     registry
 }
@@ -146,7 +161,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 52);
+        assert_eq!(identifiers.len(), 53);
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
@@ -175,6 +190,7 @@ mod tests {
         assert!(identifiers.contains(&"test/seekable"));
         assert!(identifiers.contains(&"test/probing"));
         assert!(identifiers.contains(&"test/pair"));
+        assert!(identifiers.contains(&"resample/depth"));
     }
 
     #[test]

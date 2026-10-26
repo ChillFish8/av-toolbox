@@ -154,6 +154,20 @@ pub(crate) struct ProviderNode {
     pub(crate) placement: ProviderPlacement,
 }
 
+/// A stage the graph adds itself, with everything its node is built from.
+pub(crate) struct InjectedStage {
+    pub(crate) kind: StageKind,
+    /// The full identifier the stage was registered under.
+    pub(crate) identifier: &'static str,
+    /// The name of the stage's one input.
+    pub(crate) input: &'static str,
+    /// The node's name, such as `depth(denoise)`.
+    pub(crate) name: String,
+    pub(crate) args: Value,
+    /// The table its diagnostics point at.
+    pub(crate) span: Span,
+}
+
 /// The pieces a node is built from.
 pub(crate) struct NodeParts {
     pub(crate) id: NodeId,
@@ -501,6 +515,41 @@ impl CompiledGraph {
             artefacts: StageArtefacts::NONE,
             role: NodeRole::Crossing(crossing),
             residency: Some(crossing.to_side()),
+            stream: source.output_stream(),
+            open: OpenSlot::new(),
+            route: None,
+            demands: Vec::new(),
+            probes: Vec::new(),
+            probed: None,
+        };
+
+        self.nodes.push(node);
+        id
+    }
+
+    /// Appends `stage` reading `producer`'s output, and returns it.
+    ///
+    /// The order is not recomputed until [CompiledGraph::finish_edit](crate::CompiledGraph::finish_edit)
+    /// is called.
+    pub(crate) fn push_stage(&mut self, producer: NodeId, stage: InjectedStage) -> NodeId {
+        let source = &self.nodes[producer.index()];
+        let id = NodeId::new(self.nodes.len());
+
+        let node = Node {
+            id,
+            name: stage.name,
+            kind: stage.kind,
+            identifier: stage.identifier.to_string(),
+            args: stage.args,
+            args_span: stage.span,
+            arg_spans: ArgSpans::default(),
+            inputs: vec![Edge::new(None, Some(stage.input), 0, producer, source.span())],
+            consumers: Vec::new(),
+            workers: None,
+            span: stage.span,
+            artefacts: StageArtefacts::NONE,
+            role: NodeRole::Stage,
+            residency: None,
             stream: source.output_stream(),
             open: OpenSlot::new(),
             route: None,

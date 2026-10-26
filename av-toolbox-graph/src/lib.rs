@@ -48,6 +48,7 @@ mod suggest;
 mod testing;
 #[cfg(test)]
 mod tests;
+mod widen;
 
 pub use self::artefacts::ArtefactSinkNode;
 pub use self::build::{Built, build};
@@ -73,3 +74,4 @@ pub use self::residency::place_transfers;
 pub use self::solve::{SolvedFormats, Widen, solve};
 pub use self::spec::{ArgSpans, FileId, InputRef, Span, Spanned, StageSpec};
 pub use self::suggest::suggest_name;
+pub use self::widen::insert_widens;

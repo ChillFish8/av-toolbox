@@ -10,6 +10,7 @@ use av_toolbox_graph::{
     Span,
     StageSpec,
     default_passes,
+    insert_widens,
     optimise,
     place_transfers,
     plan,
@@ -104,6 +105,7 @@ impl<'r> Pipeline<'r> {
 
         let capabilities = backend.capabilities();
         let mut formats = solve(&graph, registry, capabilities)?;
+        insert_widens(&mut graph, &mut formats);
         settle_mask_planes(&graph, registry, &mut formats)?;
 
         let placed = place_transfers(&mut graph, registry, &mut formats)?;

@@ -30,6 +30,8 @@ use av_toolbox_gpu::{
     StreamFormat,
     StreamTemplate,
 };
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use super::chunked;
 use super::shared::{BlurArgs, NoArgs, TemporalArgs, first_bound, frames_template};
@@ -487,5 +489,149 @@ impl FilterDefinition for Temporal {
         TEMPORAL_BUILD_CALLS.fetch_add(1, Ordering::SeqCst);
 
         Ok(Box::new(TemporalFilter))
+    }
+}
+
+/// The sample a [ResampleDepth] converts to, its bits or `"f32"`.
+#[derive(Debug, Deserialize, JsonSchema, Copy, Clone)]
+#[serde(untagged)]
+pub(super) enum DepthTarget {
+    Bits(u8),
+    Float(FloatTarget),
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Copy, Clone)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FloatTarget {
+    F32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Copy, Clone)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DitherMode {
+    None,
+    Ordered,
+    BlueNoise,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ResampleDepthArgs {
+    depth: DepthTarget,
+    #[serde(default)]
+    at_least: bool,
+    #[serde(default)]
+    #[expect(dead_code, reason = "the fixture only checks the argument parses")]
+    dither: Option<DitherMode>,
+}
+
+fn bad_depth(depth: u8) -> StageError {
+    let message = format!("resample/depth needs depth between 8 and 16, got {depth}");
+
+    StageError::msg(message)
+}
+
+fn integer_sample(bits: u8) -> Result<SampleFormat, StageError> {
+    if bits == 8 {
+        return Ok(SampleFormat::U8);
+    }
+
+    let Ok(depth) = Depth::new(bits) else {
+        return Err(bad_depth(bits));
+    };
+
+    Ok(SampleFormat::U16 { depth })
+}
+
+/// The samples `args` lets the output take, narrowest first.
+fn depth_samples(args: &ResampleDepthArgs) -> Result<FormatSet, StageError> {
+    let bits = match args.depth {
+        DepthTarget::Float(FloatTarget::F32) => return Ok(FormatSet::of([SampleFormat::F32])),
+        DepthTarget::Bits(bits) => bits,
+    };
+
+    let last = if args.at_least { 16 } else { bits };
+    let mut samples = FormatSet::new();
+    for deeper in bits..=last {
+        let sample = integer_sample(deeper)?;
+        samples.push(sample);
+    }
+
+    Ok(samples)
+}
+
+struct ResampleDepthStage;
+
+impl StageInstance for ResampleDepthStage {}
+
+impl Filter for ResampleDepthStage {
+    fn process(&mut self, _context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
+        let frame = inputs
+            .take_frame(0)
+            .ok_or_else(|| StageError::msg("expected a frame in slot 0"))?;
+
+        Ok(vec![frame])
+    }
+}
+
+/// A stand-in for `resample/depth`, taking any sample and emitting the depth it is asked for.
+pub(super) struct ResampleDepth;
+
+impl StageDefinition for ResampleDepth {
+    type Args = ResampleDepthArgs;
+
+    fn package() -> &'static str {
+        "resample"
+    }
+
+    fn identifier() -> &'static str {
+        "depth"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("input").accepting(StreamType::Frames)]);
+        SIGNATURE
+    }
+}
+
+impl FilterDefinition for ResampleDepth {
+    type Side = DeviceSide;
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([offered.sample()]))
+    }
+
+    fn produces(
+        _capabilities: &Capabilities,
+        args: &Self::Args,
+        chosen: &[Option<StreamFormat>],
+    ) -> Result<OutputFormats, StageError> {
+        let format = first_bound(chosen)?;
+        let samples = depth_samples(args)?;
+
+        Ok(OutputFormats {
+            template: StreamTemplate::from_format(&format),
+            samples,
+        })
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Filter>, StageError> {
+        Ok(Box::new(ResampleDepthStage))
     }
 }
