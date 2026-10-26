@@ -130,7 +130,7 @@ impl StageDefinition for Heatmap {
 }
 
 fn not_frames() -> StageError {
-    let message = format!("{STAGE} paints frames, not masks");
+    let message = format!("{STAGE} needs frames on both inputs, so a mask needs mask/to_frames first");
 
     StageError::msg(message)
 }

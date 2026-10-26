@@ -311,7 +311,7 @@ fn the_map_frames_metadata_is_kept() {
     let output = painted(map_meta, &picture);
 
     let mut attachments = output.meta.attachments.clone();
-    attachments.stamp("vship/cvvdp");
+    attachments.stamp("test/map");
     let score = float_named(&attachments, "score");
 
     assert_eq!(score, 9.5);

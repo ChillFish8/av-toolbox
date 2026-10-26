@@ -34,12 +34,20 @@ pub enum Shading {
     ///
     /// The stops are the colours at strength 0, 0.5 and 1, as red, green and blue between 0 and 1.
     Multiply {
+        /// The ramp's colours at strength 0, 0.5 and 1.
         stops: [[f32; 3]; 3],
+        /// The brightness of a black pixel.
         base: f32,
+        /// How much brighter a white pixel is than a black one.
         gain: f32,
     },
     /// The picture's grey mixed with `colour`, which covers `opacity * strength` of it.
-    Overlay { colour: [f32; 3], opacity: f32 },
+    Overlay {
+        /// The colour laid over the picture, as red, green and blue between 0 and 1.
+        colour: [f32; 3],
+        /// How much of the picture the colour covers at full strength.
+        opacity: f32,
+    },
 }
 
 /// How the planes of a clip hold the picture being painted.
@@ -112,6 +120,21 @@ const GREY_WEIGHTS: [f32; 3] = [0.2126, 0.7152, 0.0722];
 /// A multiply shading is its three stops, then its base and gain. An overlay shading is its colour,
 /// then its opacity, with the rest left at zero.
 const PALETTE_VALUES: usize = 11;
+
+/// Where a multiply shading's middle stop starts in the palette.
+const MIDDLE_STOP: u32 = 3;
+
+/// Where a multiply shading's last stop starts in the palette.
+const LAST_STOP: u32 = 6;
+
+/// Where a multiply shading's base sits in the palette.
+const BASE: u32 = 9;
+
+/// Where a multiply shading's gain sits in the palette.
+const GAIN: u32 = 10;
+
+/// Where an overlay shading's opacity sits in the palette, after its colour.
+const OPACITY: u32 = 3;
 
 fn palette_values(shading: Shading) -> Vec<f32> {
     let mut values = match shading {
@@ -532,7 +555,7 @@ fn colour_channel(
 /// One channel of the palette's colour mixed over a pixel of brightness `grey` at `strength`.
 #[cube]
 fn overlaid_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32) -> f32 {
-    let cover = palette[3] * strength;
+    let cover = palette[OPACITY as usize] * strength;
 
     grey * (1.0 - cover) + palette[channel as usize] * cover
 }
@@ -540,14 +563,14 @@ fn overlaid_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32
 /// One channel of the palette's ramp at `strength`, times a pixel of brightness `grey`.
 #[cube]
 fn multiplied_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32) -> f32 {
-    let brightness = palette[9] + palette[10] * grey;
-    let mut from = palette[(3 + channel) as usize];
-    let mut to = palette[(6 + channel) as usize];
+    let brightness = palette[BASE as usize] + palette[GAIN as usize] * grey;
+    let mut from = palette[(MIDDLE_STOP + channel) as usize];
+    let mut to = palette[(LAST_STOP + channel) as usize];
     let mut fraction = (strength - 0.5) * 2.0;
 
     if strength <= 0.5 {
         from = palette[channel as usize];
-        to = palette[(3 + channel) as usize];
+        to = palette[(MIDDLE_STOP + channel) as usize];
         fraction = strength * 2.0;
     }
 
