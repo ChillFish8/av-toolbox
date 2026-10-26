@@ -53,6 +53,7 @@ opinionated_source!(
     "deep",
     FormatSet::of([SampleFormat::U16 { depth: Depth::TEN }, SampleFormat::F32])
 );
+opinionated_source!(Float, FloatStage, "float", FormatSet::of([SampleFormat::F32]));
 // FloatFirst would rather emit the wider of its two samples.
 opinionated_source!(
     FloatFirst,

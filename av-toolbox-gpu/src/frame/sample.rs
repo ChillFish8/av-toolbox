@@ -86,6 +86,26 @@ impl SampleFormat {
             Self::F32 => ElementType::F32,
         }
     }
+
+    /// Every sample that holds all of this one's values exactly, narrowest first.
+    ///
+    /// An integer widens to each deeper integer and then to F32, which holds every integer up to
+    /// 16 bits exactly. F32 widens to nothing.
+    pub fn lossless_widenings(self) -> Vec<SampleFormat> {
+        let bits = match self {
+            Self::U8 => 8,
+            Self::U16 { depth } => depth.bits(),
+            Self::F32 => return Vec::new(),
+        };
+
+        let mut widenings: Vec<SampleFormat> = (bits + 1..=16)
+            .filter_map(|deeper| Depth::new(deeper).ok())
+            .map(|depth| Self::U16 { depth })
+            .collect();
+        widenings.push(Self::F32);
+
+        widenings
+    }
 }
 
 impl fmt::Display for SampleFormat {
@@ -178,6 +198,32 @@ mod tests {
         assert_eq!(SampleFormat::U8.to_string(), "u8");
         assert_eq!(SampleFormat::F32.to_string(), "f32");
         assert_eq!(SampleFormat::U16 { depth: Depth::TEN }.to_string(), "u16 10-bit");
+    }
+
+    #[test]
+    fn an_integer_widens_to_every_deeper_integer_then_f32() {
+        let ten = SampleFormat::U16 { depth: Depth::TEN };
+        let widenings = ten.lossless_widenings();
+
+        let eleven = Depth::new(11).expect("should accept");
+        assert_eq!(widenings.first(), Some(&SampleFormat::U16 { depth: eleven }));
+        assert_eq!(widenings.last(), Some(&SampleFormat::F32));
+        assert_eq!(widenings.len(), 7);
+    }
+
+    #[test]
+    fn u8_widens_to_every_u16_depth_then_f32() {
+        let widenings = SampleFormat::U8.lossless_widenings();
+
+        let nine = Depth::new(9).expect("should accept");
+        assert_eq!(widenings.first(), Some(&SampleFormat::U16 { depth: nine }));
+        assert_eq!(widenings.last(), Some(&SampleFormat::F32));
+        assert_eq!(widenings.len(), 9);
+    }
+
+    #[test]
+    fn f32_widens_to_nothing() {
+        assert!(SampleFormat::F32.lossless_widenings().is_empty());
     }
 
     #[test]

@@ -19,7 +19,7 @@ use av_toolbox_core::{Parallelism, PipelineRegistry};
 use self::artefacts::{Files, Grain, Scenes};
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
-use self::endpoints::{Deep, File, FloatFirst, Stdout, Wide, WideningSource};
+use self::endpoints::{Deep, File, Float, FloatFirst, Stdout, Wide, WideningSource};
 use self::filters::{Blur, Deband, Either, Failing, Narrow, Precise, Prefers16, Recording, Sparse, Temporal};
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 pub(crate) use self::filters::{RECORDED_INPUT_WIDTH, TEMPORAL_BUILD_CALLS};
@@ -83,6 +83,7 @@ pub(crate) fn registry_without_probe_kinds() -> PipelineRegistry {
     registry.register_filter::<Prefers16>().expect("should register");
     registry.register_mask::<Matched>().expect("should register");
     registry.register_mask::<Anchored>().expect("should register");
+    registry.register_source::<Float>().expect("should register");
     registry.register_source::<FloatFirst>().expect("should register");
     registry.register_mask::<Mislabelled>().expect("should register");
     registry.register_filter::<Sparse>().expect("should register");
@@ -145,7 +146,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 51);
+        assert_eq!(identifiers.len(), 52);
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));

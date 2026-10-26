@@ -528,7 +528,7 @@ mod diagnostics_tests {
         let per_node = (0..graph.len())
             .map(|_| ResolvedFormats::new(Vec::new(), None))
             .collect();
-        let formats = SolvedFormats::new(per_node);
+        let formats = SolvedFormats::new(per_node, Vec::new());
 
         let held = graph.held_frames(&registry, &formats).expect("should prepare");
 
@@ -605,7 +605,7 @@ mod tests {
             })
             .collect();
 
-        SolvedFormats::new(per_node)
+        SolvedFormats::new(per_node, Vec::new())
     }
 
     fn frames(width: u32) -> StreamFormat {

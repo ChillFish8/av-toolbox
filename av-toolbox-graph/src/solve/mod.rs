@@ -27,11 +27,17 @@ use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 #[derive(Debug, Clone)]
 pub struct SolvedFormats {
     per_node: Vec<ResolvedFormats>,
+    widens: Vec<Widen>,
 }
 
 impl SolvedFormats {
-    pub(crate) fn new(per_node: Vec<ResolvedFormats>) -> Self {
-        Self { per_node }
+    pub(crate) fn new(per_node: Vec<ResolvedFormats>, widens: Vec<Widen>) -> Self {
+        Self { per_node, widens }
+    }
+
+    /// Every edge the solver widened, where the consumer's input holds the wider format.
+    pub fn widens(&self) -> &[Widen] {
+        &self.widens
     }
 
     pub fn get(&self, node: NodeId) -> &ResolvedFormats {
@@ -65,11 +71,22 @@ impl SolvedFormats {
     }
 }
 
+/// One edge the solver widened so its reader could take it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Widen {
+    pub consumer: NodeId,
+    /// The input's position in the consumer's definition.
+    pub edge: usize,
+    pub from: StreamFormat,
+    pub to: StreamFormat,
+}
+
 /// Chooses one sample format per edge, in the graph's topological order.
 ///
 /// Every stage states what it could emit and what it would take, and an edge carries the producer's
-/// most preferred format that both ends allow. No conversion is inserted, so an edge whose ends
-/// share nothing is an error naming both sides.
+/// most preferred format that both ends allow. An edge whose reader only takes a wider sample is
+/// widened to the narrowest one holding every value exactly. An edge that would have to narrow is
+/// an error naming both sides.
 pub fn solve(
     graph: &CompiledGraph,
     registry: &PipelineRegistry,
@@ -92,6 +109,7 @@ pub fn solve(
         resolved: (0..graph.len()).map(|_| None).collect(),
         produced: (0..graph.len()).map(|_| None).collect(),
         reported: HashSet::new(),
+        widens: Vec::new(),
         diagnostics,
     };
 
@@ -113,6 +131,7 @@ struct Solver<'a> {
     resolved: Vec<Option<ResolvedFormats>>,
     produced: Vec<Option<OutputFormats>>,
     reported: HashSet<NodeId>,
+    widens: Vec<Widen>,
     diagnostics: Diagnostics,
 }
 
@@ -120,11 +139,18 @@ impl Solver<'_> {
     /// Settles one node's inputs and the format it emits.
     ///
     /// A node whose stage never prepared, and one reading a node that never settled, is left
-    /// undecided rather than guessed at.
+    /// undecided rather than guessed at. Inputs the node refuses are widened before its output is
+    /// worked out, so the output follows from what it actually receives.
     fn decide(&mut self, id: NodeId) {
         if self.prepared[id.index()].is_none() {
             return;
         }
+
+        if self.inputs_of(id).is_none() {
+            return;
+        }
+
+        while self.widen_refused_inputs(id) {}
 
         let Some(inputs) = self.inputs_of(id) else {
             return;
@@ -196,7 +222,8 @@ impl Solver<'_> {
     /// while one of its other inputs was still unsettled may have been steering on a proposal that
     /// moves later, so that sample is only set aside rather than ruled out. It is taken up again
     /// when nothing else survives, and the validation pass holds the reader to it once everything
-    /// has settled.
+    /// has settled. When every sample was ruled out, the producer's first one is widened for each
+    /// reader that refused it.
     fn choose(&mut self, id: NodeId, output: &OutputFormats) -> Option<SampleFormat> {
         if output.samples.is_empty() {
             let error = StageError::msg("the stage offered no sample format to emit");
@@ -210,7 +237,6 @@ impl Solver<'_> {
 
         let mut agreed = FormatSet::new();
         let mut tolerated = FormatSet::new();
-        let mut refused: Vec<Option<Refusal>> = vec![None; readers.len()];
 
         for candidate in candidates {
             let offered = output.template.with_sample(candidate);
@@ -222,16 +248,7 @@ impl Solver<'_> {
                 continue;
             }
 
-            let mut ruled_out = false;
-            for turndown in turndowns {
-                if !turndown.firm {
-                    continue;
-                }
-
-                ruled_out = true;
-                keep_refusal(&mut refused, &readers, turndown);
-            }
-
+            let ruled_out = turndowns.iter().any(|turndown| turndown.firm);
             if !ruled_out {
                 tolerated.push(candidate);
             }
@@ -245,15 +262,126 @@ impl Solver<'_> {
             return tolerated.first();
         }
 
-        let mut refusals = refused.into_iter().flatten();
-        let first = refusals
-            .next()
-            .expect("a sample either survives every reader or one of them ruled it out");
-        let rest: Vec<Refusal> = refusals.collect();
+        let first = output.samples.first()?;
+        self.widen_for_readers(id, output, &readers, first)
+    }
 
+    /// Settles on `sample`, widening the edge into each reader that firmly refused it.
+    ///
+    /// A reader with no lossless widening it takes may have refused only because a sibling input
+    /// settled narrower. That reader is left to widen the sibling when it is decided itself.
+    /// Any other such reader makes the edge an error naming each one.
+    fn widen_for_readers(
+        &mut self,
+        id: NodeId,
+        output: &OutputFormats,
+        readers: &[Reader],
+        sample: SampleFormat,
+    ) -> Option<SampleFormat> {
+        let offered = output.template.with_sample(sample);
+        let turndowns = self.probe(id, readers, sample, offered)?;
+
+        let mut widens = Vec::new();
+        let mut refusals = Vec::new();
+
+        for turndown in turndowns {
+            if !turndown.firm {
+                continue;
+            }
+
+            let reader = readers[turndown.reader];
+            let proposals = Proposals::Forward(id);
+            let widened = self.widening(reader, offered, &turndown.accepted, proposals);
+
+            if let Some(to) = widened {
+                widens.push(Widen {
+                    consumer: reader.consumer,
+                    edge: reader.edge,
+                    from: offered,
+                    to,
+                });
+                continue;
+            }
+
+            if self.a_sibling_could_widen_to(reader, sample) {
+                continue;
+            }
+
+            refusals.push(Refusal {
+                consumer: reader.consumer,
+                edge: reader.edge,
+                accepted: turndown.accepted,
+            });
+        }
+
+        let mut refusals = refusals.into_iter();
+        let Some(first) = refusals.next() else {
+            self.widens.extend(widens);
+            return Some(sample);
+        };
+
+        let rest: Vec<Refusal> = refusals.collect();
         self.report_no_common_format(&output.samples, None, &first, &rest);
 
         None
+    }
+
+    /// The narrowest lossless widening of `offered` that `reader` takes, confirmed by asking again.
+    fn widening(
+        &mut self,
+        reader: Reader,
+        offered: StreamFormat,
+        accepted: &FormatSet,
+        proposals: Proposals,
+    ) -> Option<StreamFormat> {
+        let widenings = offered.sample().lossless_widenings();
+        let sample = widenings.into_iter().find(|wider| accepted.accepts(*wider))?;
+
+        let template = StreamTemplate::from_format(&offered);
+        let widened = template.with_sample(sample);
+        let answer = self.ask(reader.consumer, reader.slot, widened, proposals)?;
+
+        if !answer.accepted.accepts(sample) {
+            return None;
+        }
+
+        Some(widened)
+    }
+
+    /// Whether another settled input of the reader could widen losslessly to `sample`.
+    fn a_sibling_could_widen_to(&self, reader: Reader, sample: SampleFormat) -> bool {
+        let slots = self.slots[reader.consumer.index()].len();
+
+        (0..slots)
+            .filter(|slot| *slot != reader.slot)
+            .filter_map(|slot| self.received(reader.consumer, slot))
+            .any(|format| format.sample().lossless_widenings().contains(&sample))
+    }
+
+    /// Records that the edge into `reader` now carries `to`, keeping the producer's format as `from`.
+    ///
+    /// The reader is still being decided, so its own formats are worked out from `to` afterwards.
+    /// Any output kept for it from a proposal was worked out from the narrower input, so it is
+    /// dropped.
+    fn record_widen(&mut self, reader: Reader, given: StreamFormat, to: StreamFormat) {
+        self.produced[reader.consumer.index()] = None;
+
+        let existing = self
+            .widens
+            .iter_mut()
+            .find(|widen| widen.consumer == reader.consumer && widen.edge == reader.edge);
+
+        if let Some(widen) = existing {
+            widen.to = to;
+            return;
+        }
+
+        self.widens.push(Widen {
+            consumer: reader.consumer,
+            edge: reader.edge,
+            from: given,
+            to,
+        });
     }
 
     /// Puts one sample to every reader, collecting each one that will not take it.
@@ -284,6 +412,44 @@ impl Solver<'_> {
         Some(turndowns)
     }
 
+    /// Widens each input of `id` that it refuses but takes a lossless widening of.
+    ///
+    /// Every producer has settled by now, so the node answers on what it actually gets. Returns
+    /// whether any input was widened, since a widen can change what a sibling input is allowed.
+    /// Each widen moves an edge strictly wider, so repeating this always comes to an end.
+    fn widen_refused_inputs(&mut self, id: NodeId) -> bool {
+        let mut widened = false;
+
+        for (edge, _source) in edges_of(self.graph, id) {
+            let slot = self.slot_of(id, edge);
+            let Some(given) = self.received(id, slot) else {
+                continue;
+            };
+
+            let Some(answer) = self.ask(id, slot, given, Proposals::Settled) else {
+                continue;
+            };
+
+            if answer.accepted.accepts(given.sample()) {
+                continue;
+            }
+
+            let reader = Reader {
+                consumer: id,
+                edge,
+                slot,
+            };
+            let wider = self.widening(reader, given, &answer.accepted, Proposals::Settled);
+
+            if let Some(to) = wider {
+                self.record_widen(reader, given, to);
+                widened = true;
+            }
+        }
+
+        widened
+    }
+
     /// Re-asks every consumer, now that none of its inputs is unknown.
     ///
     /// A stage whose acceptance depends on more than one input answers on incomplete information
@@ -297,11 +463,11 @@ impl Solver<'_> {
             }
 
             for (edge, source) in edges_of(graph, *id) {
-                let Some(given) = self.emitted_by(source) else {
+                let slot = self.slot_of(*id, edge);
+                let Some(given) = self.received(*id, slot) else {
                     continue;
                 };
 
-                let slot = self.slot_of(*id, edge);
                 let Some(answer) = self.ask(*id, slot, given, Proposals::Settled) else {
                     continue;
                 };
@@ -310,14 +476,18 @@ impl Solver<'_> {
                     continue;
                 }
 
-                let emitted = self.emitted_samples(source, given.sample());
+                let Some(settled) = self.emitted_by(source) else {
+                    continue;
+                };
+
+                let emitted = self.emitted_samples(source, settled.sample());
                 let refusal = Refusal {
                     consumer: *id,
                     edge,
                     accepted: answer.accepted,
                 };
 
-                self.report_no_common_format(&emitted, Some(given.sample()), &refusal, &[]);
+                self.report_no_common_format(&emitted, Some(settled.sample()), &refusal, &[]);
             }
         }
     }
@@ -333,7 +503,7 @@ impl Solver<'_> {
             .map(|formats| formats.expect("every node settled without a diagnostic"))
             .collect();
 
-        Ok(SolvedFormats::new(per_node))
+        Ok(SolvedFormats::new(per_node, self.widens))
     }
 
     /// Asks one consumer what it would take in `slot`, given what is known about its other inputs.
@@ -349,7 +519,7 @@ impl Solver<'_> {
     ) -> Option<Answer> {
         let inputs = match proposals {
             Proposals::Forward(deciding) => self.offers_to(consumer, slot, offered, deciding),
-            Proposals::Settled => self.settled_offers_to(consumer),
+            Proposals::Settled => self.settled_offers_to(consumer, slot, offered),
         };
 
         let slots = &self.slots[consumer.index()];
@@ -402,7 +572,7 @@ impl Solver<'_> {
                 continue;
             }
 
-            if let Some(settled) = self.emitted_by(source) {
+            if let Some(settled) = self.received(consumer, index) {
                 inputs.push(Offered::Resolved(settled));
                 continue;
             }
@@ -416,15 +586,18 @@ impl Solver<'_> {
         inputs
     }
 
-    /// Every input of `consumer` as it finally settled.
-    fn settled_offers_to(&mut self, consumer: NodeId) -> Vec<Offered> {
-        let sources = self.sources_of(consumer);
-        let mut inputs = Vec::with_capacity(sources.len());
+    /// Every input of `consumer` as it finally settled, with `offered` in `slot`.
+    fn settled_offers_to(&self, consumer: NodeId, slot: usize, offered: StreamFormat) -> Vec<Offered> {
+        let slots = self.slots[consumer.index()].len();
+        let mut inputs = Vec::with_capacity(slots);
 
-        for source in sources {
-            let settled = source.and_then(|source| self.emitted_by(source));
+        for index in 0..slots {
+            if index == slot {
+                inputs.push(Offered::Resolved(offered));
+                continue;
+            }
 
-            match settled {
+            match self.received(consumer, index) {
                 Some(format) => inputs.push(Offered::Resolved(format)),
                 None => inputs.push(Offered::Unknown),
             }
@@ -451,8 +624,8 @@ impl Solver<'_> {
 
     /// What a node would emit, computed once and kept for whoever asks again.
     ///
-    /// Every input is settled by the time this runs, so the answer cannot change between one
-    /// reader asking and the next.
+    /// Every input is settled by the time this runs. Widening one of the node's inputs drops what
+    /// was kept, so the answer is worked out again from what the node receives.
     fn output_of(&mut self, id: NodeId, inputs: &[Option<StreamFormat>]) -> Option<OutputFormats> {
         if let Some(cached) = &self.produced[id.index()] {
             return Some(cached.clone());
@@ -480,20 +653,38 @@ impl Solver<'_> {
     /// A slot nobody bound is a hole, so everything after it keeps its own index. A producer that
     /// never settled gives `None` for the node as a whole, because it cannot be decided at all.
     fn inputs_of(&self, id: NodeId) -> Option<Vec<Option<StreamFormat>>> {
-        let sources = self.sources_of(id);
-        let mut inputs = Vec::with_capacity(sources.len());
+        let slots = &self.slots[id.index()];
+        let mut inputs = Vec::with_capacity(slots.len());
 
-        for source in sources {
-            let Some(source) = source else {
+        for (slot, filled) in slots.iter().enumerate() {
+            if filled.is_none() {
                 inputs.push(None);
                 continue;
-            };
+            }
 
-            let format = self.emitted_by(source)?;
+            let format = self.received(id, slot)?;
             inputs.push(Some(format));
         }
 
         Some(inputs)
+    }
+
+    /// The format `consumer` gets in `slot`, which is the widened one where the edge was widened.
+    ///
+    /// It is `None` while the producer is unsettled and for a slot nobody bound.
+    fn received(&self, consumer: NodeId, slot: usize) -> Option<StreamFormat> {
+        let edge = self.slots[consumer.index()][slot]?;
+
+        let widened = self
+            .widens
+            .iter()
+            .find(|widen| widen.consumer == consumer && widen.edge == edge);
+        if let Some(widen) = widened {
+            return Some(widen.to);
+        }
+
+        let source = self.graph.node(consumer).inputs()[edge].source();
+        self.emitted_by(source)
     }
 
     fn emitted_by(&self, id: NodeId) -> Option<StreamFormat> {
@@ -598,7 +789,7 @@ impl Solver<'_> {
         let message = match (settled, rest.is_empty()) {
             (Some(sample), _) => format!(
                 "{} emits {} and was settled on {sample}, but {} takes {}. \
-                 Put a convert filter between them to pick one.",
+                 Put a resample/depth filter between them to pick one.",
                 producing.name(),
                 describe(emitted),
                 consuming.name(),
@@ -606,7 +797,7 @@ impl Solver<'_> {
             ),
             (None, true) => format!(
                 "{} emits {} and {} takes {}, so this edge has no format to carry. \
-                 Put a convert filter between them to pick one.",
+                 Put a resample/depth filter between them to pick one.",
                 producing.name(),
                 describe(emitted),
                 consuming.name(),
@@ -614,7 +805,7 @@ impl Solver<'_> {
             ),
             (None, false) => format!(
                 "{} emits {} and no single one of those suits every stage reading it. {} takes {}. \
-                 Put a convert filter before whichever reader needs a different one.",
+                 Put a resample/depth filter before whichever reader needs a different one.",
                 producing.name(),
                 describe(emitted),
                 consuming.name(),
@@ -660,19 +851,6 @@ struct Turndown {
     reader: usize,
     accepted: FormatSet,
     firm: bool,
-}
-
-/// Records what a reader ruled out, keeping the first where it ruled out more than one sample.
-fn keep_refusal(refused: &mut [Option<Refusal>], readers: &[Reader], turndown: Turndown) {
-    if refused[turndown.reader].is_some() {
-        return;
-    }
-
-    refused[turndown.reader] = Some(Refusal {
-        consumer: readers[turndown.reader].consumer,
-        edge: readers[turndown.reader].edge,
-        accepted: turndown.accepted,
-    });
 }
 
 /// One input of one consumer that reads a node whose format is being decided.

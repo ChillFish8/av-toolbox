@@ -216,13 +216,57 @@ fn anchored_named_in_reverse() -> Vec<StageSpec> {
 }
 
 /// `test/wide` read by one stage taking only U8 and another taking only F32.
-fn fan_out_that_suits_nobody() -> Vec<StageSpec> {
+fn fan_out_into_narrow_and_precise() -> Vec<StageSpec> {
     vec![
         source("input", "test/wide"),
         filter("small", "test/narrow", "input"),
         filter("exact", "test/precise", "input"),
         sink("out_small", "small"),
         sink("out_exact", "exact"),
+    ]
+}
+
+/// `test/float` read by two stages taking only U8.
+fn fan_out_that_suits_nobody() -> Vec<StageSpec> {
+    vec![
+        source("input", "test/float"),
+        filter("small", "test/narrow", "input"),
+        filter("tiny", "test/narrow", "input"),
+        sink("out_small", "small"),
+        sink("out_tiny", "tiny"),
+    ]
+}
+
+fn f32_into_narrow() -> Vec<StageSpec> {
+    vec![
+        source("input", "test/wide"),
+        filter("exact", "test/precise", "input"),
+        filter("small", "test/narrow", "exact"),
+        sink("out", "small"),
+    ]
+}
+
+/// A mask needing matched inputs, given F32 in its first slot and U8 in its second.
+fn matched_beside_float() -> Vec<StageSpec> {
+    vec![
+        source("input", "test/float"),
+        source("second", "test/wide"),
+        filter("small", "test/narrow", "second"),
+        mask("both", "test/matched", "input", "small"),
+        sink("out", "both"),
+    ]
+}
+
+/// A mask whose base must match its overlay, with the U8 overlay settled before the F32 base.
+///
+/// The mask takes anything as its overlay, so the only edge it refuses is the F32 base.
+fn anchored_over_settled_u8() -> Vec<StageSpec> {
+    vec![
+        source("second", "test/wide"),
+        filter("small", "test/narrow", "second"),
+        source("first", "test/float"),
+        mask("both", "test/anchored", "first", "small"),
+        sink("out", "both"),
     ]
 }
 
@@ -267,17 +311,18 @@ fn mask_that_emits_frames() -> Vec<StageSpec> {
 fn two_impossible_edges() -> Vec<StageSpec> {
     vec![
         source("first", "test/wide"),
-        filter("small_a", "test/narrow", "first"),
-        filter("exact_a", "test/precise", "small_a"),
-        sink("out_a", "exact_a"),
+        filter("exact_a", "test/precise", "first"),
+        filter("small_a", "test/narrow", "exact_a"),
+        sink("out_a", "small_a"),
         source("second", "test/wide"),
-        filter("small_b", "test/narrow", "second"),
-        filter("exact_b", "test/precise", "small_b"),
-        sink("out_b", "exact_b"),
+        filter("exact_b", "test/precise", "second"),
+        filter("small_b", "test/narrow", "exact_b"),
+        sink("out_b", "small_b"),
     ]
 }
 
-fn anchored_cannot_agree() -> Vec<StageSpec> {
+/// A mask whose U8 base must match an F32 overlay.
+fn anchored_u8_base_under_f32() -> Vec<StageSpec> {
     vec![
         source("first", "test/wide"),
         filter("pick", "test/either", "first"),
@@ -286,6 +331,27 @@ fn anchored_cannot_agree() -> Vec<StageSpec> {
         mask("both", "test/anchored", "pick", "exact"),
         sink("out", "both"),
     ]
+}
+
+/// A mask whose F32 base must match a U8 overlay that settles after it.
+///
+/// The mask takes anything as its overlay, so the only edge it refuses is the F32 base.
+fn anchored_cannot_agree() -> Vec<StageSpec> {
+    vec![
+        source("first", "test/float"),
+        source("second", "test/wide"),
+        filter("small", "test/narrow", "second"),
+        mask("both", "test/anchored", "first", "small"),
+        sink("out", "both"),
+    ]
+}
+
+fn note_messages(diagnostic: &Diagnostic) -> Vec<&str> {
+    diagnostic
+        .notes()
+        .iter()
+        .map(|note| note.message.as_str())
+        .collect()
 }
 
 #[test]
@@ -346,18 +412,81 @@ fn every_node_is_covered_and_a_sink_emits_nothing() {
 }
 
 #[test]
-fn an_edge_whose_ends_share_nothing_names_the_edge() {
+fn an_f32_edge_into_a_narrow_reader_names_the_edge() {
     let registry = testing::registry();
-    let graph = build(&registry, &nothing_in_common())
+    let graph = build(&registry, &f32_into_narrow())
         .expect("should build")
         .into_graph();
 
     let diagnostics = solve(&graph, &registry, &capabilities()).expect_err("should fail");
     let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
 
+    assert_eq!(reported.len(), 1);
     assert_eq!(reported[0].code(), DiagnosticCode::NoCommonFormat);
-    assert!(reported[0].message().contains("convert"));
-    assert_eq!(reported[0].path(), "filter.exact.inputs[0]");
+    assert!(reported[0].message().contains("resample/depth"));
+    assert_eq!(reported[0].path(), "filter.small.inputs[0]");
+
+    let notes = note_messages(reported[0]);
+    assert_eq!(notes, vec!["exact is defined here"]);
+}
+
+#[test]
+fn a_narrow_producer_widens_into_a_precise_reader() {
+    let registry = testing::registry();
+    let graph = build(&registry, &nothing_in_common())
+        .expect("should build")
+        .into_graph();
+
+    let solved = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+    let expected = Widen {
+        consumer: NodeId::new(2),
+        edge: 0,
+        from: frames(SampleFormat::U8),
+        to: frames(SampleFormat::F32),
+    };
+    assert_eq!(solved.widens(), &[expected]);
+    assert_eq!(solved.output(NodeId::new(1)), Some(frames(SampleFormat::U8)));
+    assert_eq!(
+        solved.get(NodeId::new(2)).input(0),
+        Some(frames(SampleFormat::F32))
+    );
+}
+
+#[test]
+fn a_reader_that_needs_narrowing_is_still_an_error() {
+    let registry = testing::registry();
+    let specs = vec![
+        source("input", "test/float"),
+        filter("small", "test/narrow", "input"),
+        sink("out", "small"),
+    ];
+    let graph = build(&registry, &specs).expect("should build").into_graph();
+
+    let diagnostics = solve(&graph, &registry, &capabilities()).expect_err("should fail");
+    let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
+
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].code(), DiagnosticCode::NoCommonFormat);
+    assert!(reported[0].message().contains("resample/depth"));
+}
+
+#[test]
+fn a_widen_on_one_input_lets_its_sibling_through() {
+    let registry = testing::registry();
+    let graph = build(&registry, &matched_beside_float())
+        .expect("should build")
+        .into_graph();
+
+    let solved = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+    let expected = Widen {
+        consumer: NodeId::new(3),
+        edge: 1,
+        from: frames(SampleFormat::U8),
+        to: frames(SampleFormat::F32),
+    };
+    assert_eq!(solved.widens(), &[expected]);
 }
 
 #[test]
@@ -393,12 +522,96 @@ fn a_coupled_mask_steers_a_producer_before_it_commits() {
     assert_eq!(wide, frames(SampleFormat::F32));
 }
 
-/// A mask whose two producers can never carry the same sample is caught while the second of
-/// them is being decided, because by then the first is settled and the mask answers exactly.
+/// The F32 producer is decided after the U8 one has settled, so the mask refuses it firmly and
+/// only widening the earlier edge lets the two meet.
 #[test]
-fn a_coupled_mask_whose_producers_cannot_agree_names_the_second_edge() {
+fn a_coupled_mask_widens_the_narrower_producer() {
     let registry = testing::registry();
     let graph = build(&registry, &matched_cannot_agree())
+        .expect("should build")
+        .into_graph();
+
+    let solved = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+    let expected = Widen {
+        consumer: NodeId::new(4),
+        edge: 0,
+        from: frames(SampleFormat::U8),
+        to: frames(SampleFormat::F32),
+    };
+    assert_eq!(solved.widens(), &[expected]);
+    assert_eq!(
+        solved.get(NodeId::new(4)).input(0),
+        Some(frames(SampleFormat::F32))
+    );
+
+    let emitted = solved.output(NodeId::new(4)).expect("a mask emits");
+    assert_eq!(emitted.sample(), SampleFormat::F32);
+}
+
+/// A frame source settles before the mask, so the mask is asked for a proposal while one of its
+/// inputs still needs widening.
+#[test]
+fn a_mask_proposed_before_its_widen_still_emits_what_it_receives() {
+    let specs = vec![
+        source("first", "test/wide"),
+        filter("small", "test/narrow", "first"),
+        source("second", "test/wide"),
+        filter("exact", "test/precise", "second"),
+        source("third", "test/wide"),
+        mask("both", "test/matched", "small", "exact"),
+        deband_with_mask("third", "both"),
+        sink("out", "clean"),
+    ];
+
+    let registry = testing::registry();
+    let graph = build(&registry, &specs).expect("should build").into_graph();
+
+    let order: Vec<usize> = graph.order().iter().map(|id| id.index()).collect();
+    assert_eq!(
+        order,
+        vec![0, 1, 2, 3, 4, 5, 6, 7],
+        "third has to settle before both"
+    );
+
+    let solved = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+    assert_eq!(
+        solved.get(NodeId::new(5)).input(0),
+        Some(frames(SampleFormat::F32))
+    );
+
+    let emitted = solved.output(NodeId::new(5)).expect("a mask emits");
+    assert_eq!(emitted.sample(), SampleFormat::F32);
+}
+
+#[test]
+fn a_one_way_coupled_mask_widens_its_base_to_the_overlay() {
+    let registry = testing::registry();
+    let graph = build(&registry, &anchored_u8_base_under_f32())
+        .expect("should build")
+        .into_graph();
+
+    let solved = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+    let expected = Widen {
+        consumer: NodeId::new(4),
+        edge: 0,
+        from: frames(SampleFormat::U8),
+        to: frames(SampleFormat::F32),
+    };
+    assert_eq!(solved.widens(), &[expected]);
+
+    let emitted = solved.output(NodeId::new(4)).expect("a mask emits");
+    assert_eq!(emitted.sample(), SampleFormat::F32);
+}
+
+/// The F32 base is decided after its U8 overlay has settled. Only an edge the mask refuses is
+/// widened, and F32 widens to nothing.
+#[test]
+fn a_refused_f32_base_is_reported_even_though_its_overlay_could_widen() {
+    let registry = testing::registry();
+    let graph = build(&registry, &anchored_over_settled_u8())
         .expect("should build")
         .into_graph();
 
@@ -407,12 +620,16 @@ fn a_coupled_mask_whose_producers_cannot_agree_names_the_second_edge() {
 
     assert_eq!(reported.len(), 1);
     assert_eq!(reported[0].code(), DiagnosticCode::NoCommonFormat);
-    assert_eq!(reported[0].path(), "mask.both.inputs[1]");
+    assert_eq!(reported[0].path(), "mask.both.inputs[0]");
+    assert!(reported[0].message().contains("resample/depth"));
+
+    let notes = note_messages(reported[0]);
+    assert_eq!(notes, vec!["first is defined here"]);
 }
 
 /// The forward pass asks a coupled stage about a slot whose sibling is still unknown, and a
-/// stage that only couples one way answers permissively and is never asked again. Holding it to
-/// what it finally got is the validation pass, and nothing else here reaches it.
+/// stage that only couples one way answers permissively. Holding it to what it finally got is
+/// left to the stage's own decision and the validation pass.
 #[test]
 fn a_stage_coupled_one_way_is_held_to_what_it_finally_got() {
     let registry = testing::registry();
@@ -478,9 +695,27 @@ fn named_inputs_written_out_of_order_solve_the_same_as_positional_ones() {
     );
 }
 
-/// Two stages reading one producer, each needing a sample the other refuses, is a failure with
-/// no "both" to name. Naming one of them alone would show two sets that overlap, so every
-/// reader that refused is named with what it does take.
+#[test]
+fn a_fan_out_widens_only_the_reader_that_needs_it() {
+    let registry = testing::registry();
+    let graph = build(&registry, &fan_out_into_narrow_and_precise())
+        .expect("should build")
+        .into_graph();
+
+    let solved = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+    let expected = Widen {
+        consumer: NodeId::new(2),
+        edge: 0,
+        from: frames(SampleFormat::U8),
+        to: frames(SampleFormat::F32),
+    };
+    assert_eq!(solved.output(NodeId::new(0)), Some(frames(SampleFormat::U8)));
+    assert_eq!(solved.widens(), &[expected]);
+}
+
+/// Several readers refusing one producer is a failure with no "both" to name, so every reader
+/// that refused is named with what it does take.
 #[test]
 fn a_fan_out_that_suits_no_reader_names_every_one_that_refused() {
     let registry = testing::registry();
@@ -493,15 +728,12 @@ fn a_fan_out_that_suits_no_reader_names_every_one_that_refused() {
 
     assert_eq!(reported.len(), 1);
     assert_eq!(reported[0].code(), DiagnosticCode::NoCommonFormat);
-    assert!(reported[0].message().contains("input emits u8, f32"));
+    assert!(reported[0].message().contains("input emits f32"));
     assert!(reported[0].message().contains("small takes u8"));
+    assert!(reported[0].message().contains("resample/depth"));
 
-    let notes: Vec<&str> = reported[0]
-        .notes()
-        .iter()
-        .map(|note| note.message.as_str())
-        .collect();
-    assert!(notes.contains(&"exact takes f32"), "{notes:?}");
+    let notes = note_messages(reported[0]);
+    assert!(notes.contains(&"tiny takes u8"), "{notes:?}");
 }
 
 /// A diamond of two filters reading `test/wide` into `test/matched`, with the filters declared the
@@ -605,7 +837,7 @@ fn every_impossible_edge_is_reported_not_just_the_first() {
     let paths: Vec<&str> = reported.iter().map(|entry| entry.path()).collect();
     assert_eq!(
         paths,
-        vec!["filter.exact_a.inputs[0]", "filter.exact_b.inputs[0]"]
+        vec!["filter.small_a.inputs[0]", "filter.small_b.inputs[0]"]
     );
 }
 
