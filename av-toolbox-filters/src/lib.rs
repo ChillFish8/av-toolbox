@@ -41,7 +41,7 @@
 //! - `lineart/thin` warp-sharpens only on lines, to thin them.
 //! - `lineart/toon` darkens lines by a warp-thinned map of how dark they are, as havsfunc's Toon does.
 //! - `lineart/vinverse` removes residual combing, as vs-jetpack's vinverse does.
-//! - `mask/to_frames` turns one plane of a mask into float grey frames, so it can be painted or viewed.
+//! - `mask/to_frames` turns a mask into float grey frames, so it can be painted or viewed.
 //! - `resize/point`, `resize/bilinear`, `resize/bicubic`, `resize/lanczos`, `resize/spline16`,
 //!   `resize/spline36` and `resize/spline64` resize a clip, optionally from a window of it.
 //! - `resample/depth` changes a clip's bit depth, or turns a float clip into integers, dithering when it

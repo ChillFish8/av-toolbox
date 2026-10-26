@@ -248,15 +248,3 @@ fn a_mask_chroma_plane_is_dropped() {
     assert_eq!((output.format.width, output.format.height), (WIDTH, HEIGHT));
     assert_shares(&output.values, &codes);
 }
-
-#[test]
-fn the_chroma_plane_can_be_taken() {
-    let mask = mask_format(chroma_420());
-    let args = serde_json::json!({ "plane": "chroma" });
-    let output = converted(mask, args, FrameMeta::at(0));
-
-    let codes = chroma_values(8 * 4);
-
-    assert_eq!((output.format.width, output.format.height), (8, 4));
-    assert_shares(&output.values, &codes);
-}

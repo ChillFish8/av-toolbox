@@ -136,13 +136,13 @@ fn palette_values(shading: Shading) -> Vec<f32> {
 ///
 /// `map`, `scratch` and `smoothed` are f32 at the luma size. The picture and output planes hold
 /// [Painting::samples](crate::heatmap::Painting::samples), with chroma at its subsampled size.
-/// `scratch` and `smoothed` are left untouched when the painting does not smooth.
+/// `scratch` and `smoothed` are only needed, and only touched, when the painting smooths.
 #[derive(Debug, Clone, Copy)]
 pub struct HeatmapPlanes<'a> {
     pub picture: [DevicePlane<'a>; 3],
     pub map: DevicePlane<'a>,
-    pub scratch: DevicePlane<'a>,
-    pub smoothed: DevicePlane<'a>,
+    pub scratch: Option<DevicePlane<'a>>,
+    pub smoothed: Option<DevicePlane<'a>>,
     pub output: [DevicePlane<'a>; 3],
 }
 
@@ -188,7 +188,9 @@ impl Encoding {
 }
 
 impl Heatmap {
-    /// A painting of clips `height` rows tall, with its palette and smoothing already on the device.
+    /// A painting of clips `height` rows tall, with its palette already on the device.
+    ///
+    /// When the painting smooths, its gaussian is put on the device too.
     pub fn new<R: Runtime>(client: &ComputeClient<R>, painting: Painting, height: u32) -> Self {
         let gaussian = painting.smooth.then(|| {
             let sigma = sigma_for(height);
@@ -209,7 +211,9 @@ impl Heatmap {
     }
 
     fn overlays(&self) -> bool {
-        self.painting.style == Style::Overlay
+        let shading = shading(self.painting.style);
+
+        matches!(shading, Shading::Overlay { .. })
     }
 
     fn palette<R: Runtime>(&self) -> ArrayArg<R> {
@@ -237,8 +241,14 @@ impl Heatmap {
             "heatmap map height differs from the height given to new"
         );
         assert_plane(&planes.map, width, height, "heatmap map");
-        assert_plane(&planes.scratch, width, height, "heatmap scratch");
-        assert_plane(&planes.smoothed, width, height, "heatmap smoothed");
+        if let Some(scratch) = &planes.scratch {
+            assert_plane(scratch, width, height, "heatmap scratch");
+        }
+
+        if let Some(smoothed) = &planes.smoothed {
+            assert_plane(smoothed, width, height, "heatmap smoothed");
+        }
+
         self.assert_picture_planes(&planes, width, height);
 
         let values = self.map_values(client, dispatch, &planes);
@@ -261,14 +271,19 @@ impl Heatmap {
             return planes.map;
         };
 
+        let scratch = planes.scratch.expect("a smoothing heatmap needs a scratch plane");
+        let smoothed = planes
+            .smoothed
+            .expect("a smoothing heatmap needs a smoothed plane");
+
         let blur_planes = BlurPlanes {
             input: planes.map,
-            scratch: planes.scratch,
-            output: planes.smoothed,
+            scratch,
+            output: smoothed,
         };
         gaussian.apply_with_edge(client, dispatch, blur_planes, Edge::Clamp, Storage::F32);
 
-        planes.smoothed
+        smoothed
     }
 
     fn assert_picture_planes(&self, planes: &HeatmapPlanes<'_>, width: u32, height: u32) {

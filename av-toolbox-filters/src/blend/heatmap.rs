@@ -373,6 +373,7 @@ impl FilterDefinition for Heatmap {
             client,
             clip,
             heatmap,
+            smooths: painting.smooth,
         };
 
         Ok(Box::new(painter))
@@ -384,6 +385,7 @@ struct HeatmapPainter<R: Runtime> {
     client: ComputeClient<R>,
     clip: FrameFormat,
     heatmap: heatmap::Heatmap,
+    smooths: bool,
 }
 
 /// The three planes of `frame` in `format`'s channel order.
@@ -429,8 +431,8 @@ impl<R: Runtime> Filter for HeatmapPainter<R> {
         let map_plane = map.plane(Channel::Y).ok_or_else(missing_channel)?;
 
         let (width, height) = (self.clip.width, self.clip.height);
-        let scratch = Scratch::new::<f32>(context, width, height);
-        let smoothed = Scratch::new::<f32>(context, width, height);
+        let scratch = self.smooths.then(|| Scratch::new::<f32>(context, width, height));
+        let smoothed = self.smooths.then(|| Scratch::new::<f32>(context, width, height));
 
         // Safety: both frames are in the clip's format, which the painting was built for, so their
         // planes hold the samples `apply` reads and writes.
@@ -446,8 +448,8 @@ impl<R: Runtime> Filter for HeatmapPainter<R> {
         let planes = HeatmapPlanes {
             picture,
             map: map_device,
-            scratch: scratch.plane(),
-            smoothed: smoothed.plane(),
+            scratch: scratch.as_ref().map(Scratch::plane),
+            smoothed: smoothed.as_ref().map(Scratch::plane),
             output: output_planes,
         };
         let sizing = Sizing(context);

@@ -23,7 +23,6 @@ use av_toolbox_gpu::{
     FrameContext,
     FrameFormat,
     FrameLayout,
-    MaskFormat,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -41,26 +40,11 @@ use serde::Deserialize;
 const STAGE: &str = "mask/to_frames";
 const INPUT: usize = 0;
 
-/// Which plane of a mask becomes the frames.
-#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum MaskPlane {
-    /// The plane at the mask's own size.
-    #[default]
-    Full,
-    /// The subsampled plane, for masks that carry one.
-    Chroma,
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ToFramesArgs {
-    /// Which plane of the mask becomes the frames.
-    #[serde(default)]
-    pub(crate) plane: MaskPlane,
-}
+pub(crate) struct ToFramesArgs {}
 
-/// Turns one plane of a mask into float grey frames.
+/// Turns a mask into float grey frames.
 pub(crate) struct ToFrames;
 
 impl StageDefinition for ToFrames {
@@ -75,7 +59,7 @@ impl StageDefinition for ToFrames {
     }
 
     fn description() -> &'static str {
-        "Turns one plane of a mask into frames, so it can be painted or viewed.\n\n\
+        "Turns a mask into frames, so it can be painted or viewed.\n\n\
          Each frame is the mask's value between 0 and 1, as float grey."
     }
 
@@ -113,12 +97,6 @@ fn not_u8(sample: SampleFormat) -> StageError {
     StageError::msg(message)
 }
 
-fn no_chroma_plane() -> StageError {
-    let message = format!("{STAGE} was asked for the chroma plane of a mask with no chroma plane");
-
-    StageError::msg(message)
-}
-
 fn missing_input() -> StageError {
     let message = format!("{STAGE} needs its input bound");
 
@@ -127,12 +105,6 @@ fn missing_input() -> StageError {
 
 fn missing_mask() -> StageError {
     let message = format!("{STAGE} expected a mask in slot 0");
-
-    StageError::msg(message)
-}
-
-fn missing_mask_plane() -> StageError {
-    let message = format!("{STAGE} was handed a mask without its chroma plane");
 
     StageError::msg(message)
 }
@@ -155,16 +127,8 @@ fn accepts_mask(offered: StreamFormat) -> Result<FormatSet, StageError> {
     Ok(FormatSet::of([SampleFormat::U8]))
 }
 
-/// The size of the plane `plane` picks out of `mask`.
-fn plane_size(mask: &MaskFormat, plane: MaskPlane) -> Result<(u32, u32), StageError> {
-    match plane {
-        MaskPlane::Full => Ok((mask.width, mask.height)),
-        MaskPlane::Chroma => mask.chroma_dimensions().ok_or_else(no_chroma_plane),
-    }
-}
-
-/// The F32 grey frames the chosen plane of the bound mask becomes.
-fn checked_output(args: &ToFramesArgs, chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
+/// The F32 grey frames the bound mask becomes.
+fn checked_output(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
     let Some(input) = chosen.get(INPUT).copied().flatten() else {
         return Err(missing_input());
     };
@@ -174,15 +138,14 @@ fn checked_output(args: &ToFramesArgs, chosen: &[Option<StreamFormat>]) -> Resul
         return Err(not_u8(mask.sample));
     }
 
-    let (width, height) = plane_size(&mask, args.plane)?;
     let colour = ColourInfo {
         range: ColourRange::Full,
         ..ColourInfo::default()
     };
 
     Ok(FrameFormat {
-        width,
-        height,
+        width: mask.width,
+        height: mask.height,
         layout: FrameLayout::Grey,
         sample: SampleFormat::F32,
         colour,
@@ -206,10 +169,10 @@ impl FilterDefinition for ToFrames {
 
     fn produces(
         _capabilities: &Capabilities,
-        args: &Self::Args,
+        _args: &Self::Args,
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
-        let output = checked_output(args, chosen)?;
+        let output = checked_output(chosen)?;
         let format = StreamFormat::Frames(output);
 
         Ok(OutputFormats {
@@ -220,27 +183,22 @@ impl FilterDefinition for ToFrames {
 
     fn build<R: Runtime>(
         context: &BuildContext<R>,
-        args: Self::Args,
+        _args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
     ) -> Result<Box<dyn Filter>, StageError> {
         let inputs = formats.inputs();
-        let output = checked_output(&args, inputs)?;
+        let output = checked_output(inputs)?;
         let client = context.client().clone();
-        let converter = MaskToFrames {
-            client,
-            plane: args.plane,
-            output,
-        };
+        let converter = MaskToFrames { client, output };
 
         Ok(Box::new(converter))
     }
 }
 
-/// Converts the chosen plane of every mask into a frame.
+/// Converts the full plane of every mask into a frame.
 struct MaskToFrames<R: Runtime> {
     client: ComputeClient<R>,
-    plane: MaskPlane,
     output: FrameFormat,
 }
 
@@ -249,10 +207,7 @@ impl<R: Runtime> StageInstance for MaskToFrames<R> {}
 impl<R: Runtime> Filter for MaskToFrames<R> {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let mask = inputs.take_mask(INPUT).ok_or_else(missing_mask)?;
-        let mask_plane = match self.plane {
-            MaskPlane::Full => mask.plane(),
-            MaskPlane::Chroma => mask.chroma_plane().ok_or_else(missing_mask_plane)?,
-        };
+        let mask_plane = mask.plane();
 
         let meta = mask.meta().clone();
         let output = context.alloc_frame(&self.output, meta);
@@ -276,7 +231,7 @@ impl<R: Runtime> Filter for MaskToFrames<R> {
 
 #[cfg(test)]
 mod tests {
-    use av_toolbox_gpu::{ChromaLocation, Depth, FrameRate, MaskChroma, Subsampling};
+    use av_toolbox_gpu::{ChromaLocation, Depth, FrameRate, MaskChroma, MaskFormat, Subsampling};
 
     use super::*;
 
@@ -295,10 +250,6 @@ mod tests {
             subsampling: Subsampling::Yuv420,
             location: ChromaLocation::Left,
         })
-    }
-
-    fn args(plane: MaskPlane) -> ToFramesArgs {
-        ToFramesArgs { plane }
     }
 
     #[test]
@@ -346,7 +297,7 @@ mod tests {
         };
         let chosen = [Some(StreamFormat::Mask(rated))];
 
-        let output = checked_output(&args(MaskPlane::Full), &chosen).expect("the mask is readable");
+        let output = checked_output(&chosen).expect("the mask is readable");
 
         assert_eq!(output.frame_rate, rate);
     }
@@ -354,7 +305,7 @@ mod tests {
     #[test]
     fn the_output_is_f32_grey_at_the_mask_size() {
         let chosen = [Some(mask(12, 6, SampleFormat::U8, chroma_420()))];
-        let output = checked_output(&args(MaskPlane::Full), &chosen).expect("the mask is readable");
+        let output = checked_output(&chosen).expect("the mask is readable");
 
         assert_eq!(output.sample, SampleFormat::F32);
         assert_eq!(output.layout, FrameLayout::Grey);
@@ -365,38 +316,14 @@ mod tests {
     }
 
     #[test]
-    fn plane_defaults_to_full() {
-        let given = serde_json::json!({});
-        let parsed: ToFramesArgs = serde_json::from_value(given).expect("the defaults apply");
-
-        assert_eq!(parsed.plane, MaskPlane::Full);
-    }
-
-    #[test]
-    fn the_chroma_plane_is_the_subsampled_size() {
-        let given = serde_json::json!({ "plane": "chroma" });
-        let parsed: ToFramesArgs = serde_json::from_value(given).expect("chroma is a plane");
-        let chosen = [Some(mask(13, 7, SampleFormat::U8, chroma_420()))];
-
-        let output = checked_output(&parsed, &chosen).expect("the mask has a chroma plane");
-
-        assert_eq!((output.width, output.height), (7, 4));
-    }
-
-    #[test]
-    fn chroma_on_a_mask_without_chroma_is_refused() {
-        let chosen = [Some(mask(12, 6, SampleFormat::U8, None))];
-        let error = checked_output(&args(MaskPlane::Chroma), &chosen).expect_err("there is no chroma plane");
-        let message = error.to_string();
-
-        assert!(message.contains("chroma plane"), "{message}");
-    }
-
-    #[test]
     fn unknown_arguments_are_refused() {
-        let given = serde_json::json!({ "scale": 1 });
-        let parsed = serde_json::from_value::<ToFramesArgs>(given);
+        for given in [
+            serde_json::json!({ "scale": 1 }),
+            serde_json::json!({ "plane": "full" }),
+        ] {
+            let parsed = serde_json::from_value::<ToFramesArgs>(given);
 
-        assert!(parsed.is_err());
+            assert!(parsed.is_err());
+        }
     }
 }

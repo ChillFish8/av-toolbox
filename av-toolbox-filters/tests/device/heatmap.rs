@@ -250,9 +250,9 @@ fn assert_matches_reference(output: &Painted, picture: &[Vec<f32>], painting: &P
     }
 }
 
-fn blue_painting(floor: f32, smooth: bool) -> Painting {
+fn painting_of(style: Style, floor: f32, smooth: bool) -> Painting {
     Painting {
-        style: Style::Blue,
+        style,
         scale: SCALE,
         floor,
         smooth,
@@ -267,25 +267,36 @@ fn blue_painting(floor: f32, smooth: bool) -> Painting {
 }
 
 #[test]
-fn the_overlay_matches_the_reference() {
+fn the_heatmap_matches_the_reference() {
     let format = clip_format();
     let picture = patterned_clip(&format);
     let output = painted(FrameMeta::at(0), &picture);
 
-    let mut painting = blue_painting(FLOOR, true);
-    painting.style = Style::Heat;
+    let painting = painting_of(Style::Heat, FLOOR, true);
 
     assert_matches_reference(&output, &picture, &painting);
 }
 
 #[test]
-fn an_unsmoothed_overlay_with_no_floor_matches_the_reference() {
+fn an_unsmoothed_heatmap_with_no_floor_matches_the_reference() {
     let format = clip_format();
     let picture = patterned_clip(&format);
     let args = serde_json::json!({ "style": "blue", "scale": SCALE, "smooth": false, "floor": 0.0 });
     let output = painted_with(args, FrameMeta::at(0), &picture);
 
-    let painting = blue_painting(0.0, false);
+    let painting = painting_of(Style::Blue, 0.0, false);
+
+    assert_matches_reference(&output, &picture, &painting);
+}
+
+#[test]
+fn the_overlay_style_matches_the_reference() {
+    let format = clip_format();
+    let picture = patterned_clip(&format);
+    let args = serde_json::json!({ "style": "overlay", "scale": SCALE, "smooth": false, "floor": 0.0 });
+    let output = painted_with(args, FrameMeta::at(0), &picture);
+
+    let painting = painting_of(Style::Overlay, 0.0, false);
 
     assert_matches_reference(&output, &picture, &painting);
 }

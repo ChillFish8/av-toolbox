@@ -212,13 +212,13 @@ impl MaskChroma {
 /// What a mask is, which is a full plane at its own dimensions and an optional chroma plane.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct MaskFormat {
+    /// How many masks a second the stream carries, when known.
+    pub frame_rate: Option<FrameRate>,
     pub width: u32,
     pub height: u32,
     pub sample: SampleFormat,
     /// The chroma plane this mask carries, `None` when it has only the full plane.
     pub chroma: Option<MaskChroma>,
-    /// How many masks a second the stream carries, when known.
-    pub frame_rate: Option<FrameRate>,
 }
 
 impl MaskFormat {

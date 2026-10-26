@@ -30,8 +30,9 @@ impl BuildTask for Paint {
         let picture = self.picture.each_ref().map(|bytes| upload_u8(client, bytes));
         let output = self.picture.each_ref().map(|bytes| empty(client, bytes.len()));
         let map = upload_f32(client, &self.map);
-        let scratch = empty(client, map_bytes);
-        let smoothed = empty(client, map_bytes);
+        let smooths = self.painting.smooth;
+        let scratch = smooths.then(|| empty(client, map_bytes));
+        let smoothed = smooths.then(|| empty(client, map_bytes));
         let sizes = [luma_size, chroma_size, chroma_size];
 
         let picture_planes = [0, 1, 2].map(|index| plane(&picture[index], sizes[index].0, sizes[index].1));
@@ -39,8 +40,8 @@ impl BuildTask for Paint {
         let planes = HeatmapPlanes {
             picture: picture_planes,
             map: plane(&map, width, height),
-            scratch: plane(&scratch, width, height),
-            smoothed: plane(&smoothed, width, height),
+            scratch: scratch.as_ref().map(|handle| plane(handle, width, height)),
+            smoothed: smoothed.as_ref().map(|handle| plane(handle, width, height)),
             output: output_planes,
         };
         let heatmap = Heatmap::new(client, self.painting, height);
