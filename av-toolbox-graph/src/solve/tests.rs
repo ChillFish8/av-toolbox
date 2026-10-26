@@ -237,12 +237,14 @@ fn diamond_declared_backwards() -> Vec<StageSpec> {
     ]
 }
 
-/// One producer filling both slots of the same mask.
+/// One producer filling both slots of the same mask, with a second reader that takes only U8.
 fn one_producer_in_both_slots() -> Vec<StageSpec> {
     vec![
         source("input", "test/floatfirst"),
         mask("both", "test/matched", "input", "input"),
+        filter("small", "test/narrow", "input"),
         sink("out", "both"),
+        sink("small_out", "small"),
     ]
 }
 
@@ -287,7 +289,22 @@ fn anchored_cannot_agree() -> Vec<StageSpec> {
 }
 
 #[test]
-fn an_edge_carries_the_narrowest_format_both_ends_accept() {
+fn an_edge_carries_the_producers_first_choice_both_ends_accept() {
+    let registry = testing::registry();
+    let specs = vec![
+        source("input", "test/floatfirst"),
+        filter("pick", "test/either", "input"),
+        sink("out", "pick"),
+    ];
+    let graph = build(&registry, &specs).expect("should build").into_graph();
+
+    let solved = solve(&graph, &registry, &capabilities()).expect("should solve");
+
+    assert_eq!(solved.output(NodeId::new(0)), Some(frames(SampleFormat::F32)));
+}
+
+#[test]
+fn an_edge_carries_the_first_format_both_ends_accept() {
     let registry = testing::registry();
     let graph = build(&registry, &both_accept_either())
         .expect("should build")
@@ -509,11 +526,9 @@ fn a_coupled_mask_still_agrees_when_its_producers_are_declared_the_other_way_rou
     assert_eq!(precise, frames(SampleFormat::F32));
 }
 
-/// A producer feeding two slots of one consumer proposes the sample under test to both. Telling
-/// the second slot the producer's preference instead would pin the edge to that preference,
-/// which here is the wider of the two samples the source offers.
+/// The other reader refuses the producer's first preference, so only U8 is left.
 #[test]
-fn a_producer_filling_two_slots_proposes_the_same_sample_to_both() {
+fn a_producer_filling_two_slots_settles_on_what_every_reader_agrees() {
     let registry = testing::registry();
     let graph = build(&registry, &one_producer_in_both_slots())
         .expect("should build")

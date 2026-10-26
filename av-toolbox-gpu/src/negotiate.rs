@@ -41,15 +41,9 @@ impl FormatSet {
         self.preferences.is_empty()
     }
 
-    /// The sample of this set that moves the fewest bytes.
-    ///
-    /// Ties go to whichever came first, so a stage's own preference decides between two formats of
-    /// the same width.
-    pub fn narrowest(&self) -> Option<SampleFormat> {
-        self.preferences
-            .iter()
-            .min_by_key(|sample| sample.bytes())
-            .copied()
+    /// The most preferred sample of this set.
+    pub fn first(&self) -> Option<SampleFormat> {
+        self.preferences.first().copied()
     }
 
     /// The samples both sets hold, in this set's order.
@@ -238,14 +232,12 @@ mod tests {
         assert!(FormatSet::new().is_empty());
     }
 
-    /// The solver picks the narrowest format both ends accept, so a set has to be able to say which
-    /// of its own preferences is narrowest.
     #[test]
-    fn a_format_set_finds_its_narrowest_sample() {
+    fn a_format_set_returns_its_first_preference() {
         let set = FormatSet::of([SampleFormat::F32, SampleFormat::U8]);
 
-        assert_eq!(set.narrowest(), Some(SampleFormat::U8));
-        assert_eq!(FormatSet::new().narrowest(), None);
+        assert_eq!(set.first(), Some(SampleFormat::F32));
+        assert_eq!(FormatSet::new().first(), None);
     }
 
     #[test]
@@ -322,7 +314,7 @@ mod tests {
             samples: FormatSet::of([SampleFormat::F32]),
         };
 
-        assert_eq!(output.samples.narrowest(), Some(SampleFormat::F32));
+        assert_eq!(output.samples.first(), Some(SampleFormat::F32));
         assert_eq!(
             output.template.with_sample(SampleFormat::F32).dimensions(),
             (64, 64)

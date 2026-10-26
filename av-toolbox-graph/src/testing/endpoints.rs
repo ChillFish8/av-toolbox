@@ -53,8 +53,7 @@ opinionated_source!(
     "deep",
     FormatSet::of([SampleFormat::U16 { depth: Depth::TEN }, SampleFormat::F32])
 );
-// FloatFirst would rather emit the wider of its two samples, so its preference and its narrowest
-// sample are not the same.
+// FloatFirst would rather emit the wider of its two samples.
 opinionated_source!(
     FloatFirst,
     FloatFirstStage,

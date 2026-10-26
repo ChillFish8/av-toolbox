@@ -67,9 +67,9 @@ impl SolvedFormats {
 
 /// Chooses one sample format per edge, in the graph's topological order.
 ///
-/// Every stage states what it could emit and what it would take, and an edge carries the narrowest
-/// format both ends allow. No conversion is inserted, so an edge whose ends share nothing is an
-/// error naming both sides.
+/// Every stage states what it could emit and what it would take, and an edge carries the producer's
+/// most preferred format that both ends allow. No conversion is inserted, so an edge whose ends
+/// share nothing is an error naming both sides.
 pub fn solve(
     graph: &CompiledGraph,
     registry: &PipelineRegistry,
@@ -189,7 +189,7 @@ impl Solver<'_> {
         false
     }
 
-    /// The narrowest sample this node can emit that every reader of it will take.
+    /// The producer's most preferred sample that every reader of this node will take.
     ///
     /// Each sample the stage offered is put to every reader on its own, so the answer does not
     /// depend on which one happened to be asked about first. A reader that turned a sample down
@@ -238,11 +238,11 @@ impl Solver<'_> {
         }
 
         if !agreed.is_empty() {
-            return agreed.narrowest();
+            return agreed.first();
         }
 
         if !tolerated.is_empty() {
-            return tolerated.narrowest();
+            return tolerated.first();
         }
 
         let mut refusals = refused.into_iter().flatten();
