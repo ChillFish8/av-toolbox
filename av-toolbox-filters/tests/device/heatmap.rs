@@ -1,5 +1,5 @@
 use av_toolbox_core::{Filter, Inputs};
-use av_toolbox_cubek::heatmap::{PaintLayout, Painting, Style};
+use av_toolbox_cubek::heatmap::{FLOOR, PaintLayout, Painting, Style};
 use av_toolbox_cubek::matrix::{Coefficients, MatrixSamples, SampleRange};
 use av_toolbox_cubek::testing::reference_heatmap;
 use av_toolbox_gpu::{
@@ -186,8 +186,13 @@ fn ten_bit_values(bytes: &[u8]) -> Vec<f32> {
 }
 
 fn painted(map_meta: FrameMeta, picture: &[Vec<f32>]) -> Painted {
-    let clip_planes = picture.iter().map(|values| ten_bit_bytes(values)).collect();
     let args = serde_json::json!({ "style": "heat", "scale": SCALE });
+
+    painted_with(args, map_meta, picture)
+}
+
+fn painted_with(args: serde_json::Value, map_meta: FrameMeta, picture: &[Vec<f32>]) -> Painted {
+    let clip_planes = picture.iter().map(|values| ten_bit_bytes(values)).collect();
     let clip = clip_format();
     let map = map_format();
 
@@ -220,31 +225,15 @@ fn float_named(attachments: &Attachments, name: &str) -> f64 {
     }
 }
 
-#[test]
-fn the_overlay_matches_the_reference() {
-    let format = clip_format();
-    let picture = patterned_clip(&format);
-    let map_meta = FrameMeta::at(0);
-    let output = painted(map_meta, &picture);
-
-    let painting = Painting {
-        style: Style::Heat,
-        scale: SCALE,
-        layout: PaintLayout::Yuv {
-            width_shift: 1,
-            height_shift: 1,
-        },
-        samples: MatrixSamples::U16 { bits: 10 },
-        range: SampleRange::Limited,
-        coefficients: Coefficients::Bt709,
-    };
+/// Asserts every output plane is within one code value of the reference for `painting`.
+fn assert_matches_reference(output: &Painted, picture: &[Vec<f32>], painting: &Painting) {
     let picture_planes = [
         picture[0].as_slice(),
         picture[1].as_slice(),
         picture[2].as_slice(),
     ];
     let map = blob_map();
-    let expected = reference_heatmap(picture_planes, &map, WIDTH, HEIGHT, &painting);
+    let expected = reference_heatmap(picture_planes, &map, WIDTH, HEIGHT, painting);
 
     for (plane, wanted) in expected.iter().enumerate() {
         let found = ten_bit_values(&output.planes[plane]);
@@ -259,6 +248,46 @@ fn the_overlay_matches_the_reference() {
             );
         }
     }
+}
+
+fn blue_painting(floor: f32, smooth: bool) -> Painting {
+    Painting {
+        style: Style::Blue,
+        scale: SCALE,
+        floor,
+        smooth,
+        layout: PaintLayout::Yuv {
+            width_shift: 1,
+            height_shift: 1,
+        },
+        samples: MatrixSamples::U16 { bits: 10 },
+        range: SampleRange::Limited,
+        coefficients: Coefficients::Bt709,
+    }
+}
+
+#[test]
+fn the_overlay_matches_the_reference() {
+    let format = clip_format();
+    let picture = patterned_clip(&format);
+    let output = painted(FrameMeta::at(0), &picture);
+
+    let mut painting = blue_painting(FLOOR, true);
+    painting.style = Style::Heat;
+
+    assert_matches_reference(&output, &picture, &painting);
+}
+
+#[test]
+fn an_unsmoothed_overlay_with_no_floor_matches_the_reference() {
+    let format = clip_format();
+    let picture = patterned_clip(&format);
+    let args = serde_json::json!({ "style": "blue", "scale": SCALE, "smooth": false, "floor": 0.0 });
+    let output = painted_with(args, FrameMeta::at(0), &picture);
+
+    let painting = blue_painting(0.0, false);
+
+    assert_matches_reference(&output, &picture, &painting);
 }
 
 #[test]

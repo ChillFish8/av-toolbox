@@ -1,4 +1,4 @@
-use av_toolbox_cubek::heatmap::{Heatmap, HeatmapPlanes, PaintLayout, Painting, Style};
+use av_toolbox_cubek::heatmap::{FLOOR, Heatmap, HeatmapPlanes, PaintLayout, Painting, Style};
 use av_toolbox_cubek::matrix::{Coefficients, MatrixSamples, SampleRange, scaling};
 use av_toolbox_cubek::testing::{decode_samples, encode_samples, reference_heatmap};
 use av_toolbox_gpu::{BuildContext, BuildTask};
@@ -130,6 +130,8 @@ fn painting(style: Style, layout: PaintLayout, samples: MatrixSamples, range: Sa
     Painting {
         style,
         scale: SCALE,
+        floor: FLOOR,
+        smooth: true,
         layout,
         samples,
         range,
@@ -272,4 +274,85 @@ fn a_nan_in_the_map_leaves_plain_grey() {
     let found = painted_on_device(&picture, map, width, height, painting);
 
     assert_matches(&found, &grey, painting.samples);
+}
+
+fn unsmoothed(painting: Painting) -> Painting {
+    Painting {
+        smooth: false,
+        ..painting
+    }
+}
+
+#[test]
+fn blue_on_8_bit_limited_420_without_smoothing_matches_the_reference() {
+    let painting = painting(Style::Blue, yuv(1, 1), MatrixSamples::U8, SampleRange::Limited);
+    let painting = unsmoothed(painting);
+
+    assert_matches_reference(64, 36, painting);
+}
+
+#[test]
+fn heat_on_10_bit_444_with_no_floor_matches_the_reference() {
+    let samples = MatrixSamples::U16 { bits: 10 };
+    let painting = painting(Style::Heat, yuv(0, 0), samples, SampleRange::Limited);
+    let painting = Painting {
+        floor: 0.0,
+        ..painting
+    };
+
+    assert_matches_reference(64, 36, painting);
+}
+
+#[test]
+fn an_odd_sized_420_frame_without_smoothing_matches_the_reference() {
+    let painting = painting(Style::Heat, yuv(1, 1), MatrixSamples::U8, SampleRange::Limited);
+    let painting = unsmoothed(painting);
+
+    assert_matches_reference(7, 5, painting);
+}
+
+#[test]
+fn a_nan_without_smoothing_greys_only_its_pixel() {
+    let (width, height) = (64, 36);
+    let painting = painting(Style::Blue, yuv(1, 1), MatrixSamples::U8, SampleRange::Limited);
+    let painting = Painting {
+        scale: 1.0,
+        floor: 0.0,
+        smooth: false,
+        ..painting
+    };
+    let picture = patterned_picture(width, height, &painting);
+    let size = (width * height) as usize;
+    let full_map = vec![1.0; size];
+    let clean_map = vec![0.0; size];
+    let mut map = full_map.clone();
+    let centre = (height / 2 * width + width / 2) as usize;
+    map[centre] = f32::NAN;
+    let picture_slices = picture.each_ref().map(Vec::as_slice);
+
+    let full = reference_heatmap(picture_slices, &full_map, width, height, &painting);
+    let grey = reference_heatmap(picture_slices, &clean_map, width, height, &painting);
+    let found = painted_on_device(&picture, map, width, height, painting);
+
+    let centre_want = stored(grey[0][centre], painting.samples);
+    assert!(
+        (found[0][centre] - centre_want).abs() <= 1.0,
+        "centre was {}, expected {centre_want}",
+        found[0][centre],
+    );
+
+    let neighbours = [
+        centre - width as usize,
+        centre - 1,
+        centre + 1,
+        centre + width as usize,
+    ];
+    for index in neighbours {
+        let want = stored(full[0][index], painting.samples);
+        assert!(
+            (found[0][index] - want).abs() <= 1.0,
+            "neighbour {index} was {}, expected {want}",
+            found[0][index],
+        );
+    }
 }

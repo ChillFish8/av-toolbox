@@ -1,18 +1,18 @@
 use crate::Edge;
 use crate::blur::{gaussian_weights, radius_for};
-use crate::heatmap::{FLOOR, PaintLayout, Painting, Style, lift, ramp_stops, sigma_for};
+use crate::heatmap::{PaintLayout, Painting, Style, lift, ramp_stops, sigma_for};
 use crate::matrix::scaling;
 use crate::testing::reference_blur_with_edge;
 
 const LUMA_WEIGHTS: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
-/// How strongly a smoothed map `value` paints, between 0 and 1. A NaN paints nothing.
-pub fn reference_strength(value: f32, scale: f32) -> f32 {
+/// How strongly a map `value` paints, between 0 and 1. A NaN paints nothing.
+pub fn reference_strength(value: f32, scale: f32, floor: f32) -> f32 {
     if value.is_nan() {
         return 0.0;
     }
 
-    ((value / scale - FLOOR) / (1.0 - FLOOR)).clamp(0.0, 1.0)
+    ((value / scale - floor) / (1.0 - floor)).clamp(0.0, 1.0)
 }
 
 /// The red, green and blue a pixel of brightness `grey` paints with at `strength`.
@@ -62,15 +62,23 @@ fn grey_plane(picture: [&[f32]; 3], painting: &Painting) -> Vec<f32> {
     }
 }
 
-fn smoothed_strength(map: &[f32], width: u32, height: u32, painting: &Painting) -> Vec<f32> {
+fn smoothed_map(map: &[f32], width: u32, height: u32) -> Vec<f32> {
     let sigma = sigma_for(height);
     let radius = radius_for(sigma);
     let weights = gaussian_weights(sigma, radius);
-    let smoothed = reference_blur_with_edge(map, width, height, &weights, Edge::Clamp);
 
-    smoothed
+    reference_blur_with_edge(map, width, height, &weights, Edge::Clamp)
+}
+
+fn map_strength(map: &[f32], width: u32, height: u32, painting: &Painting) -> Vec<f32> {
+    let values = match painting.smooth {
+        true => smoothed_map(map, width, height),
+        false => map.to_vec(),
+    };
+
+    values
         .iter()
-        .map(|value| reference_strength(*value, painting.scale))
+        .map(|value| reference_strength(*value, painting.scale, painting.floor))
         .collect()
 }
 
@@ -112,8 +120,8 @@ fn average_chroma(differences: &[f32], width: u32, height: u32, shifts: (u32, u3
 
 /// Paints `map` over `picture` on the CPU and returns the output planes as unrounded code values.
 ///
-/// `picture` holds the clip's planes as code values, chroma at its subsampled size. The map is smoothed
-/// with an exact clamp-edged gaussian before it is painted.
+/// `picture` holds the clip's planes as code values, chroma at its subsampled size. When the painting
+/// smooths, the map is blurred with an exact clamp-edged gaussian before it is painted.
 pub fn reference_heatmap(
     picture: [&[f32]; 3],
     map: &[f32],
@@ -122,7 +130,7 @@ pub fn reference_heatmap(
     painting: &Painting,
 ) -> [Vec<f32>; 3] {
     let grey = grey_plane(picture, painting);
-    let strength = smoothed_strength(map, width, height, painting);
+    let strength = map_strength(map, width, height, painting);
     let colours: Vec<[f32; 3]> = grey
         .iter()
         .zip(&strength)

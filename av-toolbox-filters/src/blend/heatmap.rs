@@ -76,6 +76,20 @@ pub(crate) struct HeatmapArgs {
     pub(crate) style: HeatmapStyle,
     /// The map value that reaches full colour.
     pub(crate) scale: f32,
+    /// Blurs the map before painting, so differences show as regions.
+    #[serde(default = "default_smooth")]
+    pub(crate) smooth: bool,
+    /// The share of `scale` that stays uncoloured.
+    #[serde(default = "default_floor")]
+    pub(crate) floor: f32,
+}
+
+fn default_smooth() -> bool {
+    true
+}
+
+fn default_floor() -> f32 {
+    heatmap::FLOOR
 }
 
 /// Paints a distortion map over a greyscale copy of a clip.
@@ -152,6 +166,12 @@ fn bad_scale(scale: f32) -> StageError {
     StageError::msg(message)
 }
 
+fn bad_floor(floor: f32) -> StageError {
+    let message = format!("{STAGE} needs a finite floor from 0 up to but not including 1, got {floor}");
+
+    StageError::msg(message)
+}
+
 fn unsupported_sample(sample: SampleFormat) -> StageError {
     let message = format!("{STAGE} paints u8, u16 or f32 samples, not {sample}");
 
@@ -218,6 +238,10 @@ fn accepts_map(offered: StreamFormat) -> Result<FormatSet, StageError> {
 fn checked_clip(args: &HeatmapArgs, chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
     if !args.scale.is_finite() || args.scale <= 0.0 {
         return Err(bad_scale(args.scale));
+    }
+
+    if !args.floor.is_finite() || args.floor < 0.0 || args.floor >= 1.0 {
+        return Err(bad_floor(args.floor));
     }
 
     let clip = chosen.get(CLIP).copied().flatten();
@@ -291,6 +315,8 @@ fn painting(args: &HeatmapArgs, clip: &FrameFormat) -> Result<Painting, StageErr
     Ok(Painting {
         style: args.style.into(),
         scale: args.scale,
+        floor: args.floor,
+        smooth: args.smooth,
         layout,
         samples,
         range,
@@ -461,6 +487,8 @@ mod tests {
         HeatmapArgs {
             style: HeatmapStyle::Blue,
             scale,
+            smooth: true,
+            floor: heatmap::FLOOR,
         }
     }
 
@@ -471,6 +499,67 @@ mod tests {
 
         assert_eq!(parsed.style, HeatmapStyle::Blue);
         assert_eq!(Style::from(parsed.style), Style::Blue);
+    }
+
+    #[test]
+    fn smoothing_and_the_floor_default_to_todays_painting() {
+        let given = serde_json::json!({ "scale": 1.0 });
+        let parsed: HeatmapArgs = serde_json::from_value(given).expect("scale is given");
+
+        assert!(parsed.smooth);
+        assert_eq!(parsed.floor, heatmap::FLOOR);
+
+        let painted = painting(&parsed, &yuv420_clip()).expect("yuv can be painted");
+
+        assert!(painted.smooth);
+        assert_eq!(painted.floor, heatmap::FLOOR);
+    }
+
+    #[test]
+    fn a_floor_outside_zero_to_one_is_refused() {
+        let chosen = [
+            Some(yuv420(SampleFormat::U8)),
+            Some(grey_map(8, 6, SampleFormat::F32)),
+        ];
+
+        for floor in [-0.1, 1.0, 1.5, f32::NAN] {
+            let mut given = args(1.0);
+            given.floor = floor;
+
+            let error = checked_clip(&given, &chosen).expect_err("the floor is out of range");
+            let message = error.to_string();
+
+            assert!(message.contains("floor"), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_floor_of_zero_is_accepted() {
+        let chosen = [
+            Some(yuv420(SampleFormat::U8)),
+            Some(grey_map(8, 6, SampleFormat::F32)),
+        ];
+        let mut given = args(1.0);
+        given.floor = 0.0;
+
+        assert!(checked_clip(&given, &chosen).is_ok());
+    }
+
+    #[test]
+    fn smoothing_off_reaches_the_painting() {
+        let given = serde_json::json!({ "scale": 1.0, "smooth": false });
+        let parsed: HeatmapArgs = serde_json::from_value(given).expect("scale is given");
+
+        let painted = painting(&parsed, &yuv420_clip()).expect("yuv can be painted");
+
+        assert!(!painted.smooth);
+    }
+
+    fn yuv420_clip() -> FrameFormat {
+        match yuv420(SampleFormat::U8) {
+            StreamFormat::Frames(format) => format,
+            other => panic!("expected frames, got {other:?}"),
+        }
     }
 
     #[test]
