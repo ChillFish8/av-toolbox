@@ -1,0 +1,44 @@
+# Compares a distorted video against its reference with Butteraugli and shows the distorted video as a heatmap.
+#
+# The picture is the distorted clip in grey. Colour marks where the differences are more visible, with stronger
+# colour for larger differences. Each frame also carries the running score.
+# Needs the `vship` feature.
+
+[variable.reference]
+type = "path"
+description = "The original clip"
+default = "reference.mkv"
+
+[variable.distorted]
+type = "path"
+description = "The clip to compare against the original"
+default = "distorted.mkv"
+
+[variable.style]
+type = "string"
+description = "The colours of the heatmap"
+default = "blue"
+choices = ["blue", "heat"]
+
+[source.reference]
+type = "ffms2/file"
+args.path = "{{ reference }}"
+
+[source.distorted]
+type = "ffms2/file"
+args.path = "{{ distorted }}"
+
+[filter.score]
+type = "vship/butteraugli"
+inputs = ["reference", "distorted"]
+args.output = "map"
+
+[filter.heatmap]
+type = "blend/heatmap"
+inputs = ["distorted", "score"]
+args.style = "{{ style }}"
+args.scale = 1.5
+
+[sink.output]
+type = "y4m/stdout"
+inputs = ["heatmap"]
