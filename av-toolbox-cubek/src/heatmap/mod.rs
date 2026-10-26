@@ -10,6 +10,9 @@ use crate::{DevicePlane, Dispatch, Edge, assert_plane, assert_plane_sized};
 /// Smoothed map strength below this fraction of the full scale paints nothing.
 pub const FLOOR: f32 = 0.25;
 
+/// The share of the picture's brightness the heat style keeps under its colour.
+const HEAT_LIFT: f32 = 0.25;
+
 /// The colouring a heatmap is painted with.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Style {
@@ -59,7 +62,7 @@ pub fn ramp_stops(style: Style) -> [[f32; 3]; 3] {
 pub fn lift(style: Style) -> (f32, f32) {
     match style {
         Style::Blue => (0.0, 1.0),
-        Style::Heat => (FLOOR, 1.0 - FLOOR),
+        Style::Heat => (HEAT_LIFT, 1.0 - HEAT_LIFT),
     }
 }
 
@@ -88,6 +91,7 @@ pub struct Heatmap {
     painting: Painting,
     gaussian: Gaussian,
     palette: Handle,
+    height: u32,
 }
 
 /// The scalars every painting kernel shares.
@@ -141,6 +145,7 @@ impl Heatmap {
             painting,
             gaussian,
             palette,
+            height,
         }
     }
 
@@ -162,6 +167,10 @@ impl Heatmap {
     ) {
         let width = planes.map.width();
         let height = planes.map.height();
+        assert_eq!(
+            height, self.height,
+            "heatmap map height differs from the height given to new"
+        );
         assert_plane(&planes.map, width, height, "heatmap map");
         assert_plane(&planes.scratch, width, height, "heatmap scratch");
         assert_plane(&planes.smoothed, width, height, "heatmap smoothed");

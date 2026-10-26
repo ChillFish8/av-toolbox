@@ -338,10 +338,11 @@ mod device {
         let run = scored(json!({ "output": "map" }), blurred_luma);
 
         let values = f32_plane(&run.frames[0]);
-        let largest = values.iter().copied().fold(f32::MIN, f32::max);
         let rounding = 1e-6;
         let range = -rounding..=10.0;
         assert!(values.iter().all(|value| range.contains(value)));
+
+        let largest = values.iter().copied().fold(f32::MIN, f32::max);
         assert!(largest > 0.0, "{largest}");
     }
 

@@ -68,8 +68,9 @@ fn default_intensity() -> f32 {
 /// Scores each distorted frame against its reference with Butteraugli, through Vship.
 ///
 /// Each output frame carries `norm_q`, `norm3` and `norm_inf`, where 0 means identical. The output
-/// is the distorted frame, or with `output = "map"` the per-pixel map of Butteraugli distance at the clip's size.
-/// At the end of the stream it writes a `summary` record of `norm_q` and the largest `norm_inf`.
+/// is the distorted frame, or with `output = "map"` the per-pixel map of Butteraugli distance at the
+/// clip's size. At the end of the stream it writes a `summary` record of `norm_q` and the largest
+/// `norm_inf`.
 pub(crate) struct Butteraugli;
 
 impl StageDefinition for Butteraugli {

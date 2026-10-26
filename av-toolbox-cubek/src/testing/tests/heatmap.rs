@@ -87,6 +87,7 @@ fn a_flat_map_stays_flat_through_smoothing() {
 
     let colour = reference_colour(128.0 / 255.0, 1.0, Style::Blue);
     let expected = 255.0 * (0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]);
+
     for value in &output[0] {
         assert!((value - expected).abs() < 1e-3, "{value} against {expected}");
     }
@@ -109,6 +110,7 @@ fn a_clean_frame_is_the_grey_picture() {
     for (value, expected) in output[0].iter().zip(&luma) {
         assert!((value - expected).abs() < 1e-3, "{value} against {expected}");
     }
+
     for plane in &output[1..] {
         assert_eq!(plane.len(), 12);
         for value in plane {
@@ -162,6 +164,7 @@ fn full_strength_blue_encodes_the_bt709_chroma() {
     for value in &output[1] {
         assert!((value - expected_u).abs() < 1e-3, "{value} against {expected_u}");
     }
+
     for value in &output[2] {
         assert!((value - expected_v).abs() < 1e-3, "{value} against {expected_v}");
     }

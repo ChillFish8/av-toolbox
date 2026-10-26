@@ -91,8 +91,8 @@ fn default_temporal() -> bool {
 ///
 /// Each output frame carries `score` in JOD, where 10 means no visible difference. The score covers
 /// every frame so far, or with `temporal = false` only that frame. The output is the distorted
-/// frame, or with `output = "map"` the frame's map of the JOD lost at each pixel. At the end of the stream it writes a
-/// `summary` record of the final score.
+/// frame, or with `output = "map"` the frame's map of the JOD lost at each pixel. At the end of the
+/// stream it writes a `summary` record of the final score.
 pub(crate) struct Cvvdp;
 
 impl StageDefinition for Cvvdp {

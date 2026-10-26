@@ -138,7 +138,8 @@ fn map_not_f32(sample: SampleFormat) -> StageError {
 
 fn map_wrong_size(clip: &FrameFormat, map: &FrameFormat) -> StageError {
     let message = format!(
-        "{STAGE} needs a {}x{} map to match the clip, got {}x{}. The map needs a resize to the clip's size first",
+        "{STAGE} needs a {}x{} map to match the clip, got {}x{}. \
+         The map needs a resize to the clip's size first",
         clip.width, clip.height, map.width, map.height,
     );
 
@@ -564,5 +565,65 @@ mod tests {
         let clip = checked_clip(&args(0.003), &chosen).expect("everything agrees");
 
         assert_eq!(StreamFormat::Frames(clip), yuv420(ten_bit));
+    }
+
+    fn yuv_layout(subsampling: Subsampling) -> FrameLayout {
+        FrameLayout::Yuv { subsampling }
+    }
+
+    #[test]
+    fn unspecified_and_identity_matrices_paint_with_bt709() {
+        assert_eq!(coefficients(Matrix::Unspecified), Coefficients::Bt709);
+        assert_eq!(coefficients(Matrix::Identity), Coefficients::Bt709);
+    }
+
+    #[test]
+    fn an_unspecified_range_is_limited_for_yuv_and_full_for_rgb() {
+        let yuv = PaintLayout::Yuv {
+            width_shift: 1,
+            height_shift: 1,
+        };
+
+        assert_eq!(sample_range(ColourRange::Unspecified, yuv), SampleRange::Limited);
+        assert_eq!(
+            sample_range(ColourRange::Unspecified, PaintLayout::Rgb),
+            SampleRange::Full
+        );
+    }
+
+    #[test]
+    fn subsampling_gives_the_chroma_shifts() {
+        let cases = [
+            (Subsampling::Yuv420, (1, 1)),
+            (Subsampling::Yuv422, (1, 0)),
+            (Subsampling::Yuv444, (0, 0)),
+        ];
+
+        for (subsampling, (width_shift, height_shift)) in cases {
+            let clip = match frames(8, 6, yuv_layout(subsampling), SampleFormat::U8) {
+                StreamFormat::Frames(format) => format,
+                other => panic!("expected frames, got {other:?}"),
+            };
+
+            let painted = painting(&args(0.003), &clip).expect("yuv can be painted");
+
+            let expected = PaintLayout::Yuv {
+                width_shift,
+                height_shift,
+            };
+            assert_eq!(painted.layout, expected, "{subsampling:?}");
+        }
+    }
+
+    #[test]
+    fn an_rgb_clip_paints_as_rgb() {
+        let rgb = frames(8, 6, FrameLayout::Rgb, SampleFormat::U8);
+        let StreamFormat::Frames(clip) = rgb else {
+            panic!("expected frames");
+        };
+
+        let painted = painting(&args(0.003), &clip).expect("rgb can be painted");
+
+        assert_eq!(painted.layout, PaintLayout::Rgb);
     }
 }

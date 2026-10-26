@@ -50,6 +50,7 @@ struct PaintOnce {
 fn loaded(context: &FrameContext, format: &FrameFormat, planes: &[Vec<u8>], meta: FrameMeta) -> StreamItem {
     let host = HostPool::new();
     let mut host_frame = host.alloc_frame(format, meta);
+
     for (index, channel) in format.channels().iter().enumerate() {
         let plane = host_frame
             .plane_mut(*channel)

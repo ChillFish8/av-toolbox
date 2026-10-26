@@ -112,8 +112,8 @@ fn average_chroma(differences: &[f32], width: u32, height: u32, shifts: (u32, u3
 
 /// Paints `map` over `picture` on the CPU and returns the output planes as unrounded code values.
 ///
-/// `picture` holds the clip's planes as code values, chroma at its subsampled size. The map is smoothed with an
-/// exact clamp-edged gaussian before it is painted.
+/// `picture` holds the clip's planes as code values, chroma at its subsampled size. The map is smoothed
+/// with an exact clamp-edged gaussian before it is painted.
 pub fn reference_heatmap(
     picture: [&[f32]; 3],
     map: &[f32],
