@@ -13,6 +13,7 @@ mod deinterlace;
 mod depth;
 mod dpir;
 mod edges;
+mod heatmap;
 mod histogram;
 mod hysteresis;
 mod ivtc;

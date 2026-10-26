@@ -134,3 +134,35 @@ fn superblack_luma_reads_as_black() {
         assert!((value - 16.0).abs() < 1e-3, "{value}");
     }
 }
+
+#[test]
+fn full_strength_blue_encodes_the_bt709_chroma() {
+    let (width, height) = (4, 4);
+    let layout = PaintLayout::Yuv {
+        width_shift: 0,
+        height_shift: 0,
+    };
+    let painting = painting(layout, SampleRange::Full, 0.003);
+    let size = (width * height) as usize;
+    let luma = vec![255.0; size];
+    let chroma = vec![128.0; size];
+    let map = vec![0.003; size];
+
+    let output = reference_heatmap([&luma, &chroma, &chroma], &map, width, height, &painting);
+
+    let (red, green, blue) = (20.0 / 255.0, 40.0 / 255.0, 200.0 / 255.0);
+    let (weight_red, weight_blue) = (0.2126, 0.0722);
+    let weight_green = 1.0 - weight_red - weight_blue;
+    let luma_value = weight_red * red + weight_green * green + weight_blue * blue;
+    let blue_difference = (blue - luma_value) / (2.0 * (1.0 - weight_blue));
+    let red_difference = (red - luma_value) / (2.0 * (1.0 - weight_red));
+    let expected_u = 128.0 + 255.0 * blue_difference;
+    let expected_v = 128.0 + 255.0 * red_difference;
+
+    for value in &output[1] {
+        assert!((value - expected_u).abs() < 1e-3, "{value} against {expected_u}");
+    }
+    for value in &output[2] {
+        assert!((value - expected_v).abs() < 1e-3, "{value} against {expected_v}");
+    }
+}
