@@ -1,6 +1,6 @@
 use crate::Edge;
 use crate::blur::{gaussian_weights, radius_for};
-use crate::heatmap::{PaintLayout, Painting, Style, lift, ramp_stops, sigma_for};
+use crate::heatmap::{PaintLayout, Painting, Shading, Style, shading, sigma_for};
 use crate::matrix::scaling;
 use crate::testing::reference_blur_with_edge;
 
@@ -17,8 +17,19 @@ pub fn reference_strength(value: f32, scale: f32, floor: f32) -> f32 {
 
 /// The red, green and blue a pixel of brightness `grey` paints with at `strength`.
 pub fn reference_colour(grey: f32, strength: f32, style: Style) -> [f32; 3] {
-    let stops = ramp_stops(style);
-    let (base, gain) = lift(style);
+    match shading(style) {
+        Shading::Multiply { stops, base, gain } => multiplied_colour(grey, strength, stops, base, gain),
+        Shading::Overlay { colour, opacity } => overlaid_colour(grey, strength, colour, opacity),
+    }
+}
+
+fn overlaid_colour(grey: f32, strength: f32, colour: [f32; 3], opacity: f32) -> [f32; 3] {
+    let cover = opacity * strength;
+
+    colour.map(|channel| grey * (1.0 - cover) + channel * cover)
+}
+
+fn multiplied_colour(grey: f32, strength: f32, stops: [[f32; 3]; 3], base: f32, gain: f32) -> [f32; 3] {
     let brightness = base + gain * grey;
 
     let (from, to, fraction) = if strength <= 0.5 {

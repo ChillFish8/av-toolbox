@@ -13,6 +13,9 @@ pub const FLOOR: f32 = 0.25;
 /// The share of the picture's brightness the heat style keeps under its colour.
 const HEAT_LIFT: f32 = 0.25;
 
+/// The share of the picture the overlay style's colour covers at full strength.
+const OVERLAY_OPACITY: f32 = 0.85;
+
 /// The colouring a heatmap is painted with.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Style {
@@ -20,6 +23,23 @@ pub enum Style {
     Blue,
     /// A lifted greyscale picture shaded from cyan through yellow to red.
     Heat,
+    /// A greyscale picture with blue mixed over it, so dark pixels take the colour too.
+    Overlay,
+}
+
+/// How a style turns a pixel's brightness and strength into a colour.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Shading {
+    /// The picture's brightness `base + gain * grey` times a ramp through `stops`.
+    ///
+    /// The stops are the colours at strength 0, 0.5 and 1, as red, green and blue between 0 and 1.
+    Multiply {
+        stops: [[f32; 3]; 3],
+        base: f32,
+        gain: f32,
+    },
+    /// The picture's grey mixed with `colour`, which covers `opacity * strength` of it.
+    Overlay { colour: [f32; 3], opacity: f32 },
 }
 
 /// How the planes of a clip hold the picture being painted.
@@ -52,29 +72,65 @@ pub fn sigma_for(height: u32) -> f32 {
     height as f32 / 90.0
 }
 
-/// The colours at strength 0, 0.5 and 1, as red, green and blue between 0 and 1.
-pub fn ramp_stops(style: Style) -> [[f32; 3]; 3] {
-    let stops = match style {
-        Style::Blue => [[255.0, 255.0, 255.0], [110.0, 160.0, 255.0], [20.0, 40.0, 200.0]],
-        Style::Heat => [[60.0, 220.0, 230.0], [240.0, 220.0, 40.0], [230.0, 30.0, 30.0]],
-    };
+/// How `style` turns a pixel's brightness and strength into a colour.
+pub fn shading(style: Style) -> Shading {
+    match style {
+        Style::Blue => {
+            let stops = [[255.0, 255.0, 255.0], [110.0, 160.0, 255.0], [20.0, 40.0, 200.0]];
 
-    stops.map(|stop| stop.map(|channel| channel / 255.0))
+            Shading::Multiply {
+                stops: stops.map(as_fractions),
+                base: 0.0,
+                gain: 1.0,
+            }
+        },
+        Style::Heat => {
+            let stops = [[60.0, 220.0, 230.0], [240.0, 220.0, 40.0], [230.0, 30.0, 30.0]];
+
+            Shading::Multiply {
+                stops: stops.map(as_fractions),
+                base: HEAT_LIFT,
+                gain: 1.0 - HEAT_LIFT,
+            }
+        },
+        Style::Overlay => Shading::Overlay {
+            colour: as_fractions([30.0, 80.0, 255.0]),
+            opacity: OVERLAY_OPACITY,
+        },
+    }
 }
 
-/// The picture's brightness as `(base, gain)`, so a grey of `grey` shows as `base + gain * grey`.
-pub fn lift(style: Style) -> (f32, f32) {
-    match style {
-        Style::Blue => (0.0, 1.0),
-        Style::Heat => (HEAT_LIFT, 1.0 - HEAT_LIFT),
-    }
+fn as_fractions(colour: [f32; 3]) -> [f32; 3] {
+    colour.map(|channel| channel / 255.0)
 }
 
 /// The weights BT.709 gives red, green and blue in the brightness of an RGB picture.
 const GREY_WEIGHTS: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
-/// The palette buffer holds the three ramp stops, then the base and gain of [lift].
+/// The palette buffer holds a [Shading](crate::heatmap::Shading) as the kernels read it.
+///
+/// A multiply shading is its three stops, then its base and gain. An overlay shading is its colour,
+/// then its opacity, with the rest left at zero.
 const PALETTE_VALUES: usize = 11;
+
+fn palette_values(shading: Shading) -> Vec<f32> {
+    let mut values = match shading {
+        Shading::Multiply { stops, base, gain } => {
+            let mut values: Vec<f32> = stops.iter().flatten().copied().collect();
+            values.push(base);
+            values.push(gain);
+            values
+        },
+        Shading::Overlay { colour, opacity } => {
+            let mut values = colour.to_vec();
+            values.push(opacity);
+            values
+        },
+    };
+
+    values.resize(PALETTE_VALUES, 0.0);
+    values
+}
 
 /// The planes one painting reads, works in and writes.
 ///
@@ -139,12 +195,8 @@ impl Heatmap {
             Gaussian::new(client, sigma)
         });
 
-        let stops = ramp_stops(painting.style);
-        let (base, gain) = lift(painting.style);
-        let mut values: Vec<f32> = stops.iter().flatten().copied().collect();
-        values.push(base);
-        values.push(gain);
-
+        let shading = shading(painting.style);
+        let values = palette_values(shading);
         let bytes = f32::as_bytes(&values);
         let palette = client.create_from_slice(bytes);
 
@@ -154,6 +206,10 @@ impl Heatmap {
             palette,
             height,
         }
+    }
+
+    fn overlays(&self) -> bool {
+        self.painting.style == Style::Overlay
     }
 
     fn palette<R: Runtime>(&self) -> ArrayArg<R> {
@@ -295,6 +351,7 @@ impl Heatmap {
         let samples = values.samples();
         let cubes = dispatch.cube_count(samples);
         let unit = dispatch.cube_dim();
+        let overlays = self.overlays();
 
         // Safety: every plane holds `width * height` samples, checked by `apply`, and the palette
         // holds its `PALETTE_VALUES` values.
@@ -317,6 +374,7 @@ impl Heatmap {
                 encoding.luma_scale,
                 encoding.largest,
                 encoding.rounds,
+                overlays,
             );
         }
     }
@@ -337,6 +395,7 @@ impl Heatmap {
         let samples = values.samples();
         let cubes = dispatch.cube_count(samples);
         let unit = dispatch.cube_dim();
+        let overlays = self.overlays();
 
         // Safety: the luma, map value and luma output planes hold `width * height` samples, checked
         // by `apply`, and the palette holds its `PALETTE_VALUES` values.
@@ -357,6 +416,7 @@ impl Heatmap {
                 weight_blue as f32,
                 encoding.largest,
                 encoding.rounds,
+                overlays,
             );
         }
     }
@@ -383,6 +443,7 @@ impl Heatmap {
         let samples = planes.output[1].samples();
         let cubes = dispatch.cube_count(samples);
         let unit = dispatch.cube_dim();
+        let overlays = self.overlays();
 
         // Safety: the luma and map value planes hold `width * height` samples and both chroma
         // outputs hold `chroma_width` by the shifted height, checked by `apply`. Every pixel read
@@ -412,6 +473,7 @@ impl Heatmap {
                 weight_blue as f32,
                 encoding.largest,
                 encoding.rounds,
+                overlays,
             );
         }
     }
@@ -435,8 +497,34 @@ fn normalised(code: f32, offset: f32, scale: f32) -> f32 {
 }
 
 /// One channel of the colour a pixel of brightness `grey` paints with at `strength`.
+///
+/// `overlays` picks how the palette is read, as an overlay shading or as a multiply shading.
 #[cube]
-fn colour_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32) -> f32 {
+fn colour_channel(
+    palette: &Array<f32>,
+    channel: u32,
+    grey: f32,
+    strength: f32,
+    #[comptime] overlays: bool,
+) -> f32 {
+    if overlays {
+        overlaid_channel(palette, channel, grey, strength)
+    } else {
+        multiplied_channel(palette, channel, grey, strength)
+    }
+}
+
+/// One channel of the palette's colour mixed over a pixel of brightness `grey` at `strength`.
+#[cube]
+fn overlaid_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32) -> f32 {
+    let cover = palette[3] * strength;
+
+    grey * (1.0 - cover) + palette[channel as usize] * cover
+}
+
+/// One channel of the palette's ramp at `strength`, times a pixel of brightness `grey`.
+#[cube]
+fn multiplied_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32) -> f32 {
     let brightness = palette[9] + palette[10] * grey;
     let mut from = palette[(3 + channel) as usize];
     let mut to = palette[(6 + channel) as usize];
@@ -478,12 +566,13 @@ fn painted_yuv(
     luma_scale: f32,
     weight_red: f32,
     weight_blue: f32,
+    #[comptime] overlays: bool,
 ) -> (f32, f32, f32) {
     let grey = normalised(luma_code, luma_offset, luma_scale);
     let pixel_strength = strength(value, scale, floor);
-    let red = colour_channel(palette, 0, grey, pixel_strength);
-    let green = colour_channel(palette, 1, grey, pixel_strength);
-    let blue = colour_channel(palette, 2, grey, pixel_strength);
+    let red = colour_channel(palette, 0, grey, pixel_strength, overlays);
+    let green = colour_channel(palette, 1, grey, pixel_strength, overlays);
+    let blue = colour_channel(palette, 2, grey, pixel_strength, overlays);
 
     let weight_green = 1.0 - weight_red - weight_blue;
     let luma = weight_red * red + weight_green * green + weight_blue * blue;
@@ -509,6 +598,7 @@ fn paint_rgb<E: CubePrimitive>(
     span: f32,
     largest: f32,
     #[comptime] rounds: bool,
+    #[comptime] overlays: bool,
 ) {
     if ABSOLUTE_POS >= red_out.len() {
         terminate!();
@@ -523,9 +613,9 @@ fn paint_rgb<E: CubePrimitive>(
     let grey = red_grey + green_grey + blue_grey;
     let pixel_strength = strength(values[ABSOLUTE_POS], scale, floor);
 
-    let red_colour = colour_channel(palette, 0, grey, pixel_strength);
-    let green_colour = colour_channel(palette, 1, grey, pixel_strength);
-    let blue_colour = colour_channel(palette, 2, grey, pixel_strength);
+    let red_colour = colour_channel(palette, 0, grey, pixel_strength, overlays);
+    let green_colour = colour_channel(palette, 1, grey, pixel_strength, overlays);
+    let blue_colour = colour_channel(palette, 2, grey, pixel_strength, overlays);
     let red_code = encoded(red_colour, offset, span, largest, rounds);
     let green_code = encoded(green_colour, offset, span, largest, rounds);
     let blue_code = encoded(blue_colour, offset, span, largest, rounds);
@@ -549,6 +639,7 @@ fn paint_luma<E: CubePrimitive>(
     weight_blue: f32,
     largest: f32,
     #[comptime] rounds: bool,
+    #[comptime] overlays: bool,
 ) {
     if ABSOLUTE_POS >= luma_out.len() {
         terminate!();
@@ -565,6 +656,7 @@ fn paint_luma<E: CubePrimitive>(
         luma_scale,
         weight_red,
         weight_blue,
+        overlays,
     );
     let code = encoded(painted, luma_offset, luma_scale, largest, rounds);
 
@@ -594,6 +686,7 @@ fn paint_chroma<E: CubePrimitive>(
     weight_blue: f32,
     largest: f32,
     #[comptime] rounds: bool,
+    #[comptime] overlays: bool,
 ) {
     if ABSOLUTE_POS >= blue_out.len() {
         terminate!();
@@ -625,6 +718,7 @@ fn paint_chroma<E: CubePrimitive>(
                 luma_scale,
                 weight_red,
                 weight_blue,
+                overlays,
             );
 
             blue_total += blue_difference;

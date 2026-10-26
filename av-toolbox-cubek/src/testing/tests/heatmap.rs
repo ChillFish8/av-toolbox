@@ -72,6 +72,29 @@ fn heat_lifts_black_and_runs_cyan_to_red() {
     );
 }
 
+fn overlay_colour() -> [f32; 3] {
+    [30.0 / 255.0, 80.0 / 255.0, 1.0]
+}
+
+#[test]
+fn overlay_leaves_the_grey_picture_at_no_strength() {
+    assert_colour(reference_colour(0.4, 0.0, Style::Overlay), [0.4, 0.4, 0.4]);
+}
+
+#[test]
+fn overlay_colours_a_black_pixel_at_full_strength() {
+    let expected = overlay_colour().map(|channel| 0.85 * channel);
+
+    assert_colour(reference_colour(0.0, 1.0, Style::Overlay), expected);
+}
+
+#[test]
+fn overlay_mixes_halfway_at_half_strength() {
+    let expected = overlay_colour().map(|channel| 1.0 * (1.0 - 0.425) + channel * 0.425);
+
+    assert_colour(reference_colour(1.0, 0.5, Style::Overlay), expected);
+}
+
 #[test]
 fn a_flat_map_stays_flat_through_smoothing() {
     let (width, height) = (16, 12);

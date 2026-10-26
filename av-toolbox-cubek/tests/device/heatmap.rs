@@ -312,6 +312,25 @@ fn an_odd_sized_420_frame_without_smoothing_matches_the_reference() {
 }
 
 #[test]
+fn overlay_on_8_bit_limited_420_matches_the_reference() {
+    let painting = painting(Style::Overlay, yuv(1, 1), MatrixSamples::U8, SampleRange::Limited);
+
+    assert_matches_reference(64, 36, painting);
+}
+
+#[test]
+fn overlay_without_smoothing_on_16_bit_rgb_matches_the_reference() {
+    let samples = MatrixSamples::U16 { bits: 16 };
+    let painting = painting(Style::Overlay, PaintLayout::Rgb, samples, SampleRange::Full);
+    let painting = Painting {
+        floor: 0.0,
+        ..unsmoothed(painting)
+    };
+
+    assert_matches_reference(64, 36, painting);
+}
+
+#[test]
 fn a_nan_without_smoothing_greys_only_its_pixel() {
     let (width, height) = (64, 36);
     let painting = painting(Style::Blue, yuv(1, 1), MatrixSamples::U8, SampleRange::Limited);

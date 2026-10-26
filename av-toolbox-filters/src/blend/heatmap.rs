@@ -57,6 +57,8 @@ pub(crate) enum HeatmapStyle {
     Blue,
     /// A lifted greyscale picture shaded from cyan through yellow to red.
     Heat,
+    /// A greyscale picture with blue mixed over it, so dark pixels take the colour too.
+    Overlay,
 }
 
 impl From<HeatmapStyle> for Style {
@@ -64,6 +66,7 @@ impl From<HeatmapStyle> for Style {
         match style {
             HeatmapStyle::Blue => Self::Blue,
             HeatmapStyle::Heat => Self::Heat,
+            HeatmapStyle::Overlay => Self::Overlay,
         }
     }
 }
@@ -499,6 +502,14 @@ mod tests {
 
         assert_eq!(parsed.style, HeatmapStyle::Blue);
         assert_eq!(Style::from(parsed.style), Style::Blue);
+    }
+
+    #[test]
+    fn overlay_parses_as_a_style() {
+        let given = serde_json::json!({ "style": "overlay", "scale": 1.0 });
+        let parsed: HeatmapArgs = serde_json::from_value(given).expect("overlay is a style");
+
+        assert_eq!(Style::from(parsed.style), Style::Overlay);
     }
 
     #[test]
