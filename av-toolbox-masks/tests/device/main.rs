@@ -8,4 +8,5 @@ mod edges;
 mod reference;
 mod retinex;
 mod support;
+mod twin;
 mod xdog;

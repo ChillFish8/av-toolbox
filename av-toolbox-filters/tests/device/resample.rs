@@ -35,6 +35,7 @@ use crate::support::{
     passes_through,
     patterned_planes,
     planes_as_codes,
+    range_of,
     run_once,
 };
 
@@ -354,10 +355,7 @@ fn raising_to_a_minimum_depth_matches_the_reference_in_either_range() {
         let planes = eight_bit_values(&input);
         let raised = run_once("resample/min_depth", input, output, args, &planes);
 
-        let sample_range = match range {
-            ColourRange::Full => SampleRange::Full,
-            _ => SampleRange::Limited,
-        };
+        let sample_range = range_of(&input);
         let thresholds = Thresholds::rounding();
         for (index, channel) in input.channels().iter().enumerate() {
             let (width, _) = input.channel_dimensions(*channel).expect("carried");

@@ -9,11 +9,14 @@ use av_toolbox_core::{
     StreamType,
 };
 use av_toolbox_cubek::DevicePlane;
+use av_toolbox_cubek::matrix::SampleRange;
+use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{
     Backend,
     BuildContext,
     BuildTask,
     ColourInfo,
+    ColourRange,
     Depth,
     Frame,
     FrameContext,
@@ -133,6 +136,39 @@ pub fn ten_bit_grey(width: u32, height: u32) -> FrameFormat {
         sample: SampleFormat::U16 { depth: Depth::TEN },
         ..grey(width, height)
     }
+}
+
+pub fn sixteen_bit_grey(width: u32, height: u32) -> FrameFormat {
+    FrameFormat {
+        sample: SampleFormat::U16 {
+            depth: Depth::SIXTEEN,
+        },
+        ..grey(width, height)
+    }
+}
+
+/// A float grey frame labelled `range`.
+pub fn f32_grey(width: u32, height: u32, range: ColourRange) -> FrameFormat {
+    FrameFormat {
+        sample: SampleFormat::F32,
+        colour: ColourInfo {
+            range,
+            ..ColourInfo::default()
+        },
+        ..grey(width, height)
+    }
+}
+
+/// The bytes of the float plane whose 16-bit codes in `range` are `codes`, the inverse of
+/// `FloatCodes`.
+pub fn float_bytes(codes: &[u16], range: SampleRange) -> Vec<u8> {
+    let mapping = FloatCodes::new(16, range, false);
+    let samples: Vec<f32> = codes
+        .iter()
+        .map(|code| (f32::from(*code) - mapping.offset) / mapping.scale)
+        .collect();
+
+    f32::as_bytes(&samples).to_vec()
 }
 
 pub fn yuv420(width: u32, height: u32) -> FrameFormat {

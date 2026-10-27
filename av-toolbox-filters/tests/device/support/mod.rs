@@ -55,6 +55,7 @@ pub(crate) use self::float::{
     float_samples,
     kept_sample_parity,
     planes_as_codes,
+    range_of,
     run_into_codes,
     run_masked_into_codes,
 };

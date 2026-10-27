@@ -1,7 +1,10 @@
 use av_toolbox_core::StageError;
 use av_toolbox_cubek::DevicePlane;
+use av_toolbox_cubek::matrix::SampleRange;
+use av_toolbox_cubek::values::{FloatCodes, float_to_whole_codes};
 use av_toolbox_gpu::{
     Channel,
+    ColourRange,
     FormatSet,
     Frame,
     FrameFormat,
@@ -20,7 +23,7 @@ use cubecl::prelude::*;
 
 use crate::sizing::Sizing;
 
-/// Takes the luma of YUV and Grey frames at U8 and U16, leaving float samples out.
+/// Takes the luma of YUV and Grey frames at any sample format.
 pub(crate) fn accepts_luma(stage: &str, offered: StreamFormat) -> Result<FormatSet, StageError> {
     let Some(format) = offered.as_frames() else {
         let message = format!("{stage} reads frames, not masks");
@@ -37,12 +40,7 @@ pub(crate) fn accepts_luma(stage: &str, offered: StreamFormat) -> Result<FormatS
         return Err(StageError::msg(message));
     }
 
-    let accepted = match format.sample {
-        SampleFormat::U8 | SampleFormat::U16 { .. } => FormatSet::of([format.sample]),
-        SampleFormat::F32 => FormatSet::new(),
-    };
-
-    Ok(accepted)
+    Ok(FormatSet::of([format.sample]))
 }
 
 fn bound_frames(stage: &str, format: Option<StreamFormat>) -> Result<FrameFormat, StageError> {
@@ -80,6 +78,9 @@ pub(crate) fn produces_luma_mask(
     })
 }
 
+/// The depth F32 luma is read at.
+const FLOAT_CODE_BITS: u32 = 16;
+
 /// How the luma a stage reads is stored.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Luma {
@@ -89,6 +90,16 @@ pub(crate) struct Luma {
     /// The largest sample value, which maps to 1.
     largest: f32,
     wide: bool,
+    /// How F32 samples map onto 16-bit codes, set for float clips only.
+    float_codes: Option<FloatCodes>,
+}
+
+/// The integer range a clip labelled `range` uses. Anything not labelled full range is limited.
+fn sample_range(range: ColourRange) -> SampleRange {
+    match range {
+        ColourRange::Full => SampleRange::Full,
+        _ => SampleRange::Limited,
+    }
 }
 
 impl Luma {
@@ -96,16 +107,18 @@ impl Luma {
         let input = formats.input(0);
         let format = bound_frames(stage, input)?;
 
-        let (largest, wide) = match format.sample {
-            SampleFormat::U8 => (255.0, false),
+        let (largest, wide, float_codes) = match format.sample {
+            SampleFormat::U8 => (255.0, false, None),
             SampleFormat::U16 { depth } => {
                 let max_value = depth.max_value();
 
-                (f32::from(max_value), true)
+                (f32::from(max_value), true, None)
             },
             SampleFormat::F32 => {
-                let message = format!("{stage} reads integer samples, not floats");
-                return Err(StageError::msg(message));
+                let range = sample_range(format.colour.range);
+                let codes = FloatCodes::new(FLOAT_CODE_BITS, range, false);
+
+                (codes.peak, false, Some(codes))
             },
         };
 
@@ -115,6 +128,7 @@ impl Luma {
             frame_rate: format.frame_rate,
             largest,
             wide,
+            float_codes,
         })
     }
 
@@ -132,7 +146,7 @@ impl Luma {
         }
     }
 
-    /// The largest code value, 255 or the U16 depth's largest.
+    /// The largest code value, 255, the U16 depth's largest, or 65535 for floats.
     pub(crate) const fn peak(&self) -> f32 {
         self.largest
     }
@@ -147,10 +161,39 @@ fn normalise<E: Int>(input: &Array<E>, output: &mut Array<f32>, scale: f32) {
     output[ABSOLUTE_POS] = f32::cast_from(input[ABSOLUTE_POS]) * scale;
 }
 
+#[cube(launch_unchecked)]
+fn scale_kernel(values: &mut Array<f32>, scale: f32) {
+    if ABSOLUTE_POS >= values.len() {
+        terminate!();
+    }
+
+    values[ABSOLUTE_POS] = values[ABSOLUTE_POS] * scale;
+}
+
 fn no_luma(stage: &str) -> StageError {
     let message = format!("{stage} was handed a frame without luma");
 
     StageError::msg(message)
+}
+
+fn scale_codes<R: Runtime>(
+    client: &ComputeClient<R>,
+    sizing: &Sizing<'_>,
+    values: DevicePlane<'_>,
+    scale: f32,
+) {
+    if scale == 1.0 {
+        return;
+    }
+
+    let written = values.array::<R>();
+    let cubes = sizing.0.cube_count(values.samples());
+    let shape = sizing.0.cube_dim();
+
+    // Safety: `values` holds `samples` f32 values and the kernel stays inside its length.
+    unsafe {
+        scale_kernel::launch_unchecked::<R>(client, cubes, shape, written, scale);
+    }
 }
 
 fn load_luma_scaled<R: Runtime>(
@@ -163,6 +206,17 @@ fn load_luma_scaled<R: Runtime>(
     scale: f32,
 ) -> Result<(), StageError> {
     let plane = frame.plane(Channel::Y).ok_or_else(|| no_luma(stage))?;
+
+    if let Some(codes) = luma.float_codes {
+        let handle = plane.buffer().handle();
+
+        // Safety: an F32 luma plane holds exactly `width * height` f32 samples.
+        let source = unsafe { DevicePlane::new(handle, luma.width, luma.height) };
+        float_to_whole_codes(client, sizing, source, output, codes);
+        scale_codes(client, sizing, output, scale);
+
+        return Ok(());
+    }
 
     let written = output.array::<R>();
     let samples = luma.samples();
@@ -292,12 +346,21 @@ mod tests {
     }
 
     #[test]
-    fn float_samples_are_left_out() {
+    fn float_samples_are_accepted() {
         let offered = frames(FrameLayout::Grey, SampleFormat::F32);
 
         let accepted = accepts_luma("lines/test", offered).expect("grey is readable");
 
-        assert!(accepted.is_empty());
+        assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
+    }
+
+    #[test]
+    fn a_float_clip_reads_at_sixteen_bits() {
+        let resolved = ResolvedFormats::new(vec![Some(frames(FrameLayout::Grey, SampleFormat::F32))], None);
+
+        let luma = Luma::from_formats("lines/test", &resolved).expect("floats are readable");
+
+        assert_eq!(luma.peak(), 65535.0);
     }
 
     #[test]
