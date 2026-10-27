@@ -11,10 +11,31 @@ use av_toolbox_cubek::testing::{
     reference_narrow,
     reference_yahr,
 };
-use av_toolbox_gpu::{Channel, ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
+use av_toolbox_gpu::{
+    Channel,
+    ChromaLocation,
+    ColourRange,
+    Depth,
+    FrameFormat,
+    FrameLayout,
+    SampleFormat,
+    Subsampling,
+};
 use serde_json::json;
 
-use crate::support::{frame, from_bytes, luma_is_shared, run_once, to_bytes};
+use crate::support::{
+    assert_a_flat_frame_is_unchanged,
+    assert_codes_within,
+    assert_planes_match,
+    encoded,
+    f32_parity,
+    float_samples,
+    frame,
+    luma_is_shared,
+    run_into_codes,
+    run_once,
+    widened,
+};
 
 fn alpha(bits: u32, ss: f32) -> AlphaParams {
     AlphaParams {
@@ -51,45 +72,42 @@ fn haloed(format: &FrameFormat, peak: u32) -> Vec<Vec<u16>> {
         .collect()
 }
 
-fn assert_within_one(actual: &[u16], expected: &[u16], label: &str) {
-    assert_eq!(actual.len(), expected.len(), "{label}");
+/// Runs `stage` on a haloed `input` of `bits` deep codes, and checks each selected plane against
+/// `reference` and the rest against the input.
+fn matches(
+    stage: &str,
+    input: FrameFormat,
+    args: serde_json::Value,
+    bits: u32,
+    selected: &[bool],
+    reference: impl Fn(&[f32], u32, u32) -> Vec<f32>,
+) {
+    let peak = (1u32 << bits) - 1;
+    let values = haloed(&input, peak);
 
-    for (index, (found, wanted)) in actual.iter().zip(expected).enumerate() {
-        assert!(
-            found.abs_diff(*wanted) <= 1,
-            "{label} sample {index}: {found} against {wanted}"
-        );
-    }
+    assert_planes_match(stage, input, args, bits, selected, &values, reference);
+}
+
+/// Checks `stage`'s F32 and 16-bit runs on one haloed clip differ by at most `largest`, with no more
+/// than a `beyond_one` share of samples more than one code apart.
+fn assert_f32_matches_sixteen_bit(stage: &str, largest: f32, beyond_one: f32) {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let input = yuv420(64, 48, sixteen_bit);
+    let values = haloed(&input, 65535);
+
+    let parity = f32_parity(stage, input, json!({}), &values);
+
+    assert!(parity.largest <= largest, "{stage}: {parity:?}");
+    assert!(parity.beyond_one <= beyond_one, "{stage}: {parity:?}");
 }
 
 /// Runs `dehalo/alpha` and checks each plane against the reference or against its input.
 fn matches_reference(input: FrameFormat, args: serde_json::Value, expected: AlphaParams, selected: &[bool]) {
-    let peak = (1u32 << expected.bits) - 1;
-    let element = if expected.bits == 8 {
-        Element::U8
-    } else {
-        Element::U16
-    };
-    let values = haloed(&input, peak);
-    let planes: Vec<Vec<u8>> = values.iter().map(|plane| to_bytes(plane, element)).collect();
+    let reference = |codes: &[f32], width, height| reference_dehalo_alpha(codes, width, height, &expected);
 
-    let dehaloed = run_once("dehalo/alpha", input, input, args, &planes);
-
-    for (plane, channel) in input.channels().iter().enumerate() {
-        let (width, height) = input.channel_dimensions(*channel).expect("carried");
-        let actual = from_bytes(&dehaloed[plane], element);
-        let label = channel.to_string();
-
-        if !selected[plane] {
-            assert_eq!(actual, values[plane], "{label} should be untouched");
-            continue;
-        }
-
-        let widened: Vec<f32> = values[plane].iter().map(|value| f32::from(*value)).collect();
-        let reference = reference_dehalo_alpha(&widened, width, height, &expected);
-        let rounded = reference_narrow(&reference, peak as f32);
-        assert_within_one(&actual, &rounded, &label);
-    }
+    matches("dehalo/alpha", input, args, expected.bits, selected, reference);
 }
 
 fn fine(bits: u32) -> FineParams {
@@ -112,32 +130,16 @@ fn matches_fine_reference(
     expected: FineParams,
     selected: &[bool],
 ) {
-    let peak = (1u32 << expected.alpha.bits) - 1;
-    let element = if expected.alpha.bits == 8 {
-        Element::U8
-    } else {
-        Element::U16
-    };
-    let values = haloed(&input, peak);
-    let planes: Vec<Vec<u8>> = values.iter().map(|plane| to_bytes(plane, element)).collect();
+    let reference = |codes: &[f32], width, height| reference_fine_dehalo(codes, width, height, &expected);
 
-    let dehaloed = run_once("dehalo/fine", input, input, args, &planes);
-
-    for (plane, channel) in input.channels().iter().enumerate() {
-        let (width, height) = input.channel_dimensions(*channel).expect("carried");
-        let actual = from_bytes(&dehaloed[plane], element);
-        let label = channel.to_string();
-
-        if !selected[plane] {
-            assert_eq!(actual, values[plane], "{label} should be untouched");
-            continue;
-        }
-
-        let widened: Vec<f32> = values[plane].iter().map(|value| f32::from(*value)).collect();
-        let reference = reference_fine_dehalo(&widened, width, height, &expected);
-        let rounded = reference_narrow(&reference, peak as f32);
-        assert_within_one(&actual, &rounded, &label);
-    }
+    matches(
+        "dehalo/fine",
+        input,
+        args,
+        expected.alpha.bits,
+        selected,
+        reference,
+    );
 }
 
 fn yuv420(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
@@ -192,28 +194,60 @@ fn a_small_chroma_plane_is_dehaloed() {
 
 #[test]
 fn a_flat_frame_is_unchanged() {
-    let sixteen_bit = SampleFormat::U16 {
-        depth: Depth::SIXTEEN,
-    };
-    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
-    let peak: u16 = 65535;
-    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
-    let values: Vec<u16> = vec![peak; samples];
-    let planes = vec![to_bytes(&values, Element::U16)];
-    let args = json!({});
-
-    let dehaloed = run_once("dehalo/alpha", input, input, args, &planes);
-    let actual = from_bytes(&dehaloed[0], Element::U16);
-
-    assert!(actual.iter().all(|sample| *sample == peak));
+    assert_a_flat_frame_is_unchanged("dehalo/alpha");
 }
 
 #[test]
 fn unselected_chroma_is_shared() {
-    let input = yuv420(64, 48, SampleFormat::U8);
+    let input = yuv420(64, 48, SampleFormat::F32);
     let args = json!({ "planes": ["u", "v"] });
 
     assert!(luma_is_shared("dehalo/alpha", input, input, args));
+}
+
+#[test]
+fn alpha_f32_matches_sixteen_bit() {
+    assert_f32_matches_sixteen_bit("dehalo/alpha", 1.0, 0.0);
+}
+
+#[test]
+fn an_unfiltered_chroma_plane_becomes_f32_centred_on_zero() {
+    let mut input = yuv420(64, 48, SampleFormat::U8);
+    input.colour.range = ColourRange::Limited;
+    let haloed_planes = haloed(&input, 255);
+    let flat_chroma = vec![128u16; haloed_planes[1].len()];
+    let values = [haloed_planes[0].clone(), flat_chroma.clone(), flat_chroma];
+    let planes = encoded(&input, &values);
+    let output = FrameFormat {
+        sample: SampleFormat::F32,
+        ..input
+    };
+
+    let found = run_once("dehalo/alpha", input, output, json!({}), &planes);
+
+    for bytes in &found[1..] {
+        let samples = float_samples(bytes);
+        assert!(samples.iter().all(|sample| sample.abs() <= 1e-6), "{samples:?}");
+    }
+}
+
+#[test]
+fn eight_bit_through_f32_rounds_back_to_todays_output() {
+    let input = yuv420(64, 48, SampleFormat::U8);
+    let (width, height) = input.channel_dimensions(Channel::Y).expect("a listed channel");
+    let values = haloed(&input, 255);
+    let planes = encoded(&input, &values);
+    let params = alpha(8, 1.5);
+
+    let found = run_into_codes("dehalo/alpha", input, json!({}), &planes, 8);
+
+    let rounded: Vec<f32> = found[0].iter().map(|code| code.round()).collect();
+    let codes = widened(&values[0]);
+    let reference = reference_dehalo_alpha(&codes, width, height, &params);
+    let narrowed = reference_narrow(&reference, 255.0);
+    let todays = widened(&narrowed);
+
+    assert_codes_within(&rounded, &todays, 1.0, "Y");
 }
 
 #[test]
@@ -260,7 +294,7 @@ fn fine_rounds_a_small_radius_to_one_pass() {
 
 #[test]
 fn fine_unselected_chroma_is_shared() {
-    let input = yuv420(64, 48, SampleFormat::U8);
+    let input = yuv420(64, 48, SampleFormat::F32);
     let args = json!({ "planes": ["u", "v"] });
 
     assert!(luma_is_shared("dehalo/fine", input, input, args));
@@ -298,20 +332,12 @@ fn fine_sixteen_bit_matches_the_reference() {
 
 #[test]
 fn fine_leaves_a_flat_frame_unchanged() {
-    let sixteen_bit = SampleFormat::U16 {
-        depth: Depth::SIXTEEN,
-    };
-    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
-    let peak: u16 = 65535;
-    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
-    let values: Vec<u16> = vec![peak; samples];
-    let planes = vec![to_bytes(&values, Element::U16)];
-    let args = json!({});
+    assert_a_flat_frame_is_unchanged("dehalo/fine");
+}
 
-    let dehaloed = run_once("dehalo/fine", input, input, args, &planes);
-    let actual = from_bytes(&dehaloed[0], Element::U16);
-
-    assert!(actual.iter().all(|sample| *sample == peak));
+#[test]
+fn fine_f32_matches_sixteen_bit() {
+    assert_f32_matches_sixteen_bit("dehalo/fine", 1.0, 0.0);
 }
 
 fn yahr(bits: u32) -> YahrParams {
@@ -332,28 +358,14 @@ fn matches_yahr_reference(
     expected: YahrParams,
     selected: &[bool],
 ) {
-    let peak = (1u32 << expected.bits) - 1;
-    let element = expected.element;
-    let values = haloed(&input, peak);
-    let planes: Vec<Vec<u8>> = values.iter().map(|plane| to_bytes(plane, element)).collect();
+    let reference = |codes: &[f32], width, height| reference_yahr(codes, width, height, &expected);
 
-    let cleaned = run_once("dehalo/yahr", input, input, args, &planes);
+    matches("dehalo/yahr", input, args, expected.bits, selected, reference);
+}
 
-    for (plane, channel) in input.channels().iter().enumerate() {
-        let (width, height) = input.channel_dimensions(*channel).expect("carried");
-        let actual = from_bytes(&cleaned[plane], element);
-        let label = channel.to_string();
-
-        if !selected[plane] {
-            assert_eq!(actual, values[plane], "{label} should be untouched");
-            continue;
-        }
-
-        let widened: Vec<f32> = values[plane].iter().map(|value| f32::from(*value)).collect();
-        let reference = reference_yahr(&widened, width, height, &expected);
-        let rounded = reference_narrow(&reference, peak as f32);
-        assert_within_one(&actual, &rounded, &label);
-    }
+#[test]
+fn yahr_f32_matches_sixteen_bit() {
+    assert_f32_matches_sixteen_bit("dehalo/yahr", 1.0, 0.0);
 }
 
 #[test]
@@ -414,25 +426,12 @@ fn yahr_a_one_wide_plane_matches_the_reference() {
 
 #[test]
 fn yahr_a_flat_frame_is_unchanged() {
-    let sixteen_bit = SampleFormat::U16 {
-        depth: Depth::SIXTEEN,
-    };
-    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
-    let peak: u16 = 65535;
-    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
-    let values: Vec<u16> = vec![peak; samples];
-    let planes = vec![to_bytes(&values, Element::U16)];
-    let args = json!({});
-
-    let cleaned = run_once("dehalo/yahr", input, input, args, &planes);
-    let actual = from_bytes(&cleaned[0], Element::U16);
-
-    assert!(actual.iter().all(|sample| *sample == peak));
+    assert_a_flat_frame_is_unchanged("dehalo/yahr");
 }
 
 #[test]
 fn yahr_unselected_chroma_is_shared() {
-    let input = yuv420(64, 48, SampleFormat::U8);
+    let input = yuv420(64, 48, SampleFormat::F32);
     let args = json!({ "planes": ["u", "v"] });
 
     assert!(luma_is_shared("dehalo/yahr", input, input, args));
@@ -459,28 +458,16 @@ fn matches_edge_clean_reference(
     expected: EdgeCleanParams,
     selected: &[bool],
 ) {
-    let peak = (1u32 << expected.bits) - 1;
-    let element = expected.element;
-    let values = haloed(&input, peak);
-    let planes: Vec<Vec<u8>> = values.iter().map(|plane| to_bytes(plane, element)).collect();
+    let reference = |codes: &[f32], width, height| reference_edge_clean(codes, width, height, &expected);
 
-    let cleaned = run_once("dehalo/edge_clean", input, input, args, &planes);
-
-    for (plane, channel) in input.channels().iter().enumerate() {
-        let (width, height) = input.channel_dimensions(*channel).expect("carried");
-        let actual = from_bytes(&cleaned[plane], element);
-        let label = channel.to_string();
-
-        if !selected[plane] {
-            assert_eq!(actual, values[plane], "{label} should be untouched");
-            continue;
-        }
-
-        let widened: Vec<f32> = values[plane].iter().map(|value| f32::from(*value)).collect();
-        let reference = reference_edge_clean(&widened, width, height, &expected);
-        let rounded = reference_narrow(&reference, peak as f32);
-        assert_within_one(&actual, &rounded, &label);
-    }
+    matches(
+        "dehalo/edge_clean",
+        input,
+        args,
+        expected.bits,
+        selected,
+        reference,
+    );
 }
 
 #[test]
@@ -619,26 +606,18 @@ fn edge_clean_high_strength_with_smode_matches() {
 
 #[test]
 fn edge_clean_a_flat_frame_is_unchanged() {
-    let sixteen_bit = SampleFormat::U16 {
-        depth: Depth::SIXTEEN,
-    };
-    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
-    let peak: u16 = 65535;
-    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
-    let values: Vec<u16> = vec![peak; samples];
-    let planes = vec![to_bytes(&values, Element::U16)];
-    let args = json!({});
-
-    let cleaned = run_once("dehalo/edge_clean", input, input, args, &planes);
-    let actual = from_bytes(&cleaned[0], Element::U16);
-
-    assert!(actual.iter().all(|sample| *sample == peak));
+    assert_a_flat_frame_is_unchanged("dehalo/edge_clean");
 }
 
 #[test]
 fn edge_clean_unselected_chroma_is_shared() {
-    let input = yuv420(64, 48, SampleFormat::U8);
+    let input = yuv420(64, 48, SampleFormat::F32);
     let args = json!({ "planes": ["u", "v"] });
 
     assert!(luma_is_shared("dehalo/edge_clean", input, input, args));
+}
+
+#[test]
+fn edge_clean_f32_matches_sixteen_bit() {
+    assert_f32_matches_sixteen_bit("dehalo/edge_clean", 1.0, 0.0);
 }

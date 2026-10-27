@@ -51,16 +51,19 @@ pub(crate) struct Planewise {
 }
 
 impl Planewise {
-    /// Runs `filter` on every selected plane of `frame`, sharing the rest.
-    pub(crate) fn run<R: Runtime>(
+    /// Runs `filter` on every selected plane of `frame`.
+    ///
+    /// The rest are shared when they are already stored as the output's sample, and converted when not.
+    pub(crate) fn run<R: Runtime, F: PlaneFilter>(
         &self,
         client: &ComputeClient<R>,
         context: &FrameContext,
         frame: Frame,
-        filter: &impl PlaneFilter,
+        filter: &F,
     ) -> Result<Frame, StageError> {
         let meta = frame.meta().clone();
         let channels = self.format.channels();
+        let shared = self.codes.output_sample() == self.format.sample;
         let mut planes = Vec::with_capacity(channels.len());
 
         for (plane_index, channel) in channels.iter().enumerate() {
@@ -68,13 +71,15 @@ impl Planewise {
                 return Err(missing_channel(self.stage, *channel));
             };
 
-            if !self.selected[plane_index] {
+            let selected = self.selected[plane_index];
+            if !selected && shared {
                 planes.push(source.clone());
                 continue;
             }
 
-            let filtered = self.filter_plane(client, context, source, plane_index, &meta, filter)?;
-            planes.push(filtered);
+            let plane_filter = selected.then_some(filter);
+            let output = self.output_plane(client, context, source, plane_index, &meta, plane_filter)?;
+            planes.push(output);
         }
 
         let output_format = FrameFormat {
@@ -88,14 +93,15 @@ impl Planewise {
         }
     }
 
-    fn filter_plane<R: Runtime>(
+    /// Stores `source` as the output's sample, through `filter` when there is one.
+    fn output_plane<R: Runtime>(
         &self,
         client: &ComputeClient<R>,
         context: &FrameContext,
         source: &Plane,
         plane_index: usize,
         meta: &FrameMeta,
-        filter: &impl PlaneFilter,
+        filter: Option<&impl PlaneFilter>,
     ) -> Result<Plane, StageError> {
         let (width, height) = source.dimensions();
         let sizing = Sizing(context);
@@ -112,9 +118,7 @@ impl Planewise {
         };
 
         let input_values = Scratch::new::<f32>(context, width, height);
-        let output_values = Scratch::new::<f32>(context, width, height);
         let input_plane = input_values.plane();
-        let output_plane = output_values.plane();
 
         let source_handle = source.buffer().handle();
         let target_handle = output.buffer().handle();
@@ -129,6 +133,15 @@ impl Planewise {
 
         self.codes
             .widen(client, &sizing, source_plane, input_plane, channel);
+
+        let Some(filter) = filter else {
+            self.codes
+                .store(client, &sizing, input_plane, target_plane, channel);
+            return Ok(output.clone());
+        };
+
+        let output_values = Scratch::new::<f32>(context, width, height);
+        let output_plane = output_values.plane();
         filter.filter(context, plane_index, input_plane, output_plane)?;
         self.codes
             .store(client, &sizing, output_plane, target_plane, channel);

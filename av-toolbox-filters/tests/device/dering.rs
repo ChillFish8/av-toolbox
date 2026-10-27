@@ -1,11 +1,16 @@
 use av_toolbox_cubek::dehalo::dering::DeringParams;
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::rgvs::RepairMode;
 use av_toolbox_cubek::testing::{reference_hq_dering, reference_narrow, reference_ring_mask};
 use av_toolbox_gpu::{Channel, ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 use serde_json::json;
 
-use crate::support::{frame, from_bytes, luma_is_shared, run_once, to_bytes};
+use crate::support::{
+    assert_a_flat_frame_is_unchanged,
+    assert_planes_match,
+    f32_parity,
+    frame,
+    luma_is_shared,
+};
 
 fn yuv420(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
     let layout = FrameLayout::Yuv {
@@ -66,17 +71,6 @@ fn ringing(format: &FrameFormat, peak: u32) -> Vec<Vec<u16>> {
         .collect()
 }
 
-fn assert_within_one(actual: &[u16], expected: &[u16], label: &str) {
-    assert_eq!(actual.len(), expected.len(), "{label}");
-
-    for (index, (found, wanted)) in actual.iter().zip(expected).enumerate() {
-        assert!(
-            found.abs_diff(*wanted) <= 1,
-            "{label} sample {index}: {found} against {wanted}"
-        );
-    }
-}
-
 /// Runs `dering/hq` and checks each plane against the reference or against its input.
 fn matches_dering_reference(
     input: FrameFormat,
@@ -85,31 +79,18 @@ fn matches_dering_reference(
     selected: &[bool],
 ) {
     let peak = (1u32 << expected.bits) - 1;
-    let element = if expected.bits == 8 {
-        Element::U8
-    } else {
-        Element::U16
-    };
     let values = ringing(&input, peak);
-    let planes: Vec<Vec<u8>> = values.iter().map(|plane| to_bytes(plane, element)).collect();
+    let reference = |codes: &[f32], width, height| reference_hq_dering(codes, width, height, &expected);
 
-    let derung = run_once("dering/hq", input, input, args, &planes);
-
-    for (plane, channel) in input.channels().iter().enumerate() {
-        let (width, height) = input.channel_dimensions(*channel).expect("carried");
-        let actual = from_bytes(&derung[plane], element);
-        let label = channel.to_string();
-
-        if !selected[plane] {
-            assert_eq!(actual, values[plane], "{label} should be untouched");
-            continue;
-        }
-
-        let widened: Vec<f32> = values[plane].iter().map(|value| f32::from(*value)).collect();
-        let reference = reference_hq_dering(&widened, width, height, &expected);
-        let rounded = reference_narrow(&reference, peak as f32);
-        assert_within_one(&actual, &rounded, &label);
-    }
+    assert_planes_match(
+        "dering/hq",
+        input,
+        args,
+        expected.bits,
+        selected,
+        &values,
+        reference,
+    );
 }
 
 /// The fewest luma samples the reference must change on [ringing]'s 64x48 fixture with the default
@@ -263,25 +244,25 @@ fn a_one_wide_plane_matches_the_reference() {
 
 #[test]
 fn a_flat_frame_is_unchanged() {
+    assert_a_flat_frame_is_unchanged("dering/hq");
+}
+
+#[test]
+fn f32_matches_sixteen_bit() {
     let sixteen_bit = SampleFormat::U16 {
         depth: Depth::SIXTEEN,
     };
-    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
-    let peak: u16 = 65535;
-    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
-    let values: Vec<u16> = vec![peak; samples];
-    let planes = vec![to_bytes(&values, Element::U16)];
-    let args = json!({});
+    let input = yuv420(64, 48, sixteen_bit);
+    let values = ringing(&input, 65535);
 
-    let derung = run_once("dering/hq", input, input, args, &planes);
-    let actual = from_bytes(&derung[0], Element::U16);
+    let parity = f32_parity("dering/hq", input, json!({}), &values);
 
-    assert!(actual.iter().all(|sample| *sample == peak));
+    assert!(parity.largest <= 1.0, "{parity:?}");
 }
 
 #[test]
 fn unselected_chroma_is_shared() {
-    let input = yuv420(64, 48, SampleFormat::U8);
+    let input = yuv420(64, 48, SampleFormat::F32);
     let args = json!({ "planes": ["u", "v"] });
 
     assert!(luma_is_shared("dering/hq", input, input, args));

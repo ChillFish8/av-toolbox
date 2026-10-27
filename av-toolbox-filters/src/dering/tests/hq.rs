@@ -6,7 +6,6 @@ use av_toolbox_gpu::{
     Depth as BitDepth,
     FrameFormat,
     FrameLayout,
-    MaskFormat,
     Offered,
     SampleFormat,
     StreamFormat,
@@ -17,6 +16,7 @@ use serde_json::json;
 
 use crate::dering::Hq;
 use crate::dering::hq::{HqArgs, dering_params};
+use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
 
 fn args(value: serde_json::Value) -> HqArgs {
     serde_json::from_value(value).expect("parses")
@@ -319,7 +319,7 @@ fn every_supported_drrep_is_accepted() {
 }
 
 #[test]
-fn the_output_format_is_the_input_format() {
+fn the_output_is_f32_for_every_input() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
@@ -330,6 +330,7 @@ fn the_output_format_is_the_input_format() {
         yuv420(16, 8),
         format(16, 8, FrameLayout::Grey, ten_bit),
         format(16, 8, chroma, ten_bit),
+        format(16, 8, FrameLayout::Grey, SampleFormat::F32),
     ];
 
     for input in inputs {
@@ -339,33 +340,30 @@ fn the_output_format_is_the_input_format() {
         let sample = outputs.samples.preferences()[0];
         let output = outputs.template.with_sample(sample);
 
-        assert_eq!(output, offered);
+        let float = FrameFormat {
+            sample: SampleFormat::F32,
+            ..input
+        };
+
+        assert_eq!(output, StreamFormat::Frames(float));
     }
 }
 
+fn sized_format(layout: FrameLayout, sample: SampleFormat) -> FrameFormat {
+    format(16, 8, layout, sample)
+}
+
 #[test]
-fn floats_are_left_out_and_masks_refused() {
+fn floats_are_accepted_and_masks_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let inputs = [Offered::Unknown];
-    let float_format = FrameFormat {
-        sample: SampleFormat::F32,
-        ..yuv420(16, 8)
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
     };
-    let float = StreamFormat::Frames(float_format);
-    let mask = StreamFormat::Mask(MaskFormat {
-        frame_rate: None,
-        width: 16,
-        height: 8,
-        sample: SampleFormat::U8,
-        chroma: None,
-    });
+    let accepted = |offered| Hq::accepts_input(&capabilities, &parsed, 0, offered, &inputs);
 
-    let accepted = Hq::accepts_input(&capabilities, &parsed, 0, float, &inputs).expect("frames are readable");
-    let refused = Hq::accepts_input(&capabilities, &parsed, 0, mask, &inputs);
-
-    assert!(accepted.is_empty());
-    assert!(refused.is_err());
+    assert_integers_and_floats_accepted_and_mask_refused("dering/hq", layout, sized_format, accepted);
 }
 
 #[test]

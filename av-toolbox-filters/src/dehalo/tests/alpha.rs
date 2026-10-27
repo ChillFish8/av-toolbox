@@ -5,7 +5,6 @@ use av_toolbox_gpu::{
     Depth as BitDepth,
     FrameFormat,
     FrameLayout,
-    MaskFormat,
     Offered,
     SampleFormat,
     StreamFormat,
@@ -16,6 +15,7 @@ use serde_json::json;
 
 use crate::dehalo::Alpha;
 use crate::dehalo::alpha::{AlphaArgs, alpha_params};
+use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
 
 fn args(value: serde_json::Value) -> AlphaArgs {
     serde_json::from_value(value).expect("parses")
@@ -126,7 +126,7 @@ fn non_finite_arguments_are_refused() {
 }
 
 #[test]
-fn the_output_format_is_the_input_format() {
+fn the_output_is_f32_for_every_input() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
@@ -138,6 +138,7 @@ fn the_output_format_is_the_input_format() {
         format(FrameLayout::Grey, ten_bit),
         format(FrameLayout::Rgb, SampleFormat::U8),
         format(chroma, ten_bit),
+        format(FrameLayout::Grey, SampleFormat::F32),
     ];
 
     for input in inputs {
@@ -147,7 +148,12 @@ fn the_output_format_is_the_input_format() {
         let sample = outputs.samples.preferences()[0];
         let output = outputs.template.with_sample(sample);
 
-        assert_eq!(output, offered);
+        let float = FrameFormat {
+            sample: SampleFormat::F32,
+            ..input
+        };
+
+        assert_eq!(output, StreamFormat::Frames(float));
     }
 }
 
@@ -180,27 +186,14 @@ fn a_huge_supersampling_factor_is_refused_through_produces() {
 }
 
 #[test]
-fn floats_are_left_out_and_masks_refused() {
+fn floats_are_accepted_and_masks_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let inputs = [Offered::Unknown];
-    let float_format = FrameFormat {
-        sample: SampleFormat::F32,
-        ..yuv420()
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
     };
-    let float = StreamFormat::Frames(float_format);
-    let mask = StreamFormat::Mask(MaskFormat {
-        frame_rate: None,
-        width: 16,
-        height: 8,
-        sample: SampleFormat::U8,
-        chroma: None,
-    });
+    let accepted = |offered| Alpha::accepts_input(&capabilities, &parsed, 0, offered, &inputs);
 
-    let accepted =
-        Alpha::accepts_input(&capabilities, &parsed, 0, float, &inputs).expect("frames are readable");
-    let refused = Alpha::accepts_input(&capabilities, &parsed, 0, mask, &inputs);
-
-    assert!(accepted.is_empty());
-    assert!(refused.is_err());
+    assert_integers_and_floats_accepted_and_mask_refused("dehalo/alpha", layout, format, accepted);
 }

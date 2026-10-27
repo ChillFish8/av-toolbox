@@ -50,7 +50,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::bits::bits_of;
-use crate::checks::{at_least, between_f32};
+use crate::checks::{accepts_integer_or_f32_frames, at_least, between_f32};
 use crate::codes::CodeValues;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
@@ -486,15 +486,11 @@ impl FilterDefinition for Alpha {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        let Some(format) = offered.as_frames() else {
+        let Some(samples) = accepts_integer_or_f32_frames(offered) else {
             return Err(not_frames());
         };
 
-        if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-            return Ok(FormatSet::new());
-        }
-
-        Ok(FormatSet::of([format.sample]))
+        Ok(samples)
     }
 
     fn produces(
@@ -511,7 +507,7 @@ impl FilterDefinition for Alpha {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
@@ -543,7 +539,7 @@ impl FilterDefinition for Alpha {
             tables.push(Some(plane_tables));
         }
 
-        let codes = CodeValues::new(&input, input.sample);
+        let codes = CodeValues::new(&input, SampleFormat::F32);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
