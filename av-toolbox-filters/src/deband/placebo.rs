@@ -13,7 +13,7 @@ use av_toolbox_core::{
 };
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::deband::{DebandParams, DebandPlanes, deband, salt};
-use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::depth::Source;
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -40,7 +40,8 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::bits::bits_of;
+use crate::codes::CodeValues;
+use crate::scratch::Scratch;
 use crate::sizing::Sizing;
 
 const STAGE: &str = "deband/placebo";
@@ -177,7 +178,8 @@ pub(crate) fn plane_settings(
     let channels = input.channels();
     let thresholds = per_plane(&args.threshold, "threshold", channels.len())?;
     let grains = per_plane(&args.grain, "grain", channels.len())?;
-    let bits = bits_of(input.sample);
+    let codes = CodeValues::new(input, SampleFormat::F32);
+    let bits = codes.bits();
 
     let settings = channels
         .iter()
@@ -281,10 +283,6 @@ impl FilterDefinition for Placebo {
             return Err(not_frames());
         };
 
-        if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-            return Ok(FormatSet::new());
-        }
-
         Ok(FormatSet::of([format.sample]))
     }
 
@@ -294,13 +292,14 @@ impl FilterDefinition for Placebo {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(chosen)?;
-        plane_settings(args, &input)?;
+        let planes = plane_settings(args, &input)?;
+        let sample = output_sample(&planes, &input);
 
         let format = StreamFormat::Frames(input);
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([sample]),
         })
     }
 
@@ -313,44 +312,74 @@ impl FilterDefinition for Placebo {
         let inputs = formats.inputs();
         let input = checked_input(inputs)?;
         let planes = plane_settings(&args, &input)?;
-        let skip_all = planes.iter().all(|plane| plane.skipped);
+        let skip_all = skips_every_plane(&planes);
+        let sample = output_sample(&planes, &input);
 
-        let bits = bits_of(input.sample);
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = ((1u32 << bits) - 1) as f32;
+        let codes = CodeValues::new(&input, sample);
+        let output = FrameFormat { sample, ..input };
         let client = context.client().clone();
         let debander = Debander {
             client,
-            output: input,
+            output,
             planes,
-            element,
+            codes,
+            source: source_of(input.sample),
             iterations: args.iterations,
             radius: args.radius,
-            peak,
             seed: args.seed,
             skip_all,
+            shared: input.sample == SampleFormat::F32,
         };
 
         Ok(Box::new(debander))
     }
 }
 
-/// Debands every plane of a frame that has something to do, sharing the rest.
+fn skips_every_plane(planes: &[PlaneSettings]) -> bool {
+    planes.iter().all(|plane| plane.skipped)
+}
+
+/// The sample `input` is stored as once debanded with `planes`.
+///
+/// It is F32, unless every plane is skipped and the frame passes through in its own sample.
+pub(crate) fn output_sample(planes: &[PlaneSettings], input: &FrameFormat) -> SampleFormat {
+    if skips_every_plane(planes) {
+        return input.sample;
+    }
+
+    SampleFormat::F32
+}
+
+/// How the deband kernel reads samples of `sample`. F32 is read as code values widened from it.
+fn source_of(sample: SampleFormat) -> Source {
+    match sample {
+        SampleFormat::U8 => Source::U8,
+        SampleFormat::U16 { .. } => Source::U16,
+        SampleFormat::F32 => Source::F32,
+    }
+}
+
+/// Debands every plane of a frame that has something to do into F32.
+///
+/// The rest are shared when the input is already F32, and converted when not. A frame with every
+/// plane skipped passes through.
 struct Debander<R: Runtime> {
     client: ComputeClient<R>,
     output: FrameFormat,
     planes: Vec<PlaneSettings>,
-    element: Element,
+    codes: CodeValues,
+    source: Source,
     iterations: u32,
     radius: f32,
-    peak: f32,
     seed: u32,
     skip_all: bool,
+    /// Whether planes left alone can be shared, which they can when the input is F32.
+    shared: bool,
 }
 
 impl<R: Runtime> Debander<R> {
-    /// Debands `source` into a fresh plane of the same size and hands that plane back.
-    fn deband_plane(
+    /// Stores `source` as an F32 plane of the same size, debanded unless `settings` skips it.
+    fn output_plane(
         &self,
         context: &FrameContext,
         source: &Plane,
@@ -371,33 +400,85 @@ impl<R: Runtime> Debander<R> {
         };
 
         let source_handle = source.buffer().handle();
-        let output_handle = output.buffer().handle();
+        let target_handle = output.buffer().handle();
 
         // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
         let source_plane = unsafe { DevicePlane::new(source_handle, width, height) };
 
         // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let output_plane = unsafe { DevicePlane::new(output_handle, width, height) };
+        let target_plane = unsafe { DevicePlane::new(target_handle, width, height) };
+
+        let values = Scratch::new::<f32>(context, width, height);
+        let values_plane = values.plane();
+        let sizing = Sizing(context);
+
+        if settings.skipped {
+            self.codes.widen(
+                &self.client,
+                &sizing,
+                source_plane,
+                values_plane,
+                settings.channel,
+            );
+        } else {
+            self.deband_values(context, source_plane, values_plane, settings, plane_index, meta);
+        }
+
+        self.codes.store(
+            &self.client,
+            &sizing,
+            values_plane,
+            target_plane,
+            settings.channel,
+        );
+
+        Ok(output.clone())
+    }
+
+    /// Debands `source` into f32 code values held in `values`.
+    fn deband_values(
+        &self,
+        context: &FrameContext,
+        source: DevicePlane<'_>,
+        values: DevicePlane<'_>,
+        settings: &PlaneSettings,
+        plane_index: u32,
+        meta: &FrameMeta,
+    ) {
+        let sizing = Sizing(context);
+        let widened = if self.source == Source::F32 {
+            Some(Scratch::new::<f32>(context, source.width(), source.height()))
+        } else {
+            None
+        };
+
+        // F32 samples are read as the code values they widen to.
+        let input = match &widened {
+            Some(scratch) => {
+                let widened_plane = scratch.plane();
+                self.codes
+                    .widen(&self.client, &sizing, source, widened_plane, settings.channel);
+                widened_plane
+            },
+            None => source,
+        };
 
         let planes = DebandPlanes {
-            input: source_plane,
-            output: output_plane,
+            input,
+            output: values,
         };
         let params = DebandParams {
-            element: self.element,
+            element: self.source,
             iterations: self.iterations,
             radius: self.radius,
             threshold: settings.threshold,
             grain: settings.grain,
             neutral: settings.neutral,
-            peak: self.peak,
+            peak: self.codes.peak(),
         };
         let plane_salt = salt(meta.index, self.seed, plane_index);
-        let sizing = Sizing(context);
 
         deband(&self.client, &sizing, planes, &params, plane_salt);
-
-        Ok(output.clone())
     }
 }
 
@@ -421,13 +502,13 @@ impl<R: Runtime> Filter for Debander<R> {
                 return Err(missing_channel(settings.channel));
             };
 
-            if settings.skipped {
+            if settings.skipped && self.shared {
                 planes.push(source.clone());
                 continue;
             }
 
-            let debanded = self.deband_plane(context, source, settings, plane_index as u32, &meta)?;
-            planes.push(debanded);
+            let output = self.output_plane(context, source, settings, plane_index as u32, &meta)?;
+            planes.push(output);
         }
 
         let output = Frame::from_planes(self.output, planes, meta).map_err(bad_frame)?;

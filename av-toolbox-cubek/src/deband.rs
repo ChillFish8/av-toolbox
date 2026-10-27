@@ -2,7 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
-use crate::depth::Element;
+use crate::depth::Source;
 use crate::{DevicePlane, Dispatch};
 
 /// One step of libplacebo's pcg3d generator, in wrapping arithmetic.
@@ -50,7 +50,8 @@ pub fn salt(frame_index: u64, seed: u32, plane: u32) -> u32 {
 /// `peak` are code values.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct DebandParams {
-    pub element: Element,
+    /// How the input holds its code values. F32 holds them unrounded.
+    pub element: Source,
     pub iterations: u32,
     /// How far the first iteration reaches, in samples of the plane.
     pub radius: f32,
@@ -70,7 +71,7 @@ impl DebandParams {
     }
 }
 
-/// The plane one deband reads and the plane it writes, both the same size.
+/// The plane one deband reads and the f32 code values it writes, both the same size.
 #[derive(Debug, Clone, Copy)]
 pub struct DebandPlanes<'a> {
     pub input: DevicePlane<'a>,
@@ -78,7 +79,7 @@ pub struct DebandPlanes<'a> {
 }
 
 #[cube]
-fn nearest<E: Int>(
+fn nearest<E: CubePrimitive>(
     input: &Array<E>,
     column: u32,
     row: u32,
@@ -106,9 +107,9 @@ fn nearest<E: Int>(
 }
 
 #[cube(launch_unchecked)]
-fn deband_plane<E: Int>(
+fn deband_plane<E: CubePrimitive>(
     input: &Array<E>,
-    output: &mut Array<E>,
+    output: &mut Array<f32>,
     width: u32,
     height: u32,
     iterations: u32,
@@ -175,12 +176,12 @@ fn deband_plane<E: Int>(
         }
     }
 
-    let scaled = f32::floor(result * peak + 0.5);
-    let clamped = f32::clamp(scaled, 0.0, peak);
-    output[ABSOLUTE_POS] = E::cast_from(clamped);
+    output[ABSOLUTE_POS] = result * peak;
 }
 
 /// Debands `planes.input` into `planes.output`, drawing from a generator seeded with `salt`.
+///
+/// The output holds code values, neither rounded nor clamped.
 pub fn deband<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -189,12 +190,13 @@ pub fn deband<R: Runtime>(
     salt: u32,
 ) {
     match params.element {
-        Element::U8 => launch::<u8, R>(client, dispatch, planes, params, salt),
-        Element::U16 => launch::<u16, R>(client, dispatch, planes, params, salt),
+        Source::U8 => launch::<u8, R>(client, dispatch, planes, params, salt),
+        Source::U16 => launch::<u16, R>(client, dispatch, planes, params, salt),
+        Source::F32 => launch::<f32, R>(client, dispatch, planes, params, salt),
     }
 }
 
-fn launch<E: Int, R: Runtime>(
+fn launch<E: CubePrimitive, R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: DebandPlanes<'_>,
@@ -214,8 +216,8 @@ fn launch<E: Int, R: Runtime>(
     let neutral = params.neutral / params.peak;
     let draws = params.draws();
 
-    // Safety: the input and output hold `width * height` samples of `E`, and every read is clamped
-    // inside the plane, including when an offset goes non-finite.
+    // Safety: the input holds `width * height` samples of `E` and the output as many f32 values. Every
+    // read is clamped inside the plane, including when an offset goes non-finite.
     unsafe {
         deband_plane::launch_unchecked::<E, R>(
             client,
@@ -240,12 +242,12 @@ fn launch<E: Int, R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::depth::Element;
+    use crate::depth::Source;
     use crate::testing::reference_deband;
 
     fn params(iterations: u32, threshold: f32, grain: f32) -> DebandParams {
         DebandParams {
-            element: Element::U8,
+            element: Source::U8,
             iterations,
             radius: 16.0,
             threshold,

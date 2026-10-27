@@ -5,6 +5,7 @@ use av_toolbox_gpu::{
     ColourInfo,
     ColourRange,
     Depth as BitDepth,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     MaskFormat,
@@ -302,7 +303,7 @@ fn produced(
 }
 
 #[test]
-fn the_output_format_is_the_input_format() {
+fn the_output_format_is_the_input_format_in_f32() {
     let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
     let chroma = FrameLayout::Chroma {
         subsampling: Subsampling::Yuv420,
@@ -316,9 +317,57 @@ fn the_output_format_is_the_input_format() {
 
     for input in inputs {
         let output = produced(input, json!({})).expect("valid");
+        let expected = FrameFormat {
+            sample: SampleFormat::F32,
+            ..input
+        };
 
-        assert_eq!(output, StreamFormat::Frames(input));
+        assert_eq!(output, StreamFormat::Frames(expected));
     }
+}
+
+#[test]
+fn the_output_is_f32_for_every_input() {
+    let capabilities = capabilities();
+    let arguments = args(json!({}));
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = format(FrameLayout::Grey, sample, ColourRange::Limited);
+        let chosen = [Some(StreamFormat::Frames(input))];
+
+        let outputs = Placebo::produces(&capabilities, &arguments, &chosen).expect("valid");
+
+        assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]), "{sample}");
+    }
+}
+
+#[test]
+fn every_plane_skipped_keeps_the_input_sample() {
+    let capabilities = capabilities();
+    let arguments = args(json!({ "threshold": 0.0, "grain": 0.0 }));
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = format(FrameLayout::Grey, sample, ColourRange::Limited);
+        let chosen = [Some(StreamFormat::Frames(input))];
+
+        let outputs = Placebo::produces(&capabilities, &arguments, &chosen).expect("valid");
+
+        assert_eq!(outputs.samples, FormatSet::of([sample]), "{sample}");
+    }
+}
+
+#[test]
+fn a_float_clip_gets_its_labels_neutral_at_sixteen_bits() {
+    let limited = format(yuv420().layout, SampleFormat::F32, ColourRange::Limited);
+    let parsed = args(json!({}));
+    let settings = plane_settings(&parsed, &limited).expect("valid");
+    let neutrals: Vec<f32> = settings.iter().map(|plane| plane.neutral).collect();
+
+    assert_eq!(neutrals, vec![4096.0, 32768.0, 32768.0]);
 }
 
 #[test]
@@ -330,7 +379,7 @@ fn produces_refuses_bad_arguments() {
 }
 
 #[test]
-fn floats_are_left_out_and_masks_refused() {
+fn floats_are_accepted_and_masks_refused() {
     let capabilities = capabilities();
     let arguments = args(json!({}));
     let inputs = [Offered::Unknown];
@@ -351,6 +400,6 @@ fn floats_are_left_out_and_masks_refused() {
         Placebo::accepts_input(&capabilities, &arguments, 0, float, &inputs).expect("frames are readable");
     let refused = Placebo::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
 
-    assert!(accepted.is_empty());
+    assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
     assert!(refused.is_err());
 }

@@ -454,7 +454,7 @@ fn nearest(
     f32::from(input[(clamped_y * width + clamped_x) as usize])
 }
 
-/// Debands a plane on the CPU, mirroring [deband](crate::deband::deband).
+/// Debands a plane on the CPU, rounded and clamped to whole codes.
 pub fn reference_deband(
     input: &[u16],
     width: u32,
@@ -462,6 +462,26 @@ pub fn reference_deband(
     params: &DebandParams,
     salt: u32,
 ) -> Vec<u16> {
+    let codes = reference_deband_codes(input, width, height, params, salt);
+
+    codes
+        .iter()
+        .map(|code| {
+            let scaled = (code + 0.5).floor();
+            let clamped = scaled.clamp(0.0, params.peak);
+            clamped as u16
+        })
+        .collect()
+}
+
+/// Debands a plane on the CPU into unrounded code values, mirroring [deband](crate::deband::deband).
+pub fn reference_deband_codes(
+    input: &[u16],
+    width: u32,
+    height: u32,
+    params: &DebandParams,
+    salt: u32,
+) -> Vec<f32> {
     let threshold = params.threshold / 1000.0;
     let grain = params.grain / 1000.0;
     let neutral = params.neutral / params.peak;
@@ -502,9 +522,7 @@ pub fn reference_deband(
                 }
             }
 
-            let scaled = (result * params.peak + 0.5).floor();
-            let clamped = scaled.clamp(0.0, params.peak);
-            output.push(clamped as u16);
+            output.push(result * params.peak);
         }
     }
 
