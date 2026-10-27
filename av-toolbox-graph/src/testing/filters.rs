@@ -544,15 +544,20 @@ fn integer_sample(bits: u8) -> Result<SampleFormat, StageError> {
 }
 
 /// The samples `args` lets the output take, narrowest first.
-fn depth_samples(args: &ResampleDepthArgs) -> Result<FormatSet, StageError> {
+fn depth_samples(args: &ResampleDepthArgs, input: SampleFormat) -> Result<FormatSet, StageError> {
     let bits = match args.depth {
         DepthTarget::Float(FloatTarget::F32) => return Ok(FormatSet::of([SampleFormat::F32])),
         DepthTarget::Bits(bits) => bits,
     };
 
-    let last = if args.at_least { 16 } else { bits };
+    let (first, last) = match (args.at_least, input) {
+        (false, _) => (bits, bits),
+        (true, SampleFormat::U8) => (bits, 16),
+        (true, SampleFormat::U16 { depth }) => (bits.max(depth.bits()), 16),
+        (true, SampleFormat::F32) => (bits, 16),
+    };
     let mut samples = FormatSet::new();
-    for deeper in bits..=last {
+    for deeper in first..=last {
         let sample = integer_sample(deeper)?;
         samples.push(sample);
     }
@@ -618,7 +623,7 @@ impl FilterDefinition for ResampleDepth {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
         let format = first_bound(chosen)?;
-        let samples = depth_samples(args)?;
+        let samples = depth_samples(args, format.sample())?;
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),

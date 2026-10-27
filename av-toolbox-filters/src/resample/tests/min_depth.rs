@@ -123,13 +123,13 @@ fn a_depth_outside_eight_to_sixteen_is_refused() {
 }
 
 #[test]
-fn a_float_clip_is_kept() {
+fn min_depth_refuses_a_float_clip_with_an_explanation() {
     let input = yuv420(SampleFormat::F32);
 
     for depth in [8, 10, 16] {
-        let output = produced(input, json!({ "depth": depth })).expect("keeps");
+        let error = produced(input, json!({ "depth": depth })).expect_err("refused");
 
-        assert_eq!(output.sample(), SampleFormat::F32);
+        assert!(error.to_string().contains("resample/depth"), "{error}");
     }
 }
 

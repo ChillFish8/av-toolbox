@@ -157,8 +157,8 @@ pub(super) fn target_sample(stage: &str, depth: u8) -> Result<SampleFormat, Stag
 
 /// The sample formats `args` lets the output take, narrowest first.
 ///
-/// With `at_least`, every integer depth from the one asked for up to 16 will do.
-fn offered_samples(args: &DepthArgs) -> Result<Vec<SampleFormat>, StageError> {
+/// With `at_least`, every integer depth from the deeper of the one asked for and the input's up to 16 will do.
+fn offered_samples(args: &DepthArgs, input: &FrameFormat) -> Result<Vec<SampleFormat>, StageError> {
     let depth = match args.depth {
         DepthTarget::Float(FloatTarget::F32) if args.at_least => return Err(float_floor(STAGE)),
         DepthTarget::Float(FloatTarget::F32) => return Ok(vec![SampleFormat::F32]),
@@ -170,8 +170,12 @@ fn offered_samples(args: &DepthArgs) -> Result<Vec<SampleFormat>, StageError> {
         return Ok(vec![target]);
     }
 
-    let mut samples = vec![target];
-    for deeper in depth + 1..=16 {
+    let first = match input.sample {
+        SampleFormat::U8 | SampleFormat::F32 => depth,
+        SampleFormat::U16 { depth: held } => depth.max(held.bits()),
+    };
+    let mut samples = vec![target_sample(STAGE, first)?];
+    for deeper in first + 1..=16 {
         let sample = target_sample(STAGE, deeper)?;
         samples.push(sample);
     }
@@ -261,7 +265,7 @@ impl FilterDefinition for Depth {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError> {
         let input = checked_input(STAGE, chosen)?;
-        let samples = offered_samples(args)?;
+        let samples = offered_samples(args, &input)?;
         let output = FrameFormat {
             sample: samples[0],
             ..input

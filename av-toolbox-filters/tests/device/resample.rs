@@ -374,7 +374,6 @@ fn a_depth_at_or_above_the_minimum_hands_back_the_input() {
     let kept = [
         SampleFormat::U16 { depth: Depth::TEN },
         SampleFormat::U16 { depth: twelve_bit },
-        SampleFormat::F32,
     ];
 
     for sample in kept {

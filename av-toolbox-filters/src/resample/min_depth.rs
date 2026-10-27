@@ -40,13 +40,22 @@ pub(crate) struct MinDepthArgs {
     pub(crate) depth: u8,
 }
 
+fn float_clip() -> StageError {
+    let message = format!(
+        "{STAGE} cannot raise a float clip, which already holds more precision than any integer depth. \
+         Put a resample/depth before the sink to choose the output depth."
+    );
+
+    StageError::msg(message)
+}
+
 /// The sample format `input` leaves as, raised to `depth` when it holds fewer bits.
 ///
-/// A float clip is already deeper than any integer depth, so it is kept.
+/// A float clip already holds more precision than any integer depth, so it is refused.
 fn raised_sample(input: &FrameFormat, depth: u8) -> Result<SampleFormat, StageError> {
     let minimum = target_sample(STAGE, depth)?;
     if input.sample == SampleFormat::F32 {
-        return Ok(input.sample);
+        return Err(float_clip());
     }
 
     let input_bits = bits_of(input.sample);
@@ -74,7 +83,7 @@ impl StageDefinition for MinDepth {
     }
 
     fn description() -> &'static str {
-        "Raises a clip to at least a given bit depth, leaving clips already that deep, or float, untouched."
+        "Raises a clip to at least a given bit depth, leaving clips already that deep untouched. A float clip is refused."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {

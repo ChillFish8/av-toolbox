@@ -207,6 +207,37 @@ fn at_least_offers_every_deeper_integer_narrowest_first() {
 }
 
 #[test]
+fn at_least_starts_from_a_deeper_integer_input() {
+    let twelve_bit = BitDepth::new(12).expect("valid");
+    let input = yuv420(SampleFormat::U16 { depth: twelve_bit });
+    let samples = offered(input, json!({ "depth": 10, "at_least": true })).expect("converts");
+
+    let expected: Vec<SampleFormat> = (12..=16)
+        .map(|bits| {
+            let depth = BitDepth::new(bits).expect("valid");
+            SampleFormat::U16 { depth }
+        })
+        .collect();
+
+    assert_eq!(samples, expected);
+}
+
+#[test]
+fn at_least_on_a_float_input_starts_from_its_depth() {
+    let input = yuv420(SampleFormat::F32);
+    let samples = offered(input, json!({ "depth": 10, "at_least": true })).expect("converts");
+
+    let expected: Vec<SampleFormat> = (10..=16)
+        .map(|bits| {
+            let depth = BitDepth::new(bits).expect("valid");
+            SampleFormat::U16 { depth }
+        })
+        .collect();
+
+    assert_eq!(samples, expected);
+}
+
+#[test]
 fn at_least_with_a_float_target_is_refused() {
     let input = yuv420(SampleFormat::U8);
     let refused = offered(input, json!({ "depth": "f32", "at_least": true }));

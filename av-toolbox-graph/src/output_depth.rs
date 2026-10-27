@@ -12,7 +12,8 @@ const OUTPUT_DEPTH: u8 = 10;
 /// Puts a `resample/depth` in front of every sink that wants the output depth, unless the user wrote one there.
 ///
 /// The conversion targets the deepest integer sample a source would rather emit, or 10 bits when that is
-/// deeper. It allows any deeper integer sample too, so the sink settles on the first one it can write.
+/// deeper. It allows any deeper integer sample too, and never narrows a stream already deeper than the target,
+/// so the sink settles on the first one it can write.
 pub fn inject_output_depth(
     graph: &mut CompiledGraph,
     registry: &PipelineRegistry,

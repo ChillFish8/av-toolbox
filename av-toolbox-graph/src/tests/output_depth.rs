@@ -141,6 +141,23 @@ fn grey_output_settles_on_twelve_bits() {
 }
 
 #[test]
+fn a_deeper_stream_than_the_target_is_not_narrowed() {
+    let mut blur = testing::spec(StageKind::Filter, "blur", "test/blur");
+    blur.inputs = vec![testing::positional("twelve")];
+    blur.args = Spanned::unknown(json!({ "sigma": 1.0 }));
+    let specs = vec![
+        source("input", "test/eight"),
+        depth("twelve", "input", 12),
+        blur,
+        y4m("out", "blur", json!({})),
+    ];
+    let graph = injected(&specs);
+    let formats = solved(&graph).expect("should solve");
+
+    assert_eq!(sink_sample(&graph, &formats, "out"), TWELVE_BIT);
+}
+
+#[test]
 fn a_written_depth_before_the_sink_is_left_alone() {
     let specs = vec![
         source("input", "test/eight"),
