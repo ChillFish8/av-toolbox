@@ -48,8 +48,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::aa::eedi2::subsampling_shifts;
-use crate::bits::bits_of;
-use crate::checks::{accepts_frames, between_u32};
+use crate::checks::{accepts_integer_or_f32_frames, between_u32};
 use crate::codes::CodeValues;
 use crate::deinterlace::rebuild::{channel_plane, widened_plane};
 use crate::ivtc::checks::checked_block;
@@ -321,7 +320,7 @@ impl FilterDefinition for Decimate {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_frames(offered).ok_or_else(not_frames)
+        accepts_integer_or_f32_frames(offered).ok_or_else(not_frames)
     }
 
     fn produces(
@@ -349,8 +348,8 @@ impl FilterDefinition for Decimate {
         let input = checked_input(STAGE, inputs)?;
         let checked = checked(&args, &input)?;
 
-        let bits = bits_of(input.sample);
-        let codes = CodeValues::new(&input, input.sample);
+        let codes = CodeValues::new(&input, input.sample).whole_codes();
+        let bits = codes.bits();
         let planes = if checked.chroma { input.channels().len() } else { 1 };
         let halves = half_blocks(&args, &input, planes);
         let (across, down) = half_block_grid(input.width, input.height, halves[0]);

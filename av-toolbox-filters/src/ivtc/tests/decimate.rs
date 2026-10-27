@@ -3,9 +3,11 @@ use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
     FieldOrder,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     FrameRate,
+    Offered,
     OutputFormats,
     ResolvedFormats,
     SampleFormat,
@@ -224,6 +226,24 @@ fn an_unknown_rate_stays_unknown() {
     let output = produced(json!({}), input);
 
     assert_eq!(output.frame_rate, None);
+}
+
+#[test]
+fn float_frames_are_accepted() {
+    let capabilities = capabilities();
+    let parsed = args(json!({}));
+    let inputs = [Offered::Unknown];
+    let input = FrameFormat {
+        sample: SampleFormat::F32,
+        ..matched()
+    };
+    let offered = StreamFormat::Frames(input);
+
+    let accepted = Decimate::accepts_input(&capabilities, &parsed, 0, offered, &inputs).expect("readable");
+    let outputs = produces(json!({}), input).expect("should be accepted");
+
+    assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
+    assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]));
 }
 
 #[test]

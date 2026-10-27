@@ -4,9 +4,11 @@ use av_toolbox_gpu::{
     ColourInfo,
     Depth as BitDepth,
     FieldOrder,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     FrameRate,
+    Offered,
     OutputFormats,
     ResolvedFormats,
     SampleFormat,
@@ -322,6 +324,24 @@ fn ten_bit_frames_are_accepted() {
     };
 
     assert!(produces(json!({}), input).is_ok());
+}
+
+#[test]
+fn float_frames_are_accepted() {
+    let capabilities = capabilities();
+    let parsed = args(json!({}));
+    let inputs = [Offered::Unknown];
+    let input = FrameFormat {
+        sample: SampleFormat::F32,
+        ..telecined()
+    };
+    let offered = StreamFormat::Frames(input);
+
+    let accepted = Match::accepts_input(&capabilities, &parsed, 0, offered, &inputs).expect("readable");
+    let outputs = produces(json!({}), input).expect("should be accepted");
+
+    assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
+    assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]));
 }
 
 #[test]

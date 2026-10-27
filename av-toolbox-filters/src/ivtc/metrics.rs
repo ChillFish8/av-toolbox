@@ -291,25 +291,19 @@ impl<R: Runtime> MetricGatherer<R> {
         Ok(total)
     }
 
-    /// The previous, current or next frame's planes, by VFM's frame number 0, 1 or 2.
-    fn frame_planes(planes: &WindowPlanes, frame: usize) -> &[Scratch] {
-        match frame {
-            0 => &planes.previous,
-            1 => &planes.current,
-            _ => &planes.next,
-        }
-    }
-
     /// Every match's weave, by raw match number, each plane woven from the frames the match names.
     fn woven(&self, context: &FrameContext, planes: &WindowPlanes) -> Vec<Vec<Scratch>> {
         let sizing = Sizing(context);
-        let matching_parity = 1 - self.settings.field;
+        let frames = [
+            planes.previous.as_slice(),
+            planes.current.as_slice(),
+            planes.next.as_slice(),
+        ];
 
         let mut woven = Vec::with_capacity(MATCHES);
         for matched in 0..MATCHES {
-            let (matching_frame, other_frame) = match_sources(matched);
-            let matching_planes = Self::frame_planes(planes, matching_frame);
-            let other_planes = Self::frame_planes(planes, other_frame);
+            let (matching_planes, other_planes, matching_parity) =
+                match_pairing(frames, matched, self.settings.field);
 
             let mut match_planes = Vec::with_capacity(matching_planes.len());
             for (matching, other) in matching_planes.iter().zip(other_planes) {
@@ -407,15 +401,21 @@ impl<R: Runtime> MetricGatherer<R> {
     }
 }
 
-/// The frames a raw match takes its matching and other fields from, 0 for the previous frame, 1 for the
-/// current and 2 for the next.
-fn match_sources(matched: usize) -> (usize, usize) {
-    match matched {
-        P => (1, 0),
-        C => (1, 1),
-        N => (1, 2),
-        B => (0, 1),
-        U => (2, 1),
+/// The frame a raw match takes its matching field from, the frame it takes the other field from, and the
+/// row parity of the matching field.
+///
+/// `frames` holds the previous, current and next frames. `field` is VFM's field, 1 when the matching field
+/// is the top field.
+pub(crate) fn match_pairing<T: Copy>(frames: [T; 3], matched: usize, field: u32) -> (T, T, u32) {
+    let [previous, current, next] = frames;
+    let (matching, other) = match matched {
+        P => (current, previous),
+        C => (current, current),
+        N => (current, next),
+        B => (previous, current),
+        U => (next, current),
         _ => unreachable!("VFM has five matches, not {matched}"),
-    }
+    };
+
+    (matching, other, 1 - field)
 }

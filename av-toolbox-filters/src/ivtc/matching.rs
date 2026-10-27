@@ -12,8 +12,9 @@ use av_toolbox_core::{
     StreamType,
     Tag,
 };
+use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::deinterlace::BwdifField;
-use av_toolbox_cubek::ivtc::MicBlocks;
+use av_toolbox_cubek::ivtc::{MicBlocks, WeavePlanes, weave};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -32,6 +33,7 @@ use av_toolbox_gpu::{
     Plane,
     ResolvedFormats,
     Runtime,
+    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -40,10 +42,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::aa::direction::missing_plane;
-use crate::bits::bits_of;
-use crate::checks::{accepts_frames, between_i32, between_u32};
+use crate::checks::{accepts_integer_or_f32_frames, between_i32, between_u32};
+use crate::codes::CodeValues;
 use crate::deinterlace::bwdif::{Order, resolved_order};
-use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane};
+use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane, widened_plane};
 use crate::deinterlace::spatial::{
     Predictor,
     Spatial,
@@ -53,9 +55,10 @@ use crate::deinterlace::spatial::{
 };
 use crate::ivtc::checks::checked_block;
 use crate::ivtc::decision::{C, Decision};
-use crate::ivtc::metrics::{Gathered, MetricGatherer, MetricSettings, WindowPlanes};
+use crate::ivtc::metrics::{Gathered, MetricGatherer, MetricSettings, WindowPlanes, match_pairing};
 use crate::masked::{INPUT, checked_input, missing_input};
 use crate::scratch::Scratch;
+use crate::sizing::Sizing;
 
 pub(crate) const STAGE: &str = "ivtc/match";
 
@@ -404,7 +407,7 @@ impl FilterDefinition for Match {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_frames(offered).ok_or_else(not_frames)
+        accepts_integer_or_f32_frames(offered).ok_or_else(not_frames)
     }
 
     fn produces(
@@ -435,7 +438,12 @@ impl FilterDefinition for Match {
         let checked = checked(&args, &input)?;
         let output = output_format(&input);
 
-        let bits = bits_of(input.sample);
+        let client = context.client().clone();
+        let predictor = checked.fallback.unwrap_or(Predictor::Cubic);
+        let rebuilder = FieldRebuilder::new(STAGE, client, input, input.sample, predictor);
+        let codes = rebuilder.codes().whole_codes();
+
+        let bits = codes.bits();
         let shift = bits - 8;
         let field = vfm_field(checked.order, args.field);
         let opposite = args.field == MatchingField::Opposite;
@@ -469,9 +477,6 @@ impl FilterDefinition for Match {
             scthresh: args.scthresh / 100.0,
         };
 
-        let client = context.client().clone();
-        let predictor = checked.fallback.unwrap_or(Predictor::Cubic);
-        let rebuilder = FieldRebuilder::new(STAGE, client, input, input.sample, predictor);
         let gatherer_client = rebuilder.client().clone();
         let gatherer = MetricGatherer::new(gatherer_client, input, settings, bits);
         let kept = BwdifField {
@@ -481,7 +486,9 @@ impl FilterDefinition for Match {
 
         let matcher = Matcher {
             rebuilder,
+            codes,
             gatherer,
+            field,
             decision,
             falls_back: checked.fallback.is_some(),
             kept,
@@ -498,7 +505,11 @@ impl FilterDefinition for Match {
 /// Runs `ivtc/match` over a chunk, emitting each frame once the frame after it arrives.
 struct Matcher<R: Runtime> {
     rebuilder: FieldRebuilder<R>,
+    /// The code values every measured plane widens to, whole codes for F32.
+    codes: CodeValues,
     gatherer: MetricGatherer<R>,
+    /// VFM's field, 1 when the matching field is the top field.
+    field: u32,
     decision: Decision,
     /// Whether a combed frame is rebuilt by bwdif rather than emitted as it is.
     falls_back: bool,
@@ -511,12 +522,14 @@ struct Matcher<R: Runtime> {
 }
 
 impl<R: Runtime> Matcher<R> {
-    /// Every plane of `frame`, widened to f32.
+    /// Every plane of `frame`, widened to f32 code values.
     fn widened_planes(&self, context: &FrameContext, frame: &Frame) -> Result<Vec<Scratch>, StageError> {
+        let client = self.rebuilder.client();
+
         let mut planes = Vec::new();
         for channel in self.input.channels() {
             let source = channel_plane(STAGE, frame, *channel)?;
-            let widened = self.rebuilder.widened(context, source, *channel);
+            let widened = widened_plane(client, context, source, self.codes, *channel);
             planes.push(widened);
         }
 
@@ -537,6 +550,52 @@ impl<R: Runtime> Matcher<R> {
         })
     }
 
+    /// The planes of match `matched` woven straight from the window's F32 planes, so every sample is kept.
+    fn woven_float_planes(
+        &self,
+        context: &FrameContext,
+        window: &Window<'_>,
+        matched: usize,
+    ) -> Result<Vec<Plane>, StageError> {
+        let frames = [window.previous, window.current, window.next];
+        let (matching_frame, other_frame, matching_parity) = match_pairing(frames, matched, self.field);
+        let meta = window.current.meta();
+        let sizing = Sizing(context);
+
+        let mut planes = Vec::with_capacity(self.input.channels().len());
+        for channel in self.input.channels() {
+            let matching = channel_plane(STAGE, matching_frame, *channel)?;
+            let other = channel_plane(STAGE, other_frame, *channel)?;
+            let (width, height) = matching.dimensions();
+            let plane_format = FrameFormat {
+                width,
+                height,
+                layout: FrameLayout::Grey,
+                ..self.input
+            };
+            let target = context.alloc_frame(&plane_format, meta.clone());
+            let output = channel_plane(STAGE, &target, Channel::Y)?;
+
+            let matching_handle = matching.buffer().handle();
+            let other_handle = other.buffer().handle();
+            let output_handle = output.buffer().handle();
+
+            // Safety: each F32 plane holds exactly `width * height` f32 samples.
+            let weave_planes = unsafe {
+                WeavePlanes {
+                    matching: DevicePlane::new(matching_handle, width, height),
+                    other: DevicePlane::new(other_handle, width, height),
+                    output: DevicePlane::new(output_handle, width, height),
+                }
+            };
+            weave(self.rebuilder.client(), &sizing, weave_planes, matching_parity);
+
+            planes.push(output.clone());
+        }
+
+        Ok(planes)
+    }
+
     /// The planes of the chosen weave, the current frame's own for a `c` match.
     fn woven_planes(
         &self,
@@ -554,6 +613,10 @@ impl<R: Runtime> Matcher<R> {
             }
 
             return Ok(planes);
+        }
+
+        if self.input.sample == SampleFormat::F32 {
+            return self.woven_float_planes(context, window, matched);
         }
 
         let meta = window.current.meta();

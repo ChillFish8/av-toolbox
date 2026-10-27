@@ -21,16 +21,6 @@ pub(crate) fn wider_sample(first: SampleFormat, second: SampleFormat) -> Option<
     None
 }
 
-/// The samples a stage over frames accepts, U8 and U16, or `None` when `offered` is not frames.
-pub(crate) fn accepts_frames(offered: StreamFormat) -> Option<FormatSet> {
-    let format = offered.as_frames()?;
-    if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-        return Some(FormatSet::new());
-    }
-
-    Some(FormatSet::of([format.sample]))
-}
-
 /// The samples a stage over frames accepts, U8, U16 and F32, or `None` when `offered` is not frames.
 pub(crate) fn accepts_integer_or_f32_frames(offered: StreamFormat) -> Option<FormatSet> {
     let format = offered.as_frames()?;

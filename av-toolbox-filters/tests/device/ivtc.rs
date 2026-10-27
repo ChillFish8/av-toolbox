@@ -18,6 +18,9 @@ use av_toolbox_cubek::testing::{
 use av_toolbox_filters::testing::VfmDecision;
 use av_toolbox_gpu::{
     ChromaLocation,
+    ColourInfo,
+    ColourRange,
+    Depth,
     FieldOrder,
     FrameFormat,
     FrameLayout,
@@ -37,6 +40,10 @@ use crate::support::{
     backend,
     built_filter,
     element_of,
+    encoded,
+    float_bytes,
+    float_planes,
+    float_samples,
     frame,
     from_bytes,
     ten_bit,
@@ -51,6 +58,8 @@ const FILM_FRAMES: usize = 10;
 /// The video frames of one 3:2 cadence cycle.
 const CYCLE: usize = 5;
 const MATCH_NAMES: [&str; 5] = ["p", "c", "n", "b", "u"];
+/// VFM's raw match number of a `c` match.
+const C: usize = 1;
 
 fn clip_named(name: &str) -> SyntheticClip {
     synthetic_clips()
@@ -804,6 +813,300 @@ fn a_grey_stream_counts_luma_alone() {
             output,
             &matched_frames[*source],
             &format!("input {source}"),
+        );
+    }
+}
+
+fn sixteen_bit() -> SampleFormat {
+    SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    }
+}
+
+/// The format of `clip`'s 4:2:0 frames holding `sample`.
+fn clip_format_as(clip: &SyntheticClip, sample: SampleFormat) -> FrameFormat {
+    FrameFormat {
+        sample,
+        ..clip_format(clip, false)
+    }
+}
+
+/// `format` at an unknown rate after matching, so a decimated output's timestamp names its input.
+fn unknown_rate(format: FrameFormat) -> FrameFormat {
+    FrameFormat {
+        frame_rate: None,
+        ..progressive(format)
+    }
+}
+
+/// `bits` deep codes as 16-bit codes.
+fn sixteen_bit_plane(plane: &[i32], bits: u32) -> Vec<u16> {
+    let shift = 16 - bits;
+
+    plane.iter().map(|value| (*value << shift) as u16).collect()
+}
+
+/// Every frame of `frames`, `bits` deep codes, as inputs of `format` holding the same 16-bit codes.
+///
+/// Each input is stamped with its index in seconds.
+fn sixteen_bit_inputs(format: &FrameFormat, frames: &[[Vec<i32>; 3]], bits: u32) -> Vec<Input> {
+    let mut inputs = Vec::with_capacity(frames.len());
+    for (index, planes) in frames.iter().enumerate() {
+        let codes: Vec<Vec<u16>> = planes
+            .iter()
+            .map(|plane| sixteen_bit_plane(plane, bits))
+            .collect();
+        let encoded_planes = if format.sample == SampleFormat::F32 {
+            float_planes(format, &codes, 16)
+        } else {
+            encoded(format, &codes)
+        };
+
+        inputs.push(timed_input(index, encoded_planes));
+    }
+
+    inputs
+}
+
+fn timed_input(index: usize, planes: Vec<Vec<u8>>) -> Input {
+    let index = index as u64;
+    let meta = FrameMeta {
+        timestamp: Some(Duration::from_secs(index)),
+        ..FrameMeta::at(index)
+    };
+
+    Input { meta, planes }
+}
+
+/// Every frame of `samples` as F32 inputs.
+fn float_inputs(samples: &[[Vec<f32>; 3]]) -> Vec<Input> {
+    samples
+        .iter()
+        .enumerate()
+        .map(|(index, planes)| {
+            let bytes = planes.iter().map(|plane| float_bytes(plane)).collect();
+            timed_input(index, bytes)
+        })
+        .collect()
+}
+
+/// `clip`'s codes over 1000 as F32 samples, which mostly fall between 16-bit codes.
+fn thousandths(clip: &SyntheticClip) -> Vec<[Vec<f32>; 3]> {
+    clip.frames
+        .iter()
+        .map(|planes| planes.clone().map(|plane| plane_thousandths(&plane)))
+        .collect()
+}
+
+fn plane_thousandths(plane: &[i32]) -> Vec<f32> {
+    plane.iter().map(|value| *value as f32 / 1000.0).collect()
+}
+
+/// The raw match number `output` carries.
+fn matched_of(output: &Output) -> usize {
+    let MetaValue::String(name) = attached(output, "match") else {
+        panic!("frame {} carries a match that is not a name", output.meta.index);
+    };
+
+    MATCH_NAMES
+        .iter()
+        .position(|found| *found == name)
+        .unwrap_or_else(|| panic!("frame {} carries an unknown match {name}", output.meta.index))
+}
+
+/// Plane `plane_index` of `matched`'s weave of frame `frame` of `samples`, with VFM's `field`.
+fn woven_samples(
+    samples: &[[Vec<f32>; 3]],
+    frame: usize,
+    plane_index: usize,
+    matched: usize,
+    field: usize,
+) -> Vec<f32> {
+    let last = samples.len() - 1;
+    let previous = frame.saturating_sub(1);
+    let next = usize::min(frame + 1, last);
+    let sources = [previous, frame, next];
+    let count = samples[frame][plane_index].len();
+    let shift = u32::from(plane_index > 0);
+    let width = (WIDTH >> shift) as usize;
+    let height = (HEIGHT >> shift) as usize;
+
+    // Each sample of the window gets its own id, so the weave says where every output sample comes from.
+    let ids: Vec<Vec<i32>> = (0..sources.len())
+        .map(|slot| (slot * count..(slot + 1) * count).map(|id| id as i32).collect())
+        .collect();
+    let id_frames = [ids[0].as_slice(), ids[1].as_slice(), ids[2].as_slice()];
+
+    let picked = reference_match_weave(id_frames, width, height, matched, field);
+
+    picked
+        .iter()
+        .map(|id| {
+            let id = *id as usize;
+            let source = sources[id / count];
+            samples[source][plane_index][id % count]
+        })
+        .collect()
+}
+
+fn bits_of_samples(samples: &[f32]) -> Vec<u32> {
+    samples.iter().map(|sample| sample.to_bits()).collect()
+}
+
+#[test]
+fn an_f32_weave_is_bit_exact() {
+    for name in ["tff_8", "bff_8", "orphan_8"] {
+        let clip = clip_named(name);
+        let format = clip_format_as(&clip, SampleFormat::F32);
+        let samples = thousandths(&clip);
+        let inputs = float_inputs(&samples);
+
+        let outputs = run(json!({ "fallback": { "kind": "none" } }), format, vec![inputs]);
+
+        assert_eq!(outputs.len(), samples.len(), "{name}");
+
+        let field = resolved_field(&clip, false);
+        let mut woven = 0;
+        for (frame, output) in outputs.iter().enumerate() {
+            let matched = matched_of(output);
+            if matched != C {
+                woven += 1;
+            }
+
+            for (plane_index, bytes) in output.planes.iter().enumerate() {
+                let found = float_samples(bytes);
+                let expected = woven_samples(&samples, frame, plane_index, matched, field);
+                let label = format!("{name} frame {frame} plane {plane_index}");
+
+                assert_eq!(bits_of_samples(&found), bits_of_samples(&expected), "{label}");
+            }
+        }
+
+        assert!(woven > 0, "{name} never weaves across frames");
+    }
+}
+
+#[test]
+fn f32_matches_agree_with_sixteen_bit() {
+    for clip in synthetic_clips() {
+        let sixteen_bit_format = clip_format_as(&clip, sixteen_bit());
+        let float_format = clip_format_as(&clip, SampleFormat::F32);
+        let sixteen_bit_frames = sixteen_bit_inputs(&sixteen_bit_format, &clip.frames, clip.bits);
+        let float_frames = sixteen_bit_inputs(&float_format, &clip.frames, clip.bits);
+
+        let sixteen_bit_outputs = run(json!({}), sixteen_bit_format, vec![sixteen_bit_frames]);
+        let float_outputs = run(json!({}), float_format, vec![float_frames]);
+
+        assert_eq!(float_outputs.len(), sixteen_bit_outputs.len(), "{}", clip.name);
+
+        let pairs = float_outputs.iter().zip(&sixteen_bit_outputs).enumerate();
+        for (frame, (float_output, sixteen_bit_output)) in pairs {
+            let label = format!("{} frame {frame}", clip.name);
+
+            assert_eq!(
+                decision_of(float_output),
+                decision_of(sixteen_bit_output),
+                "{label}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f32_decimation_agrees_with_sixteen_bit() {
+    for clip in synthetic_clips() {
+        let sixteen_bit_format = unknown_rate(clip_format_as(&clip, sixteen_bit()));
+        let float_format = unknown_rate(clip_format_as(&clip, SampleFormat::F32));
+        let matched_frames = vfm_matched_frames(&clip);
+
+        for (source, frames) in [("matched", &matched_frames), ("raw", &clip.frames)] {
+            let label = format!("{} {source}", clip.name);
+            let sixteen_bit_frames = sixteen_bit_inputs(&sixteen_bit_format, frames, clip.bits);
+            let float_frames = sixteen_bit_inputs(&float_format, frames, clip.bits);
+
+            let sixteen_bit_outputs = run_decimate(json!({}), sixteen_bit_format, sixteen_bit_frames);
+            let float_outputs = run_decimate(json!({}), float_format, float_frames.clone());
+
+            let kept = source_frames(&float_outputs);
+            assert_eq!(kept, source_frames(&sixteen_bit_outputs), "{label}");
+
+            for (output, source) in float_outputs.iter().zip(kept) {
+                assert_eq!(
+                    output.planes, float_frames[source].planes,
+                    "{label} input {source}"
+                );
+            }
+        }
+    }
+}
+
+/// `clip`'s luma stretched so its darkest and brightest samples sit at 0 and 1, and its chroma over 1000.
+fn held_samples(clip: &SyntheticClip) -> Vec<[Vec<f32>; 3]> {
+    clip.frames
+        .iter()
+        .map(|[luma, u_plane, v_plane]| {
+            let held_luma = luma
+                .iter()
+                .map(|value| ((*value - 64) as f32 / 128.0).clamp(0.0, 1.0))
+                .collect();
+
+            [held_luma, plane_thousandths(u_plane), plane_thousandths(v_plane)]
+        })
+        .collect()
+}
+
+/// `held` with every luma sample at 0 moved to -2 and every one at 1 moved to 3.
+fn out_of_range(held: &[[Vec<f32>; 3]]) -> Vec<[Vec<f32>; 3]> {
+    held.iter()
+        .map(|[luma, u_plane, v_plane]| {
+            let pushed_luma = luma.iter().map(|sample| pushed_out(*sample)).collect();
+
+            [pushed_luma, u_plane.clone(), v_plane.clone()]
+        })
+        .collect()
+}
+
+fn pushed_out(sample: f32) -> f32 {
+    if sample == 0.0 {
+        -2.0
+    } else if sample == 1.0 {
+        3.0
+    } else {
+        sample
+    }
+}
+
+#[test]
+fn out_of_range_f32_samples_do_not_overflow_the_sums() {
+    let clip = clip_named("tff_8");
+    let float_format = clip_format_as(&clip, SampleFormat::F32);
+    let colour = ColourInfo {
+        range: ColourRange::Full,
+        ..float_format.colour
+    };
+    let format = FrameFormat {
+        colour,
+        ..float_format
+    };
+    let held = held_samples(&clip);
+    let pushed = out_of_range(&held);
+    let pushed_luma: Vec<f32> = pushed.iter().flat_map(|[luma, _, _]| luma.clone()).collect();
+
+    assert!(pushed_luma.contains(&-2.0));
+    assert!(pushed_luma.contains(&3.0));
+
+    let held_inputs = float_inputs(&held);
+    let pushed_inputs = float_inputs(&pushed);
+
+    let held_outputs = run(json!({}), format, vec![held_inputs]);
+    let pushed_outputs = run(json!({}), format, vec![pushed_inputs]);
+
+    assert_eq!(pushed_outputs.len(), held_outputs.len());
+    for (frame, (pushed_output, held_output)) in pushed_outputs.iter().zip(&held_outputs).enumerate() {
+        assert_eq!(
+            decision_of(pushed_output),
+            decision_of(held_output),
+            "frame {frame}"
         );
     }
 }
