@@ -94,6 +94,74 @@ args.path = "/dev/null"
 }
 
 #[test]
+fn merged_luma_widens_to_resized_chroma() {
+    let text = format!(
+        r#"{SOURCE}
+[filter.luma]
+type = "planes/extract"
+inputs = ["input"]
+args.plane = "y"
+
+[filter.chroma]
+type = "planes/extract"
+inputs = ["input"]
+args.plane = "chroma"
+
+[filter.upscaled]
+type = "resize/spline36"
+inputs = ["chroma"]
+args.width = 64
+args.height = 64
+
+[filter.merged]
+type = "planes/merge"
+inputs = ["luma", "upscaled"]
+args.y = {{ input = 0 }}
+args.u = {{ input = 1 }}
+args.v = {{ input = 1 }}
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["merged"]
+args.path = "/dev/null"
+"#
+    );
+    let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
+    let compiled = compiled(&text, &registry, &backend);
+
+    let graph = compiled.graph();
+    let merged = graph
+        .nodes()
+        .iter()
+        .find(|node| node.name() == "merged")
+        .expect("the merge node");
+    let luma_edge = &merged.inputs()[0];
+    let injected: Vec<_> = graph
+        .nodes()
+        .iter()
+        .filter(|node| node.identifier() == "resample/depth")
+        .filter(|node| *node.args() == json!({ "depth": "f32" }))
+        .collect();
+    assert_eq!(injected.len(), 1);
+
+    let widen = injected[0];
+    let widen_formats = compiled.formats().get(widen.id());
+    let widen_input = widen_formats.inputs()[0].expect("the widen has an input");
+    let widen_output = widen_formats.output().expect("the widen has an output");
+    assert_eq!(widen_input.sample(), SampleFormat::U8);
+    assert_eq!(widen_output.sample(), SampleFormat::F32);
+    assert_eq!(luma_edge.source(), widen.id());
+
+    let merge_formats = compiled.formats().get(merged.id());
+    let merge_inputs = merge_formats.inputs();
+    let luma = merge_inputs[0].expect("the merge reads luma");
+    let chroma = merge_inputs[1].expect("the merge reads chroma");
+    assert_eq!(luma.sample(), SampleFormat::F32);
+    assert_eq!(chroma.sample(), SampleFormat::F32);
+}
+
+#[test]
 fn one_producer_in_both_slots_solves() {
     let text = format!(
         r#"{SOURCE}

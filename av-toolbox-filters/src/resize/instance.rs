@@ -1,6 +1,8 @@
 use av_toolbox_core::{Filter, Inputs, StageError, StageInstance};
 use av_toolbox_cubek::DevicePlane;
+use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Samples, Weights, apply, taps, upload};
+use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{
     Channel,
     ComputeClient,
@@ -13,6 +15,8 @@ use av_toolbox_gpu::{
 };
 
 use super::geometry::{Geometry, PlaneShape};
+use crate::bits::bits_of;
+use crate::codes::sample_range;
 use crate::sizing::Sizing;
 
 /// One plane's weight tables on the device.
@@ -41,6 +45,26 @@ pub(crate) fn samples_for(sample: SampleFormat) -> Samples {
         SampleFormat::U8 => Samples::U8,
         SampleFormat::F32 => Samples::F32,
     }
+}
+
+/// How a resize turns `input`'s samples into `output` samples, for a chroma plane when `chroma` is set.
+///
+/// Integers resized into F32 land on the samples `resample/depth` gives them.
+pub(crate) fn samples_between(input: &FrameFormat, output: SampleFormat, chroma: bool) -> Samples {
+    if output != SampleFormat::F32 {
+        return samples_for(output);
+    }
+
+    let element = match input.sample {
+        SampleFormat::U8 => Element::U8,
+        SampleFormat::U16 { .. } => Element::U16,
+        SampleFormat::F32 => return Samples::F32,
+    };
+    let bits = bits_of(input.sample);
+    let range = sample_range(input.colour.range);
+    let codes = FloatCodes::new(bits, range, chroma);
+
+    Samples::IntegerToFloat { element, codes }
 }
 
 /// Resizes `input` into `output` through `tables`, whatever their sizes.
@@ -79,6 +103,10 @@ pub(crate) fn resize_plane<R: Runtime>(
     apply(client, &sizing, planes, &tables.across, &tables.down, samples);
 }
 
+fn is_chroma(channel: Channel) -> bool {
+    matches!(channel, Channel::U | Channel::V)
+}
+
 fn missing_input(stage: &str) -> StageError {
     let message = format!("{stage} expected a frame in slot 0");
 
@@ -95,7 +123,8 @@ pub(super) struct Resizer<R: Runtime> {
     client: ComputeClient<R>,
     stage: String,
     output: FrameFormat,
-    samples: Samples,
+    luma_samples: Samples,
+    chroma_samples: Samples,
     luma: Tables,
     /// The subsampled chroma planes' tables, `None` when chroma is read like luma.
     chroma: Option<Tables>,
@@ -107,12 +136,14 @@ impl<R: Runtime> Resizer<R> {
     pub(super) fn new(
         client: ComputeClient<R>,
         stage: String,
+        input: &FrameFormat,
         output: FrameFormat,
         shapes: &Geometry,
         kernel: &Kernel,
         identity: bool,
     ) -> Self {
-        let samples = samples_for(output.sample);
+        let luma_samples = samples_between(input, output.sample, false);
+        let chroma_samples = samples_between(input, output.sample, true);
         let luma = Tables::new(&client, &shapes.luma, kernel);
         let chroma = shapes.chroma.map(|shape| Tables::new(&client, &shape, kernel));
 
@@ -120,17 +151,24 @@ impl<R: Runtime> Resizer<R> {
             client,
             stage,
             output,
-            samples,
+            luma_samples,
+            chroma_samples,
             luma,
             chroma,
             identity,
         }
     }
 
-    fn tables_for(&self, channel: Channel) -> &Tables {
-        let is_chroma = matches!(channel, Channel::U | Channel::V);
+    fn samples_of(&self, channel: Channel) -> Samples {
+        if is_chroma(channel) {
+            self.chroma_samples
+        } else {
+            self.luma_samples
+        }
+    }
 
-        match (&self.chroma, is_chroma) {
+    fn tables_for(&self, channel: Channel) -> &Tables {
+        match (&self.chroma, is_chroma(channel)) {
             (Some(chroma), true) => chroma,
             _ => &self.luma,
         }
@@ -162,15 +200,9 @@ impl<R: Runtime> Filter for Resizer<R> {
             };
 
             let tables = self.tables_for(*channel);
+            let samples = self.samples_of(*channel);
 
-            resize_plane(
-                &self.client,
-                context,
-                input_plane,
-                output_plane,
-                tables,
-                self.samples,
-            );
+            resize_plane(&self.client, context, input_plane, output_plane, tables, samples);
         }
 
         Ok(vec![output])

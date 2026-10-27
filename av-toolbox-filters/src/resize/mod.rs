@@ -25,6 +25,7 @@ use av_toolbox_gpu::{
     OutputFormats,
     ResolvedFormats,
     Runtime,
+    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -73,7 +74,16 @@ fn checked_input(chosen: &[Option<StreamFormat>], stage: &str) -> Result<FrameFo
     Ok(*format)
 }
 
+/// Whether the arguments resize `input` into exactly itself.
+fn hands_back_input<K: ResizeKernel>(input: &FrameFormat, args: &K::Args) -> bool {
+    let window = K::window(args);
+
+    is_identity(input, &window)
+}
+
 /// Checks the arguments against the input and gives the output format.
+///
+/// The output is F32, except for an identity resize, which keeps the input's sample.
 fn resized<K: ResizeKernel>(input: &FrameFormat, args: &K::Args) -> Result<FrameFormat, StageError> {
     let stage = stage_name::<K>();
     let window = K::window(args);
@@ -82,9 +92,13 @@ fn resized<K: ResizeKernel>(input: &FrameFormat, args: &K::Args) -> Result<Frame
     check_output(input, &window, &stage)?;
     check_source(input, &window, &stage)?;
 
+    let identity = hands_back_input::<K>(input, args);
+    let sample = if identity { input.sample } else { SampleFormat::F32 };
+
     Ok(FrameFormat {
         width: window.width,
         height: window.height,
+        sample,
         ..*input
     })
 }
@@ -162,9 +176,9 @@ impl<K: ResizeKernel> FilterDefinition for Resize<K> {
         let window = K::window(&args);
         let kernel = K::kernel(&args)?;
         let shapes = geometry(&input, &window);
-        let identity = is_identity(&input, &window);
+        let identity = hands_back_input::<K>(&input, &args);
         let client = context.client().clone();
-        let resizer = Resizer::new(client, stage, output, &shapes, &kernel, identity);
+        let resizer = Resizer::new(client, stage, &input, output, &shapes, &kernel, identity);
 
         Ok(Box::new(resizer))
     }
@@ -236,8 +250,11 @@ mod tests {
         let chosen = [Some(format)];
         let arguments = args(value);
         let outputs = Resize::<Point>::produces(&capabilities, &arguments, &chosen)?;
+        let sample = outputs.samples.first().expect("a produced sample");
 
-        Ok(outputs.template.with_sample(format.sample()))
+        assert_eq!(outputs.samples, FormatSet::of([sample]));
+
+        Ok(outputs.template.with_sample(sample))
     }
 
     #[test]
@@ -258,9 +275,34 @@ mod tests {
 
             assert_eq!((resized.width, resized.height), (32, 4));
             assert_eq!(resized.layout, input.layout);
-            assert_eq!(resized.sample, input.sample);
+            assert_eq!(resized.sample, SampleFormat::F32);
             assert_eq!(resized.colour, input.colour);
         }
+    }
+
+    #[test]
+    fn an_identity_resize_keeps_its_sample() {
+        let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+        let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+        for sample in samples {
+            let format = frames(16, 8, FrameLayout::Grey, sample);
+            let value = json!({ "width": 16, "height": 8 });
+
+            let output = produced(format, value).expect("resizable");
+
+            assert_eq!(output.sample(), sample, "{sample}");
+        }
+    }
+
+    #[test]
+    fn a_crop_at_the_same_size_resizes_into_floats() {
+        let format = frames(16, 8, FrameLayout::Grey, SampleFormat::U8);
+        let value = json!({ "width": 16, "height": 8, "src_left": 1.0 });
+
+        let output = produced(format, value).expect("resizable");
+
+        assert_eq!(output.sample(), SampleFormat::F32);
     }
 
     #[test]

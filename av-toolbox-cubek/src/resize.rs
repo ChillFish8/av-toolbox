@@ -3,6 +3,8 @@
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
+use crate::depth::Element;
+use crate::values::FloatCodes;
 use crate::{DevicePlane, Dispatch, assert_plane, assert_plane_sized, reflect};
 
 /// How much an input sample weighs by its distance from where an output sample lands.
@@ -271,7 +273,7 @@ pub struct ResizePlanes<'a> {
 }
 
 /// How a plane's samples are stored.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Samples {
     U8,
     /// Samples held in `u16`, which never exceed `largest`.
@@ -280,6 +282,12 @@ pub enum Samples {
     },
     /// Samples held in `f32`, written back without rounding or clamping.
     F32,
+    /// Integer samples of `element` read as code values, written as full range `f32` samples through
+    /// `codes` without rounding or clamping.
+    IntegerToFloat {
+        element: Element,
+        codes: FloatCodes,
+    },
 }
 
 #[cube(launch_unchecked)]
@@ -344,6 +352,39 @@ fn resize_columns<E: Int>(
     output[ABSOLUTE_POS] = E::cast_from(f32::clamp(rounded, 0.0, largest));
 }
 
+/// The column pass over code values, writing each total as a full range sample `(code - offset) / scale`.
+#[cube(launch_unchecked)]
+fn resize_columns_to_float(
+    input: &Array<f32>,
+    starts: &Array<i32>,
+    weights: &Array<f32>,
+    output: &mut Array<f32>,
+    width: u32,
+    in_height: u32,
+    count: u32,
+    offset: f32,
+    scale: f32,
+) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let position = ABSOLUTE_POS as u32;
+    let column = position % width;
+    let row = position / width;
+    let start = starts[row as usize];
+
+    let mut total = 0.0f32;
+    for step in 0..count {
+        let source = reflect(start + step as i32, in_height as i32);
+        let sample = input[(source as u32 * width + column) as usize];
+        let weight = weights[(row * count + step) as usize];
+        total += sample * weight;
+    }
+
+    output[ABSOLUTE_POS] = (total - offset) / scale;
+}
+
 /// Resizes a plane through one table per axis.
 pub fn apply<R: Runtime>(
     client: &ComputeClient<R>,
@@ -363,6 +404,14 @@ pub fn apply<R: Runtime>(
             launch::<u16, R>(client, dispatch, planes, across, down, largest);
         },
         Samples::F32 => launch_float::<f32, R>(client, dispatch, planes, across, down),
+        Samples::IntegerToFloat {
+            element: Element::U8,
+            codes,
+        } => launch_to_float::<u8, R>(client, dispatch, planes, across, down, codes),
+        Samples::IntegerToFloat {
+            element: Element::U16,
+            codes,
+        } => launch_to_float::<u16, R>(client, dispatch, planes, across, down, codes),
     }
 }
 
@@ -374,36 +423,10 @@ fn launch<E: Int, R: Runtime>(
     down: &Weights,
     largest: f32,
 ) {
-    let in_width = planes.input.width();
+    launch_rows::<E, R>(client, dispatch, planes, across);
+
     let in_height = planes.input.height();
     let out_width = planes.output.width();
-
-    let input = planes.input.array::<R>();
-    let starts = across.starts::<R>();
-    let weights = across.weights::<R>();
-    let rows = planes.scratch.array::<R>();
-    let row_samples = planes.scratch.samples();
-    let cubes = dispatch.cube_count(row_samples);
-    let unit = dispatch.cube_dim();
-
-    // Safety: the input holds `in_width * in_height` samples of `E`, the scratch
-    // `out_width * in_height` f32 values, the tables `out_width` starts and `out_width * count`
-    // weights, and every tap is folded back inside its row before it is read.
-    unsafe {
-        resize_rows::launch_unchecked::<E, R>(
-            client,
-            cubes,
-            unit,
-            input,
-            starts,
-            weights,
-            rows,
-            in_width,
-            out_width,
-            across.count(),
-        );
-    }
-
     let rows = planes.scratch.array::<R>();
     let starts = down.starts::<R>();
     let weights = down.weights::<R>();
@@ -429,6 +452,88 @@ fn launch<E: Int, R: Runtime>(
             in_height,
             down.count(),
             largest,
+        );
+    }
+}
+
+/// Resizes integer samples `E` into full range f32 samples through `codes`.
+fn launch_to_float<E: Int, R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ResizePlanes<'_>,
+    across: &Weights,
+    down: &Weights,
+    codes: FloatCodes,
+) {
+    let out_width = planes.output.width();
+    let out_height = planes.output.height();
+    assert_plane_sized(&planes.output, out_width, out_height, size_of::<f32>(), "output");
+
+    launch_rows::<E, R>(client, dispatch, planes, across);
+
+    let in_height = planes.input.height();
+    let rows = planes.scratch.array::<R>();
+    let starts = down.starts::<R>();
+    let weights = down.weights::<R>();
+    let output = planes.output.array::<R>();
+    let output_samples = planes.output.samples();
+    let cubes = dispatch.cube_count(output_samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the scratch holds `out_width * in_height` f32 values, the output
+    // `out_width * out_height` f32 values, the tables `out_height` starts and `out_height * count`
+    // weights, and every tap is folded back inside its column before it is read.
+    unsafe {
+        resize_columns_to_float::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            rows,
+            starts,
+            weights,
+            output,
+            out_width,
+            in_height,
+            down.count(),
+            codes.offset,
+            codes.scale,
+        );
+    }
+}
+
+/// The row pass over integer samples `E`, writing f32 code values into the scratch.
+fn launch_rows<E: Int, R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: ResizePlanes<'_>,
+    across: &Weights,
+) {
+    let in_width = planes.input.width();
+    let out_width = planes.output.width();
+
+    let input = planes.input.array::<R>();
+    let starts = across.starts::<R>();
+    let weights = across.weights::<R>();
+    let rows = planes.scratch.array::<R>();
+    let row_samples = planes.scratch.samples();
+    let cubes = dispatch.cube_count(row_samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the input holds `in_width * in_height` samples of `E`, the scratch
+    // `out_width * in_height` f32 values, the tables `out_width` starts and `out_width * count`
+    // weights, and every tap is folded back inside its row before it is read.
+    unsafe {
+        resize_rows::launch_unchecked::<E, R>(
+            client,
+            cubes,
+            unit,
+            input,
+            starts,
+            weights,
+            rows,
+            in_width,
+            out_width,
+            across.count(),
         );
     }
 }

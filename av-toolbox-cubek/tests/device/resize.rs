@@ -1,3 +1,5 @@
+use av_toolbox_cubek::depth::{Conversion, Element, convert_to_float_sample};
+use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_cubek::resize::{
     Kernel,
     ResizePlanes,
@@ -10,6 +12,7 @@ use av_toolbox_cubek::resize::{
     upload,
 };
 use av_toolbox_cubek::testing::{reference_resize, reference_resize_float, reference_resize_wide};
+use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -50,7 +53,7 @@ impl BuildTask for Resize {
         let sample_bytes = match self.samples {
             Samples::U8 => 1,
             Samples::U16 { .. } => 2,
-            Samples::F32 => 4,
+            Samples::F32 | Samples::IntegerToFloat { .. } => 4,
         };
         let out_width = self.across.starts.len() as u32;
         let out_height = self.down.starts.len() as u32;
@@ -351,4 +354,49 @@ fn apply_float_upscales_and_matches_the_reference_in_f32() {
     let actual = backend().build(task);
 
     assert_close(&actual, &expected, 1e-3);
+}
+
+fn float_values(bytes: &[u8]) -> Vec<f32> {
+    let (words, _) = bytes.as_chunks::<4>();
+
+    words.iter().map(|word| f32::from_le_bytes(*word)).collect()
+}
+
+#[test]
+fn integer_rows_resize_into_float_samples() {
+    let input: Vec<u8> = (0..16 * 11).map(|index| (16 + index * 37 % 220) as u8).collect();
+    let kernel = Kernel::Spline36;
+
+    for chroma in [false, true] {
+        let conversion = Conversion::to_float(8, SampleRange::Limited, chroma);
+        let floats: Vec<f32> = input
+            .iter()
+            .map(|code| convert_to_float_sample(f32::from(*code), &conversion))
+            .collect();
+        let float_task = ResizeFloat {
+            input: floats,
+            width: 16,
+            height: 11,
+            across: centred(16, 23, &kernel),
+            down: centred(11, 5, &kernel),
+        };
+        let expected = backend().build(float_task);
+
+        let codes = FloatCodes::new(8, SampleRange::Limited, chroma);
+        let integer_task = Resize {
+            input: input.clone(),
+            width: 16,
+            height: 11,
+            across: centred(16, 23, &kernel),
+            down: centred(11, 5, &kernel),
+            samples: Samples::IntegerToFloat {
+                element: Element::U8,
+                codes,
+            },
+        };
+        let bytes = backend().build(integer_task);
+        let found = float_values(&bytes);
+
+        assert_close(&found, &expected, 1e-6);
+    }
 }
