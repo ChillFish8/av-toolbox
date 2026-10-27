@@ -10,6 +10,8 @@ use av_toolbox_core::{
     StageKind,
     StreamType,
 };
+use av_toolbox_cubek::depth::{Conversion, convert_to_float_sample};
+use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_gpu::{
     Attachments,
     Backend,
@@ -270,4 +272,33 @@ fn write_sample(plane: &mut [u8], sample: SampleFormat, position: usize, value: 
         },
         _ => panic!("the test clips are integer"),
     }
+}
+
+/// `source` as an F32 clip, converted the way `resample/depth` turns limited 8-bit codes into floats.
+pub(crate) fn float_copy(source: &FrameFormat, frame: &HostFrame, index: u64) -> (FrameFormat, HostFrame) {
+    let float_format = FrameFormat {
+        sample: SampleFormat::F32,
+        ..*source
+    };
+    let luma_conversion = Conversion::to_float(8, SampleRange::Limited, false);
+    let chroma_conversion = Conversion::to_float(8, SampleRange::Limited, true);
+
+    let host = HostPool::new();
+    let mut converted = host.alloc_frame(&float_format, FrameMeta::at(index));
+
+    for (channel, plane) in converted.planes_mut() {
+        let conversion = match channel {
+            Channel::Y => &luma_conversion,
+            _ => &chroma_conversion,
+        };
+        let codes = frame.plane(channel).expect("the source has this plane").bytes();
+        let (samples, _) = plane.as_chunks_mut::<4>();
+
+        for (sample, code) in samples.iter_mut().zip(codes) {
+            let value = convert_to_float_sample(f32::from(*code), conversion);
+            *sample = value.to_le_bytes();
+        }
+    }
+
+    (float_format, converted.freeze())
 }

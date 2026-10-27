@@ -35,6 +35,7 @@ mod device {
         build_error,
         built,
         detailed_luma,
+        float_copy,
         float_named,
         frame,
         run,
@@ -111,6 +112,32 @@ mod device {
         assert_eq!(per_frame.len(), FRAMES as usize);
         for score in per_frame {
             assert!(score > 99.5, "{score}");
+        }
+    }
+
+    #[test]
+    fn an_f32_clip_scores_like_its_integer_source() {
+        let format = yuv420(SampleFormat::U8);
+        let integer_run = scored(format, blurred_luma);
+        let integer_scores = scores(&integer_run);
+
+        let mut float_format = format;
+        let mut float_pairs = Vec::new();
+        for (index, (reference, distorted)) in pairs(&format, blurred_luma).into_iter().enumerate() {
+            let (converted_format, converted) = float_copy(&format, &distorted, index as u64);
+            float_format = converted_format;
+            float_pairs.push((reference, converted));
+        }
+        let mut filter = built(STAGE, json!({}), format, float_format).expect("should build");
+        let float_run = run(filter.as_mut(), float_pairs);
+        let float_scores = scores(&float_run);
+
+        assert_eq!(float_scores.len(), integer_scores.len());
+        for (float_score, integer_score) in float_scores.iter().zip(&integer_scores) {
+            assert!(
+                (float_score - integer_score).abs() < 0.5,
+                "{float_score} against {integer_score}"
+            );
         }
     }
 
