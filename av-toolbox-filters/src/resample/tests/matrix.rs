@@ -89,7 +89,9 @@ fn produced(input: FrameFormat, value: serde_json::Value) -> Result<FrameFormat,
     let arguments = args(value);
     let chosen = [Some(StreamFormat::Frames(input))];
     let outputs = Matrix::produces(&capabilities, &arguments, &chosen)?;
-    let output = outputs.template.with_sample(input.sample);
+    assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]));
+
+    let output = outputs.template.with_sample(SampleFormat::F32);
     let frames = output.as_frames().expect("frames");
 
     Ok(*frames)
@@ -149,7 +151,7 @@ fn going_to_rgb_gives_full_range_rgb_with_the_identity_matrix() {
     assert_eq!(output.layout, FrameLayout::Rgb);
     assert_eq!(output.colour.matrix, StreamMatrix::Identity);
     assert_eq!(output.colour.range, ColourRange::Full);
-    assert_eq!(output.sample, SampleFormat::U8);
+    assert_eq!(output.sample, SampleFormat::F32);
     assert_eq!((output.width, output.height), (16, 8));
 }
 
@@ -164,7 +166,9 @@ fn going_to_rgb_reads_the_stream_matrix_and_range() {
     assert_eq!(planned.conversion.direction, Direction::ToRgb);
     assert_eq!(planned.conversion.input_range, SampleRange::Limited);
     assert_eq!(planned.conversion.output_range, SampleRange::Full);
-    assert_eq!(planned.conversion.samples, MatrixSamples::U8);
+    assert_eq!(planned.conversion.input_samples, MatrixSamples::U8);
+    assert_eq!(planned.conversion.output_samples, MatrixSamples::F32);
+    assert_eq!(planned.output.sample, SampleFormat::F32);
 }
 
 #[test]
@@ -229,7 +233,8 @@ fn a_ten_bit_frame_converts_at_ten_bits() {
 
     let planned = converted(&input, &arguments).expect("accepted");
 
-    assert_eq!(planned.conversion.samples, MatrixSamples::U16 { bits: 10 });
+    assert_eq!(planned.conversion.input_samples, MatrixSamples::U16 { bits: 10 });
+    assert_eq!(planned.conversion.output_samples, MatrixSamples::F32);
 }
 
 #[test]
@@ -346,7 +351,8 @@ fn a_float_frame_converts_as_float() {
 
     let planned = converted(&input, &arguments).expect("accepted");
 
-    assert_eq!(planned.conversion.samples, MatrixSamples::F32);
+    assert_eq!(planned.conversion.input_samples, MatrixSamples::F32);
+    assert_eq!(planned.conversion.output_samples, MatrixSamples::F32);
 }
 
 #[test]
@@ -370,4 +376,32 @@ fn an_unspecified_range_float_stream_converts_to_rgb() {
     let planned = converted(&input, &arguments).expect("accepted");
 
     assert_eq!(planned.conversion.input_range, SampleRange::Full);
+}
+
+#[test]
+fn every_sample_produces_float() {
+    let layout = yuv(Subsampling::Yuv444);
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let capabilities = capabilities();
+    let arguments = args(json!({ "to": "rgb" }));
+
+    for sample in [SampleFormat::U8, ten_bit, SampleFormat::F32] {
+        let input = format(layout, sample, StreamMatrix::Bt709, ColourRange::Limited);
+        let chosen = [Some(StreamFormat::Frames(input))];
+
+        let outputs = Matrix::produces(&capabilities, &arguments, &chosen).expect("accepted");
+
+        assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]), "{sample}");
+    }
+}
+
+#[test]
+fn going_to_yuv_labels_float_with_the_range_it_returns_to() {
+    let arguments = args(json!({ "to": "yuv", "matrix": "bt709" }));
+
+    let planned = converted(&rgb(), &arguments).expect("accepted");
+
+    assert_eq!(planned.output.sample, SampleFormat::F32);
+    assert_eq!(planned.output.colour.range, ColourRange::Limited);
+    assert_eq!(planned.conversion.output_samples, MatrixSamples::F32);
 }

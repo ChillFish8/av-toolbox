@@ -37,7 +37,7 @@ pub enum SampleRange {
     Full,
 }
 
-/// How the planes' samples are stored. Every plane of one conversion shares it.
+/// How a plane's samples are stored.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum MatrixSamples {
     U8,
@@ -85,11 +85,14 @@ pub fn scaling(samples: MatrixSamples, range: SampleRange, chroma: bool) -> (f64
 }
 
 /// One conversion between 4:4:4 YUV and RGB.
+///
+/// The three planes read share `input_samples` and the three written share `output_samples`.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct MatrixConversion {
     pub coefficients: Coefficients,
     pub direction: Direction,
-    pub samples: MatrixSamples,
+    pub input_samples: MatrixSamples,
+    pub output_samples: MatrixSamples,
     pub input_range: SampleRange,
     pub output_range: SampleRange,
 }
@@ -125,12 +128,12 @@ impl MatrixConversion {
         let mut offsets = [0.0; 3];
         for output in 0..3 {
             let (output_offset, output_scale) =
-                scaling(self.samples, self.output_range, output_chroma[output]);
+                scaling(self.output_samples, self.output_range, output_chroma[output]);
             let mut shift = 0.0;
 
             for input in 0..3 {
                 let (input_offset, input_scale) =
-                    scaling(self.samples, self.input_range, input_chroma[input]);
+                    scaling(self.input_samples, self.input_range, input_chroma[input]);
                 let weight = output_scale * normalised[output][input] / input_scale;
 
                 weights[output][input] = weight;
@@ -229,14 +232,14 @@ fn finished(value: f32, largest: f32, #[comptime] rounds: bool) -> f32 {
 }
 
 #[cube(launch_unchecked)]
-fn matrix_kernel<E: CubePrimitive>(
-    first: &Array<E>,
-    second: &Array<E>,
-    third: &Array<E>,
+fn matrix_kernel<I: CubePrimitive, O: CubePrimitive>(
+    first: &Array<I>,
+    second: &Array<I>,
+    third: &Array<I>,
     affine: &Array<f32>,
-    first_out: &mut Array<E>,
-    second_out: &mut Array<E>,
-    third_out: &mut Array<E>,
+    first_out: &mut Array<O>,
+    second_out: &mut Array<O>,
+    third_out: &mut Array<O>,
     largest: f32,
     #[comptime] rounds: bool,
 ) {
@@ -252,20 +255,21 @@ fn matrix_kernel<E: CubePrimitive>(
     let second_mapped = affine_row(affine, 1, first_value, second_value, third_value);
     let third_mapped = affine_row(affine, 2, first_value, second_value, third_value);
 
-    first_out[ABSOLUTE_POS] = E::cast_from(finished(first_mapped, largest, rounds));
-    second_out[ABSOLUTE_POS] = E::cast_from(finished(second_mapped, largest, rounds));
-    third_out[ABSOLUTE_POS] = E::cast_from(finished(third_mapped, largest, rounds));
+    first_out[ABSOLUTE_POS] = O::cast_from(finished(first_mapped, largest, rounds));
+    second_out[ABSOLUTE_POS] = O::cast_from(finished(second_mapped, largest, rounds));
+    third_out[ABSOLUTE_POS] = O::cast_from(finished(third_mapped, largest, rounds));
 }
 
-/// Converts `planes.inputs` into `planes.outputs` through `values`.
+/// Converts `planes.inputs`, held as `conversion.input_samples`, into `planes.outputs`, held as
+/// `conversion.output_samples`, through `values`.
 ///
-/// Integer samples are rounded to nearest and clamped to their depth. Float samples are written as they come, so
+/// Integer outputs are rounded to nearest and clamped to their depth. Float outputs are written as they come, so
 /// values outside the gamut survive.
 pub fn convert<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: MatrixPlanes<'_>,
-    samples: MatrixSamples,
+    conversion: &MatrixConversion,
     values: &AffineValues,
 ) {
     let width = planes.outputs[0].width();
@@ -278,20 +282,40 @@ pub fn convert<R: Runtime>(
         );
     }
 
-    match samples {
-        MatrixSamples::U8 => launch::<u8, R>(client, dispatch, planes, values, 255.0, true),
+    let output = conversion.output_samples;
+    match conversion.input_samples {
+        MatrixSamples::U8 => launch_into::<u8, R>(client, dispatch, planes, output, values),
+        MatrixSamples::U16 { bits } => {
+            assert_supported_depth(bits);
+
+            launch_into::<u16, R>(client, dispatch, planes, output, values)
+        },
+        MatrixSamples::F32 => launch_into::<f32, R>(client, dispatch, planes, output, values),
+    }
+}
+
+/// Launches the kernel reading `I` and writing samples held as `output`.
+fn launch_into<I: CubePrimitive, R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    planes: MatrixPlanes<'_>,
+    output: MatrixSamples,
+    values: &AffineValues,
+) {
+    match output {
+        MatrixSamples::U8 => launch::<I, u8, R>(client, dispatch, planes, values, 255.0, true),
         MatrixSamples::U16 { bits } => {
             assert_supported_depth(bits);
 
             let largest = ((1u32 << bits) - 1) as f32;
 
-            launch::<u16, R>(client, dispatch, planes, values, largest, true)
+            launch::<I, u16, R>(client, dispatch, planes, values, largest, true)
         },
-        MatrixSamples::F32 => launch::<f32, R>(client, dispatch, planes, values, 0.0, false),
+        MatrixSamples::F32 => launch::<I, f32, R>(client, dispatch, planes, values, 0.0, false),
     }
 }
 
-fn launch<E: CubePrimitive, R: Runtime>(
+fn launch<I: CubePrimitive, O: CubePrimitive, R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     planes: MatrixPlanes<'_>,
@@ -306,10 +330,10 @@ fn launch<E: CubePrimitive, R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: every plane is the same size, checked by `convert`, and each holds `width * height` samples of `E`,
-    // which `DevicePlane::new` requires. The affine buffer holds its 12 values.
+    // Safety: every plane is the same size, checked by `convert`. Each input holds `width * height` samples of
+    // `I` and each output as many of `O`, which `DevicePlane::new` requires. The affine buffer holds its 12 values.
     unsafe {
-        matrix_kernel::launch_unchecked::<E, R>(
+        matrix_kernel::launch_unchecked::<I, O, R>(
             client, cubes, unit, first, second, third, affine, first_out, second_out, third_out, largest,
             rounds,
         );
@@ -342,7 +366,8 @@ mod tests {
         MatrixConversion {
             coefficients: Coefficients::Bt709,
             direction,
-            samples,
+            input_samples: samples,
+            output_samples: samples,
             input_range,
             output_range,
         }
@@ -376,6 +401,21 @@ mod tests {
 
         assert_close(black, [0.0; 3]);
         assert_close(white, [1023.0; 3]);
+    }
+
+    #[test]
+    fn an_eight_bit_affine_maps_limited_black_and_white_onto_float() {
+        let conversion = MatrixConversion {
+            output_samples: MatrixSamples::F32,
+            ..conversion(Direction::ToRgb, MatrixSamples::U8, SampleRange::Limited)
+        };
+        let affine = conversion.affine();
+
+        let black = applied(&affine, [16.0, 128.0, 128.0]);
+        let white = applied(&affine, [235.0, 128.0, 128.0]);
+
+        assert_close(black, [0.0; 3]);
+        assert_close(white, [1.0; 3]);
     }
 
     #[test]

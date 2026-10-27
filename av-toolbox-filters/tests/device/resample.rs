@@ -1,5 +1,12 @@
 use av_toolbox_cubek::depth::{Conversion, Thresholds, plane_shift};
-use av_toolbox_cubek::matrix::{Coefficients, Direction, MatrixConversion, MatrixSamples, SampleRange};
+use av_toolbox_cubek::matrix::{
+    Coefficients,
+    Direction,
+    MatrixConversion,
+    MatrixSamples,
+    SampleRange,
+    scaling,
+};
 use av_toolbox_cubek::resize::{Kernel, taps};
 use av_toolbox_cubek::testing::{
     decode_samples,
@@ -539,22 +546,54 @@ fn patterned_values(samples: usize, peak: f64, integer: bool) -> [Vec<f64>; 3] {
     })
 }
 
+/// Runs `resample/matrix` on `values`, stored as `samples`, into the F32 `output`, and reads its planes back as bytes.
 fn run_matrix(
     input: FrameFormat,
     output: FrameFormat,
     args: serde_json::Value,
     values: &[Vec<f64>; 3],
     samples: MatrixSamples,
-) -> Vec<f64> {
+) -> Vec<Vec<u8>> {
     let planes: Vec<Vec<u8>> = values
         .iter()
         .map(|plane| encode_samples(plane, samples))
         .collect();
-    let converted = run_once("resample/matrix", input, output, args, &planes);
-    let bytes = converted.concat();
 
-    decode_samples(&bytes, samples)
+    run_once("resample/matrix", input, output, args, &planes)
 }
+
+/// The same as [run_matrix], reading the output back as `bits` deep codes in the range `output` is labelled with.
+fn run_matrix_into_codes(
+    input: FrameFormat,
+    output: FrameFormat,
+    args: serde_json::Value,
+    values: &[Vec<f64>; 3],
+    samples: MatrixSamples,
+    bits: u32,
+) -> Vec<f64> {
+    let found = run_matrix(input, output, args, values, samples);
+    let codes = planes_as_codes(&output, &found, bits);
+
+    codes.concat().into_iter().map(f64::from).collect()
+}
+
+/// The reference's float output for `values` as eight-bit codes in the conversion's output range.
+fn reference_codes(conversion: &MatrixConversion, values: &[Vec<f64>; 3]) -> Vec<f64> {
+    let planes = reference_matrix(conversion, [&values[0], &values[1], &values[2]]);
+    let chroma = conversion.output_chroma();
+
+    planes
+        .iter()
+        .zip(chroma)
+        .flat_map(|(plane, is_chroma)| {
+            let (offset, scale) = scaling(MatrixSamples::U8, conversion.output_range, is_chroma);
+            plane.iter().map(move |value| value * scale + offset)
+        })
+        .collect()
+}
+
+/// How far an eight-bit code read from F32 may stray from the reference.
+const CODE_TOLERANCE: f64 = 0.01;
 
 #[test]
 fn yuv_to_rgb_matches_the_reference_and_relabels_the_frame() {
@@ -569,7 +608,7 @@ fn yuv_to_rgb_matches_the_reference_and_relabels_the_frame() {
     );
     let output = coloured(
         FrameLayout::Rgb,
-        SampleFormat::U8,
+        SampleFormat::F32,
         StreamMatrix::Identity,
         ColourRange::Full,
     );
@@ -577,16 +616,21 @@ fn yuv_to_rgb_matches_the_reference_and_relabels_the_frame() {
     let conversion = MatrixConversion {
         coefficients: Coefficients::Bt709,
         direction: Direction::ToRgb,
-        samples: MatrixSamples::U8,
+        input_samples: MatrixSamples::U8,
+        output_samples: MatrixSamples::F32,
         input_range: SampleRange::Limited,
         output_range: SampleRange::Full,
     };
+    let args = json!({ "to": "rgb" });
 
-    let found = run_matrix(input, output, json!({ "to": "rgb" }), &values, MatrixSamples::U8);
+    let found = run_matrix_into_codes(input, output, args, &values, MatrixSamples::U8, 8);
 
-    let expected = reference_matrix(&conversion, [&values[0], &values[1], &values[2]]).concat();
+    let expected = reference_codes(&conversion, &values);
     for (value, wanted) in found.iter().zip(&expected) {
-        assert!((value - wanted).abs() <= 1.0, "{value} against {wanted}");
+        assert!(
+            (value - wanted).abs() <= CODE_TOLERANCE,
+            "{value} against {wanted}"
+        );
     }
 }
 
@@ -599,7 +643,7 @@ fn a_ten_bit_yuv_frame_converts_with_ten_bit_offsets() {
     let input = coloured(layout, ten_bit, StreamMatrix::Bt2020Ncl, ColourRange::Limited);
     let output = coloured(
         FrameLayout::Rgb,
-        ten_bit,
+        SampleFormat::F32,
         StreamMatrix::Identity,
         ColourRange::Full,
     );
@@ -611,13 +655,51 @@ fn a_ten_bit_yuv_frame_converts_with_ten_bit_offsets() {
     values[0][1] = 940.0;
     values[1][1] = 512.0;
     values[2][1] = 512.0;
+    let args = json!({ "to": "rgb" });
 
-    let found = run_matrix(input, output, json!({ "to": "rgb" }), &values, samples);
+    let found = run_matrix_into_codes(input, output, args, &values, samples, 10);
 
     let plane = 16 * 8;
     for channel in 0..3 {
-        assert_eq!(found[channel * plane], 0.0, "black in channel {channel}");
-        assert_eq!(found[channel * plane + 1], 1023.0, "white in channel {channel}");
+        let black = found[channel * plane];
+        let white = found[channel * plane + 1];
+
+        assert!(black.abs() <= 1e-3, "black in channel {channel} is {black}");
+        assert!(
+            (white - 1023.0).abs() <= 1e-3,
+            "white in channel {channel} is {white}"
+        );
+    }
+}
+
+#[test]
+fn a_limited_eight_bit_clip_lands_on_full_range_rgb() {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv444,
+    };
+    let input = coloured(
+        layout,
+        SampleFormat::U8,
+        StreamMatrix::Bt709,
+        ColourRange::Limited,
+    );
+    let output = coloured(
+        FrameLayout::Rgb,
+        SampleFormat::F32,
+        StreamMatrix::Identity,
+        ColourRange::Full,
+    );
+    let plane = 16 * 8;
+    let white = [vec![235.0; plane], vec![128.0; plane], vec![128.0; plane]];
+
+    let found = run_matrix(input, output, json!({ "to": "rgb" }), &white, MatrixSamples::U8);
+
+    for (channel, bytes) in found.iter().enumerate() {
+        let samples = read_floats(bytes);
+
+        for sample in samples {
+            assert!((sample - 1.0).abs() <= 1e-5, "channel {channel} is {sample}");
+        }
     }
 }
 
@@ -632,22 +714,26 @@ fn rgb_to_yuv_takes_its_matrix_and_range_from_the_arguments() {
     let layout = FrameLayout::Yuv {
         subsampling: Subsampling::Yuv444,
     };
-    let output = coloured(layout, SampleFormat::U8, StreamMatrix::Bt601, ColourRange::Full);
+    let output = coloured(layout, SampleFormat::F32, StreamMatrix::Bt601, ColourRange::Full);
     let values = patterned_values(16 * 8, 255.0, true);
     let conversion = MatrixConversion {
         coefficients: Coefficients::Bt601,
         direction: Direction::ToYuv,
-        samples: MatrixSamples::U8,
+        input_samples: MatrixSamples::U8,
+        output_samples: MatrixSamples::F32,
         input_range: SampleRange::Full,
         output_range: SampleRange::Full,
     };
     let args = json!({ "to": "yuv", "matrix": "bt601", "range": "full" });
 
-    let found = run_matrix(input, output, args, &values, MatrixSamples::U8);
+    let found = run_matrix_into_codes(input, output, args, &values, MatrixSamples::U8, 8);
 
-    let expected = reference_matrix(&conversion, [&values[0], &values[1], &values[2]]).concat();
+    let expected = reference_codes(&conversion, &values);
     for (value, wanted) in found.iter().zip(&expected) {
-        assert!((value - wanted).abs() <= 1.0, "{value} against {wanted}");
+        assert!(
+            (value - wanted).abs() <= CODE_TOLERANCE,
+            "{value} against {wanted}"
+        );
     }
 }
 
@@ -668,11 +754,11 @@ fn a_float_round_trip_through_both_stages_returns_the_input() {
     let centred = |plane: Vec<f64>| -> Vec<f64> { plane.iter().map(|value| value - 0.5).collect() };
     let values = [luma, centred(blue), centred(red)];
 
-    let rgb_values = run_matrix(yuv, rgb, json!({ "to": "rgb" }), &values, samples);
-    let plane = 16 * 8;
-    let rgb_planes = [0, 1, 2].map(|index| rgb_values[index * plane..(index + 1) * plane].to_vec());
+    let rgb_bytes = run_matrix(yuv, rgb, json!({ "to": "rgb" }), &values, samples);
+    let rgb_planes = [0, 1, 2].map(|index| decode_samples(&rgb_bytes[index], samples));
     let args = json!({ "to": "yuv", "matrix": "bt709", "range": "full" });
-    let back = run_matrix(rgb, yuv, args, &rgb_planes, samples);
+    let back_bytes = run_matrix(rgb, yuv, args, &rgb_planes, samples);
+    let back = decode_samples(&back_bytes.concat(), samples);
 
     let expected = values.concat();
     for (value, wanted) in back.iter().zip(&expected) {

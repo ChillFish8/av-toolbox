@@ -98,7 +98,8 @@ impl MatrixFixture {
         MatrixConversion {
             coefficients,
             direction,
-            samples,
+            input_samples: samples,
+            output_samples: samples,
             input_range,
             output_range,
         }
@@ -145,13 +146,13 @@ pub fn encode_samples(values: &[f64], samples: MatrixSamples) -> Vec<u8> {
 
 /// Converts on the CPU in f64, normalising each sample, applying the matrix, then scaling back, step by step.
 ///
-/// Integer outputs are rounded half up and clamped to their depth.
+/// Integer outputs are rounded half up and clamped to their depth. Float outputs are left as they come.
 pub fn reference_matrix(conversion: &MatrixConversion, planes: [&[f64]; 3]) -> [Vec<f64>; 3] {
     let input_chroma = conversion.input_chroma();
     let output_chroma = conversion.output_chroma();
     let (red_weight, blue_weight) = conversion.coefficients.weights();
     let green_weight = 1.0 - red_weight - blue_weight;
-    let largest = match conversion.samples {
+    let largest = match conversion.output_samples {
         MatrixSamples::U8 => Some(255.0),
         MatrixSamples::U16 { bits } => Some(f64::from((1u32 << bits) - 1)),
         MatrixSamples::F32 => None,
@@ -163,7 +164,11 @@ pub fn reference_matrix(conversion: &MatrixConversion, planes: [&[f64]; 3]) -> [
     for pixel in pixels {
         let mut normalised = [0.0; 3];
         for channel in 0..3 {
-            let (offset, scale) = scaling(conversion.samples, conversion.input_range, input_chroma[channel]);
+            let (offset, scale) = scaling(
+                conversion.input_samples,
+                conversion.input_range,
+                input_chroma[channel],
+            );
             normalised[channel] = (pixel[channel] - offset) / scale;
         }
 
@@ -188,7 +193,7 @@ pub fn reference_matrix(conversion: &MatrixConversion, planes: [&[f64]; 3]) -> [
 
         for channel in 0..3 {
             let (offset, scale) = scaling(
-                conversion.samples,
+                conversion.output_samples,
                 conversion.output_range,
                 output_chroma[channel],
             );

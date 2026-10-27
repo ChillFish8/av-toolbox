@@ -223,7 +223,7 @@ fn stream_range(range: ColourRange) -> Option<SampleRange> {
     }
 }
 
-/// YUV to RGB, from the stream's matrix and range unless the arguments give them.
+/// YUV to full range float RGB, from the stream's matrix and range unless the arguments give them.
 fn to_rgb(input: &FrameFormat, args: &MatrixArgs) -> Result<Converted, StageError> {
     let stream_matrix = stream_coefficients(input.colour.matrix);
     let Some(coefficients) = args.matrix.map(MatrixName::coefficients).or(stream_matrix) else {
@@ -245,14 +245,16 @@ fn to_rgb(input: &FrameFormat, args: &MatrixArgs) -> Result<Converted, StageErro
     };
     let output = FrameFormat {
         layout: FrameLayout::Rgb,
+        sample: SampleFormat::F32,
         colour,
         ..*input
     };
-    let samples = sample_kind(input.sample);
+    let input_samples = sample_kind(input.sample);
     let conversion = MatrixConversion {
         coefficients,
         direction: Direction::ToRgb,
-        samples,
+        input_samples,
+        output_samples: MatrixSamples::F32,
         input_range,
         output_range: SampleRange::Full,
     };
@@ -260,7 +262,7 @@ fn to_rgb(input: &FrameFormat, args: &MatrixArgs) -> Result<Converted, StageErro
     Ok(Converted { output, conversion })
 }
 
-/// RGB to YUV, with the given matrix, in the given range or limited range.
+/// RGB to float YUV, with the given matrix, labelled with the given range or limited range.
 fn to_yuv(input: &FrameFormat, args: &MatrixArgs) -> Result<Converted, StageError> {
     let Some(matrix) = args.matrix else {
         return Err(yuv_needs_matrix());
@@ -279,14 +281,16 @@ fn to_yuv(input: &FrameFormat, args: &MatrixArgs) -> Result<Converted, StageErro
     };
     let output = FrameFormat {
         layout,
+        sample: SampleFormat::F32,
         colour,
         ..*input
     };
-    let samples = sample_kind(input.sample);
+    let input_samples = sample_kind(input.sample);
     let conversion = MatrixConversion {
         coefficients: matrix.coefficients(),
         direction: Direction::ToYuv,
-        samples,
+        input_samples,
+        output_samples: MatrixSamples::F32,
         input_range,
         output_range: range.sample_range(),
     };
@@ -325,7 +329,8 @@ impl StageDefinition for Matrix {
 
     fn description() -> &'static str {
         "Converts a clip between RGB and YUV.\n\n\
-         YUV must be 4:4:4, so run `resample/chroma` first on a clip with subsampled colour."
+         YUV must be 4:4:4, so run `resample/chroma` first on a clip with subsampled colour. \
+         The result is always float."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -367,7 +372,7 @@ impl FilterDefinition for Matrix {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([planned.output.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
@@ -388,7 +393,7 @@ impl FilterDefinition for Matrix {
             client,
             input,
             output: planned.output,
-            samples: planned.conversion.samples,
+            conversion: planned.conversion,
             values,
         };
 
@@ -401,7 +406,7 @@ struct MatrixConverter<R: Runtime> {
     client: ComputeClient<R>,
     input: FrameFormat,
     output: FrameFormat,
-    samples: MatrixSamples,
+    conversion: MatrixConversion,
     values: AffineValues,
 }
 
@@ -425,11 +430,11 @@ fn frame_planes<'a>(frame: &'a Frame, format: &FrameFormat) -> Result<[&'a Plane
     Ok(planes)
 }
 
-/// The planes as device planes, to be read or written as `samples`.
+/// The planes as device planes.
 ///
 /// # Safety
 ///
-/// Every plane must hold samples of the format that `samples` describes.
+/// Every plane must hold samples of the format the conversion reads or writes it as.
 unsafe fn device_planes<'a>(planes: [&'a Plane; 3]) -> [DevicePlane<'a>; 3] {
     // Safety: the caller guarantees the element type, and a plane holds `width * height` of them.
     planes.map(|plane| unsafe { device_plane(plane) })
@@ -449,14 +454,14 @@ impl<R: Runtime> Filter for MatrixConverter<R> {
         let targets = frame_planes(&output, &self.output)?;
 
         // Safety: both frames are in the formats the converter was built for, so their planes hold
-        // the samples `self.samples` describes, which is what `convert` reads and writes.
+        // the samples `self.conversion` reads and writes.
         let inputs = unsafe { device_planes(sources) };
 
         // Safety: as above.
         let outputs = unsafe { device_planes(targets) };
         let planes = MatrixPlanes { inputs, outputs };
         let sizing = Sizing(context);
-        convert(&self.client, &sizing, planes, self.samples, &self.values);
+        convert(&self.client, &sizing, planes, &self.conversion, &self.values);
 
         Ok(vec![output])
     }
