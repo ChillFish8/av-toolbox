@@ -36,13 +36,6 @@ pub(super) fn sixteen_bit() -> SampleFormat {
     }
 }
 
-pub(super) fn bits_of(sample: SampleFormat) -> u32 {
-    match sample {
-        SampleFormat::U16 { depth } => u32::from(depth.bits()),
-        _ => 8,
-    }
-}
-
 pub(super) fn decoded(format: &FrameFormat, planes: &[Vec<u8>]) -> Vec<Vec<u16>> {
     let element = element_of(format.sample);
 
@@ -127,8 +120,5 @@ pub(super) fn assert_f32_matches_sixteen_bit(
     beyond_one: f32,
 ) {
     let parity = kept_sample_parity(stage, input, args, values);
-    println!("{stage}: {parity:?}");
-
-    assert!(parity.largest <= largest, "{stage}: {parity:?}");
-    assert!(parity.beyond_one <= beyond_one, "{stage}: {parity:?}");
+    parity.assert_within(stage, largest, beyond_one);
 }

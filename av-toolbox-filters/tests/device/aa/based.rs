@@ -28,11 +28,12 @@ use cubecl::prelude::{CubeElement, Runtime};
 use cubecl::server::Handle;
 use serde_json::json;
 
-use super::{bits_of, grey, largest_vertical_step, one_sample_diagonal, yuv420};
+use super::{grey, largest_vertical_step, one_sample_diagonal, yuv420};
 use crate::support::{
     ROUND_TRIP,
     assert_codes_within,
     backend,
+    code_bits,
     encoded,
     f32_parity,
     run_into_codes,
@@ -91,7 +92,7 @@ const MATCH: f32 = 0.5;
 
 /// The largest share of 16-bit output samples that may differ from the composed reference at f32.
 ///
-/// It measured 0.256 % at most, along "both", on an AMD R9700 through RADV, and keeps about twice that.
+/// Rounding is the only difference between the two runs, so the share stays small.
 const SIXTEEN_BIT_SHARE: f64 = 0.005;
 
 fn sixteen_bit() -> SampleFormat {
@@ -325,7 +326,7 @@ fn run_stage(
     let planes = encoded(&format, &values);
     let args = stage_arguments(parameters, precision);
 
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
 
     let mut found = run_into_codes(STAGE, format, args, &planes, bits);
 
@@ -573,7 +574,7 @@ fn assert_directions_match(
 }
 
 fn assert_steps_match_at(sample: SampleFormat) {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let luma = fixture_plane(FENCE, bits);
     let parameters = default_parameters(bits, Direction::Both);
     let label = format!("{bits}-bit");
@@ -677,7 +678,7 @@ fn end_to_end(
     sample: SampleFormat,
     precision: &str,
 ) -> Vec<OutputDifference> {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let values = widened(luma);
     let weights = builtin_weights();
     let supersampled = reference_supersample(&values, width, height, &weights, bits);
@@ -700,7 +701,7 @@ fn end_to_end(
 }
 
 fn assert_end_to_end_matches(sample: SampleFormat) {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let luma = fixture_plane(FENCE, bits);
 
     let differences = end_to_end(&luma, WIDTH, HEIGHT, sample, "f32");
@@ -743,7 +744,7 @@ fn end_to_end_at_16_bit_stays_within_its_measured_share() {
 }
 
 fn assert_f16_matches(sample: SampleFormat) {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let luma = fixture_plane(FENCE, bits);
 
     let differences = end_to_end(&luma, WIDTH, HEIGHT, sample, "f16");
@@ -885,7 +886,7 @@ fn a_flat_frame_is_unchanged() {
             .collect();
         let planes = encoded(&format, &values);
         let args = json!({ "precision": "f32" });
-        let bits = bits_of(sample);
+        let bits = code_bits(sample);
 
         let found = run_into_codes(STAGE, format, args, &planes, bits);
 
@@ -936,7 +937,7 @@ fn a_one_sample_diagonal_comes_back_with_smaller_steps() {
 fn a_zero_mask_hands_back_the_input() {
     for sample in [SampleFormat::U8, ten_bit()] {
         let format = yuv420(SMALL_WIDTH, SMALL_HEIGHT, sample);
-        let bits = bits_of(sample);
+        let bits = code_bits(sample);
         let fence = fixture_plane(FENCE, bits);
         let values: Vec<Vec<u16>> = format
             .channels()
@@ -1009,7 +1010,7 @@ fn textured_mask() -> Vec<u8> {
 #[test]
 fn a_textured_bound_mask_matches_the_reference_at_10_bit() {
     let sample = ten_bit();
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let fence = fixture_plane(FENCE, bits);
     let mask = textured_mask();
     let mask_values: Vec<f32> = mask.iter().map(|value| f32::from(*value)).collect();

@@ -170,6 +170,13 @@ pub(crate) struct Parity {
 }
 
 impl Parity {
+    /// Checks the largest difference is at most `largest` codes and no more than a `beyond_one`
+    /// share of samples are more than one code apart, naming `stage` in a failure.
+    pub(crate) fn assert_within(&self, stage: &str, largest: f32, beyond_one: f32) {
+        assert!(self.largest <= largest, "{stage}: {self:?}");
+        assert!(self.beyond_one <= beyond_one, "{stage}: {self:?}");
+    }
+
     /// How far `float` strays from `sixteen_bit`, both planes of codes.
     pub(crate) fn between(sixteen_bit: &[Vec<f32>], float: &[Vec<f32>]) -> Self {
         let differences: Vec<f32> = sixteen_bit

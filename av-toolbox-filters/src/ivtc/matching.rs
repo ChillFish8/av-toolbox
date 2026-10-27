@@ -488,7 +488,6 @@ impl FilterDefinition for Match {
             rebuilder,
             codes,
             gatherer,
-            field,
             decision,
             falls_back: checked.fallback.is_some(),
             kept,
@@ -508,8 +507,6 @@ struct Matcher<R: Runtime> {
     /// The code values every measured plane widens to, whole codes for F32.
     codes: CodeValues,
     gatherer: MetricGatherer<R>,
-    /// VFM's field, 1 when the matching field is the top field.
-    field: u32,
     decision: Decision,
     /// Whether a combed frame is rebuilt by bwdif rather than emitted as it is.
     falls_back: bool,
@@ -558,7 +555,8 @@ impl<R: Runtime> Matcher<R> {
         matched: usize,
     ) -> Result<Vec<Plane>, StageError> {
         let frames = [window.previous, window.current, window.next];
-        let (matching_frame, other_frame, matching_parity) = match_pairing(frames, matched, self.field);
+        let (matching_frame, other_frame, matching_parity) =
+            match_pairing(frames, matched, self.gatherer.field());
         let meta = window.current.meta();
         let sizing = Sizing(context);
 

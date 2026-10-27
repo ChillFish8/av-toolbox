@@ -15,7 +15,6 @@ use serde_json::json;
 use super::{
     DIRECTIONS,
     assert_f32_matches_sixteen_bit,
-    bits_of,
     decoded,
     grey,
     largest_vertical_step,
@@ -28,6 +27,7 @@ use super::{
 use crate::support::{
     ROUND_TRIP,
     assert_codes_within,
+    code_bits,
     encoded,
     run_masked_into_codes,
     run_once,
@@ -49,7 +49,7 @@ const HEIGHT: u32 = 64;
 /// The shallow line falls one row every 3 columns and the steep line moves one column every 3 rows, so
 /// each tests the pass that runs across it.
 fn aliased_lines(width: u32, height: u32, sample: SampleFormat) -> Vec<u16> {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let scale = 1 << (bits - 8);
 
     (0..width * height)
@@ -87,7 +87,7 @@ fn line_planes(format: &FrameFormat) -> Vec<Vec<u16>> {
 /// The default arguments at `sample`'s depth.
 fn default_parameters(sample: SampleFormat) -> Eedi3Parameters {
     Eedi3Parameters {
-        bits: bits_of(sample),
+        bits: code_bits(sample),
         ..Eedi3Parameters::default()
     }
 }
@@ -315,7 +315,7 @@ fn based_aa_parameters(bits: u32) -> Eedi3Parameters {
 /// Aliased lines over a noisy texture, then random sloped edges with and without noise, at `sample`'s
 /// depth.
 fn based_aa_planes(width: u32, height: u32, sample: SampleFormat) -> Vec<Vec<u16>> {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let kinds = [
         Eedi3PlaneKind::NoisyEdge,
         Eedi3PlaneKind::Edge,
@@ -343,7 +343,7 @@ fn based_aa_settings_match_the_reference() {
     let mut tally = CloseDecisionTally::new();
     for sample in [SampleFormat::U8, ten_bit()] {
         let format = grey(width, height, sample);
-        let bits = bits_of(sample);
+        let bits = code_bits(sample);
         let parameters = based_aa_parameters(bits);
 
         for plane in based_aa_planes(width, height, sample) {
@@ -515,7 +515,7 @@ fn a_zero_mask_hands_back_the_input() {
         let planes = encoded(&format, &values);
         let mask = uniform_mask(&format, 0);
         let args = json!({ "planes": ["y", "u", "v"] });
-        let bits = bits_of(sample);
+        let bits = code_bits(sample);
 
         let found = run_masked_into_codes(STAGE, format, args, &planes, mask, bits);
 

@@ -10,7 +10,6 @@ use super::{
     assert_f32_matches_sixteen_bit,
     assert_matches,
     assert_unchanged,
-    bits_of,
     changed,
     flat_values,
     lined_scene,
@@ -21,7 +20,16 @@ use super::{
     sixteen_bit,
     yuv420,
 };
-use crate::support::{ROUND_TRIP, element_of, encoded, shared_planes, ten_bit, uniform_mask, widened};
+use crate::support::{
+    ROUND_TRIP,
+    code_bits,
+    element_of,
+    encoded,
+    shared_planes,
+    ten_bit,
+    uniform_mask,
+    widened,
+};
 
 const THIN: &str = "lineart/thin";
 
@@ -47,7 +55,7 @@ fn thin_settings_for(
 ) -> ThinSettings {
     let warp = WarpParams {
         element: element_of(sample),
-        bits: bits_of(sample),
+        bits: code_bits(sample),
         thresh: 128,
         blur: BlurKind::R6,
         passes,

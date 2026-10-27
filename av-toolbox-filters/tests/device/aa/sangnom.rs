@@ -10,7 +10,6 @@ use serde_json::json;
 
 use super::{
     assert_f32_matches_sixteen_bit,
-    bits_of,
     decoded,
     grey,
     largest_vertical_step,
@@ -21,6 +20,7 @@ use super::{
 use crate::support::{
     ROUND_TRIP,
     assert_codes_within,
+    code_bits,
     encoded,
     float_bytes,
     float_samples,
@@ -88,7 +88,7 @@ fn dotted_peak(width: u32, height: u32, sample: SampleFormat) -> Vec<u16> {
 }
 
 fn vertical_reference(values: &[f32], width: u32, height: u32, sample: SampleFormat, aa: u32) -> Vec<f32> {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let aaf = sangnom_aaf(aa, bits);
     let max = sangnom_max(bits);
 
@@ -230,7 +230,7 @@ fn a_zero_mask_hands_back_the_input() {
         let values = diagonal_planes(&format);
         let planes = encoded(&format, &values);
         let mask = uniform_mask(&format, 0);
-        let bits = bits_of(sample);
+        let bits = code_bits(sample);
 
         let found = run_masked_into_codes(STAGE, format, json!({}), &planes, mask, bits);
 
@@ -249,7 +249,7 @@ fn a_full_mask_hands_back_the_filtered_plane() {
         let values = diagonal_planes(&format);
         let planes = encoded(&format, &values);
         let mask = uniform_mask(&format, 255);
-        let bits = bits_of(sample);
+        let bits = code_bits(sample);
 
         let found = run_masked_into_codes(STAGE, format, json!({}), &planes, mask, bits);
 

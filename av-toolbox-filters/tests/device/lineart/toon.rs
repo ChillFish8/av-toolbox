@@ -9,7 +9,6 @@ use super::{
     assert_f32_matches_sixteen_bit,
     assert_matches,
     assert_unchanged,
-    bits_of,
     changed,
     faded_line_values,
     flat_values,
@@ -22,6 +21,7 @@ use super::{
 use crate::support::{
     ROUND_TRIP,
     assert_codes_within,
+    code_bits,
     element_of,
     encoded,
     shared_planes,
@@ -40,7 +40,7 @@ fn toon_settings_for(sample: SampleFormat, depth: i32) -> ToonSettings {
     let scale = (peak + 1.0) / 256.0;
     let warp = WarpParams {
         element: element_of(sample),
-        bits: bits_of(sample),
+        bits: code_bits(sample),
         thresh: 128,
         blur: BlurKind::R6,
         passes: 2,

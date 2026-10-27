@@ -8,6 +8,7 @@ use av_toolbox_gpu::{Channel, ChromaLocation, Depth, FrameFormat, FrameLayout, S
 use crate::support::{
     ROUND_TRIP,
     assert_codes_within,
+    code_bits,
     f32_parity,
     frame,
     run_into_codes,
@@ -34,7 +35,7 @@ pub(super) fn run_codes(
     args: serde_json::Value,
     planes: &[Vec<u8>],
 ) -> Vec<Vec<f32>> {
-    let bits = bits_of(format.sample);
+    let bits = code_bits(format.sample);
 
     run_into_codes(stage, format, args, planes, bits)
 }
@@ -48,7 +49,7 @@ pub(super) fn run_masked_codes(
     planes: &[Vec<u8>],
     mask: (Vec<u8>, Vec<u8>),
 ) -> Vec<Vec<f32>> {
-    let bits = bits_of(format.sample);
+    let bits = code_bits(format.sample);
 
     run_masked_into_codes(stage, format, args, planes, mask, bits)
 }
@@ -59,16 +60,8 @@ pub(super) fn sixteen_bit() -> SampleFormat {
     }
 }
 
-pub(super) fn bits_of(sample: SampleFormat) -> u32 {
-    match sample {
-        SampleFormat::U8 => 8,
-        SampleFormat::U16 { depth } => u32::from(depth.bits()),
-        SampleFormat::F32 => 16,
-    }
-}
-
 pub(super) fn peak_of(sample: SampleFormat) -> u32 {
-    (1 << bits_of(sample)) - 1
+    (1 << code_bits(sample)) - 1
 }
 
 /// Whether the code `found` is more than a round trip through F32 away from `code`.
@@ -85,15 +78,8 @@ pub(super) fn changed(found: &[f32], input: &[u16]) -> usize {
         .count()
 }
 
-/// Checks `found` matches the reference's `expected` codes, and prints the largest difference.
+/// Checks `found` matches the reference's `expected` codes.
 pub(super) fn assert_matches(found: &[f32], expected: &[f32], label: &str) {
-    let largest = found
-        .iter()
-        .zip(expected)
-        .map(|(sample, wanted)| (sample - wanted).abs())
-        .fold(0.0, f32::max);
-    println!("{label}: largest difference {largest}");
-
     assert_codes_within(found, expected, ROUND_TRIP, label);
 }
 
@@ -118,10 +104,7 @@ pub(super) fn assert_f32_matches_sixteen_bit(
     let input = yuv420(sixteen_bit());
 
     let parity = f32_parity(stage, input, args, values);
-    println!("{stage}: {parity:?}");
-
-    assert!(parity.largest <= largest, "{stage}: {parity:?}");
-    assert!(parity.beyond_one <= beyond_one, "{stage}: {parity:?}");
+    parity.assert_within(stage, largest, beyond_one);
 }
 
 /// Every plane of `format` held at `flat`.

@@ -99,8 +99,7 @@ fn assert_f32_matches_sixteen_bit(stage: &str, largest: f32, beyond_one: f32) {
 
     let parity = f32_parity(stage, input, json!({}), &values);
 
-    assert!(parity.largest <= largest, "{stage}: {parity:?}");
-    assert!(parity.beyond_one <= beyond_one, "{stage}: {parity:?}");
+    parity.assert_within(stage, largest, beyond_one);
 }
 
 /// Runs `dehalo/alpha` and checks each plane against the reference or against its input.

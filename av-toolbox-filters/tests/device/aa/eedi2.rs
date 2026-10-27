@@ -11,7 +11,6 @@ use serde_json::json;
 use super::{
     DIRECTIONS,
     assert_f32_matches_sixteen_bit,
-    bits_of,
     decoded,
     grey,
     largest_vertical_step,
@@ -24,6 +23,7 @@ use super::{
 use crate::support::{
     ROUND_TRIP,
     assert_codes_within,
+    code_bits,
     encoded,
     run_masked_into_codes,
     run_once,
@@ -83,7 +83,7 @@ fn aliased_lines(width: u32, height: u32, sample: SampleFormat) -> Vec<u16> {
 
 /// The lines of [aliased_lines] over `texture`.
 fn textured_lines(width: u32, height: u32, sample: SampleFormat, texture: Texture) -> Vec<u16> {
-    let bits = bits_of(sample);
+    let bits = code_bits(sample);
     let scale = 1 << (bits - 8);
 
     (0..width * height)
@@ -129,7 +129,7 @@ fn shifts_of(format: &FrameFormat, index: usize) -> Shifts {
 /// The default arguments at `sample`'s depth.
 fn default_parameters(sample: SampleFormat) -> Eedi2Parameters {
     Eedi2Parameters {
-        bits: bits_of(sample),
+        bits: code_bits(sample),
         ..Eedi2Parameters::default()
     }
 }
@@ -167,7 +167,7 @@ fn custom_parameters(sample: SampleFormat) -> Eedi2Parameters {
         maxd: 12,
         nt: 10,
         pp: 0,
-        bits: bits_of(sample),
+        bits: code_bits(sample),
         ssw: 0,
     }
 }
@@ -518,7 +518,7 @@ fn a_zero_mask_hands_back_the_input() {
         let planes = encoded(&format, &values);
         let mask = uniform_mask(&format, 0);
         let args = json!({ "planes": ["y", "u", "v"] });
-        let bits = bits_of(sample);
+        let bits = code_bits(sample);
 
         let found = run_masked_into_codes(STAGE, format, args, &planes, mask, bits);
 

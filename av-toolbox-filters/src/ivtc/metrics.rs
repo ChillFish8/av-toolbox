@@ -100,6 +100,11 @@ pub(crate) struct MetricGatherer<R: Runtime> {
 }
 
 impl<R: Runtime> MetricGatherer<R> {
+    /// VFM's field, 1 when the matching field is the top field.
+    pub(crate) fn field(&self) -> u32 {
+        self.settings.field
+    }
+
     /// A gatherer for frames of `input` at `bits` bits.
     pub(crate) fn new(
         client: ComputeClient<R>,
