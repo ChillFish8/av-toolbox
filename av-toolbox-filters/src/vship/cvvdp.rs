@@ -31,7 +31,7 @@ use avtbx_vship::{CvvdpOptions, DisplayModel, VshipError};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::common::{Fallbacks, accepts_clip, checked_pair, color_space, pick_device, planes};
+use super::common::{Fallbacks, VshipPlanes, accepts_clip, checked_pair, color_space, pick_device};
 use super::output::{MapOutput, Output, declared_map, map_format, map_frame};
 use super::summary::Summary;
 
@@ -445,8 +445,10 @@ impl Filter<HostSide> for CvvdpInstance {
             return Err(missing_frame_error("distorted"));
         };
 
-        let reference_planes = planes(&reference)?;
-        let distorted_planes = planes(&distorted)?;
+        let reference_vship = VshipPlanes::of(&reference)?;
+        let reference_planes = reference_vship.planes();
+        let distorted_vship = VshipPlanes::of(&distorted)?;
+        let distorted_planes = distorted_vship.planes();
         let computed = match &mut self.map {
             Some(output) => {
                 self.metric

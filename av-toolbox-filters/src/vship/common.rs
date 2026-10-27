@@ -244,29 +244,70 @@ fn chroma_location(location: ChromaLocation, fallbacks: &mut Fallbacks) -> Vship
     }
 }
 
-/// The three planes of `frame`, as Vship reads them.
+/// A frame's planes as Vship reads them.
 ///
-/// Host planes are packed, so each stride is one row of samples.
-pub(crate) fn planes(frame: &HostFrame) -> Result<Planes<'_>, StageError> {
-    let format = frame.format();
-    let channels = match format.layout {
-        FrameLayout::Rgb => [Channel::R, Channel::G, Channel::B],
-        _ => [Channel::Y, Channel::U, Channel::V],
-    };
+/// Vship reads full range float chroma as centred on 0.5, so float U and V are held as copies moved
+/// up by 0.5. Every other plane is borrowed from the frame.
+pub(crate) struct VshipPlanes<'a> {
+    data: [&'a [u8]; 3],
+    strides: [usize; 3],
+    centred: Option<[Vec<u8>; 2]>,
+}
 
-    let mut data: [&[u8]; 3] = [&[]; 3];
-    let mut strides = [0usize; 3];
-    for (index, channel) in channels.into_iter().enumerate() {
-        let plane = frame.plane(channel).ok_or_else(|| missing_plane_error(channel))?;
-        let (width, _) = format
-            .channel_dimensions(channel)
-            .ok_or_else(|| missing_plane_error(channel))?;
+impl<'a> VshipPlanes<'a> {
+    pub(crate) fn of(frame: &'a HostFrame) -> Result<Self, StageError> {
+        let format = frame.format();
+        let channels = match format.layout {
+            FrameLayout::Rgb => [Channel::R, Channel::G, Channel::B],
+            _ => [Channel::Y, Channel::U, Channel::V],
+        };
 
-        data[index] = plane.bytes();
-        strides[index] = width as usize * format.sample.bytes();
+        let mut data: [&[u8]; 3] = [&[]; 3];
+        let mut strides = [0usize; 3];
+        for (index, channel) in channels.into_iter().enumerate() {
+            let plane = frame.plane(channel).ok_or_else(|| missing_plane_error(channel))?;
+            let (width, _) = format
+                .channel_dimensions(channel)
+                .ok_or_else(|| missing_plane_error(channel))?;
+
+            data[index] = plane.bytes();
+            strides[index] = width as usize * format.sample.bytes();
+        }
+
+        let is_float_yuv = format.sample == SampleFormat::F32 && format.layout != FrameLayout::Rgb;
+        let centred = is_float_yuv.then(|| [centre_chroma(data[1]), centre_chroma(data[2])]);
+
+        Ok(Self {
+            data,
+            strides,
+            centred,
+        })
     }
 
-    Ok(Planes { data, strides })
+    pub(crate) fn planes(&self) -> Planes<'_> {
+        let mut data = self.data;
+        if let Some([u_plane, v_plane]) = &self.centred {
+            data[1] = u_plane;
+            data[2] = v_plane;
+        }
+
+        Planes {
+            data,
+            strides: self.strides,
+        }
+    }
+}
+
+/// Little-endian f32 samples with 0.5 added to each.
+fn centre_chroma(bytes: &[u8]) -> Vec<u8> {
+    let mut shifted = Vec::with_capacity(bytes.len());
+    let (samples, _) = bytes.as_chunks::<4>();
+    for sample in samples {
+        let value = f32::from_le_bytes(*sample);
+        shifted.extend_from_slice(&(value + 0.5).to_le_bytes());
+    }
+
+    shifted
 }
 
 /// The Vship device to score on, given the `gpu` arg, the pipeline's device and Vship's devices.
@@ -800,7 +841,8 @@ mod tests {
         let writable = host.alloc_frame(&format, FrameMeta::at(0));
         let frame = writable.freeze();
 
-        let planes = planes(&frame).expect("a yuv frame has three planes");
+        let vship = VshipPlanes::of(&frame).expect("a yuv frame has three planes");
+        let planes = vship.planes();
 
         assert_eq!(planes.strides, [128, 64, 64]);
         assert_eq!(planes.data[0].len(), 128 * 48);
@@ -817,13 +859,92 @@ mod tests {
         }
         let frame = frame.freeze();
 
-        let planes = planes(&frame).expect("an rgb frame has three planes");
+        let vship = VshipPlanes::of(&frame).expect("an rgb frame has three planes");
+        let planes = vship.planes();
 
         assert_eq!(planes.strides, [8, 8, 8]);
         assert_eq!(
             [planes.data[0][0], planes.data[1][0], planes.data[2][0]],
             [0, 1, 2]
         );
+    }
+
+    fn float_frame(u_value: f32, v_value: f32) -> HostFrame {
+        let format = FrameFormat {
+            sample: SampleFormat::F32,
+            ..yuv(Subsampling::Yuv420, bt709_limited())
+        };
+        let host = HostPool::new();
+        let mut frame = host.alloc_frame(&format, FrameMeta::at(0));
+        for (channel, plane) in frame.planes_mut() {
+            let value = match channel {
+                Channel::U => u_value,
+                Channel::V => v_value,
+                _ => 0.25,
+            };
+            let (samples, _) = plane.as_chunks_mut::<4>();
+            for sample in samples {
+                *sample = value.to_le_bytes();
+            }
+        }
+
+        frame.freeze()
+    }
+
+    fn first_sample(bytes: &[u8]) -> f32 {
+        f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+
+    #[test]
+    fn f32_chroma_is_moved_up_by_a_half_for_vship() {
+        let frame = float_frame(0.0, -0.25);
+
+        let vship = VshipPlanes::of(&frame).expect("a yuv frame has three planes");
+        let planes = vship.planes();
+
+        let luma = frame.plane(Channel::Y).expect("a luma plane").bytes();
+        assert_eq!(planes.data[0], luma);
+        assert_eq!(first_sample(planes.data[1]), 0.5);
+        assert_eq!(first_sample(planes.data[2]), 0.25);
+        assert_eq!(planes.data[1].len(), 128 * 24);
+    }
+
+    #[test]
+    fn integer_planes_are_borrowed_unchanged() {
+        let format = FrameFormat {
+            sample: u16_at(10),
+            ..yuv(Subsampling::Yuv420, bt709_limited())
+        };
+        let host = HostPool::new();
+        let frame = host.alloc_frame(&format, FrameMeta::at(0)).freeze();
+
+        let vship = VshipPlanes::of(&frame).expect("a yuv frame has three planes");
+        let planes = vship.planes();
+
+        for channel in [Channel::Y, Channel::U, Channel::V] {
+            let own = frame.plane(channel).expect("a plane").bytes();
+            let index = channel_index(channel);
+            assert!(std::ptr::eq(planes.data[index], own), "{channel:?}");
+        }
+    }
+
+    fn channel_index(channel: Channel) -> usize {
+        match channel {
+            Channel::U => 1,
+            Channel::V => 2,
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn the_frame_keeps_its_chroma() {
+        let frame = float_frame(0.0, -0.25);
+
+        let vship = VshipPlanes::of(&frame).expect("a yuv frame has three planes");
+        drop(vship);
+
+        let u_plane = frame.plane(Channel::U).expect("a chroma plane").bytes();
+        assert_eq!(first_sample(u_plane), 0.0);
     }
 
     #[test]
