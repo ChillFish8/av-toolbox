@@ -3,6 +3,7 @@ use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
     Depth as BitDepth,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     MaskFormat,
@@ -18,6 +19,7 @@ use serde_json::json;
 use crate::aa::Sangnom;
 use crate::aa::direction::Direction;
 use crate::aa::sangnom::SangnomArgs;
+use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
 
 const STAGE: &str = "aa/sangnom";
 
@@ -116,22 +118,38 @@ fn an_unknown_argument_is_refused() {
 }
 
 #[test]
-fn floats_are_left_out_and_a_mask_on_the_input_refused() {
+fn floats_are_accepted_and_a_mask_on_the_input_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let inputs = [Offered::Unknown];
-    let float_format = FrameFormat {
-        sample: SampleFormat::F32,
-        ..yuv420(16, 8)
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
     };
-    let float = StreamFormat::Frames(float_format);
-    let mask = mask_format(16, 8, SampleFormat::U8);
+    let frame_format = |layout, sample| format(16, 8, layout, sample);
+    let accepted = |offered| Sangnom::accepts_input(&capabilities, &parsed, 0, offered, &inputs);
 
-    let accepted = Sangnom::accepts_input(&capabilities, &parsed, 0, float, &inputs).expect("readable");
-    let refused = Sangnom::accepts_input(&capabilities, &parsed, 0, mask, &inputs);
+    assert_integers_and_floats_accepted_and_mask_refused(STAGE, layout, frame_format, accepted);
+}
 
-    assert!(accepted.is_empty());
-    assert!(refused.is_err());
+#[test]
+fn a_bound_mask_makes_the_output_f32() {
+    let capabilities = capabilities();
+    let parsed = args(json!({}));
+    let frames = Some(StreamFormat::Frames(yuv420(16, 8)));
+    let mask = Some(mask_format(16, 8, SampleFormat::U8));
+
+    let outputs = Sangnom::produces(&capabilities, &parsed, &[frames, mask]).expect("valid");
+
+    assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]));
+}
+
+#[test]
+fn f32_input_gives_f32_output() {
+    let input = format(16, 8, FrameLayout::Grey, SampleFormat::F32);
+
+    let outputs = produces(json!({}), input).expect("valid");
+
+    assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]));
 }
 
 #[test]

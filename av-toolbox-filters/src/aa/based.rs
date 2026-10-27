@@ -193,12 +193,6 @@ fn unusable_layout(layout: FrameLayout) -> StageError {
     StageError::msg(message)
 }
 
-fn unusable_sample(sample: SampleFormat) -> StageError {
-    let message = format!("{STAGE} anti-aliases U8 or U16 frames, not {sample} frames");
-
-    StageError::msg(message)
-}
-
 fn mask_without_merge() -> StageError {
     let message = format!("{STAGE} needs edge_mask = true to merge through a bound mask, got false");
 
@@ -255,14 +249,10 @@ fn based_layout(layout: FrameLayout) -> bool {
     matches!(layout, FrameLayout::Grey | FrameLayout::Yuv { .. })
 }
 
-/// Refuses a layout other than grey or YUV, and samples other than U8 or U16.
+/// Refuses a layout other than grey or YUV.
 fn checked_format(format: &FrameFormat) -> Result<(), StageError> {
     if !based_layout(format.layout) {
         return Err(unusable_layout(format.layout));
-    }
-
-    if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-        return Err(unusable_sample(format.sample));
     }
 
     Ok(())
@@ -405,7 +395,7 @@ impl FilterDefinition for Based {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
@@ -426,7 +416,7 @@ impl FilterDefinition for Based {
 
         let channels = input.channels();
         let selected = channels.iter().map(|channel| *channel == Channel::Y).collect();
-        let codes = CodeValues::new(&input, input.sample);
+        let codes = CodeValues::new(&input, SampleFormat::F32).whole_codes();
         let planewise = Planewise {
             stage: STAGE,
             format: input,

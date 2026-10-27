@@ -5,11 +5,33 @@ use av_toolbox_cubek::testing::{
     reference_sangnom_antialias,
     transposed_plane,
 };
-use av_toolbox_gpu::{FrameFormat, SampleFormat};
+use av_toolbox_gpu::{ColourInfo, ColourRange, FrameFormat, SampleFormat};
 use serde_json::json;
 
-use super::{bits_of, decoded, grey, largest_vertical_step, one_sample_diagonal, yuv420};
-use crate::support::{encoded, peak_of, run_masked, run_once, shared_planes, ten_bit, uniform_mask};
+use super::{
+    assert_f32_matches_sixteen_bit,
+    bits_of,
+    decoded,
+    grey,
+    largest_vertical_step,
+    one_sample_diagonal,
+    sixteen_bit,
+    yuv420,
+};
+use crate::support::{
+    ROUND_TRIP,
+    assert_codes_within,
+    encoded,
+    float_bytes,
+    float_samples,
+    peak_of,
+    run_masked_into_codes,
+    run_once,
+    shared_planes,
+    ten_bit,
+    uniform_mask,
+    widened,
+};
 
 const STAGE: &str = "aa/sangnom";
 
@@ -207,11 +229,16 @@ fn a_zero_mask_hands_back_the_input() {
         let format = yuv420(WIDTH, HEIGHT, sample);
         let values = diagonal_planes(&format);
         let planes = encoded(&format, &values);
-        let (mask, mask_chroma) = uniform_mask(&format, 0);
+        let mask = uniform_mask(&format, 0);
+        let bits = bits_of(sample);
 
-        let filtered = run_masked(STAGE, format, json!({}), &planes, mask, mask_chroma);
+        let found = run_masked_into_codes(STAGE, format, json!({}), &planes, mask, bits);
 
-        assert_eq!(filtered, planes, "{sample}");
+        for (plane, codes) in found.iter().enumerate() {
+            let input = widened(&values[plane]);
+            let label = format!("{sample} plane {plane}");
+            assert_codes_within(codes, &input, ROUND_TRIP, &label);
+        }
     }
 }
 
@@ -221,17 +248,22 @@ fn a_full_mask_hands_back_the_filtered_plane() {
         let format = yuv420(WIDTH, HEIGHT, sample);
         let values = diagonal_planes(&format);
         let planes = encoded(&format, &values);
-        let (mask, mask_chroma) = uniform_mask(&format, 255);
+        let mask = uniform_mask(&format, 255);
+        let bits = bits_of(sample);
 
-        let filtered = run_masked(STAGE, format, json!({}), &planes, mask, mask_chroma);
+        let found = run_masked_into_codes(STAGE, format, json!({}), &planes, mask, bits);
 
-        let found = decoded(&format, &filtered);
         let reference = reference_values(&values[0], WIDTH, HEIGHT, sample, DEFAULT_AA, "both");
         let peak = peak_of(sample) as f32;
-        let expected = reference_narrow(&reference, peak);
+        let expected: Vec<f32> = reference.iter().map(|value| value.clamp(0.0, peak)).collect();
         let label = format!("{sample} full mask");
-        assert_same_plane(&found[0], &expected, WIDTH, &label);
-        assert_eq!(found[1..], values[1..], "{label} changed the chroma");
+        assert_codes_within(&found[0], &expected, ROUND_TRIP, &label);
+
+        for plane in 1..found.len() {
+            let input = widened(&values[plane]);
+            let chroma_label = format!("{label} chroma plane {plane}");
+            assert_codes_within(&found[plane], &input, ROUND_TRIP, &chroma_label);
+        }
     }
 }
 
@@ -300,6 +332,55 @@ fn a_one_sample_diagonal_comes_back_with_smaller_steps() {
         assert!(
             after < before,
             "{direction} leaves a step of {after}, the input's was {before}"
+        );
+    }
+}
+
+#[test]
+fn sangnom_f32_matches_sixteen_bit() {
+    let input = yuv420(WIDTH, HEIGHT, sixteen_bit());
+    let eight_bit = yuv420(WIDTH, HEIGHT, SampleFormat::U8);
+    let values: Vec<Vec<u16>> = diagonal_planes(&eight_bit)
+        .iter()
+        .map(|plane| plane.iter().map(|value| value * 257).collect())
+        .collect();
+    let args = json!({ "planes": ["y", "u", "v"] });
+
+    assert_f32_matches_sixteen_bit(STAGE, input, args, &values, 0.01, 0.0);
+}
+
+/// Runs a full range F32 grey clip of `aliased_diagonal`'s line at 0.8 over `background` and gives
+/// its output.
+fn diagonal_over(background: f32) -> Vec<f32> {
+    let colour = ColourInfo {
+        range: ColourRange::Full,
+        ..ColourInfo::default()
+    };
+    let format = FrameFormat {
+        colour,
+        ..grey(WIDTH, HEIGHT, SampleFormat::F32)
+    };
+    let line = aliased_diagonal(WIDTH, HEIGHT, SampleFormat::U8);
+    let samples: Vec<f32> = line
+        .iter()
+        .map(|value| if *value == 220 { 0.8 } else { background })
+        .collect();
+    let planes = [float_bytes(&samples)];
+
+    let filtered = run_once(STAGE, format, format, json!({}), &planes);
+
+    float_samples(&filtered[0])
+}
+
+#[test]
+fn sangnom_holds_negative_f32_samples_to_black() {
+    let below_black = diagonal_over(-0.1);
+    let black = diagonal_over(0.0);
+
+    for (index, (below, at_black)) in below_black.iter().zip(&black).enumerate() {
+        assert!(
+            *below <= *at_black + 1e-6,
+            "sample {index} was {below} below black, {at_black} at black"
         );
     }
 }

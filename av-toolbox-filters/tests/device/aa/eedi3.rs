@@ -14,6 +14,7 @@ use serde_json::json;
 
 use super::{
     DIRECTIONS,
+    assert_f32_matches_sixteen_bit,
     bits_of,
     decoded,
     grey,
@@ -21,9 +22,20 @@ use super::{
     noisy_diagonals,
     one_sample_diagonal,
     scramble,
+    sixteen_bit,
     yuv420,
 };
-use crate::support::{encoded, run_masked, run_once, shared_planes, ten_bit, uniform_mask, widened};
+use crate::support::{
+    ROUND_TRIP,
+    assert_codes_within,
+    encoded,
+    run_masked_into_codes,
+    run_once,
+    shared_planes,
+    ten_bit,
+    uniform_mask,
+    widened,
+};
 
 const STAGE: &str = "aa/eedi3";
 
@@ -501,12 +513,17 @@ fn a_zero_mask_hands_back_the_input() {
         let format = yuv420(WIDTH, HEIGHT, sample);
         let values = line_planes(&format);
         let planes = encoded(&format, &values);
-        let (mask, mask_chroma) = uniform_mask(&format, 0);
+        let mask = uniform_mask(&format, 0);
         let args = json!({ "planes": ["y", "u", "v"] });
+        let bits = bits_of(sample);
 
-        let filtered = run_masked(STAGE, format, args, &planes, mask, mask_chroma);
+        let found = run_masked_into_codes(STAGE, format, args, &planes, mask, bits);
 
-        assert_eq!(filtered, planes, "{sample}");
+        for (plane, codes) in found.iter().enumerate() {
+            let input = widened(&values[plane]);
+            let label = format!("{sample} plane {plane}");
+            assert_codes_within(codes, &input, ROUND_TRIP, &label);
+        }
     }
 }
 
@@ -530,4 +547,13 @@ fn a_flat_frame_is_unchanged() {
 
         assert_eq!(filtered, planes, "{sample}");
     }
+}
+
+#[test]
+fn eedi3_f32_matches_sixteen_bit() {
+    let input = yuv420(WIDTH, HEIGHT, sixteen_bit());
+    let values = line_planes(&input);
+    let args = json!({ "planes": ["y", "u", "v"] });
+
+    assert_f32_matches_sixteen_bit(STAGE, input, args, &values, 0.01, 0.0);
 }

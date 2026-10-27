@@ -50,6 +50,26 @@ fn float_to_codes_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f3
 }
 
 #[cube(launch_unchecked)]
+fn float_to_whole_codes_kernel(
+    input: &Array<f32>,
+    output: &mut Array<f32>,
+    offset: f32,
+    scale: f32,
+    peak: f32,
+) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let sample = input[ABSOLUTE_POS];
+    let defined = select(f32::is_nan(sample), 0.0, sample);
+    let code = defined * scale + offset;
+    let rounded = f32::floor(code + 0.5);
+
+    output[ABSOLUTE_POS] = f32::clamp(rounded, 0.0, peak);
+}
+
+#[cube(launch_unchecked)]
 fn codes_to_float_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f32, scale: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
@@ -186,6 +206,38 @@ pub fn float_to_codes<R: Runtime>(
     // Safety: the input and the output each hold `samples` f32 values.
     unsafe {
         float_to_codes_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            input_array,
+            output_array,
+            codes.offset,
+            codes.scale,
+            codes.peak,
+        );
+    }
+}
+
+/// Maps float samples to the nearest whole code value, held to `0..=peak`. A NaN sample reads as 0.
+///
+/// It suits kernels defined on integer codes. Without it, an F32 sample a hair below its code would read one
+/// code lower.
+pub fn float_to_whole_codes<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    input: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+    codes: FloatCodes,
+) {
+    let samples = output.samples();
+    let input_array = input.array::<R>();
+    let output_array = output.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the input and the output each hold `samples` f32 values.
+    unsafe {
+        float_to_whole_codes_kernel::launch_unchecked::<R>(
             client,
             cubes,
             unit,

@@ -3,9 +3,9 @@ mod eedi2;
 mod eedi3;
 mod sangnom;
 
-use av_toolbox_gpu::{ChromaLocation, FrameFormat, FrameLayout, SampleFormat, Subsampling};
+use av_toolbox_gpu::{ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 
-use crate::support::{element_of, frame, from_bytes};
+use crate::support::{element_of, frame, from_bytes, kept_sample_parity};
 
 /// The directions an anti-aliasing stage runs along, as its arguments name them.
 pub(super) const DIRECTIONS: [&str; 3] = ["vertical", "horizontal", "both"];
@@ -28,6 +28,12 @@ pub(super) fn yuv422(width: u32, height: u32, sample: SampleFormat) -> FrameForm
     };
 
     frame(width, height, layout, sample, ChromaLocation::Left)
+}
+
+pub(super) fn sixteen_bit() -> SampleFormat {
+    SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    }
 }
 
 pub(super) fn bits_of(sample: SampleFormat) -> u32 {
@@ -108,4 +114,21 @@ pub(super) fn noisy_diagonals(
     }
 
     plane
+}
+
+/// Checks `stage`'s F32 and 16-bit runs on `values` differ by at most `largest` codes, with no more than a
+/// `beyond_one` share of samples more than one code apart.
+pub(super) fn assert_f32_matches_sixteen_bit(
+    stage: &str,
+    input: FrameFormat,
+    args: serde_json::Value,
+    values: &[Vec<u16>],
+    largest: f32,
+    beyond_one: f32,
+) {
+    let parity = kept_sample_parity(stage, input, args, values);
+    println!("{stage}: {parity:?}");
+
+    assert!(parity.largest <= largest, "{stage}: {parity:?}");
+    assert!(parity.beyond_one <= beyond_one, "{stage}: {parity:?}");
 }

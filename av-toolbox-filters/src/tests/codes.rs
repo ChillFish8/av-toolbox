@@ -65,3 +65,13 @@ fn bits_of_a_float_clip_is_the_code_depth() {
     assert_eq!(bits_of(SampleFormat::F32), FLOAT_CODE_BITS);
     assert_eq!(bits_of(SampleFormat::F32), 16);
 }
+
+#[test]
+fn whole_codes_keeps_the_depth_peak_and_output() {
+    let float = CodeValues::new(&format(SampleFormat::F32), SampleFormat::F32);
+    let whole = float.whole_codes();
+
+    assert_eq!(whole.bits(), float.bits());
+    assert_eq!(whole.peak(), float.peak());
+    assert_eq!(whole.output_sample(), float.output_sample());
+}

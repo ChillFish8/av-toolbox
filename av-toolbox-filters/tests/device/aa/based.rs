@@ -28,8 +28,19 @@ use cubecl::prelude::{CubeElement, Runtime};
 use cubecl::server::Handle;
 use serde_json::json;
 
-use super::{bits_of, decoded, grey, largest_vertical_step, one_sample_diagonal, yuv420};
-use crate::support::{backend, encoded, run_masked, run_once, shared_planes, ten_bit, uniform_mask, widened};
+use super::{bits_of, grey, largest_vertical_step, one_sample_diagonal, yuv420};
+use crate::support::{
+    ROUND_TRIP,
+    assert_codes_within,
+    backend,
+    encoded,
+    f32_parity,
+    run_into_codes,
+    run_masked_into_codes,
+    ten_bit,
+    uniform_mask,
+    widened,
+};
 
 const STAGE: &str = "aa/based";
 
@@ -74,6 +85,9 @@ const F16_SHARE: f64 = 0.005;
 ///
 /// It holds on natural footage. Hard synthetic lines of 220 on 40 measured 0.0027 at 8 bit.
 const F16_MEAN: f64 = 0.002;
+
+/// How far an unrounded output code may sit from the reference's and still match it, half a code.
+const MATCH: f32 = 0.5;
 
 /// The largest share of 16-bit output samples that may differ from the composed reference at f32.
 ///
@@ -296,7 +310,8 @@ fn run_chain(
     backend().build(task)
 }
 
-/// Runs the whole stage with `parameters` at `precision` on a grey frame of `luma`, giving its output.
+/// Runs the whole stage with `parameters` at `precision` on a grey frame of `luma`, giving its output as
+/// unrounded codes.
 fn run_stage(
     luma: &[u16],
     width: u32,
@@ -310,10 +325,11 @@ fn run_stage(
     let planes = encoded(&format, &values);
     let args = stage_arguments(parameters, precision);
 
-    let filtered = run_once(STAGE, format, format, args, &planes);
+    let bits = bits_of(sample);
 
-    let found = decoded(&format, &filtered);
-    widened(&found[0])
+    let mut found = run_into_codes(STAGE, format, args, &planes, bits);
+
+    found.remove(0)
 }
 
 /// EEDI3's reference on the transposed `input`, reading the transposed `supersampled` and `mclip` as its
@@ -613,8 +629,10 @@ struct OutputDifference {
     mean: f64,
 }
 
-/// Compares the stage's output with the composed reference's, panicking at a difference where the
-/// reference's mask is zero.
+/// Compares the stage's unrounded output with the composed reference's merged plane, panicking at a
+/// difference where the reference's mask is zero.
+///
+/// A sample differs when it sits more than [MATCH] from the reference.
 fn output_difference(
     found: &[f32],
     expected: &[f32],
@@ -628,7 +646,8 @@ fn output_difference(
     let mut differing = 0usize;
     let mut total = 0.0f64;
     for (index, (found_value, expected_value)) in found.iter().zip(expected).enumerate() {
-        if found_value == expected_value {
+        let difference = (found_value - expected_value).abs();
+        if difference <= MATCH {
             continue;
         }
 
@@ -638,9 +657,8 @@ fn output_difference(
              {expected_value}"
         );
 
-        let difference = f64::from(found_value - expected_value).abs();
         differing += 1;
-        total += difference / scale;
+        total += f64::from(difference) / scale;
     }
 
     let samples = found.len() as f64;
@@ -673,7 +691,7 @@ fn end_to_end(
 
             let name = direction_name(*direction);
             let label = format!("{width}x{height} {bits}-bit {precision} {name}");
-            let difference = output_difference(&found, &expected.output, &expected.mask, bits, &label);
+            let difference = output_difference(&found, &expected.merged, &expected.mask, bits, &label);
             println!("{label}: {difference:?}");
 
             difference
@@ -867,10 +885,15 @@ fn a_flat_frame_is_unchanged() {
             .collect();
         let planes = encoded(&format, &values);
         let args = json!({ "precision": "f32" });
+        let bits = bits_of(sample);
 
-        let filtered = run_once(STAGE, format, format, args, &planes);
+        let found = run_into_codes(STAGE, format, args, &planes, bits);
 
-        assert_eq!(filtered, planes, "{sample}");
+        for (plane, codes) in found.iter().enumerate() {
+            let input = widened(&values[plane]);
+            let label = format!("{sample} plane {plane}");
+            assert_codes_within(codes, &input, ROUND_TRIP, &label);
+        }
     }
 }
 
@@ -897,10 +920,10 @@ fn a_one_sample_diagonal_comes_back_with_smaller_steps() {
     for direction in ["vertical", "both"] {
         let args = json!({ "direction": direction, "precision": "f32" });
 
-        let filtered = run_once(STAGE, format, format, args, &planes);
+        let found = run_into_codes(STAGE, format, args, &planes, 8);
 
-        let found = decoded(&format, &filtered);
-        let inner_found = interior(&found[0]);
+        let found_codes: Vec<u16> = found[0].iter().map(|code| code.round() as u16).collect();
+        let inner_found = interior(&found_codes);
         let after = largest_vertical_step(&inner_found, inner_width);
         assert!(
             after < before,
@@ -924,23 +947,41 @@ fn a_zero_mask_hands_back_the_input() {
             })
             .collect();
         let planes = encoded(&format, &values);
-        let (mask, mask_chroma) = uniform_mask(&format, 0);
+        let mask = uniform_mask(&format, 0);
         let args = json!({ "precision": "f32" });
 
-        let filtered = run_masked(STAGE, format, args, &planes, mask, mask_chroma);
+        let found = run_masked_into_codes(STAGE, format, args, &planes, mask, bits);
 
-        assert_eq!(filtered, planes, "{sample}");
+        for (plane, codes) in found.iter().enumerate() {
+            let input = widened(&values[plane]);
+            let label = format!("{sample} plane {plane}");
+            assert_codes_within(codes, &input, ROUND_TRIP, &label);
+        }
     }
 }
 
 #[test]
-fn chroma_is_handed_through() {
+fn chroma_comes_back_unchanged() {
     let format = yuv420(SMALL_WIDTH, SMALL_HEIGHT, SampleFormat::U8);
+    let fence = fixture_plane(FENCE, 8);
+    let values: Vec<Vec<u16>> = format
+        .channels()
+        .iter()
+        .map(|channel| {
+            let (width, height) = format.channel_dimensions(*channel).expect("a listed channel");
+            cropped(&fence, WIDTH, 0, 0, width, height)
+        })
+        .collect();
+    let planes = encoded(&format, &values);
     let args = json!({ "precision": "f32" });
 
-    let shared = shared_planes(STAGE, format, args);
+    let found = run_into_codes(STAGE, format, args, &planes, 8);
 
-    assert_eq!(shared, vec![false, true, true]);
+    for plane in 1..found.len() {
+        let input = widened(&values[plane]);
+        let label = format!("chroma plane {plane}");
+        assert_codes_within(&found[plane], &input, ROUND_TRIP, &label);
+    }
 }
 
 /// A mask of 255 over the left third of a `WIDTH` by `HEIGHT` frame, the 8-bit fence over the middle third
@@ -996,7 +1037,7 @@ fn a_textured_bound_mask_matches_the_reference_at_10_bit() {
     let (_, mask_chroma) = uniform_mask(&format, 0);
     let args = stage_arguments(&parameters, "f32");
 
-    let filtered = run_masked(STAGE, format, args, &planes, mask, mask_chroma);
+    let found = run_masked_into_codes(STAGE, format, args, &planes, (mask, mask_chroma), bits);
 
     let luma = widened(&fence);
     let chain = run_chain(&luma, WIDTH, HEIGHT, &parameters, Some(&mask_values));
@@ -1013,13 +1054,25 @@ fn a_textured_bound_mask_matches_the_reference_at_10_bit() {
         "the reference leaves the luma unchanged under the bound mask"
     );
 
-    let found = decoded(&format, &filtered);
-    let found_luma = widened(&found[0]);
-    let difference = output_difference(&found_luma, &expected.output, &mask_values, bits, "bound mask");
+    let difference = output_difference(&found[0], &expected.merged, &mask_values, bits, "bound mask");
     println!("bound mask: {difference:?}");
     assert!(
         difference.share <= END_TO_END_SHARE,
         "{} of output samples differ under the bound mask",
         difference.share
     );
+}
+
+#[test]
+fn based_f32_matches_sixteen_bit() {
+    let input = grey(WIDTH, HEIGHT, sixteen_bit());
+    let luma = fixture_plane(FENCE, 16);
+    let values = [luma];
+    let args = json!({ "precision": "f32" });
+
+    let parity = f32_parity(STAGE, input, args, &values);
+    println!("{STAGE}: {parity:?}");
+
+    assert!(parity.largest <= 0.01, "{parity:?}");
+    assert!(parity.beyond_one <= 0.0, "{parity:?}");
 }

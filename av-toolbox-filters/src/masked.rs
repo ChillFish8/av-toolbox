@@ -16,7 +16,7 @@ use av_toolbox_gpu::{
     StreamFormat,
 };
 
-use crate::checks::accepts_frames;
+use crate::checks::accepts_integer_or_f32_frames;
 use crate::planewise::PlaneFilter;
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
@@ -39,7 +39,7 @@ pub(crate) const MASKED_INPUTS: &InputSignature = &InputSignature::new(&[
         .planes_of("input"),
 ]);
 
-/// The samples a masked stage accepts on `index`, U8 and U16 frames for the input and a U8
+/// The samples a masked stage accepts on `index`, U8, U16 and F32 frames for the input and a U8
 /// mask for the mask.
 pub(crate) fn accepts_masked_input(
     stage: &str,
@@ -54,7 +54,7 @@ pub(crate) fn accepts_masked_input(
 }
 
 fn accepts_input_frames(stage: &str, offered: StreamFormat) -> Result<FormatSet, StageError> {
-    let Some(samples) = accepts_frames(offered) else {
+    let Some(samples) = accepts_integer_or_f32_frames(offered) else {
         return Err(input_not_frames(stage));
     };
 
@@ -71,6 +71,17 @@ fn accepts_mask(stage: &str, offered: StreamFormat) -> Result<FormatSet, StageEr
     }
 
     Ok(FormatSet::of([SampleFormat::U8]))
+}
+
+/// The sample a masked stage stores its output as.
+///
+/// A bound mask blends between codes, so the result is F32. Without one, integer input keeps its sample.
+pub(crate) fn masked_output(input: SampleFormat, mask: Option<StreamFormat>) -> SampleFormat {
+    if mask.is_some() {
+        return SampleFormat::F32;
+    }
+
+    input
 }
 
 /// Refuses a bound mask that is not U8 or not the size of `frame`.
@@ -343,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn float_frames_and_a_wide_mask_are_left_out() {
+    fn float_frames_are_accepted_and_a_wide_mask_left_out() {
         let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
         let float_frames = StreamFormat::Frames(frame_format(SampleFormat::F32));
         let wide_mask = mask(8, 6, ten_bit);
@@ -351,8 +362,31 @@ mod tests {
         let floats = accepts_masked_input(STAGE, INPUT, float_frames).expect("frames are readable");
         let wide = accepts_masked_input(STAGE, MASK, wide_mask).expect("a mask is readable");
 
-        assert!(floats.is_empty());
+        assert_eq!(floats, FormatSet::of([SampleFormat::F32]));
         assert!(wide.is_empty());
+    }
+
+    #[test]
+    fn eight_bit_without_a_mask_stays_eight_bit() {
+        let output = masked_output(SampleFormat::U8, None);
+
+        assert_eq!(output, SampleFormat::U8);
+    }
+
+    #[test]
+    fn eight_bit_with_a_mask_becomes_f32() {
+        let bound = mask(8, 6, SampleFormat::U8);
+
+        let output = masked_output(SampleFormat::U8, Some(bound));
+
+        assert_eq!(output, SampleFormat::F32);
+    }
+
+    #[test]
+    fn f32_stays_f32() {
+        let output = masked_output(SampleFormat::F32, None);
+
+        assert_eq!(output, SampleFormat::F32);
     }
 
     #[test]

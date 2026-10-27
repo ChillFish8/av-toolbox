@@ -17,6 +17,7 @@ use serde_json::json;
 
 use crate::lineart::Darken;
 use crate::lineart::darken::{DarkenArgs, darken_settings};
+use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
 
 const STAGE: &str = "lineart/darken";
 
@@ -266,22 +267,16 @@ fn the_output_format_is_the_input_format() {
 }
 
 #[test]
-fn floats_are_left_out_and_a_mask_on_the_input_refused() {
+fn floats_are_accepted_and_a_mask_on_the_input_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let inputs = [Offered::Unknown];
-    let float_format = FrameFormat {
-        sample: SampleFormat::F32,
-        ..yuv420()
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
     };
-    let float = StreamFormat::Frames(float_format);
-    let mask = mask_format(16, 8, SampleFormat::U8);
+    let accepted = |offered| Darken::accepts_input(&capabilities, &parsed, 0, offered, &inputs);
 
-    let accepted = Darken::accepts_input(&capabilities, &parsed, 0, float, &inputs).expect("readable");
-    let refused = Darken::accepts_input(&capabilities, &parsed, 0, mask, &inputs);
-
-    assert!(accepted.is_empty());
-    assert!(refused.is_err());
+    assert_integers_and_floats_accepted_and_mask_refused("lineart/darken", layout, format, accepted);
 }
 
 #[test]

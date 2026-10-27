@@ -22,7 +22,7 @@ use crate::aa::based::{BasedArgs, Eedi3Tuning, checked_frame_mask, planned};
 use crate::aa::direction::Direction;
 use crate::artcnn::ModelName;
 use crate::cnn::PrecisionName;
-use crate::sample_checks::capabilities_computing;
+use crate::sample_checks::{assert_integers_and_floats_accepted_and_mask_refused, capabilities_computing};
 
 const STAGE: &str = "aa/based";
 
@@ -328,7 +328,7 @@ fn the_stage_runs_as_a_single_instance() {
 }
 
 #[test]
-fn grey_and_yuv_are_accepted_and_the_output_is_the_input() {
+fn grey_and_yuv_are_accepted_and_keep_their_layout() {
     let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
     let sixteen_bit = SampleFormat::U16 {
         depth: BitDepth::SIXTEEN,
@@ -356,8 +356,13 @@ fn grey_and_yuv_are_accepted_and_the_output_is_the_input() {
             let chosen = outputs.samples.preferences()[0];
             let output = outputs.template.with_sample(chosen);
 
+            let float = FrameFormat {
+                sample: SampleFormat::F32,
+                ..input
+            };
+
             assert!(accepted_set.accepts(sample), "{layout} {sample}");
-            assert_eq!(output, offered, "{layout} {sample}");
+            assert_eq!(output, StreamFormat::Frames(float), "{layout} {sample}");
         }
     }
 }
@@ -387,22 +392,36 @@ fn rgb_and_chroma_layouts_are_refused() {
 }
 
 #[test]
-fn floats_are_left_out_and_a_mask_on_the_input_refused() {
-    let float_input = format(16, 16, FrameLayout::Grey, SampleFormat::F32);
-    let floats = StreamFormat::Frames(float_input);
-    let mask = mask_format(16, 16);
+fn floats_are_accepted_and_a_mask_on_the_input_refused() {
+    let frame_format = |layout, sample| format(16, 16, layout, sample);
 
-    let float_set = accepted(floats).expect("frames are readable");
-    let mask_error = accepted(mask).expect_err("a mask is refused");
-    let float_message = refusal(json!({}), float_input);
+    assert_integers_and_floats_accepted_and_mask_refused(STAGE, FrameLayout::Grey, frame_format, accepted);
+}
 
-    let float_name = format!("not {} frames", SampleFormat::F32);
-    let mask_message = mask_error.to_string();
-    assert!(float_set.is_empty());
-    assert!(mask_message.contains(STAGE), "{mask_message}");
-    assert!(mask_message.contains("not a mask"), "{mask_message}");
-    assert!(float_message.contains(STAGE), "{float_message}");
-    assert!(float_message.ends_with(&float_name), "{float_message}");
+#[test]
+fn the_output_is_f32_for_every_input() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: BitDepth::SIXTEEN,
+    };
+    let eight_bit = yuv420(16, 16);
+    let mask = Some(mask_format(16, 16));
+    let inputs = [
+        (eight_bit, None),
+        (eight_bit, mask),
+        (format(16, 16, FrameLayout::Grey, sixteen_bit), None),
+        (format(16, 16, FrameLayout::Grey, SampleFormat::F32), None),
+    ];
+
+    for (input, bound) in inputs {
+        let outputs = produces_with(json!({}), input, bound).expect("valid");
+
+        assert_eq!(
+            outputs.samples,
+            FormatSet::of([SampleFormat::F32]),
+            "{}",
+            input.sample
+        );
+    }
 }
 
 #[test]

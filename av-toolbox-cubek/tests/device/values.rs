@@ -1,7 +1,15 @@
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_cubek::testing::reference_narrow;
-use av_toolbox_cubek::values::{FloatCodes, codes_to_float, float_to_codes, narrow, offset, widen};
+use av_toolbox_cubek::values::{
+    FloatCodes,
+    codes_to_float,
+    float_to_codes,
+    float_to_whole_codes,
+    narrow,
+    offset,
+    widen,
+};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
@@ -158,10 +166,18 @@ fn offsetting_adds_the_amount_to_every_sample() {
     }
 }
 
+/// Which way a [MapCodes] task maps its samples.
+#[derive(Clone, Copy)]
+enum Mapping {
+    Codes,
+    WholeCodes,
+    Float,
+}
+
 struct MapCodes {
     input: Vec<f32>,
     codes: FloatCodes,
-    to_float: bool,
+    mapping: Mapping,
 }
 
 impl BuildTask for MapCodes {
@@ -178,34 +194,34 @@ impl BuildTask for MapCodes {
         let output = empty(client, output_bytes);
         let input_plane = plane(&input, samples, 1);
         let output_plane = plane(&output, samples, 1);
-        if self.to_float {
-            codes_to_float(client, &sizing, input_plane, output_plane, self.codes);
-        } else {
-            float_to_codes(client, &sizing, input_plane, output_plane, self.codes);
+        match self.mapping {
+            Mapping::Codes => float_to_codes(client, &sizing, input_plane, output_plane, self.codes),
+            Mapping::WholeCodes => {
+                float_to_whole_codes(client, &sizing, input_plane, output_plane, self.codes);
+            },
+            Mapping::Float => codes_to_float(client, &sizing, input_plane, output_plane, self.codes),
         }
 
         read_f32(client, &output)
     }
 }
 
-fn float_codes(input: Vec<f32>, codes: FloatCodes) -> Vec<f32> {
+fn mapped(input: Vec<f32>, codes: FloatCodes, mapping: Mapping) -> Vec<f32> {
     let task = MapCodes {
         input,
         codes,
-        to_float: false,
+        mapping,
     };
 
     backend().build(task)
 }
 
-fn codes_floats(input: Vec<f32>, codes: FloatCodes) -> Vec<f32> {
-    let task = MapCodes {
-        input,
-        codes,
-        to_float: true,
-    };
+fn float_codes(input: Vec<f32>, codes: FloatCodes) -> Vec<f32> {
+    mapped(input, codes, Mapping::Codes)
+}
 
-    backend().build(task)
+fn codes_floats(input: Vec<f32>, codes: FloatCodes) -> Vec<f32> {
+    mapped(input, codes, Mapping::Float)
 }
 
 #[test]
@@ -254,4 +270,23 @@ fn a_round_trip_keeps_every_sixteen_bit_code() {
             assert_close(&returned, &every_code, 0.01);
         }
     }
+}
+
+#[test]
+fn whole_codes_round_to_the_nearest_code() {
+    let codes = FloatCodes::new(16, SampleRange::Limited, true);
+    let spread: Vec<f32> = (0..=65535u32).step_by(7).map(|code| code as f32).collect();
+    let samples: Vec<f32> = spread.iter().map(|code| (code - 32768.0) / 57344.0).collect();
+    let between = vec![
+        (1000.3 - 32768.0) / 57344.0,
+        (1000.7 - 32768.0) / 57344.0,
+        f32::NAN,
+    ];
+
+    let whole = mapped(samples, codes, Mapping::WholeCodes);
+    let rounded = mapped(between, codes, Mapping::WholeCodes);
+
+    assert_eq!(whole, spread);
+    // A NaN reads as the sample 0, which is chroma's centre.
+    assert_eq!(rounded, vec![1000.0, 1001.0, 32768.0]);
 }

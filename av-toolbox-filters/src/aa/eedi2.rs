@@ -51,6 +51,7 @@ use crate::masked::{
     accepts_masked_input,
     checked_input,
     checked_mask,
+    masked_output,
     missing_input,
 };
 use crate::planes::ChannelName;
@@ -395,10 +396,11 @@ impl FilterDefinition for Eedi2 {
         checked_mask(STAGE, &input, mask)?;
 
         let format = StreamFormat::Frames(input);
+        let output = masked_output(input.sample, mask);
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([output]),
         })
     }
 
@@ -418,7 +420,8 @@ impl FilterDefinition for Eedi2 {
 
         let bits = bits_of(input.sample);
 
-        let codes = CodeValues::new(&input, input.sample);
+        let output = masked_output(input.sample, mask);
+        let codes = CodeValues::new(&input, output).whole_codes();
         let planewise = Planewise {
             stage: STAGE,
             format: input,

@@ -1,6 +1,13 @@
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::matrix::SampleRange;
-use av_toolbox_cubek::values::{FloatCodes, codes_to_float, float_to_codes, narrow, widen};
+use av_toolbox_cubek::values::{
+    FloatCodes,
+    codes_to_float,
+    float_to_codes,
+    float_to_whole_codes,
+    narrow,
+    widen,
+};
 use av_toolbox_cubek::{DevicePlane, Dispatch};
 use av_toolbox_gpu::{Channel, ColourRange, ComputeClient, FrameFormat, Runtime, SampleFormat};
 
@@ -45,6 +52,8 @@ pub(crate) struct CodeValues {
     output_sample: SampleFormat,
     bits: u32,
     range: SampleRange,
+    /// Whether F32 samples widen to the nearest whole code.
+    whole: bool,
 }
 
 impl CodeValues {
@@ -68,7 +77,15 @@ impl CodeValues {
             output_sample: output,
             bits: bits_of(input.sample),
             range: sample_range(input.colour.range),
+            whole: false,
         }
+    }
+
+    /// The same code values, with F32 samples widened to the nearest whole code.
+    ///
+    /// It suits kernels defined on integer codes. Integer samples are unaffected.
+    pub(crate) fn whole_codes(self) -> Self {
+        Self { whole: true, ..self }
     }
 
     /// The depth of the code values.
@@ -97,6 +114,10 @@ impl CodeValues {
     ) {
         match self.input {
             Storage::Integer(element) => widen(client, dispatch, source, values, element),
+            Storage::Float if self.whole => {
+                let codes = self.float_codes(channel);
+                float_to_whole_codes(client, dispatch, source, values, codes);
+            },
             Storage::Float => {
                 let codes = self.float_codes(channel);
                 float_to_codes(client, dispatch, source, values, codes);

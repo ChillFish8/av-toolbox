@@ -1,3 +1,5 @@
+mod float;
+
 use av_toolbox_core::{
     Filter,
     InputArgument,
@@ -10,8 +12,6 @@ use av_toolbox_core::{
 };
 use av_toolbox_cubek::Dispatch;
 use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::matrix::SampleRange;
-use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{
     Backend,
     BuildContext,
@@ -19,7 +19,6 @@ use av_toolbox_gpu::{
     Channel,
     ChromaLocation,
     ColourInfo,
-    ColourRange,
     CubeCount,
     CubeDim,
     Depth,
@@ -42,7 +41,19 @@ use av_toolbox_gpu::{
     test_device,
 };
 use cubecl::prelude::Runtime;
-use serde_json::json;
+
+pub(crate) use self::float::{
+    ROUND_TRIP,
+    assert_a_flat_frame_is_unchanged,
+    assert_codes_within,
+    assert_planes_match,
+    f32_parity,
+    float_bytes,
+    float_samples,
+    kept_sample_parity,
+    run_into_codes,
+    run_masked_into_codes,
+};
 
 pub(crate) fn backend() -> Backend {
     Backend::open_default(test_device()).expect("a backend should open")
@@ -669,6 +680,7 @@ pub(crate) fn built_masked(
     backend: &Backend,
     stage: &str,
     format: FrameFormat,
+    output: FrameFormat,
     args: serde_json::Value,
 ) -> Box<dyn Filter> {
     let mut registry = PipelineRegistry::new();
@@ -689,7 +701,8 @@ pub(crate) fn built_masked(
 
     let frames = StreamFormat::Frames(format);
     let mask = StreamFormat::Mask(mask_format(&format));
-    let formats = ResolvedFormats::new(vec![Some(frames), Some(mask)], Some(frames));
+    let output_format = StreamFormat::Frames(output);
+    let formats = ResolvedFormats::new(vec![Some(frames), Some(mask)], Some(output_format));
 
     prepared
         .build(backend, &formats)
@@ -702,6 +715,7 @@ pub(crate) fn built_masked(
 struct MaskedOnce {
     filter: Box<dyn Filter>,
     format: FrameFormat,
+    output: FrameFormat,
     planes: Vec<Vec<u8>>,
     mask: Vec<u8>,
     mask_chroma: Vec<u8>,
@@ -749,9 +763,9 @@ impl BuildTask for MaskedOnce {
         let processed = self.filter.process(&mut context, inputs).expect("should process");
         let output = only_frame(processed);
 
-        assert_eq!(output.format(), &self.format);
+        assert_eq!(output.format(), &self.output);
 
-        self.format
+        self.output
             .channels()
             .iter()
             .map(|channel| {
@@ -776,12 +790,26 @@ pub(crate) fn run_masked(
     mask: Vec<u8>,
     mask_chroma: Vec<u8>,
 ) -> Vec<Vec<u8>> {
+    run_masked_into(stage, format, format, args, planes, (mask, mask_chroma))
+}
+
+/// Runs `stage` on `planes` into `output` frames, with a mask of the full and chroma bytes in `mask`.
+pub(crate) fn run_masked_into(
+    stage: &str,
+    format: FrameFormat,
+    output: FrameFormat,
+    args: serde_json::Value,
+    planes: &[Vec<u8>],
+    mask: (Vec<u8>, Vec<u8>),
+) -> Vec<Vec<u8>> {
     let backend = backend();
-    let filter = built_masked(&backend, stage, format, args);
+    let filter = built_masked(&backend, stage, format, output, args);
+    let (mask, mask_chroma) = mask;
 
     backend.build(MaskedOnce {
         filter,
         format,
+        output,
         planes: planes.to_vec(),
         mask,
         mask_chroma,
@@ -908,194 +936,4 @@ pub(crate) fn encoded(format: &FrameFormat, values: &[Vec<u16>]) -> Vec<Vec<u8>>
     let element = element_of(format.sample);
 
     values.iter().map(|plane| to_bytes(plane, element)).collect()
-}
-
-/// F32 samples read from a plane's bytes.
-pub(crate) fn float_samples(bytes: &[u8]) -> Vec<f32> {
-    let (words, _) = bytes.as_chunks::<4>();
-
-    words.iter().map(|word| f32::from_le_bytes(*word)).collect()
-}
-
-/// A plane's bytes holding `samples` as F32.
-pub(crate) fn float_bytes(samples: &[f32]) -> Vec<u8> {
-    samples.iter().flat_map(|sample| sample.to_le_bytes()).collect()
-}
-
-/// `bits` deep code values in `range` as full range float samples.
-pub(crate) fn as_float(codes: &[u16], bits: u32, range: SampleRange, chroma: bool) -> Vec<f32> {
-    let mapping = FloatCodes::new(bits, range, chroma);
-
-    codes
-        .iter()
-        .map(|code| (f32::from(*code) - mapping.offset) / mapping.scale)
-        .collect()
-}
-
-/// Full range float samples as unrounded `bits` deep code values in `range`.
-pub(crate) fn as_codes(samples: &[f32], bits: u32, range: SampleRange, chroma: bool) -> Vec<f32> {
-    let mapping = FloatCodes::new(bits, range, chroma);
-
-    samples
-        .iter()
-        .map(|sample| sample * mapping.scale + mapping.offset)
-        .collect()
-}
-
-/// Checks every code of `found` is within `tolerance` of `expected`, naming `label` in a failure.
-pub(crate) fn assert_codes_within(found: &[f32], expected: &[f32], tolerance: f32, label: &str) {
-    assert_eq!(found.len(), expected.len(), "{label}");
-
-    for (index, (got, want)) in found.iter().zip(expected).enumerate() {
-        assert!(
-            (got - want).abs() <= tolerance,
-            "{label}: sample {index} was {got}, expected {want} within {tolerance}"
-        );
-    }
-}
-
-/// The integer range `format` returns to. Anything not labelled full range is limited.
-pub(crate) fn range_of(format: &FrameFormat) -> SampleRange {
-    match format.colour.range {
-        ColourRange::Full => SampleRange::Full,
-        _ => SampleRange::Limited,
-    }
-}
-
-fn is_chroma(channel: Channel) -> bool {
-    matches!(channel, Channel::U | Channel::V)
-}
-
-/// Every plane of `values`, `bits` deep codes of `format`, as F32 samples.
-pub(crate) fn float_planes(format: &FrameFormat, values: &[Vec<u16>], bits: u32) -> Vec<Vec<u8>> {
-    let range = range_of(format);
-
-    format
-        .channels()
-        .iter()
-        .zip(values)
-        .map(|(channel, plane)| {
-            let chroma = is_chroma(*channel);
-            let samples = as_float(plane, bits, range, chroma);
-            float_bytes(&samples)
-        })
-        .collect()
-}
-
-/// Runs `stage` on one frame into F32, and reads every output plane back as `bits` deep codes.
-pub(crate) fn run_into_codes(
-    stage: &str,
-    input: FrameFormat,
-    args: serde_json::Value,
-    planes: &[Vec<u8>],
-    bits: u32,
-) -> Vec<Vec<f32>> {
-    let output = FrameFormat {
-        sample: SampleFormat::F32,
-        ..input
-    };
-    let range = range_of(&input);
-
-    let found = run_once(stage, input, output, args, planes);
-
-    input
-        .channels()
-        .iter()
-        .zip(&found)
-        .map(|(channel, bytes)| {
-            let chroma = is_chroma(*channel);
-            let samples = float_samples(bytes);
-            as_codes(&samples, bits, range, chroma)
-        })
-        .collect()
-}
-
-/// How far a stage's F32 run strays from its 16-bit run, read as 16-bit codes.
-#[derive(Debug)]
-pub(crate) struct Parity {
-    /// The largest difference over every plane.
-    pub(crate) largest: f32,
-    /// The share of samples differing by more than one code.
-    pub(crate) beyond_one: f32,
-}
-
-/// Runs `stage` on `values` as 16-bit codes of `input` and as the same codes in F32, and compares
-/// the two outputs.
-pub(crate) fn f32_parity(
-    stage: &str,
-    input: FrameFormat,
-    args: serde_json::Value,
-    values: &[Vec<u16>],
-) -> Parity {
-    let float_input = FrameFormat {
-        sample: SampleFormat::F32,
-        ..input
-    };
-    let integer_planes = encoded(&input, values);
-    let float_input_planes = float_planes(&float_input, values, 16);
-
-    let sixteen_bit = run_into_codes(stage, input, args.clone(), &integer_planes, 16);
-    let float = run_into_codes(stage, float_input, args, &float_input_planes, 16);
-
-    let differences: Vec<f32> = sixteen_bit
-        .iter()
-        .flatten()
-        .zip(float.iter().flatten())
-        .map(|(integer_code, float_code)| (integer_code - float_code).abs())
-        .collect();
-    let largest = differences.iter().copied().fold(0.0, f32::max);
-    let beyond = differences.iter().filter(|difference| **difference > 1.0).count();
-    let beyond_one = beyond as f32 / differences.len() as f32;
-
-    Parity { largest, beyond_one }
-}
-
-/// How far a code may move on its way into F32 and back.
-pub(crate) const ROUND_TRIP: f32 = 0.02;
-
-/// Runs `stage` on `values`, `bits` deep codes of `input`, into F32. Checks each selected plane is
-/// within one code of `reference`, and the rest are the input.
-pub(crate) fn assert_planes_match(
-    stage: &str,
-    input: FrameFormat,
-    args: serde_json::Value,
-    bits: u32,
-    selected: &[bool],
-    values: &[Vec<u16>],
-    reference: impl Fn(&[f32], u32, u32) -> Vec<f32>,
-) {
-    let planes = encoded(&input, values);
-
-    let found = run_into_codes(stage, input, args, &planes, bits);
-
-    for (plane, channel) in input.channels().iter().enumerate() {
-        let (width, height) = input.channel_dimensions(*channel).expect("carried");
-        let codes = widened(&values[plane]);
-        let label = channel.to_string();
-
-        if !selected[plane] {
-            let untouched = format!("{label} should be untouched");
-            assert_codes_within(&found[plane], &codes, ROUND_TRIP, &untouched);
-            continue;
-        }
-
-        let expected = reference(&codes, width, height);
-        assert_codes_within(&found[plane], &expected, 1.0, &label);
-    }
-}
-
-/// Runs `stage` on a flat 16-bit frame at its peak and checks it stays there.
-pub(crate) fn assert_a_flat_frame_is_unchanged(stage: &str) {
-    let sixteen_bit = SampleFormat::U16 {
-        depth: Depth::SIXTEEN,
-    };
-    let input = frame(64, 48, FrameLayout::Grey, sixteen_bit, ChromaLocation::Left);
-    let samples = input.channel_samples(Channel::Y).expect("a listed channel");
-    let values = vec![vec![65535u16; samples]];
-    let planes = encoded(&input, &values);
-    let peak = widened(&values[0]);
-
-    let found = run_into_codes(stage, input, json!({}), &planes, 16);
-
-    assert_codes_within(&found[0], &peak, ROUND_TRIP, stage);
 }
