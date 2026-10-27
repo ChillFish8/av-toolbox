@@ -10,6 +10,7 @@ use av_toolbox_graph::{
     Span,
     StageSpec,
     default_passes,
+    inject_output_depth,
     insert_widens,
     optimise,
     place_transfers,
@@ -93,7 +94,8 @@ impl<'r> Pipeline<'r> {
         live_sources(&self.graph, self.registry)
     }
 
-    /// Settles every edge's format, places the transfers and plans the run on `backend`.
+    /// Brings each sink that wants it to the output depth, settles every edge's format, places the transfers and
+    /// plans the run on `backend`.
     pub fn compile<'b>(self, backend: &'b Backend) -> Result<CompiledPipeline<'r, 'b>, PipelineError> {
         let Self {
             registry,
@@ -104,6 +106,8 @@ impl<'r> Pipeline<'r> {
         run_probes(&mut graph, registry)?;
 
         let capabilities = backend.capabilities();
+        inject_output_depth(&mut graph, registry, capabilities)?;
+
         let mut formats = solve(&graph, registry, capabilities)?;
         insert_widens(&mut graph, &mut formats);
         settle_mask_planes(&graph, registry, &mut formats)?;
@@ -169,7 +173,7 @@ impl CompiledPipeline<'_, '_> {
     }
 }
 
-/// The written stage behind a node, or `None` for a node the compiler inserted.
+/// The stage behind a node, whether written or injected by the graph, or `None` for a provider or crossing.
 fn stage_of(graph: &CompiledGraph, id: NodeId) -> Option<StageRef<'_>> {
     let node = graph.nodes().get(id.index())?;
     if *node.role() != NodeRole::Stage {

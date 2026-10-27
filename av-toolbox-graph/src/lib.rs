@@ -37,6 +37,7 @@ mod diagnostic;
 mod graph;
 mod instantiate;
 mod optimise;
+mod output_depth;
 mod plan;
 mod probes;
 mod render;
@@ -67,6 +68,7 @@ pub use self::optimise::{
     default_passes,
     optimise,
 };
+pub use self::output_depth::inject_output_depth;
 pub use self::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId, Routing, plan};
 pub use self::probes::{NodeProbe, record_probes, run_probes};
 pub use self::render::{RenderOptions, render_ascii, render_html};

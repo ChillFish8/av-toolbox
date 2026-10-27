@@ -250,8 +250,19 @@ macro_rules! fixture_sink {
 }
 
 /// Writes a source fixture offering more than one sample, so an edge from it has a choice to make.
+///
+/// The frames are in the fixture format unless a frame format is given.
 macro_rules! opinionated_source {
     ($definition:ident, $instance:ident, $identifier:literal, $samples:expr) => {
+        opinionated_source!(
+            $definition,
+            $instance,
+            $identifier,
+            $samples,
+            frame_format()
+        );
+    };
+    ($definition:ident, $instance:ident, $identifier:literal, $samples:expr, $format:expr) => {
         struct $instance;
 
         impl StageInstance for $instance {}
@@ -298,7 +309,7 @@ macro_rules! opinionated_source {
                 _opened: &Self::Opened,
             ) -> Result<OutputFormats, StageError> {
                 Ok(OutputFormats {
-                    template: StreamTemplate::Frames(frame_format()),
+                    template: StreamTemplate::Frames($format),
                     samples: $samples,
                 })
             }

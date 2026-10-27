@@ -1,5 +1,7 @@
 #![cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 
+mod support;
+
 use std::fs;
 use std::ops::Range;
 use std::path::Path;
@@ -212,8 +214,11 @@ fn the_lineart_example_blends_the_overlay_into_the_lines() {
 
     let example_path = example();
     let loaded = av_toolbox_pipeline::load(example_path, &DiskFiles, &supplied).expect("the example loads");
+    let mut specs = loaded.specs;
+    support::written_at(&mut specs, 8);
+
     let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
-    let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
+    let pipeline = Pipeline::build(&registry, &specs).expect("should build");
     let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
     let settings = Settings::default();
@@ -288,9 +293,11 @@ args.path = "{second_output_path}"
     let supplied = Supplied::new();
     let loaded =
         av_toolbox_pipeline::load(&pipeline_path, &DiskFiles, &supplied).expect("the file should load");
+    let mut specs = loaded.specs;
+    support::written_at(&mut specs, 8);
 
     let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
-    let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
+    let pipeline = Pipeline::build(&registry, &specs).expect("should build");
     let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
 

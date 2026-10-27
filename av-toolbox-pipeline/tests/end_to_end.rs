@@ -33,7 +33,7 @@ use av_toolbox_gpu::{
     StreamTemplate,
     test_device,
 };
-use av_toolbox_graph::NodeRole;
+use av_toolbox_graph::{NodeRole, StageSpec};
 use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
 use schemars::JsonSchema;
@@ -156,6 +156,19 @@ fn piped(bytes: Vec<u8>) -> (RawFd, JoinHandle<()>) {
     (fd, feeder)
 }
 
+/// Loads the pipeline `text` from a file, as the CLI would.
+fn loaded_specs(text: &str) -> Vec<StageSpec> {
+    let pipeline_directory = tempfile::tempdir().expect("a temp dir");
+    let pipeline_path = pipeline_directory.path().join("pipeline.toml");
+    fs::write(&pipeline_path, text).expect("writes the pipeline");
+
+    let supplied = Supplied::new();
+    let loaded =
+        av_toolbox_pipeline::load(&pipeline_path, &DiskFiles, &supplied).expect("the file should load");
+
+    loaded.specs
+}
+
 #[test]
 fn a_toml_pipeline_compiles_and_runs_through_a_device_filter() {
     let stream = y4m_stream();
@@ -174,9 +187,14 @@ args.fd = {fd}
 type = "pipeline-test/pass"
 inputs = ["input"]
 
+[filter.eight]
+type = "resample/depth"
+inputs = ["pass"]
+args.depth = 8
+
 [sink.output]
 type = "y4m/pipe"
-inputs = ["pass"]
+inputs = ["eight"]
 args.path = "{output_path}"
 "#
     );
@@ -184,14 +202,7 @@ args.path = "{output_path}"
     let mut registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
     registry.register_filter::<Pass>().expect("should register");
 
-    let pipeline_directory = tempfile::tempdir().expect("a temp dir");
-    let pipeline_path = pipeline_directory.path().join("pipeline.toml");
-    fs::write(&pipeline_path, &text).expect("writes the pipeline");
-    let supplied = Supplied::new();
-    let loaded =
-        av_toolbox_pipeline::load(&pipeline_path, &DiskFiles, &supplied).expect("the file should load");
-    let specs = loaded.specs;
-
+    let specs = loaded_specs(&text);
     let pipeline = Pipeline::build(&registry, &specs).expect("should build");
     let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
@@ -216,4 +227,47 @@ args.path = "{output_path}"
 
     let written = fs::read(&output).expect("reads the output");
     assert_eq!(written, stream);
+}
+
+#[test]
+fn an_eight_bit_y4m_pipe_comes_out_at_ten_bits() {
+    let (fd, feeder) = piped(y4m_stream());
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let output = folder.path().join("output.y4m");
+    let output_path = output.to_str().expect("a utf-8 path");
+
+    let text = format!(
+        r#"
+[source.input]
+type = "y4m/pipe"
+args.fd = {fd}
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["input"]
+args.path = "{output_path}"
+"#
+    );
+
+    let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+    let specs = loaded_specs(&text);
+    let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
+    let compiled = pipeline.compile(&backend).expect("should compile");
+
+    let engine = compiled
+        .engine(Settings::default())
+        .expect("should build the engine");
+    let report = engine.run().expect("should run");
+    feeder.join().expect("the feeder finishes");
+
+    assert_eq!(report.frames, FRAME_COUNT);
+
+    let written = fs::read(&output).expect("reads the output");
+    let header_end = written
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .expect("the output has a header line");
+    let header = String::from_utf8_lossy(&written[..header_end]);
+    assert!(header.contains(" C420p10"), "{header}");
 }

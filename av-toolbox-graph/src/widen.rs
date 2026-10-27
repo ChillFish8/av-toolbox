@@ -9,7 +9,7 @@ use crate::graph::{CompiledGraph, InjectedStage, NodeId};
 pub(crate) const DEPTH_STAGE: &str = "resample/depth";
 
 /// The name of [DEPTH_STAGE]'s one input.
-const DEPTH_INPUT: &str = "input";
+pub(crate) const DEPTH_INPUT: &str = "input";
 
 /// One depth stage to inject, with every edge that reads it.
 struct Planned {

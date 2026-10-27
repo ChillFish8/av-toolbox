@@ -1,5 +1,7 @@
 #![cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 
+mod support;
+
 use std::fs;
 use std::path::Path;
 
@@ -293,8 +295,11 @@ fn run_stage(stage: &str, alone_args: &str, bits: u32) -> Run {
     let supplied = Supplied::new();
     let loaded =
         av_toolbox_pipeline::load(&pipeline_path, &DiskFiles, &supplied).expect("the file should load");
+    let mut specs = loaded.specs;
+    support::written_at(&mut specs, bits);
+
     let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
-    let pipeline = Pipeline::build(&registry, &loaded.specs).expect("should build");
+    let pipeline = Pipeline::build(&registry, &specs).expect("should build");
     let backend = Backend::open_default(test_device()).expect("should open a device");
     let compiled = pipeline.compile(&backend).expect("should compile");
     let settings = Settings::default();

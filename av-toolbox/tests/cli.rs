@@ -604,6 +604,38 @@ mod device {
         bytes
     }
 
+    /// The same stream as [y4m_stream] at 10 bits, each sample scaled across the full range.
+    fn ten_bit_y4m_stream() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let ratio = y4m::Ratio::new(30000, 1001);
+        let range = y4m::VendorExtensionString::new(b"COLORRANGE=FULL".to_vec()).expect("valid");
+        let mut encoder = y4m::encode(FRAME_SIZE, FRAME_SIZE, ratio)
+            .with_colorspace(y4m::Colorspace::C420p10)
+            .append_vendor_extension(range)
+            .write_header(&mut bytes)
+            .expect("writes the header");
+
+        let luma_size = FRAME_SIZE * FRAME_SIZE;
+        let chroma_size = (FRAME_SIZE / 2) * (FRAME_SIZE / 2);
+        let u_plane = ten_bit_plane(100, chroma_size);
+        let v_plane = ten_bit_plane(150, chroma_size);
+        for index in 0..FRAME_COUNT {
+            let luma = ten_bit_plane(index as u8, luma_size);
+            let frame = y4m::Frame::new([&luma, &u_plane, &v_plane], None);
+            encoder.write_frame(&frame).expect("writes a frame");
+        }
+
+        bytes
+    }
+
+    /// A plane of `size` little-endian 10-bit samples, each the full range equivalent of `sample`.
+    fn ten_bit_plane(sample: u8, size: usize) -> Vec<u8> {
+        let scaled = (u32::from(sample) * 1023 + 127) / 255;
+        let scaled = u16::try_from(scaled).expect("a 10-bit sample");
+
+        scaled.to_le_bytes().repeat(size)
+    }
+
     /// A luma plane of repeatable noise, with a different pattern in the second half of the
     /// stream.
     fn noisy_luma(index: u64) -> Vec<u8> {
@@ -649,7 +681,7 @@ mod device {
     }
 
     #[test]
-    fn executing_the_passthrough_example_copies_stdin_to_stdout() {
+    fn executing_the_passthrough_example_writes_stdin_to_stdout_at_ten_bits() {
         let path = example("passthrough.toml");
         let path = path.to_str().expect("utf-8 path");
 
@@ -663,7 +695,7 @@ mod device {
 
         let mut stdin = child.stdin.take().expect("stdin is piped");
         let input = y4m_stream();
-        let expected = input.clone();
+        let expected = ten_bit_y4m_stream();
         let feeder = thread::spawn(move || {
             stdin.write_all(&input).expect("writes the stream");
         });

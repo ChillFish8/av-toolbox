@@ -19,7 +19,20 @@ use av_toolbox_core::{Parallelism, PipelineRegistry};
 use self::artefacts::{Files, Grain, Scenes};
 pub(crate) use self::counted::COUNTED_OPENS;
 use self::counted::{Counted, Unopenable};
-use self::endpoints::{Deep, File, Float, FloatFirst, Stdout, Wide, WideningSource};
+use self::endpoints::{
+    Deep,
+    Eight,
+    File,
+    Float,
+    FloatFirst,
+    Grey,
+    Sixteen,
+    Stdout,
+    Twelve,
+    Wide,
+    WideningSource,
+    Y4m,
+};
 use self::filters::{
     Blur,
     Deband,
@@ -145,6 +158,11 @@ pub(crate) fn registry_without_probe_kinds() -> PipelineRegistry {
     registry
         .register_filter::<ResampleDepth>()
         .expect("should register");
+    registry.register_source::<Eight>().expect("should register");
+    registry.register_source::<Twelve>().expect("should register");
+    registry.register_source::<Sixteen>().expect("should register");
+    registry.register_source::<Grey>().expect("should register");
+    registry.register_sink::<Y4m>().expect("should register");
 
     registry
 }
@@ -161,7 +179,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 53);
+        assert_eq!(identifiers.len(), 58);
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));
@@ -191,6 +209,8 @@ mod tests {
         assert!(identifiers.contains(&"test/probing"));
         assert!(identifiers.contains(&"test/pair"));
         assert!(identifiers.contains(&"resample/depth"));
+        assert!(identifiers.contains(&"test/twelve"));
+        assert!(identifiers.contains(&"test/y4m"));
     }
 
     #[test]
