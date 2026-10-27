@@ -202,7 +202,7 @@ fn rgb_and_chroma_layouts_are_refused() {
 }
 
 #[test]
-fn floats_are_left_out_and_a_mask_is_refused() {
+fn floats_are_accepted_and_a_mask_is_refused() {
     let capabilities = capabilities();
     let float_input = format(16, 8, FrameLayout::Grey, SampleFormat::F32);
     let floats = StreamFormat::Frames(float_input);
@@ -216,16 +216,30 @@ fn floats_are_left_out_and_a_mask_is_refused() {
 
     let float_set = accepted(floats).expect("frames are readable");
     let mask_error = accepted(mask).expect_err("a mask is refused");
-    let float_error = produced(&capabilities, float_input, json!({})).expect_err("floats are refused");
+    let float_output = produced(&capabilities, float_input, json!({})).expect("floats are upscalable");
 
     let mask_message = mask_error.to_string();
-    let float_message = float_error.to_string();
-    let float_name = SampleFormat::F32.to_string();
-    assert!(float_set.is_empty());
+    assert_eq!(float_set, FormatSet::of([SampleFormat::F32]));
+    assert_eq!(float_output.sample, SampleFormat::F32);
     assert!(mask_message.contains(STAGE), "{mask_message}");
     assert!(mask_message.contains("mask"), "{mask_message}");
-    assert!(float_message.contains(STAGE), "{float_message}");
-    assert!(float_message.contains(&float_name), "{float_message}");
+}
+
+#[test]
+fn the_output_is_f32_for_every_input() {
+    let capabilities = capabilities();
+    let arguments = args(json!({}));
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = format(16, 8, FrameLayout::Grey, sample);
+        let chosen = [Some(StreamFormat::Frames(input))];
+
+        let outputs = Artcnn::produces(&capabilities, &arguments, &chosen).expect("upscalable");
+
+        assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]), "{sample}");
+    }
 }
 
 #[test]
@@ -511,6 +525,16 @@ fn an_unknown_kernel_value_is_refused_naming_the_variable() {
 
 #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 mod device_tests {
+    use av_toolbox_core::{
+        Filter,
+        InputArgument,
+        Inputs,
+        PipelineRegistry,
+        PreparedStage,
+        StageHandle,
+        StageKind,
+        StreamType,
+    };
     use av_toolbox_cubek::DevicePlane;
     use av_toolbox_cubek::artcnn::{
         Candidate,
@@ -521,12 +545,27 @@ mod device_tests {
         offered_candidates,
         tiles,
     };
+    use av_toolbox_cubek::matrix::SampleRange;
     use av_toolbox_cubek::testing::{failing_kernels, reference_artcnn};
-    use av_toolbox_gpu::{Backend, BuildContext, BuildTask, Runtime, test_device};
+    use av_toolbox_cubek::values::FloatCodes;
+    use av_toolbox_gpu::{
+        Backend,
+        BuildContext,
+        BuildTask,
+        Channel,
+        ColourRange,
+        FrameMeta,
+        HostPool,
+        HostStreamItem,
+        ResolvedFormats,
+        Runtime,
+        test_device,
+    };
     use cubecl::prelude::CubeElement;
 
     use super::*;
     use crate::artcnn::Supersampler;
+    use crate::upscale::artcnn::doubled;
 
     /// Loads R8F64 at f16 for a `width` by `height` plane, giving the path and tile it chose.
     struct Loaded {
@@ -559,7 +598,15 @@ mod device_tests {
     }
 
     fn load_r8f64<R: Runtime>(build: &BuildContext<R>, width: u32, height: u32) -> Supersampler {
-        let loaded = Supersampler::load(STAGE, build, ModelName::R8f64, PrecisionName::F16, width, height);
+        let loaded = Supersampler::load(
+            STAGE,
+            build,
+            ModelName::R8f64,
+            PrecisionName::F16,
+            width,
+            height,
+            true,
+        );
 
         loaded.expect("R8F64 loads")
     }
@@ -644,10 +691,17 @@ mod device_tests {
             let model = ModelName::R8f64;
             let precision = PrecisionName::F16;
             let loaded = match self.kernels {
-                Some(kernels) => {
-                    Supersampler::load_with(STAGE, build, model, precision, self.width, self.height, kernels)
-                },
-                None => Supersampler::load(STAGE, build, model, precision, self.width, self.height),
+                Some(kernels) => Supersampler::load_with(
+                    STAGE,
+                    build,
+                    model,
+                    precision,
+                    self.width,
+                    self.height,
+                    true,
+                    kernels,
+                ),
+                None => Supersampler::load(STAGE, build, model, precision, self.width, self.height, true),
             };
             let supersampler = loaded.expect("R8F64 loads");
 
@@ -744,6 +798,15 @@ mod device_tests {
     /// The code values the supersampler's frame runs on, up to this peak.
     const PEAK: f32 = 65535.0;
 
+    /// The largest error R8F64 at f16 makes against the reference, as a share of full scale.
+    const F16_REFERENCE_ERROR: f64 = 5e-4;
+
+    /// How far an f16 run of an F32 frame may stray from its 16-bit twin's luma, in 16-bit codes.
+    ///
+    /// The F32 frame's codes land a fraction of a code off the twin's, and the f16 feature maps round that
+    /// differently, so the two may differ by up to the network's own error.
+    const F16_TWIN_CODES: f32 = F16_REFERENCE_ERROR as f32 * PEAK;
+
     /// A plane of `width` by `height` in `0..=1`, with ripples, a ramp and a step.
     fn rippled(width: u32, height: u32) -> Vec<f32> {
         let mut plane = Vec::new();
@@ -769,7 +832,7 @@ mod device_tests {
     }
 
     struct FrameRun {
-        output: Vec<f32>,
+        codes: Vec<f32>,
         offered: BodyPath,
         layers: Vec<LayerRun>,
     }
@@ -787,6 +850,7 @@ mod device_tests {
                 PrecisionName::F16,
                 self.width,
                 self.height,
+                false,
             );
             let supersampler = loaded.expect("R8F64 loads");
             let context = build.frame_context();
@@ -805,11 +869,10 @@ mod device_tests {
             ran.expect("the frame runs");
 
             let bytes = client.read_one(output).expect("the output reads back");
-            let values = f32::from_bytes(&bytes);
-            let output = values.iter().map(|code| code / PEAK).collect();
+            let codes = f32::from_bytes(&bytes).to_vec();
 
             FrameRun {
-                output,
+                codes,
                 offered,
                 layers: supersampler.layers().to_vec(),
             }
@@ -835,19 +898,204 @@ mod device_tests {
         let ran = backend.build(task);
 
         let error = ran
-            .output
+            .codes
             .iter()
             .zip(&expected)
-            .map(|(got, want)| (f64::from(*got) - want).abs())
+            .map(|(got, want)| (f64::from(*got) / f64::from(PEAK) - want).abs())
             .fold(0.0, f64::max);
+        let fractional = ran.codes.iter().filter(|code| code.fract() != 0.0).count();
         let tuned = ran.layers.iter().all(|layer| layer.candidate.is_some());
-        println!("loaded 24x20: largest error {error:e}, tuned {tuned}");
+        println!("loaded 24x20: largest error {error:e}, {fractional} fractional codes, tuned {tuned}");
+
+        assert!(fractional > 0, "every code was rounded");
 
         if ran.offered == BodyPath::Convolution {
             assert!(tuned, "a body layer skipped the tuned path");
         }
 
         // The bound of the R8F64 24x20 case on every path.
-        assert!(error <= 5e-4, "{error:e}");
+        assert!(error <= F16_REFERENCE_ERROR, "{error:e}");
+    }
+
+    /// A limited range 4:2:0 frame of `width` by `height` in `sample`.
+    fn limited_yuv420(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
+        let layout = FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv420,
+        };
+        let colour = ColourInfo {
+            range: ColourRange::Limited,
+            ..ColourInfo::default()
+        };
+
+        FrameFormat {
+            colour,
+            ..format(width, height, layout, sample)
+        }
+    }
+
+    /// Runs one frame through `upscale/artcnn`, built the way a pipeline would, and reads every output plane
+    /// back as bytes.
+    struct UpscaledFrame {
+        filter: Box<dyn Filter>,
+        input: FrameFormat,
+        planes: Vec<Vec<u8>>,
+    }
+
+    impl BuildTask for UpscaledFrame {
+        type Output = Vec<Vec<u8>>;
+
+        fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+            let mut context = build.frame_context();
+            let host = HostPool::new();
+            let meta = FrameMeta::at(0);
+            let mut frame = host.alloc_frame(&self.input, meta);
+
+            for (channel, bytes) in self.input.channels().iter().zip(&self.planes) {
+                let plane = frame
+                    .plane_mut(*channel)
+                    .expect("the format carries this channel");
+                plane.copy_from_slice(bytes);
+            }
+
+            let item = HostStreamItem::Frame(frame.freeze());
+            let loaded = context.load_host(&item).expect("the frame loads");
+            let inputs = Inputs::new(vec![Some(loaded)]);
+
+            self.filter
+                .start_of_stream(&mut context)
+                .expect("the stream starts");
+            let mut emitted = self.filter.process(&mut context, inputs).expect("the frame runs");
+            let output = emitted.pop().expect("a frame is emitted");
+
+            self.input
+                .channels()
+                .iter()
+                .map(|channel| {
+                    let plane = output.plane(*channel).expect("the output carries this channel");
+                    let handle = plane.buffer().handle().clone();
+                    let bytes = build.client().read_one(handle).expect("the plane reads back");
+                    bytes.to_vec()
+                })
+                .collect()
+        }
+    }
+
+    /// Upscales `planes` of `input` into F32, and reads every output plane back as 16-bit codes.
+    fn upscaled_codes(input: FrameFormat, args: &serde_json::Value, planes: Vec<Vec<u8>>) -> Vec<Vec<f32>> {
+        let backend = Backend::open_default(test_device()).expect("a backend should open");
+        let mut registry = PipelineRegistry::new();
+        crate::register(&mut registry).expect("the filters register");
+
+        let handle = StageHandle::new(1);
+        let arguments = [InputArgument::positional(handle, StreamType::Frames)];
+        let prepared = registry
+            .prepare(StageKind::Filter, STAGE, args, &arguments)
+            .expect("the stage prepares");
+        let PreparedStage::Filter(prepared) = prepared else {
+            panic!("expected a filter");
+        };
+
+        let output = FrameFormat {
+            sample: SampleFormat::F32,
+            ..doubled(&input)
+        };
+        let input_format = StreamFormat::Frames(input);
+        let output_format = StreamFormat::Frames(output);
+        let formats = ResolvedFormats::new(vec![Some(input_format)], Some(output_format));
+        let built = prepared.build(&backend, &formats).expect("the stage builds");
+        let filter = built.into_device().expect("a device filter");
+
+        let task = UpscaledFrame {
+            filter,
+            input,
+            planes,
+        };
+        let found = backend.build(task);
+
+        output
+            .channels()
+            .iter()
+            .zip(found)
+            .map(|(channel, bytes)| {
+                let chroma = matches!(channel, Channel::U | Channel::V);
+                let codes = FloatCodes::new(16, SampleRange::Limited, chroma);
+                let (words, _) = bytes.as_chunks::<4>();
+                words
+                    .iter()
+                    .map(|word| f32::from_le_bytes(*word) * codes.scale + codes.offset)
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Upscales a 16-bit frame and its F32 twin with `args`, giving the largest difference of each plane in
+    /// 16-bit codes.
+    fn twin_differences(args: serde_json::Value) -> Vec<f32> {
+        let sixteen_bit = SampleFormat::U16 {
+            depth: BitDepth::SIXTEEN,
+        };
+        let integer_input = limited_yuv420(24, 20, sixteen_bit);
+        let float_input = limited_yuv420(24, 20, SampleFormat::F32);
+        let mut integer_planes = Vec::new();
+        let mut float_planes = Vec::new();
+
+        for &channel in integer_input.channels() {
+            let (width, height) = integer_input
+                .channel_dimensions(channel)
+                .expect("a listed channel");
+            let chroma = matches!(channel, Channel::U | Channel::V);
+            let codes = FloatCodes::new(16, SampleRange::Limited, chroma);
+            let values: Vec<u16> = rippled(width, height)
+                .iter()
+                .map(|value| (4096.0 + value * 56064.0).round() as u16)
+                .collect();
+            let integer_bytes = values.iter().flat_map(|code| code.to_le_bytes()).collect();
+            let float_bytes = values
+                .iter()
+                .map(|code| (f32::from(*code) - codes.offset) / codes.scale)
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect();
+            integer_planes.push(integer_bytes);
+            float_planes.push(float_bytes);
+        }
+
+        let integer_codes = upscaled_codes(integer_input, &args, integer_planes);
+        let float_codes = upscaled_codes(float_input, &args, float_planes);
+
+        let mut largest_per_plane = Vec::new();
+        for (integer, float) in integer_codes.iter().zip(&float_codes) {
+            let largest = integer
+                .iter()
+                .zip(float)
+                .map(|(integer_code, float_code)| (integer_code - float_code).abs())
+                .fold(0.0f32, f32::max);
+            largest_per_plane.push(largest);
+        }
+
+        println!("{args}: largest difference per plane {largest_per_plane:?} codes");
+
+        largest_per_plane
+    }
+
+    #[test]
+    fn an_f32_frame_matches_its_sixteen_bit_twin() {
+        let largest_per_plane = twin_differences(json!({ "precision": "f32" }));
+
+        for (plane, largest) in largest_per_plane.iter().enumerate() {
+            assert!(*largest <= 0.05, "plane {plane} differs by {largest} codes");
+        }
+    }
+
+    #[test]
+    fn an_f32_frame_at_f16_stays_within_the_network_error_of_its_twin() {
+        let largest_per_plane = twin_differences(json!({}));
+
+        let [luma, chroma @ ..] = largest_per_plane.as_slice() else {
+            panic!("the frame has a luma plane");
+        };
+        assert!(*luma <= F16_TWIN_CODES, "luma differs by {luma} codes");
+        for largest in chroma {
+            assert!(*largest <= 0.05, "chroma differs by {largest} codes");
+        }
     }
 }

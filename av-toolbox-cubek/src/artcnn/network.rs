@@ -249,8 +249,9 @@ pub struct Maps<'a> {
 /// Runs the network over `region` of `input`, divided by `peak`, and writes the doubled `core` into `output`.
 /// Gives how each body layer ran, in order.
 ///
-/// The region's edge is padded with zero. Each output sample is clamped to `0..=1`, scaled by `peak` and
-/// rounded. The four maps must be distinct buffers, since a layer reads one while writing another.
+/// The region's edge is padded with zero. Each output sample is clamped to `0..=1` and scaled by `peak`, and
+/// rounded to whole codes when `rounded` is set. The four maps must be distinct buffers, since a layer reads
+/// one while writing another.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
@@ -262,6 +263,7 @@ pub fn run_region<R: Runtime>(
     path: BodyPath,
     input: DevicePlane<'_>,
     peak: f32,
+    rounded: bool,
     region: Region,
     core: Region,
     maps: Maps<'_>,
@@ -273,7 +275,7 @@ pub fn run_region<R: Runtime>(
     };
 
     run_region_on(
-        client, dispatch, network, body, input, peak, region, core, maps, output,
+        client, dispatch, network, body, input, peak, rounded, region, core, maps, output,
     )
 }
 
@@ -291,6 +293,7 @@ pub fn run_region_with_candidate<R: Runtime>(
     candidate: Candidate,
     input: DevicePlane<'_>,
     peak: f32,
+    rounded: bool,
     region: Region,
     core: Region,
     maps: Maps<'_>,
@@ -302,7 +305,7 @@ pub fn run_region_with_candidate<R: Runtime>(
     };
 
     run_region_on(
-        client, dispatch, network, body, input, peak, region, core, maps, output,
+        client, dispatch, network, body, input, peak, rounded, region, core, maps, output,
     )
 }
 
@@ -324,6 +327,7 @@ fn run_region_on<R: Runtime>(
     body: Body,
     input: DevicePlane<'_>,
     peak: f32,
+    rounded: bool,
     region: Region,
     core: Region,
     maps: Maps<'_>,
@@ -441,9 +445,11 @@ fn run_region_on<R: Runtime>(
         BodyPath::Convolution | BodyPath::UnfusedConvolution => {
             // `conv0` is dead once the join has read it, so the padded last layer writes into it.
             padded_last_layer(client, network, joined, region, maps.conv0)?;
-            shuffle(client, dispatch, maps.conv0, region, core, peak, output);
+            shuffle(client, dispatch, maps.conv0, region, core, peak, rounded, output);
         },
-        BodyPath::Im2col => last_layer(client, dispatch, network, joined, region, core, peak, output),
+        BodyPath::Im2col => last_layer(
+            client, dispatch, network, joined, region, core, peak, rounded, output,
+        ),
     }
 
     Ok(runs)

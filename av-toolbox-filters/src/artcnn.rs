@@ -223,7 +223,11 @@ struct Warmed {
     layers: Vec<LayerRun>,
 }
 
-/// Warms the network up on `path` at the frame's size.
+/// Warms the network up on `path` at the frame's size, with the last write rounded when `rounded` is set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the warm-up"
+)]
 fn warm_up_on<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
@@ -232,13 +236,14 @@ fn warm_up_on<R: Runtime>(
     cap: usize,
     width: u32,
     height: u32,
+    rounded: bool,
 ) -> Result<Warmed, CnnError> {
     let tile = tile_for(network, path, cap, width, height);
     let buffers = MapBuffers::new(context, network, path, tile, width, height);
     let maps = buffers.maps();
     let sizing = Sizing(context);
 
-    let layers = warm_up(client, &sizing, network, path, width, height, tile, maps)?;
+    let layers = warm_up(client, &sizing, network, path, width, height, rounded, tile, maps)?;
 
     Ok(Warmed { tile, layers })
 }
@@ -249,6 +254,7 @@ pub(crate) struct Supersampler {
     network: Network,
     path: BodyPath,
     tile: u32,
+    rounded: bool,
     #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     layers: Vec<LayerRun>,
 }
@@ -256,7 +262,7 @@ pub(crate) struct Supersampler {
 impl Supersampler {
     /// Finds and reads `model` at `precision`, then warms it up on a `width` by `height` plane.
     ///
-    /// The fused convolution path is taken when the device offers it, falling back to the unfused
+    /// Its output is rounded to whole codes when `rounded` is set. The fused convolution path is taken when the device offers it, falling back to the unfused
     /// convolution and then to im2col when it cannot run there. Its f16 body convolutions choose their
     /// kernel by autotune, which benchmarks during the warm-up, unless [KERNEL_ENV] pins one.
     pub(crate) fn load<R: Runtime>(
@@ -266,15 +272,20 @@ impl Supersampler {
         precision: PrecisionName,
         width: u32,
         height: u32,
+        rounded: bool,
     ) -> Result<Self, StageError> {
         let pinned = std::env::var(KERNEL_ENV).ok();
         let kernels = kernels_from_value(stage, pinned.as_deref())?;
 
-        Self::load_with(stage, context, model, precision, width, height, kernels)
+        Self::load_with(stage, context, model, precision, width, height, rounded, kernels)
     }
 
     /// The same as [Supersampler::load](crate::artcnn::Supersampler::load), with the body convolutions
     /// choosing their kernel by `kernels`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct input of the load"
+    )]
     pub(crate) fn load_with<R: Runtime>(
         stage: &'static str,
         context: &BuildContext<R>,
@@ -282,6 +293,7 @@ impl Supersampler {
         precision: PrecisionName,
         width: u32,
         height: u32,
+        rounded: bool,
         kernels: Kernels,
     ) -> Result<Self, StageError> {
         let capabilities = context.capabilities();
@@ -296,7 +308,16 @@ impl Supersampler {
         let chosen = body_path(capabilities, precision);
         let cap = allocation_cap(capabilities);
         let warmed = warmed_path(stage, chosen, |path| {
-            warm_up_on(client, &frame_context, &network, path, cap, width, height)
+            warm_up_on(
+                client,
+                &frame_context,
+                &network,
+                path,
+                cap,
+                width,
+                height,
+                rounded,
+            )
         })?;
         let (path, outcome) = warmed;
 
@@ -312,6 +333,7 @@ impl Supersampler {
             network,
             path,
             tile: outcome.tile,
+            rounded,
             #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
             layers: outcome.layers,
         })
@@ -347,8 +369,8 @@ impl Supersampler {
 
     /// Doubles `input` into `output`, both f32 code values up to `peak`.
     ///
-    /// The output is rounded to code values. `input` must be the size given to
-    /// [Supersampler::load](crate::artcnn::Supersampler::load), since the tile is chosen there.
+    /// The output is rounded to whole codes when the supersampler was loaded to round. `input` must be the size
+    /// given to [Supersampler::load](crate::artcnn::Supersampler::load), since the tile is chosen there.
     pub(crate) fn run<R: Runtime>(
         &self,
         client: &ComputeClient<R>,
@@ -370,6 +392,7 @@ impl Supersampler {
             self.path,
             input,
             peak,
+            self.rounded,
             self.tile,
             maps,
             output,

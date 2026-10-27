@@ -14,9 +14,7 @@ use av_toolbox_core::{
 use av_toolbox_cubek::DevicePlane;
 #[cfg(test)]
 use av_toolbox_cubek::artcnn::{BodyPath, CnnError};
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::resize::{Kernel, Samples};
-use av_toolbox_cubek::values::{narrow, widen};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -45,12 +43,12 @@ pub(crate) use crate::artcnn::ModelName;
 use crate::artcnn::Supersampler;
 #[cfg(test)]
 pub(crate) use crate::artcnn::{KERNEL_ENV, frame_tile, kernels_from_value};
-use crate::bits::bits_of;
 pub(crate) use crate::cnn::PrecisionName;
 use crate::cnn::checked_precision;
 #[cfg(test)]
 pub(crate) use crate::cnn::{allocation_cap, body_path, fallbacks, warmed_path};
-use crate::resize::{Tables, Window, geometry, resize_plane, samples_for};
+use crate::codes::CodeValues;
+use crate::resize::{Tables, Window, geometry, resize_plane, samples_between};
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
 
@@ -76,10 +74,6 @@ fn upscalable_layout(layout: FrameLayout) -> bool {
     matches!(layout, FrameLayout::Grey | FrameLayout::Yuv { .. })
 }
 
-fn upscalable_sample(sample: SampleFormat) -> bool {
-    matches!(sample, SampleFormat::U8 | SampleFormat::U16 { .. })
-}
-
 fn missing_input() -> StageError {
     let message = format!("{STAGE} needs its input bound");
 
@@ -94,12 +88,6 @@ fn not_frames() -> StageError {
 
 fn unusable_layout(layout: FrameLayout) -> StageError {
     let message = format!("{STAGE} upscales grey or yuv frames, not {layout} frames");
-
-    StageError::msg(message)
-}
-
-fn unusable_sample(sample: SampleFormat) -> StageError {
-    let message = format!("{STAGE} upscales U8 or U16 frames, not {sample} frames");
 
     StageError::msg(message)
 }
@@ -128,7 +116,7 @@ pub(crate) fn failed_convolution_and_im2col(convolution: CnnError, im2col: CnnEr
     crate::cnn::failed_every_path(STAGE, failures)
 }
 
-/// The input format, once it is known to be U8 or U16 frames in a grey or YUV layout.
+/// The input format, once it is known to be frames in a grey or YUV layout.
 pub(crate) fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageError> {
     let Some(input) = chosen.first().copied().flatten() else {
         return Err(missing_input());
@@ -142,10 +130,6 @@ pub(crate) fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameForm
         return Err(unusable_layout(format.layout));
     }
 
-    if !upscalable_sample(format.sample) {
-        return Err(unusable_sample(format.sample));
-    }
-
     Ok(*format)
 }
 
@@ -157,10 +141,6 @@ fn accepted_samples(offered: StreamFormat) -> Result<FormatSet, StageError> {
 
     if !upscalable_layout(format.layout) {
         return Err(unusable_layout(format.layout));
-    }
-
-    if !upscalable_sample(format.sample) {
-        return Ok(FormatSet::new());
     }
 
     Ok(FormatSet::of([format.sample]))
@@ -260,7 +240,7 @@ impl FilterDefinition for Artcnn {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([output.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
@@ -279,23 +259,25 @@ impl FilterDefinition for Artcnn {
             args.precision,
             input.width,
             input.height,
+            false,
         )?;
 
         let client = context.client().clone();
         let chroma = chroma_tables(&client, &input);
-        let bits = bits_of(input.sample);
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = ((1u32 << bits) - 1) as f32;
-        let samples = samples_for(input.sample);
+        let codes = CodeValues::new(&input, SampleFormat::F32);
+        let chroma_samples = samples_between(&input, SampleFormat::F32, true);
+        let output = FrameFormat {
+            sample: SampleFormat::F32,
+            ..doubled(&input)
+        };
 
         let upscaler = Upscaler {
             client,
             supersampler,
-            output: doubled(&input),
+            output,
             chroma,
-            element,
-            peak,
-            samples,
+            codes,
+            chroma_samples,
         };
 
         Ok(Box::new(upscaler))
@@ -308,13 +290,13 @@ struct Upscaler<R: Runtime> {
     supersampler: Supersampler,
     output: FrameFormat,
     chroma: Option<Tables>,
-    element: Element,
-    peak: f32,
-    samples: Samples,
+    codes: CodeValues,
+    chroma_samples: Samples,
 }
 
 impl<R: Runtime> Upscaler<R> {
-    /// Widens `input` to f32, runs the network over it, and narrows the doubled result into `output`.
+    /// Widens `input` to code values, runs the network over them, and stores the doubled result into `output`
+    /// unrounded.
     fn upscale_luma(&self, context: &FrameContext, input: &Plane, output: &Plane) -> Result<(), StageError> {
         let (width, height) = input.dimensions();
         let (doubled_width, doubled_height) = output.dimensions();
@@ -334,19 +316,16 @@ impl<R: Runtime> Upscaler<R> {
         // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
         let target_plane = unsafe { DevicePlane::new(target_handle, doubled_width, doubled_height) };
 
-        widen(&self.client, &sizing, source_plane, input_plane, self.element);
+        let peak = self.codes.peak();
+
+        self.codes
+            .widen(&self.client, &sizing, source_plane, input_plane, Channel::Y);
 
         self.supersampler
-            .run(&self.client, context, input_plane, self.peak, output_plane)?;
+            .run(&self.client, context, input_plane, peak, output_plane)?;
 
-        narrow(
-            &self.client,
-            &sizing,
-            output_plane,
-            target_plane,
-            self.element,
-            self.peak,
-        );
+        self.codes
+            .store(&self.client, &sizing, output_plane, target_plane, Channel::Y);
 
         Ok(())
     }
@@ -392,7 +371,7 @@ impl<R: Runtime> Filter for Upscaler<R> {
                 input_plane,
                 output_plane,
                 tables,
-                self.samples,
+                self.chroma_samples,
             );
         }
 

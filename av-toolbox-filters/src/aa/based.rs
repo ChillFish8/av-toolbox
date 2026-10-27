@@ -540,7 +540,9 @@ impl<R: Runtime> BasedChain<R> {
         width: u32,
         height: u32,
     ) -> Result<Self, StageError> {
-        let supersampler = Supersampler::load(STAGE, context, args.model, args.precision, width, height)?;
+        // eedi3 reads whole codes, so the supersampled clip is rounded.
+        let supersampler =
+            Supersampler::load(STAGE, context, args.model, args.precision, width, height, true)?;
 
         let client = context.client().clone();
         let settings = Eedi3Settings::new(arguments, bits);

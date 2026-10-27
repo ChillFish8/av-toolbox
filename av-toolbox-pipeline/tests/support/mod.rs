@@ -2,7 +2,8 @@ use av_toolbox_core::StageKind;
 use av_toolbox_graph::{ArgSpans, InputRef, Spanned, StageSpec};
 use serde_json::json;
 
-/// Puts a `resample/depth` to `bits` in front of every y4m sink in `specs`.
+/// Puts a `resample/depth` to `bits` without dither in front of every y4m sink in `specs`, so float clips
+/// round to their nearest codes.
 pub(crate) fn written_at(specs: &mut Vec<StageSpec>, bits: u32) {
     let mut conversions = Vec::new();
 
@@ -24,7 +25,7 @@ pub(crate) fn written_at(specs: &mut Vec<StageSpec>, bits: u32) {
             kind: StageKind::Filter,
             stage_type: Spanned::new(String::from("resample/depth"), sink.stage_type.span),
             inputs,
-            args: Spanned::new(json!({ "depth": bits }), sink.args.span),
+            args: Spanned::new(json!({ "depth": bits, "dither": "none" }), sink.args.span),
             arg_spans: ArgSpans::new(),
             workers: None,
             span: sink.span,

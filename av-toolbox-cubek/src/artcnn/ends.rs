@@ -72,15 +72,27 @@ impl CoreUnit {
     }
 }
 
-/// Clamps `value` to `0..=1`, scales it by `peak`, rounds it and writes it to `unit`'s place in the doubled
-/// output.
+/// Clamps `value` to `0..=1`, scales it by `peak` and writes it to `unit`'s place in the doubled output,
+/// rounded to a whole code when `rounded` is set.
 #[cube]
-fn write_doubled(output: &mut Array<f32>, output_width: u32, unit: &CoreUnit, value: f32, peak: f32) {
+fn write_doubled(
+    output: &mut Array<f32>,
+    output_width: u32,
+    unit: &CoreUnit,
+    value: f32,
+    peak: f32,
+    #[comptime] rounded: bool,
+) {
     let clamped = f32::clamp(value, 0.0, 1.0);
-    let rounded = f32::floor(clamped * peak + 0.5);
+    let mut scaled = clamped * peak;
+
+    if rounded {
+        scaled = f32::floor(scaled + 0.5);
+    }
+
     let out_row = unit.plane_row * 2 + unit.channel / 2;
     let out_column = unit.plane_column * 2 + unit.channel % 2;
-    output[(out_row * output_width + out_column) as usize] = rounded;
+    output[(out_row * output_width + out_column) as usize] = scaled;
 }
 
 #[cube(launch_unchecked)]
@@ -100,6 +112,7 @@ fn last_layer_kernel<F: Float>(
     core_samples: u32,
     features: u32,
     peak: f32,
+    #[comptime] rounded: bool,
 ) {
     if ABSOLUTE_POS >= (core_samples * 4) as usize {
         terminate!();
@@ -123,7 +136,7 @@ fn last_layer_kernel<F: Float>(
         features,
     );
 
-    write_doubled(output, output_width, &unit, sum, peak);
+    write_doubled(output, output_width, &unit, sum, peak, rounded);
 }
 
 #[cube(launch_unchecked)]
@@ -140,6 +153,7 @@ fn shuffle_kernel(
     core_samples: u32,
     channels: u32,
     peak: f32,
+    #[comptime] rounded: bool,
 ) {
     if ABSOLUTE_POS >= (core_samples * 4) as usize {
         terminate!();
@@ -152,7 +166,7 @@ fn shuffle_kernel(
     let source = (row * region_width + column) * channels + unit.channel;
     let value = scratch[source as usize];
 
-    write_doubled(output, output_width, &unit, value, peak);
+    write_doubled(output, output_width, &unit, value, peak, rounded);
 }
 
 /// Runs the network's first layer over `region` of `input`, divided by `peak`, into NHWC maps in `output`.
@@ -242,7 +256,8 @@ pub fn first_layer<R: Runtime>(
 
 /// Runs the network's last layer over the NHWC maps of `region` and writes `core` into the doubled `output`.
 ///
-/// Each sample of `core` becomes a 2x2 block of the output, clamped to `0..=1`, scaled by `peak` and rounded.
+/// Each sample of `core` becomes a 2x2 block of the output, clamped to `0..=1` and scaled by `peak`. It is
+/// rounded to whole codes when `rounded` is set.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
@@ -255,6 +270,7 @@ pub fn last_layer<R: Runtime>(
     region: Region,
     core: Region,
     peak: f32,
+    rounded: bool,
     output: DevicePlane<'_>,
 ) {
     check_core(region, core, output);
@@ -305,6 +321,7 @@ pub fn last_layer<R: Runtime>(
                 core_samples,
                 features,
                 peak,
+                rounded,
             ),
             Precision::F32 => last_layer_kernel::launch_unchecked::<f32, R>(
                 client,
@@ -325,6 +342,7 @@ pub fn last_layer<R: Runtime>(
                 core_samples,
                 features,
                 peak,
+                rounded,
             ),
         }
     }
@@ -395,8 +413,12 @@ pub fn padded_last_layer_with_blueprint<R: Runtime>(
 
 /// Writes `core` of the padded last layer's maps of `region` in `scratch` into the doubled `output`.
 ///
-/// Each sample of `core` becomes a 2x2 block of the output from its first four channels, clamped to `0..=1`,
-/// scaled by `peak` and rounded.
+/// Each sample of `core` becomes a 2x2 block of the output from its first four channels, clamped to `0..=1`
+/// and scaled by `peak`. It is rounded to whole codes when `rounded` is set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the launch"
+)]
 pub fn shuffle<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -404,6 +426,7 @@ pub fn shuffle<R: Runtime>(
     region: Region,
     core: Region,
     peak: f32,
+    rounded: bool,
     output: DevicePlane<'_>,
 ) {
     check_core(region, core, output);
@@ -444,6 +467,7 @@ pub fn shuffle<R: Runtime>(
             core_samples,
             channels,
             peak,
+            rounded,
         );
     }
 }

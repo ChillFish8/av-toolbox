@@ -133,7 +133,8 @@ pub(crate) fn haloed_scratch(
 
 /// Runs the network over the whole of `input`, divided by `peak`, one tile at a time.
 ///
-/// The result is written into `output`, which must be twice the input on each side. The maps must be sized
+/// The result is written into `output`, which must be twice the input on each side, as code values up to
+/// `peak` that are rounded to whole codes when `rounded` is set. The maps must be sized
 /// by [scratch_sizes](crate::artcnn::scratch_sizes) for the same `tile` and frame.
 #[expect(
     clippy::too_many_arguments,
@@ -146,11 +147,14 @@ pub fn artcnn<R: Runtime>(
     path: BodyPath,
     input: DevicePlane<'_>,
     peak: f32,
+    rounded: bool,
     tile: u32,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
 ) -> Result<(), CnnError> {
-    run_tiles(client, dispatch, network, path, input, peak, tile, maps, output)?;
+    run_tiles(
+        client, dispatch, network, path, input, peak, rounded, tile, maps, output,
+    )?;
 
     Ok(())
 }
@@ -167,6 +171,7 @@ fn run_tiles<R: Runtime>(
     path: BodyPath,
     input: DevicePlane<'_>,
     peak: f32,
+    rounded: bool,
     tile: u32,
     maps: Maps<'_>,
     output: DevicePlane<'_>,
@@ -216,7 +221,7 @@ fn run_tiles<R: Runtime>(
         };
 
         let region_runs = run_region(
-            client, dispatch, network, path, input, peak, region, core, tile_maps, output,
+            client, dispatch, network, path, input, peak, rounded, region, core, tile_maps, output,
         )?;
         runs.extend(region_runs);
     }
@@ -226,6 +231,8 @@ fn run_tiles<R: Runtime>(
 
 /// Runs one frame of zeros at the stage's size and waits for the device, so every kernel a frame uses is
 /// compiled and tuned before the first real frame. Gives how each body layer of each tile ran, in order.
+///
+/// `rounded` must match the frames' own runs, since the last write is compiled for one or the other.
 ///
 /// The maps must be sized by [scratch_sizes](crate::artcnn::scratch_sizes) for the same `tile` and frame. The
 /// input and output planes are allocated here.
@@ -240,6 +247,7 @@ pub fn warm_up<R: Runtime>(
     path: BodyPath,
     width: u32,
     height: u32,
+    rounded: bool,
     tile: u32,
     maps: Maps<'_>,
 ) -> Result<Vec<LayerRun>, CnnError> {
@@ -263,6 +271,7 @@ pub fn warm_up<R: Runtime>(
         path,
         input_plane,
         1.0,
+        rounded,
         tile,
         maps,
         output_plane,

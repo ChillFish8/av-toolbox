@@ -33,7 +33,7 @@ use av_toolbox_gpu::{
 pub(crate) use self::geometry::{Window, geometry};
 use self::geometry::{check_output, check_source, is_identity};
 use self::instance::Resizer;
-pub(crate) use self::instance::{Tables, resize_plane, samples_for};
+pub(crate) use self::instance::{Tables, resize_plane, samples_between, samples_for};
 pub(crate) use self::kernels::{
     Bicubic,
     Bilinear,

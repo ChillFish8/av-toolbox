@@ -75,6 +75,7 @@ impl BuildTask for Tiled {
             self.path,
             input_plane,
             PEAK,
+            true,
             self.tile,
             maps,
             output_plane,
@@ -130,6 +131,7 @@ impl BuildTask for WarmUp {
             self.path,
             self.width,
             self.height,
+            true,
             self.tile,
             maps,
         );
@@ -199,6 +201,7 @@ impl BuildTask for SmallFrame {
             self.path,
             input_plane,
             PEAK,
+            true,
             8,
             maps,
             output_plane,

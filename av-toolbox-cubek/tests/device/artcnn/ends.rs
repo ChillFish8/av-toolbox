@@ -191,6 +191,7 @@ struct LastLayer {
     output_width: u32,
     output_height: u32,
     peak: f32,
+    rounded: bool,
     precision: Precision,
 }
 
@@ -217,6 +218,7 @@ impl BuildTask for LastLayer {
             self.region,
             self.core,
             self.peak,
+            self.rounded,
             output_plane,
         );
         synced(client);
@@ -225,9 +227,12 @@ impl BuildTask for LastLayer {
     }
 }
 
-/// The region is offset in the plane, and the core touches its left, right and bottom edges.
-#[test]
-fn the_last_layer_shuffles_clamps_and_rounds_the_core() {
+/// Runs the last layer over an offset region whose core touches its left, right and bottom edges, and gives
+/// the largest error in codes against the clamped reference.
+///
+/// It checks every sample outside the core is untouched, and that the core's samples are whole codes when
+/// `rounded` is set and partly fractional otherwise.
+fn last_layer_largest_error(rounded: bool) -> f64 {
     let features = 8;
     let peak = 65535.0f32;
     let weights = synthetic_weights(features, 1, 4);
@@ -251,6 +256,7 @@ fn the_last_layer_shuffles_clamps_and_rounds_the_core() {
     let doubled_region_width = region.width * 2;
     let map_count = (region.samples() * features) as usize;
     let maps = signed_values(map_count, 11, 1.0);
+    let mut largest_error = 0.0f64;
 
     for precision in PRECISIONS {
         let stored = as_stored(&maps, precision);
@@ -269,14 +275,16 @@ fn the_last_layer_shuffles_clamps_and_rounds_the_core() {
             output_width,
             output_height,
             peak,
+            rounded,
             precision,
         };
 
         let actual = backend().build(task);
         assert_eq!(actual.len(), (output_width * output_height) as usize);
 
-        let mut largest_error = 0.0f64;
+        let mut precision_error = 0.0f64;
         let mut clamped_samples = 0;
+        let mut fractional_samples = 0;
         for row in 0..output_height {
             for column in 0..output_width {
                 let index = (row * output_width + column) as usize;
@@ -297,14 +305,12 @@ fn the_last_layer_shuffles_clamps_and_rounds_the_core() {
                 let region_row = row - region.y * 2;
                 let region_column = column - region.x * 2;
                 let want = expected[(region_row * doubled_region_width + region_column) as usize];
-                assert_eq!(
-                    got,
-                    got.round(),
-                    "({column}, {row}) was {got}, which is not rounded"
-                );
+                if got != got.round() {
+                    fractional_samples += 1;
+                }
 
                 let error = (f64::from(got) - want).abs();
-                largest_error = largest_error.max(error);
+                precision_error = precision_error.max(error);
 
                 if want == 0.0 || want == f64::from(peak) {
                     clamped_samples += 1;
@@ -313,19 +319,42 @@ fn the_last_layer_shuffles_clamps_and_rounds_the_core() {
         }
 
         println!(
-            "last layer {precision:?}: largest error {largest_error:e} codes, \
-             {clamped_samples} clamped samples"
+            "last layer {precision:?}, rounded {rounded}: largest error {precision_error:e} codes, \
+             {clamped_samples} clamped samples, {fractional_samples} fractional samples"
         );
 
-        // Rounding alone gives up to 0.5 codes. Measured 0.493 for f32 and 0.495 for f16, with 87 of the 180
-        // samples clamped, so 0.01 codes is left for the accumulation error.
-        assert!(largest_error <= 0.51, "{largest_error:e}");
+        if rounded {
+            assert_eq!(fractional_samples, 0, "a sample of the core was not rounded");
+        } else {
+            assert!(fractional_samples > 0, "every sample of the core was rounded");
+        }
+
         assert!(clamped_samples > 0, "no sample of the core reached a clamp");
         assert!(
             clamped_samples < core.samples() * 4,
             "every sample of the core was clamped"
         );
+        largest_error = largest_error.max(precision_error);
     }
+
+    largest_error
+}
+
+#[test]
+fn the_last_layer_shuffles_clamps_and_rounds_the_core() {
+    let largest_error = last_layer_largest_error(true);
+
+    // Rounding alone gives up to 0.5 codes. Measured 0.493 for f32 and 0.495 for f16, with 87 of the 180
+    // samples clamped, so 0.01 codes is left for the accumulation error.
+    assert!(largest_error <= 0.51, "{largest_error:e}");
+}
+
+#[test]
+fn the_unrounded_last_layer_clamps_and_scales_the_core() {
+    let largest_error = last_layer_largest_error(false);
+
+    // Measured 0.015 codes for f32 and 0.017 for f16, the accumulation error alone.
+    assert!(largest_error <= 0.02, "{largest_error:e}");
 }
 
 struct Epilogue {
@@ -486,6 +515,7 @@ struct PaddedAgainstDirect {
     output_width: u32,
     output_height: u32,
     peak: f32,
+    rounded: bool,
 }
 
 struct LastLayerOutputs {
@@ -520,6 +550,7 @@ impl BuildTask for PaddedAgainstDirect {
             self.region,
             self.core,
             self.peak,
+            self.rounded,
             direct_plane,
         );
         let ran = padded_last_layer(client, &network, &input, self.region, &scratch);
@@ -530,6 +561,7 @@ impl BuildTask for PaddedAgainstDirect {
             self.region,
             self.core,
             self.peak,
+            self.rounded,
             padded_plane,
         );
         synced(client);
@@ -560,11 +592,19 @@ fn large_region_and_core() -> (Region, Region) {
     (region, core)
 }
 
-/// Runs the padded last layer against the direct one at `peak`, and gives how many output samples differ.
+/// How far the padded last layer strays from the direct one.
+struct PaddedDifference {
+    /// The number of output samples that differ.
+    differing: usize,
+    /// The largest difference in codes.
+    largest: f32,
+}
+
+/// Runs the padded last layer against the direct one at `peak`, rounding when `rounded` is set.
 ///
 /// It fails if any sample differs by more than one code, or if fewer than a quarter of the core's samples lie
 /// strictly between the clamps.
-fn padded_samples_differing(peak: f32) -> usize {
+fn padded_difference(peak: f32, rounded: bool) -> PaddedDifference {
     let (region, core) = large_region_and_core();
     let output_width = 210 * 2;
     let output_height = 130 * 2;
@@ -577,6 +617,7 @@ fn padded_samples_differing(peak: f32) -> usize {
         output_width,
         output_height,
         peak,
+        rounded,
     };
 
     let outputs = backend().build(task);
@@ -596,7 +637,7 @@ fn padded_samples_differing(peak: f32) -> usize {
     let core_samples = (core.samples() * 4) as usize;
     let share = differing as f64 / core_samples as f64 * 100.0;
     println!(
-        "padded last layer at peak {peak}: {differing} of {core_samples} samples differ ({share:.4} %), \
+        "padded last layer at peak {peak}, rounded {rounded}: {differing} of {core_samples} samples differ ({share:.4} %), \
          largest {largest} codes, {unclamped} unclamped"
     );
 
@@ -606,7 +647,7 @@ fn padded_samples_differing(peak: f32) -> usize {
         "only {unclamped} of {core_samples} samples lie between the clamps"
     );
 
-    differing
+    PaddedDifference { differing, largest }
 }
 
 #[test]
@@ -616,7 +657,7 @@ fn the_padded_last_layer_matches_the_direct_one_at_8_bits() {
         return;
     }
 
-    let differing = padded_samples_differing(255.0);
+    let PaddedDifference { differing, .. } = padded_difference(255.0, true);
 
     let (_, core) = large_region_and_core();
     let core_samples = (core.samples() * 4) as usize;
@@ -635,7 +676,7 @@ fn the_padded_last_layer_matches_the_direct_one_at_16_bits() {
         return;
     }
 
-    let differing = padded_samples_differing(65535.0);
+    let PaddedDifference { differing, .. } = padded_difference(65535.0, true);
 
     let (_, core) = large_region_and_core();
     let core_samples = (core.samples() * 4) as usize;
@@ -645,6 +686,19 @@ fn the_padded_last_layer_matches_the_direct_one_at_16_bits() {
         differing * 100 <= core_samples,
         "{differing} of {core_samples} samples differ"
     );
+}
+
+#[test]
+fn the_unrounded_padded_last_layer_matches_the_direct_one() {
+    if !supports(BodyPath::Convolution, Precision::F16) {
+        println!("padded last layer: no f16 cooperative matrix, so there is nothing to compare");
+        return;
+    }
+
+    let PaddedDifference { largest, .. } = padded_difference(65535.0, false);
+
+    // The two sum in another order. Measured 0.137 codes.
+    assert!(largest <= 0.2, "a sample differs by {largest} codes");
 }
 
 /// The padded last layer over the same maps with the forced blueprint allowed, and with the inferred one.
