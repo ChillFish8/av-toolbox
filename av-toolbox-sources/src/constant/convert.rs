@@ -29,8 +29,11 @@ enum Role {
     Difference,
 }
 
-fn float_target(stage: &str, sample: SampleFormat) -> StageError {
-    let message = format!("{stage} makes U8 or U16 frames, not {sample}");
+fn float_planes(stage: &str) -> StageError {
+    let message = format!(
+        "{stage} takes raw plane values only for integer frames. Give a colour, or put a resample/depth \
+         before the reference"
+    );
 
     StageError::msg(message)
 }
@@ -77,11 +80,11 @@ pub(crate) fn check(picture: &Picture, format: &FrameFormat, stage: &str) -> Res
         return Err(chroma_clip(stage));
     }
 
-    let Some(largest) = format.sample.max_value() else {
-        return Err(float_target(stage, format.sample));
-    };
-
     if let Picture::Planes(values) = picture {
+        let Some(largest) = format.sample.max_value() else {
+            return Err(float_planes(stage));
+        };
+
         let expected = format.channels().len();
         if values.len() != expected {
             return Err(wrong_plane_count(stage, expected, values.len()));
@@ -347,6 +350,7 @@ fn downsample(full: Signal, format: &FrameFormat, subsampling: Subsampling) -> S
 /// Quantises a signal into a plane of `samples` samples, repeating a single value to fill it.
 fn encode(signal: &Signal, samples: usize, role: Role, limited: bool, sample: SampleFormat) -> Vec<u8> {
     let bits = bits_of(sample);
+    let is_float = sample == SampleFormat::F32;
     let is_single = signal.values.len() == 1;
     let mut bytes = Vec::with_capacity(samples * sample.bytes());
 
@@ -356,6 +360,11 @@ fn encode(signal: &Signal, samples: usize, role: Role, limited: bool, sample: Sa
         } else {
             signal.values[index]
         };
+        if is_float {
+            bytes.extend_from_slice(&value.to_le_bytes());
+            continue;
+        }
+
         let quantised = quantise(value, role, limited, bits);
         push_sample(&mut bytes, quantised, sample);
     }
@@ -448,6 +457,15 @@ mod tests {
                     u16::from(plane[0])
                 }
             })
+            .collect()
+    }
+
+    fn converted_floats(picture: Picture, target: FrameFormat) -> Vec<f32> {
+        let converted = convert(&picture, &target, "solid/fill").expect("converts");
+        let planes = converted.planes.iter();
+
+        planes
+            .map(|plane| f32::from_le_bytes([plane[0], plane[1], plane[2], plane[3]]))
             .collect()
     }
 
@@ -668,12 +686,29 @@ mod tests {
     }
 
     #[test]
-    fn a_float_target_is_refused() {
-        let target = format(2, 2, FrameLayout::Grey, SampleFormat::F32, ColourInfo::default());
+    fn a_float_target_takes_the_colour_in_full_range() {
+        let target = yuv444(SampleFormat::F32, ColourRange::Limited, Matrix::Bt709);
 
-        let refused = check(&solid(0.0, 0.0, 0.0), &target, "solid/like");
+        let white = converted_floats(solid(1.0, 1.0, 1.0), target);
+        let grey = converted_floats(solid(0.5, 0.5, 0.5), target);
 
-        assert!(refused.is_err());
+        assert_eq!(white, vec![1.0, 0.0, 0.0]);
+        assert!((grey[0] - 0.5).abs() < 1e-6);
+        assert!(grey[1].abs() < 1e-6);
+    }
+
+    #[test]
+    fn raw_planes_are_refused_for_a_float_target() {
+        let target = yuv444(SampleFormat::F32, ColourRange::Full, Matrix::Bt709);
+        let picture = Picture::Planes(vec![1, 2, 3]);
+
+        let error = check(&picture, &target, "solid/like").expect_err("floats take no raw values");
+
+        assert!(
+            error
+                .to_string()
+                .contains("solid/like takes raw plane values only for integer frames")
+        );
     }
 
     #[test]

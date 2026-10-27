@@ -1,5 +1,5 @@
 use av_toolbox_core::{InputParam, InputSignature, StageError, StreamType};
-use av_toolbox_gpu::{FormatSet, FrameFormat, SampleFormat, StreamFormat};
+use av_toolbox_gpu::{FormatSet, FrameFormat, StreamFormat};
 
 /// The one input of a `like` stage, the clip it follows.
 pub(super) const REFERENCE_SIGNATURE: &InputSignature =
@@ -17,19 +17,11 @@ fn missing_reference(stage: &str) -> StageError {
     StageError::msg(message)
 }
 
-fn integer_sample(sample: SampleFormat) -> bool {
-    matches!(sample, SampleFormat::U8 | SampleFormat::U16 { .. })
-}
-
 /// Which samples a `like` stage takes from its reference.
 pub(super) fn accepts_reference(offered: StreamFormat, stage: &str) -> Result<FormatSet, StageError> {
     let Some(format) = offered.as_frames() else {
         return Err(not_frames(stage));
     };
-
-    if !integer_sample(format.sample) {
-        return Ok(FormatSet::new());
-    }
 
     Ok(FormatSet::of([format.sample]))
 }

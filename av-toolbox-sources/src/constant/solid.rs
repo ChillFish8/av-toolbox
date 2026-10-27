@@ -272,14 +272,14 @@ mod tests {
     }
 
     #[test]
-    fn solid_like_leaves_out_float_references() {
+    fn solid_like_follows_a_float_reference() {
         let args = like_args(json!({ "colour": "#000000" }));
         let inputs = [Offered::Unknown];
         let offered = grey(SampleFormat::F32);
 
         let accepted = SolidLike::accepts_input(&capabilities(), &args, 0, offered, &inputs).expect("frames");
 
-        assert!(accepted.is_empty());
+        assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
     }
 
     #[test]
