@@ -33,14 +33,25 @@ use av_toolbox_models::Store;
 use cubecl::prelude::{CubeElement, Runtime};
 use serde_json::json;
 
-use crate::support::{Sizing, frame, run_once};
+use crate::support::{
+    Sizing,
+    assert_codes_within,
+    float_samples,
+    frame,
+    planes_as_codes,
+    run_into_codes,
+    run_once,
+};
 
 const STAGE: &str = "deblock/dpir";
 
 /// How far an f16 output code may sit from the f32 run of the stage.
 ///
 /// It measured 1 code out, with 7 of 1920 codes differing, so one code of headroom is kept.
-const F16_CODE_BOUND: f64 = 2.0;
+const F16_CODE_BOUND: f32 = 2.0;
+
+/// How far a float output, read as codes, may sit from the unrounded network.
+const CODE_TOLERANCE: f32 = 0.01;
 
 const BODY_PATHS: [BodyPath; 3] = [
     BodyPath::Convolution,
@@ -218,13 +229,6 @@ fn as_f32(values: &[f64]) -> Vec<f32> {
     values.iter().map(|value| *value as f32).collect()
 }
 
-fn rounded(values: &[f32], peak: f32) -> Vec<f64> {
-    values
-        .iter()
-        .map(|value| f64::from((value + 0.5).floor().clamp(0.0, peak)))
-        .collect()
-}
-
 fn assert_within(found: &[f64], expected: &[f64], bound: f64, label: &str) {
     assert_eq!(found.len(), expected.len(), "{label}: lengths differ");
 
@@ -259,14 +263,12 @@ fn the_gray_model_on_a_grey_u8_frame_matches_the_network() {
     let planes = vec![encoded];
     let args = json!({ "precision": "f32" });
 
-    let found = run_once(STAGE, input, input, args, &planes);
+    let found = run_into_codes(STAGE, input, args, &planes, 8);
 
     let network_values = as_f32(&values);
-    let expected = direct(Variant::Gray, vec![network_values], 48, 40, 10.0, 255.0);
-    let found_values = decode_samples(&found[0], MatrixSamples::U8);
-    let expected_values = rounded(&expected[0], 255.0);
-    assert_within(&found_values, &expected_values, 1.0, "grey u8");
-    assert_ne!(found_values, values, "the stage changed nothing");
+    let expected = direct(Variant::Gray, vec![network_values.clone()], 48, 40, 10.0, 255.0);
+    assert_codes_within(&found[0], &expected[0], CODE_TOLERANCE, "grey u8");
+    assert_ne!(found[0], network_values, "the stage changed nothing");
 }
 
 #[test]
@@ -288,19 +290,21 @@ fn the_gray_model_runs_only_the_selected_planes_each_at_its_own_strength() {
         .collect();
     let args = json!({ "planes": ["u", "y"], "strength": [50, 5], "precision": "f32" });
 
-    let found = run_once(STAGE, input, input, args, &planes);
+    let found = run_into_codes(STAGE, input, args, &planes, 8);
 
     let luma_values = as_f32(&values[0]);
     let blue_values = as_f32(&values[1]);
+    let red_values = as_f32(&values[2]);
     let luma = direct(Variant::Gray, vec![luma_values], 48, 40, 5.0, 255.0);
     let blue = direct(Variant::Gray, vec![blue_values], 48, 40, 50.0, 255.0);
-    let found_luma = decode_samples(&found[0], MatrixSamples::U8);
-    let found_blue = decode_samples(&found[1], MatrixSamples::U8);
-    let expected_luma = rounded(&luma[0], 255.0);
-    let expected_blue = rounded(&blue[0], 255.0);
-    assert_within(&found_luma, &expected_luma, 1.0, "luma at 5");
-    assert_within(&found_blue, &expected_blue, 1.0, "blue at 50");
-    assert_eq!(found[2], planes[2], "the unselected red difference plane changed");
+    assert_codes_within(&found[0], &luma[0], CODE_TOLERANCE, "luma at 5");
+    assert_codes_within(&found[1], &blue[0], CODE_TOLERANCE, "blue at 50");
+    assert_codes_within(
+        &found[2],
+        &red_values,
+        CODE_TOLERANCE,
+        "the unselected red difference plane",
+    );
 }
 
 #[test]
@@ -325,17 +329,15 @@ fn gray_mode_runs_luma_and_half_size_chroma_in_one_frame() {
         .collect();
     let args = json!({ "precision": "f32" });
 
-    let found = run_once(STAGE, input, input, args, &planes);
+    let found = run_into_codes(STAGE, input, args, &planes, 8);
 
     for index in 0..3 {
         let (width, height) = sizes[index];
         let network_values = as_f32(&values[index]);
         let expected = direct(Variant::Gray, vec![network_values], width, height, 10.0, 255.0);
-        let found_values = decode_samples(&found[index], MatrixSamples::U8);
-        let expected_values = rounded(&expected[0], 255.0);
         let label = format!("plane {index}");
 
-        assert_within(&found_values, &expected_values, 1.0, &label);
+        assert_codes_within(&found[index], &expected[0], CODE_TOLERANCE, &label);
     }
 }
 
@@ -351,17 +353,15 @@ fn a_frame_whose_sides_are_not_multiples_of_eight_comes_back_its_own_size() {
     let planes = vec![encoded];
     let args = json!({ "precision": "f32" });
 
-    let found = run_once(STAGE, input, input, args, &planes);
+    let found = run_into_codes(STAGE, input, args, &planes, 8);
 
     let network_values = as_f32(&values);
     let expected = direct(Variant::Gray, vec![network_values], 50, 38, 10.0, 255.0);
-    let found_values = decode_samples(&found[0], MatrixSamples::U8);
-    let expected_values = rounded(&expected[0], 255.0);
-    assert_within(&found_values, &expected_values, 1.0, "50x38");
+    assert_codes_within(&found[0], &expected[0], CODE_TOLERANCE, "50x38");
 }
 
 #[test]
-fn a_ten_bit_frame_comes_back_at_ten_bits() {
+fn a_ten_bit_frame_comes_back_as_f32() {
     if !installed(Variant::Gray) {
         return;
     }
@@ -374,14 +374,53 @@ fn a_ten_bit_frame_comes_back_at_ten_bits() {
     let planes = vec![encoded];
     let args = json!({ "precision": "f32" });
 
-    let found = run_once(STAGE, input, input, args, &planes);
+    let found = run_into_codes(STAGE, input, args, &planes, 10);
 
     let network_values = as_f32(&values);
     let expected = direct(Variant::Gray, vec![network_values], 48, 40, 10.0, 1023.0);
-    let found_values = decode_samples(&found[0], samples);
-    let expected_values = rounded(&expected[0], 1023.0);
-    assert_within(&found_values, &expected_values, 1.0, "ten bit");
-    assert!(found_values.iter().all(|value| *value <= 1023.0));
+    assert_codes_within(&found[0], &expected[0], CODE_TOLERANCE, "ten bit");
+}
+
+#[test]
+fn an_unrun_chroma_plane_becomes_f32_centred_on_zero() {
+    if !installed(Variant::Gray) {
+        return;
+    }
+
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv444,
+    };
+    let input = frame(48, 40, layout, SampleFormat::U8, ChromaLocation::Left);
+    let output = FrameFormat {
+        sample: SampleFormat::F32,
+        ..input
+    };
+    let luma = blocky(48, 40, MatrixSamples::U8, 0);
+    let neutral = vec![128.0; 48 * 40];
+    let chroma = blocky(48, 40, MatrixSamples::U8, 1);
+    let planes = vec![
+        encode_samples(&luma, MatrixSamples::U8),
+        encode_samples(&neutral, MatrixSamples::U8),
+        encode_samples(&chroma, MatrixSamples::U8),
+    ];
+    let args = json!({ "planes": ["y"], "precision": "f32" });
+
+    let found = run_once(STAGE, input, output, args, &planes);
+
+    let neutral_samples = float_samples(&found[1]);
+    assert!(
+        neutral_samples.iter().all(|sample| *sample == 0.0),
+        "neutral chroma is not centred on zero"
+    );
+
+    let found_codes = planes_as_codes(&output, &found, 8);
+    let chroma_values = as_f32(&chroma);
+    assert_codes_within(
+        &found_codes[2],
+        &chroma_values,
+        CODE_TOLERANCE,
+        "the unrun red difference plane",
+    );
 }
 
 #[test]
@@ -433,16 +472,14 @@ fn the_colour_model_on_rgb_matches_the_network() {
         .collect();
     let args = json!({ "strength": 30, "precision": "f32" });
 
-    let found = run_once(STAGE, input, input, args, &planes);
+    let found = run_into_codes(STAGE, input, args, &planes, 8);
 
     let network_planes: Vec<Vec<f32>> = values.iter().map(|plane| as_f32(plane)).collect();
     let expected = direct(Variant::Colour, network_planes, 40, 48, 30.0, 255.0);
     for index in 0..3 {
-        let found_values = decode_samples(&found[index], MatrixSamples::U8);
-        let expected_values = rounded(&expected[index], 255.0);
         let label = format!("rgb plane {index}");
 
-        assert_within(&found_values, &expected_values, 1.0, &label);
+        assert_codes_within(&found[index], &expected[index], CODE_TOLERANCE, &label);
     }
 }
 
@@ -464,22 +501,26 @@ fn the_default_f16_precision_matches_the_f32_run() {
     let planes = vec![encoded];
     let full_args = json!({ "precision": "f32" });
 
-    let half = run_once(STAGE, input, input, json!({}), &planes);
-    let full = run_once(STAGE, input, input, full_args, &planes);
+    let half = run_into_codes(STAGE, input, json!({}), &planes, 8);
+    let full = run_into_codes(STAGE, input, full_args, &planes, 8);
 
-    let half_values = decode_samples(&half[0], MatrixSamples::U8);
-    let full_values = decode_samples(&full[0], MatrixSamples::U8);
-    let differences: Vec<f64> = half_values
+    let half_values = &half[0];
+    let full_values = &full[0];
+    let differences: Vec<f32> = half_values
         .iter()
-        .zip(&full_values)
+        .zip(full_values)
         .map(|(half_value, full_value)| (half_value - full_value).abs())
         .collect();
-    let largest = differences.iter().copied().fold(0.0, f64::max);
-    let differing = differences.iter().filter(|difference| **difference > 0.0).count();
+    let largest = differences.iter().copied().fold(0.0, f32::max);
+    let differing = differences
+        .iter()
+        .filter(|difference| **difference > CODE_TOLERANCE)
+        .count();
     println!("f16 against f32: largest difference {largest}, {differing} codes differ");
 
-    assert_within(&half_values, &full_values, F16_CODE_BOUND, "f16 against f32");
-    assert_ne!(half_values, values, "the stage changed nothing");
+    let input_values = as_f32(&values);
+    assert_codes_within(half_values, full_values, F16_CODE_BOUND, "f16 against f32");
+    assert_ne!(*half_values, input_values, "the stage changed nothing");
 }
 
 const H264_STAGE: &str = "deblock/h264";

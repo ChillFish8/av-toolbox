@@ -45,6 +45,7 @@ use av_toolbox_gpu::{
     PlaneBuffer,
     ResolvedFormats,
     Runtime,
+    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -549,7 +550,7 @@ impl FilterDefinition for Dpir {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
@@ -585,13 +586,18 @@ impl FilterDefinition for Dpir {
             "warmed up on the {path_label} path, with the ResBlock convolutions on {summary}",
         );
 
-        let staging = Staging::of(input.sample);
+        let staging = Staging::of(&input);
+        let output = FrameFormat {
+            sample: SampleFormat::F32,
+            ..input
+        };
         let deblocker = Deblocker {
             client: client.clone(),
             network,
             path,
             runs,
             format: input,
+            output,
             staging,
             cap,
         };
@@ -607,19 +613,20 @@ struct Deblocker<R: Runtime> {
     path: BodyPath,
     runs: Runs,
     format: FrameFormat,
+    output: FrameFormat,
     staging: Staging,
     cap: usize,
 }
 
 impl<R: Runtime> Deblocker<R> {
-    /// A fresh plane of `source`'s size in the clip's sample format.
+    /// A fresh F32 plane of `source`'s size.
     fn fresh_plane(
         &self,
         context: &FrameContext,
         source: &Plane,
         meta: &FrameMeta,
     ) -> Result<Plane, StageError> {
-        let Some(plane) = plane_like(context, &self.format, source, meta) else {
+        let Some(plane) = plane_like(context, &self.output, source, meta) else {
             return Err(missing_channel(Channel::Y));
         };
 
@@ -681,10 +688,10 @@ impl<R: Runtime> Deblocker<R> {
         }
 
         let mut written = Vec::with_capacity(sources.len());
-        for (index, (_, source)) in sources.iter().enumerate() {
+        for (index, (channel, source)) in sources.iter().enumerate() {
             let target = self.fresh_plane(context, source, meta)?;
 
-            // Safety: `staging` was made from the clip's sample format, which `fresh_plane` allocates in.
+            // Safety: `fresh_plane` allocates F32 planes.
             unsafe {
                 stage_out(
                     &self.client,
@@ -692,7 +699,7 @@ impl<R: Runtime> Deblocker<R> {
                     self.staging,
                     outputs[index],
                     &target,
-                    centres[index],
+                    *channel,
                 );
             }
 
@@ -700,6 +707,39 @@ impl<R: Runtime> Deblocker<R> {
         }
 
         Ok(written)
+    }
+
+    /// `source` as an F32 plane, without running the network.
+    fn unrun(
+        &self,
+        context: &FrameContext,
+        channel: Channel,
+        source: &Plane,
+        meta: &FrameMeta,
+    ) -> Result<Plane, StageError> {
+        if matches!(self.staging, Staging::Float) {
+            return Ok(source.clone());
+        }
+
+        let centre = centre_of(self.format.sample, channel);
+
+        // Safety: `staging` was made from the clip's sample format, which every source plane holds.
+        let values = unsafe { stage_in(&self.client, context, self.staging, source, centre) };
+        let target = self.fresh_plane(context, source, meta)?;
+
+        // Safety: `fresh_plane` allocates F32 planes.
+        unsafe {
+            stage_out(
+                &self.client,
+                context,
+                self.staging,
+                values.plane(),
+                &target,
+                channel,
+            );
+        }
+
+        Ok(target)
     }
 }
 
@@ -729,7 +769,9 @@ impl<R: Runtime> Filter for Deblocker<R> {
 
                 for (source, strength) in sources.iter().zip(strengths) {
                     let Some(strength) = strength else {
-                        planes.push(source.1.clone());
+                        let (channel, plane) = source;
+                        let unrun = self.unrun(context, *channel, plane, &meta)?;
+                        planes.push(unrun);
                         continue;
                     };
 
@@ -741,7 +783,7 @@ impl<R: Runtime> Filter for Deblocker<R> {
             },
         };
 
-        match Frame::from_planes(self.format, planes, meta) {
+        match Frame::from_planes(self.output, planes, meta) {
             Ok(output) => Ok(vec![output]),
             Err(error) => Err(bad_frame(error)),
         }

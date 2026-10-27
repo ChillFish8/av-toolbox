@@ -3,7 +3,9 @@ use av_toolbox_cubek::cnn::{Candidate, LayerRun};
 use av_toolbox_cubek::dpir::Variant;
 use av_toolbox_gpu::{
     ColourInfo,
+    Depth as BitDepth,
     ElementType,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     SampleFormat,
@@ -294,6 +296,23 @@ fn f16_without_f16_arithmetic_is_refused_suggesting_f32() {
 
     assert!(message.contains(STAGE), "{message}");
     assert!(message.contains("\"f32\""), "{message}");
+}
+
+#[test]
+fn the_output_is_f32_for_every_input() {
+    let capabilities = capabilities_computing(&[ElementType::F32]);
+    let arguments = args(json!({ "precision": "f32" }));
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = format(FrameLayout::Grey, sample);
+        let chosen = [Some(StreamFormat::Frames(input))];
+
+        let outputs = Dpir::produces(&capabilities, &arguments, &chosen).expect("deblockable");
+
+        assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]), "{sample}");
+    }
 }
 
 #[test]
