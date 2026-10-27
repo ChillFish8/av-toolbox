@@ -126,15 +126,15 @@ pub(crate) fn engine_specs(
     Ok(specs)
 }
 
-/// The av-denoise format of `sample`, or `None` when av-denoise cannot read it.
-pub(crate) fn engine_sample(sample: SampleFormat) -> Option<av_denoise_core::SampleFormat> {
+/// The av-denoise format of `sample`.
+pub(crate) fn engine_sample(sample: SampleFormat) -> av_denoise_core::SampleFormat {
     match sample {
-        SampleFormat::U8 => Some(av_denoise_core::SampleFormat::U8),
+        SampleFormat::U8 => av_denoise_core::SampleFormat::U8,
         SampleFormat::U16 { depth } => {
             let depth = depth.bits();
-            Some(av_denoise_core::SampleFormat::U16 { depth })
+            av_denoise_core::SampleFormat::U16 { depth }
         },
-        SampleFormat::F32 => Some(av_denoise_core::SampleFormat::F32),
+        SampleFormat::F32 => av_denoise_core::SampleFormat::F32,
     }
 }
 

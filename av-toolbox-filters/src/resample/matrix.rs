@@ -206,20 +206,6 @@ fn checked_input(chosen: &[Option<StreamFormat>]) -> Result<FrameFormat, StageEr
     Ok(*format)
 }
 
-fn unsupported_sample(sample: SampleFormat) -> StageError {
-    let message = format!("{STAGE} converts u8, u16 or f32 samples, not {sample:?}");
-
-    StageError::msg(message)
-}
-
-fn matrix_samples(sample: SampleFormat) -> Result<MatrixSamples, StageError> {
-    let Some(samples) = sample_kind(sample) else {
-        return Err(unsupported_sample(sample));
-    };
-
-    Ok(samples)
-}
-
 fn stream_coefficients(matrix: StreamMatrix) -> Option<Coefficients> {
     match matrix {
         StreamMatrix::Bt709 => Some(Coefficients::Bt709),
@@ -262,7 +248,7 @@ fn to_rgb(input: &FrameFormat, args: &MatrixArgs) -> Result<Converted, StageErro
         colour,
         ..*input
     };
-    let samples = matrix_samples(input.sample)?;
+    let samples = sample_kind(input.sample);
     let conversion = MatrixConversion {
         coefficients,
         direction: Direction::ToRgb,
@@ -296,7 +282,7 @@ fn to_yuv(input: &FrameFormat, args: &MatrixArgs) -> Result<Converted, StageErro
         colour,
         ..*input
     };
-    let samples = matrix_samples(input.sample)?;
+    let samples = sample_kind(input.sample);
     let conversion = MatrixConversion {
         coefficients: matrix.coefficients(),
         direction: Direction::ToYuv,

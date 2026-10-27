@@ -23,12 +23,10 @@ use av_toolbox_cubek::depth::{
     plane_shift,
     upload_pattern,
 };
-use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ColourRange,
     ComputeClient,
     Depth as BitDepth,
     DeviceSide,
@@ -50,6 +48,7 @@ use serde::Deserialize;
 
 use crate::bits::bits_of;
 use crate::checks::accepts_integer_or_f32_frames;
+use crate::codes::sample_range;
 use crate::sizing::Sizing;
 
 const STAGE: &str = "resample/depth";
@@ -329,14 +328,6 @@ struct ConversionPlan {
     conversion: Conversion,
     chroma_conversion: Conversion,
     lowering: bool,
-}
-
-/// The integer range a clip labelled `range` uses. Anything not labelled full range is limited.
-fn sample_range(range: ColourRange) -> SampleRange {
-    match range {
-        ColourRange::Full => SampleRange::Full,
-        _ => SampleRange::Limited,
-    }
 }
 
 /// A conversion handing float samples back unchanged.

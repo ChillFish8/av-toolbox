@@ -134,17 +134,14 @@ fn rgb_is_refused() {
 fn samples_map_to_av_denoise_formats() {
     let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
 
-    assert_eq!(
-        engine_sample(SampleFormat::U8),
-        Some(av_denoise_core::SampleFormat::U8)
-    );
+    assert_eq!(engine_sample(SampleFormat::U8), av_denoise_core::SampleFormat::U8);
     assert_eq!(
         engine_sample(ten_bit),
-        Some(av_denoise_core::SampleFormat::U16 { depth: 10 })
+        av_denoise_core::SampleFormat::U16 { depth: 10 }
     );
     assert_eq!(
         engine_sample(SampleFormat::F32),
-        Some(av_denoise_core::SampleFormat::F32)
+        av_denoise_core::SampleFormat::F32
     );
 }
 

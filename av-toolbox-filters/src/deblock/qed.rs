@@ -46,7 +46,6 @@ use av_toolbox_gpu::{
     Plane,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -145,12 +144,6 @@ fn not_frames() -> StageError {
 
 fn missing_input() -> StageError {
     let message = format!("{STAGE} needs its input bound");
-
-    StageError::msg(message)
-}
-
-fn unsupported_sample(sample: SampleFormat) -> StageError {
-    let message = format!("{STAGE} deblocks u8, u16 or f32 samples, not {sample:?}");
 
     StageError::msg(message)
 }
@@ -261,9 +254,7 @@ pub(crate) fn checked_qed(args: &QedArgs, input: &FrameFormat) -> Result<QedDebl
     let requested = args.planes.as_deref();
     let selected = selected_planes(STAGE, requested, input.layout, PlaneDefault::Every)?;
 
-    let Some(samples) = sample_kind(input.sample) else {
-        return Err(unsupported_sample(input.sample));
-    };
+    let samples = sample_kind(input.sample);
 
     let channels = input.channels();
     let treatments = channels

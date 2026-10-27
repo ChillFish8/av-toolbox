@@ -38,7 +38,7 @@ use av_toolbox_gpu::{
 use av_toolbox_providers::{SceneRequest, Scenes};
 
 pub(crate) use self::args::{AvdArgs, Nl4dArgs, NlmeansArgs, NlmeansHqArgs};
-use self::planes::{checked_layout, engine_sample, engine_specs};
+use self::planes::{checked_layout, engine_specs};
 use self::runner::AvdFilter;
 use crate::masked::checked_input;
 
@@ -124,11 +124,6 @@ impl<A: AvdArgs> FilterDefinition for Denoise<A> {
         };
 
         checked_layout(A::STAGE, format.layout)?;
-
-        let readable = engine_sample(format.sample).is_some();
-        if !readable {
-            return Ok(FormatSet::new());
-        }
 
         Ok(FormatSet::of([format.sample]))
     }

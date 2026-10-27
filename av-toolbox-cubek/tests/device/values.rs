@@ -1,11 +1,13 @@
 use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_cubek::testing::reference_narrow;
-use av_toolbox_cubek::values::{narrow, offset, widen};
+use av_toolbox_cubek::values::{FloatCodes, codes_to_float, float_to_codes, narrow, offset, widen};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use cubecl::prelude::Runtime;
 
 use crate::support::{
     Sizing,
+    assert_close,
     backend,
     empty,
     from_bytes,
@@ -153,5 +155,103 @@ fn offsetting_adds_the_amount_to_every_sample() {
         let expected: Vec<f32> = values.iter().map(|value| value + amount).collect();
 
         assert_eq!(offsetted, expected, "amount {amount}");
+    }
+}
+
+struct MapCodes {
+    input: Vec<f32>,
+    codes: FloatCodes,
+    to_float: bool,
+}
+
+impl BuildTask for MapCodes {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let samples = self.input.len() as u32;
+        let output_bytes = self.input.len() * size_of::<f32>();
+
+        let input = upload_f32(client, &self.input);
+        let output = empty(client, output_bytes);
+        let input_plane = plane(&input, samples, 1);
+        let output_plane = plane(&output, samples, 1);
+        if self.to_float {
+            codes_to_float(client, &sizing, input_plane, output_plane, self.codes);
+        } else {
+            float_to_codes(client, &sizing, input_plane, output_plane, self.codes);
+        }
+
+        read_f32(client, &output)
+    }
+}
+
+fn float_codes(input: Vec<f32>, codes: FloatCodes) -> Vec<f32> {
+    let task = MapCodes {
+        input,
+        codes,
+        to_float: false,
+    };
+
+    backend().build(task)
+}
+
+fn codes_floats(input: Vec<f32>, codes: FloatCodes) -> Vec<f32> {
+    let task = MapCodes {
+        input,
+        codes,
+        to_float: true,
+    };
+
+    backend().build(task)
+}
+
+#[test]
+fn float_samples_land_on_their_code_values() {
+    let limited_luma = FloatCodes::new(16, SampleRange::Limited, false);
+    let full_chroma = FloatCodes::new(16, SampleRange::Full, true);
+
+    let luma = float_codes(vec![0.0, 1.0, 0.5], limited_luma);
+    let chroma = float_codes(vec![-0.5, 0.0], full_chroma);
+
+    assert_close(&luma, &[4096.0, 60160.0, 32128.0], 0.01);
+    // Full range chroma spans 65535 codes around 32768, so -0.5 lands half a code above zero.
+    assert_close(&chroma, &[0.5, 32768.0], 0.01);
+}
+
+#[test]
+fn float_samples_outside_the_range_are_held_to_it() {
+    let codes = FloatCodes::new(16, SampleRange::Full, false);
+
+    let held = float_codes(vec![-0.25, 1.5, f32::NAN], codes);
+
+    assert_close(&held, &[0.0, 65535.0, 0.0], 0.01);
+}
+
+#[test]
+fn codes_return_to_their_float_samples_unrounded() {
+    let codes = FloatCodes::new(16, SampleRange::Limited, false);
+
+    let samples = codes_floats(vec![4096.5, 70000.0], codes);
+
+    assert!((samples[0] - 0.5 / 56064.0).abs() < 1e-7, "was {}", samples[0]);
+    assert!(samples[1] > 1.0, "was {}", samples[1]);
+}
+
+#[test]
+fn a_round_trip_keeps_every_sixteen_bit_code() {
+    let every_code: Vec<f32> = (0..=65535u32).map(|code| code as f32).collect();
+
+    for range in [SampleRange::Limited, SampleRange::Full] {
+        for chroma in [false, true] {
+            let codes = FloatCodes::new(16, range, chroma);
+
+            let samples = codes_floats(every_code.clone(), codes);
+            let returned = float_codes(samples, codes);
+
+            assert_close(&returned, &every_code, 0.01);
+        }
     }
 }

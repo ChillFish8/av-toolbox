@@ -38,7 +38,6 @@ use av_toolbox_gpu::{
     Plane,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -119,12 +118,6 @@ fn missing_input() -> StageError {
     StageError::msg(message)
 }
 
-fn unsupported_sample(sample: SampleFormat) -> StageError {
-    let message = format!("{STAGE} deblocks u8, u16 or f32 samples, not {sample:?}");
-
-    StageError::msg(message)
-}
-
 fn missing_frame() -> StageError {
     let message = format!("{STAGE} expected a frame in slot 0");
 
@@ -172,9 +165,7 @@ pub(crate) fn checked_pp7(args: &Pp7Args, input: &FrameFormat) -> Result<Pp7Debl
     let requested = args.planes.as_deref();
     let selected = selected_planes(STAGE, requested, input.layout, PlaneDefault::Every)?;
 
-    let Some(samples) = sample_kind(input.sample) else {
-        return Err(unsupported_sample(input.sample));
-    };
+    let samples = sample_kind(input.sample);
 
     let mode = args.mode.kernel_mode();
 

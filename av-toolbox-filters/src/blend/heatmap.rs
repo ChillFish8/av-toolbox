@@ -175,12 +175,6 @@ fn bad_floor(floor: f32) -> StageError {
     StageError::msg(message)
 }
 
-fn unsupported_sample(sample: SampleFormat) -> StageError {
-    let message = format!("{STAGE} paints u8, u16 or f32 samples, not {sample}");
-
-    StageError::msg(message)
-}
-
 fn missing_inputs() -> StageError {
     let message = format!("{STAGE} needs clip and map bound");
 
@@ -308,9 +302,7 @@ fn painting(args: &HeatmapArgs, clip: &FrameFormat) -> Result<Painting, StageErr
         layout => return Err(not_yuv_or_rgb(layout)),
     };
 
-    let Some(samples) = sample_kind(clip.sample) else {
-        return Err(unsupported_sample(clip.sample));
-    };
+    let samples = sample_kind(clip.sample);
 
     let range = sample_range(clip.colour.range, layout);
     let coefficients = coefficients(clip.colour.matrix);

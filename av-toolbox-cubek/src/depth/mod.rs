@@ -126,7 +126,7 @@ impl Conversion {
     ///
     /// Floats run between 0 and 1, or between -0.5 and 0.5 for `chroma`. The result is neither
     /// rounded nor clamped. Dividing by the range's span, rather than multiplying by its
-    /// inverse, keeps black and white exactly on 0 and 1.
+    /// inverse, keeps black and white on 0 and 1 to within f32 rounding.
     pub fn to_float(input_bits: u32, range: SampleRange, chroma: bool) -> Self {
         let element = Element::for_bits(input_bits);
         let samples = integer_samples(element, input_bits);

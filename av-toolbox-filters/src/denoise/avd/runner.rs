@@ -40,12 +40,6 @@ fn unbuildable(stage: &str, spec: &EngineSpec, error: av_denoise_core::Error) ->
     StageError::msg(message)
 }
 
-fn unsupported_sample(stage: &str, sample: SampleFormat) -> StageError {
-    let message = format!("{stage} needs U8, U16 or F32 samples, got {sample}");
-
-    StageError::msg(message)
-}
-
 fn missing_frame(stage: &str) -> StageError {
     let message = format!("{stage} expected a frame on its input");
 
@@ -202,9 +196,7 @@ impl<R: Runtime> AvdFilter<R> {
         args: &A,
         input: FrameFormat,
     ) -> Result<Self, StageError> {
-        let Some(sample) = engine_sample(input.sample) else {
-            return Err(unsupported_sample(A::STAGE, input.sample));
-        };
+        let sample = engine_sample(input.sample);
 
         let client = context.client();
         let specs = engine_specs(A::STAGE, args.planes(), args.fused(), &input)?;
