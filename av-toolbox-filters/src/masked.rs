@@ -1,7 +1,7 @@
 use av_toolbox_core::{InputParam, InputSignature, StageError, StreamType};
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::lineart::{MergePlanes, clamped_merge};
+use av_toolbox_cubek::lineart::{MergePlanes, clamped_merge, merge};
 use av_toolbox_cubek::values::widen;
 use av_toolbox_gpu::{
     Channel,
@@ -17,6 +17,7 @@ use av_toolbox_gpu::{
 };
 
 use crate::checks::accepts_integer_or_f32_frames;
+use crate::codes::CodeValues;
 use crate::planewise::PlaneFilter;
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
@@ -230,9 +231,11 @@ pub(crate) fn mask_weights<R: Runtime>(
 
 /// Runs `inner` on a plane, then moves the input toward its output by the frame's mask.
 ///
-/// Each plane becomes `input + (filtered - input) * mask / 255`, with `filtered` first held to
-/// `0..=peak`. The mask's full plane serves a full size plane and its chroma plane a subsampled
-/// one. Without a mask the plane is the inner filter's output.
+/// Each plane becomes `input + (filtered - input) * mask / 255`. For integer output `filtered` is first
+/// held to `0..=peak`, as it would be stored. F32 output is stored unclamped, so it merges unclamped.
+///
+/// The mask's full plane serves a full size plane and its chroma plane a subsampled one. Without a
+/// mask the plane is the inner filter's output.
 ///
 /// The merge reads `input` after the inner filter runs, so the inner filter must leave `input`
 /// unchanged.
@@ -243,8 +246,8 @@ pub(crate) struct MaskedFilter<'a, R: Runtime, F> {
     pub(crate) format: &'a FrameFormat,
     /// The frame's mask, `None` when no mask is bound.
     pub(crate) mask: Option<&'a Mask>,
-    /// The largest sample value of the frame being filtered.
-    pub(crate) peak: f32,
+    /// The code values the frame is filtered in and stored as.
+    pub(crate) codes: CodeValues,
     pub(crate) inner: &'a F,
 }
 
@@ -285,7 +288,12 @@ impl<R: Runtime, F: PlaneFilter> PlaneFilter for MaskedFilter<'_, R, F> {
             filtered: output,
             weight: weight_plane,
         };
-        clamped_merge(self.client, &sizing, planes, MASK_PEAK, self.peak);
+        if self.codes.output_sample() == SampleFormat::F32 {
+            merge(self.client, &sizing, planes, MASK_PEAK);
+        } else {
+            let peak = self.codes.peak();
+            clamped_merge(self.client, &sizing, planes, MASK_PEAK, peak);
+        }
 
         Ok(())
     }

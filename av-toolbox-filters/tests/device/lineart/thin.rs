@@ -1,23 +1,27 @@
 use av_toolbox_cubek::lineart::ThinSettings;
-use av_toolbox_cubek::testing::{reference_narrow, reference_padded_warp, reference_thin};
+use av_toolbox_cubek::testing::{reference_padded_warp, reference_thin};
 use av_toolbox_cubek::warp::{BlurKind, WarpParams};
 use av_toolbox_gpu::{Channel, FrameFormat, SampleFormat};
 use serde_json::json;
 
-use super::{HEIGHT, Rounding, WIDTH, agreement, changed, lined_scene, luma_codes, rounding_of, yuv420};
-use crate::support::{
-    element_of,
-    encoded,
-    from_bytes,
+use super::{
+    HEIGHT,
+    WIDTH,
+    assert_f32_matches_sixteen_bit,
+    assert_matches,
+    assert_unchanged,
+    bits_of,
+    changed,
+    flat_values,
+    lined_scene,
+    moved,
     peak_of,
-    run_masked,
-    run_once,
-    shared_planes,
-    ten_bit,
-    to_bytes,
-    uniform_mask,
-    widened,
+    run_codes,
+    run_masked_codes,
+    sixteen_bit,
+    yuv420,
 };
+use crate::support::{ROUND_TRIP, element_of, encoded, shared_planes, ten_bit, uniform_mask, widened};
 
 const THIN: &str = "lineart/thin";
 
@@ -41,10 +45,9 @@ fn thin_settings_for(
     depth: i32,
     threshold: f32,
 ) -> ThinSettings {
-    let bits = if sample == SampleFormat::U8 { 8 } else { 10 };
     let warp = WarpParams {
         element: element_of(sample),
-        bits,
+        bits: bits_of(sample),
         thresh: 128,
         blur: BlurKind::R6,
         passes,
@@ -59,77 +62,43 @@ fn thin_settings_for(
     }
 }
 
-/// The reference's answer for one plane as codes, and how close it sits to a rounding boundary.
-fn thin_reference(values: &[u16], width: u32, height: u32, settings: &ThinSettings) -> (Vec<u16>, Rounding) {
+/// The reference's answer for one plane as codes.
+fn thin_reference(values: &[u16], width: u32, height: u32, settings: &ThinSettings) -> Vec<f32> {
     let input = widened(values);
-    let filtered = reference_thin(&input, width, height, settings);
-    let rounding = rounding_of(&filtered);
-    let codes = reference_narrow(&filtered, settings.peak);
 
-    (codes, rounding)
+    reference_thin(&input, width, height, settings)
 }
 
-/// The samples of a plane that the warp alone changes, so the merge has something to select.
-fn warp_moved_samples(values: &[u16], width: u32, height: u32, settings: &ThinSettings) -> usize {
+/// The reference warp alone on one plane, as codes.
+fn warp_reference(values: &[u16], width: u32, height: u32, settings: &ThinSettings) -> Vec<f32> {
     let input = widened(values);
-    let warped = reference_padded_warp(&input, width, height, &settings.warp);
-    let codes = reference_narrow(&warped, settings.peak);
 
-    changed(&codes, values)
+    reference_padded_warp(&input, width, height, &settings.warp)
 }
 
-/// Checks every plane of `actual` is within a code of the reference.
-///
-/// The merge divides by 255 and the inflate by 8, so only the samples within `RISK` of a rounding
-/// boundary may sit a code away, and every other sample is exact. Returns the count of samples a
-/// code away across the frame.
+/// Checks every plane of `found` matches the reference, and that the luma thinned a sample.
 fn assert_matches_thin(
     format: &FrameFormat,
     values: &[Vec<u16>],
-    actual: &[Vec<u8>],
+    found: &[Vec<f32>],
     settings: &ThinSettings,
     label: &str,
-) -> usize {
-    let element = element_of(format.sample);
-    let mut total_off_by_one = 0usize;
-
+) {
     for (plane, channel) in format.channels().iter().enumerate() {
         let (width, height) = format.channel_dimensions(*channel).expect("a listed channel");
-        let found = from_bytes(&actual[plane], element);
-        let (expected, rounding) = thin_reference(&values[plane], width, height, settings);
-        let result = agreement(&found, &expected);
-        let moved = changed(&found, &values[plane]);
-        let warped = warp_moved_samples(&values[plane], width, height, settings);
-        let stray: Vec<usize> = (0..found.len())
-            .filter(|index| found[*index] != expected[*index] && !rounding.at_risk.contains(index))
-            .collect();
-        total_off_by_one += result.off_by_one;
+        let expected = thin_reference(&values[plane], width, height, settings);
+        let warped = warp_reference(&values[plane], width, height, settings);
+        let thinned = changed(&found[plane], &values[plane]);
+        let warp_moved = changed(&warped, &values[plane]);
+        let plane_label = format!("{label} {channel}");
 
-        println!(
-            "{label} {channel}: largest {}, {} of {} off, {} at risk, {moved} moved, {warped} \
-             moved by the warp, nearest margin {}",
-            result.largest,
-            result.off_by_one,
-            found.len(),
-            rounding.at_risk.len(),
-            rounding.nearest,
-        );
+        println!("{plane_label}: {thinned} moved, {warp_moved} moved by the warp");
         if *channel == Channel::Y {
-            assert!(moved > 0, "{label} {channel} never thinned a sample");
+            assert!(thinned > 0, "{plane_label} never thinned a sample");
         }
 
-        assert!(
-            result.largest <= 1,
-            "{label} {channel} differs by {}",
-            result.largest
-        );
-        assert!(
-            stray.is_empty(),
-            "{label} {channel} differs at {stray:?}, which do not sit near a boundary"
-        );
+        assert_matches(&found[plane], &expected, &plane_label);
     }
-
-    total_off_by_one
 }
 
 #[test]
@@ -149,11 +118,10 @@ fn thin_matches_the_reference() {
                     "planes": ["y", "u", "v"],
                 });
 
-                let filtered = run_once(THIN, format, format, args, &planes);
+                let found = run_codes(THIN, format, args, &planes);
 
                 let label = format!("{sample} mrad {radius} blur {passes} depth {depth}");
-                let off_by_one = assert_matches_thin(&format, &values, &filtered, &settings, &label);
-                println!("{label}: {off_by_one} samples a code away");
+                assert_matches_thin(&format, &values, &found, &settings, &label);
             }
         }
     }
@@ -227,7 +195,7 @@ fn luma_over_flat_chroma(format: &FrameFormat, luma: &[u16], flat: u16) -> Vec<V
 /// The width of the single dip in the middle row of `codes` below `level`, with its two edges
 /// interpolated between the samples either side of the crossing. A row with any other number of
 /// crossings has no single dip and gives `None`.
-fn dip_width(codes: &[u16], level: f64) -> Option<f64> {
+fn dip_width(codes: &[f32], level: f64) -> Option<f64> {
     let row = (HEIGHT / 2 * WIDTH) as usize;
     let values: Vec<f64> = codes[row..row + WIDTH as usize]
         .iter()
@@ -256,14 +224,13 @@ fn dip_width(codes: &[u16], level: f64) -> Option<f64> {
 }
 
 /// The lowest sample of the middle row of `codes`.
-fn row_minimum(codes: &[u16]) -> u16 {
+fn row_minimum(codes: &[f32]) -> f32 {
     let row = (HEIGHT / 2 * WIDTH) as usize;
 
     codes[row..row + WIDTH as usize]
         .iter()
         .copied()
-        .min()
-        .unwrap_or(0)
+        .fold(f32::MAX, f32::min)
 }
 
 /// An anti-aliased line of 40 in 200 has a narrower half-contrast width after the default warp, with
@@ -278,14 +245,14 @@ fn thin_narrows_an_anti_aliased_line() {
             let values = luma_over_flat_chroma(&format, &luma, 200 * scale);
             let planes = encoded(&format, &values);
 
-            let filtered = run_once(THIN, format, format, json!({}), &planes);
+            let found = run_codes(THIN, format, json!({}), &planes);
 
-            let found = luma_codes(&filtered, sample);
+            let codes = widened(&luma);
             let level = f64::from(120 * scale);
-            let before = dip_width(&luma, level).expect("the input has a single dip");
-            let after = dip_width(&found, level).expect("the output has a single dip");
-            let darkest_before = row_minimum(&luma);
-            let darkest_after = row_minimum(&found);
+            let before = dip_width(&codes, level).expect("the input has a single dip");
+            let after = dip_width(&found[0], level).expect("the output has a single dip");
+            let darkest_before = row_minimum(&codes);
+            let darkest_after = row_minimum(&found[0]);
             println!(
                 "{sample} shift {shift}: half-contrast width {before:.2} before and {after:.2} after, \
                  darkest {darkest_before} before and {darkest_after} after"
@@ -294,15 +261,15 @@ fn thin_narrows_an_anti_aliased_line() {
                 after < before - NARROWED_BY,
                 "{sample} shift {shift} did not narrow"
             );
-            assert_eq!(
-                darkest_after, darkest_before,
+            assert!(
+                (darkest_after - darkest_before).abs() <= ROUND_TRIP,
                 "{sample} shift {shift} moved the darkest sample"
             );
 
             let threshold = default_threshold(sample);
             let settings = thin_settings_for(sample, 1, 2, 16, threshold);
             let label = format!("{sample} shift {shift}");
-            assert_matches_thin(&format, &values, &filtered, &settings, &label);
+            assert_matches_thin(&format, &values, &found, &settings, &label);
         }
     }
 }
@@ -324,14 +291,12 @@ fn thin_leaves_samples_outside_its_mask_untouched() {
         let planes = encoded(&format, &values);
         let args = json!({ "blur": 1, "depth": 24, "mthr": 1.0 });
 
-        let filtered = run_once(THIN, format, format, args, &planes);
+        let filtered = run_codes(THIN, format, args, &planes);
 
-        let found = luma_codes(&filtered, sample);
+        let found = &filtered[0];
         let peak = peak_of(sample) as f32;
         let settings = thin_settings_for(sample, 1, 1, 24, peak);
-        let input = widened(&values[0]);
-        let warped = reference_padded_warp(&input, WIDTH, HEIGHT, &settings.warp);
-        let warped_codes = reference_narrow(&warped, settings.peak);
+        let warped = warp_reference(&values[0], WIDTH, HEIGHT, &settings);
         let outside_indices: Vec<usize> = (0..found.len())
             .filter(|index| {
                 let column = index % WIDTH as usize;
@@ -341,16 +306,16 @@ fn thin_leaves_samples_outside_its_mask_untouched() {
         let stray: Vec<usize> = outside_indices
             .iter()
             .copied()
-            .filter(|index| found[*index] != values[0][*index])
+            .filter(|index| moved(found[*index], values[0][*index]))
             .collect();
         let warp_would_move = outside_indices
             .iter()
-            .filter(|index| warped_codes[**index] != values[0][**index])
+            .filter(|index| moved(warped[**index], values[0][**index]))
             .count();
-        let moved = changed(&found, &values[0]);
+        let thinned = changed(found, &values[0]);
         println!(
             "{sample}: {} samples outside the mask, {} differ, {warp_would_move} of them the warp \
-             alone would move, {moved} moved in all",
+             alone would move, {thinned} moved in all",
             outside_indices.len(),
             stray.len(),
         );
@@ -359,7 +324,7 @@ fn thin_leaves_samples_outside_its_mask_untouched() {
             warp_would_move > 0,
             "{sample} has nothing for the mask to hold back"
         );
-        assert!(moved > 0, "{sample} never moved a sample inside the mask");
+        assert!(thinned > 0, "{sample} never moved a sample inside the mask");
     }
 }
 
@@ -376,33 +341,27 @@ fn a_bound_mask_replaces_the_built_in_one() {
         let scene_planes = encoded(&format, &scene);
         let args = json!({ "blur": 1, "depth": 24, "mthr": 1.0, "planes": ["y", "u", "v"] });
 
-        let (zero_mask, zero_chroma) = uniform_mask(&format, 0);
-        let line_zero = run_masked(
-            THIN,
-            format,
-            args.clone(),
-            &planes,
-            zero_mask.clone(),
-            zero_chroma.clone(),
-        );
-        let scene_zero = run_masked(THIN, format, args.clone(), &scene_planes, zero_mask, zero_chroma);
+        let zero_mask = uniform_mask(&format, 0);
+        let line_zero = run_masked_codes(THIN, format, args.clone(), &planes, zero_mask.clone());
+        let scene_zero = run_masked_codes(THIN, format, args.clone(), &scene_planes, zero_mask);
 
-        assert_eq!(line_zero, planes, "{sample} lines under a mask of 0");
-        assert_eq!(scene_zero, scene_planes, "{sample} scene under a mask of 0");
+        let lines_label = format!("{sample} lines under a mask of 0");
+        let scene_label = format!("{sample} scene under a mask of 0");
+        assert_unchanged(&line_zero, &values, &lines_label);
+        assert_unchanged(&scene_zero, &scene, &scene_label);
 
-        let (full_mask, full_chroma) = uniform_mask(&format, 255);
-        let line_full = run_masked(THIN, format, args, &planes, full_mask, full_chroma);
+        let full_mask = uniform_mask(&format, 255);
+        let line_full = run_masked_codes(THIN, format, args, &planes, full_mask);
 
         let peak = peak_of(sample) as f32;
         let settings = thin_settings_for(sample, 1, 1, 24, peak);
-        let found = luma_codes(&line_full, sample);
-        let input = widened(&values[0]);
-        let warped = reference_padded_warp(&input, WIDTH, HEIGHT, &settings.warp);
-        let warped_codes = reference_narrow(&warped, settings.peak);
-        let (built_in, _) = thin_reference(&values[0], WIDTH, HEIGHT, &settings);
+        let found = &line_full[0];
+        let warped = warp_reference(&values[0], WIDTH, HEIGHT, &settings);
+        let built_in = thin_reference(&values[0], WIDTH, HEIGHT, &settings);
         let held_back = (0..found.len())
             .filter(|index| {
-                warped_codes[*index] != values[0][*index] && built_in[*index] == values[0][*index]
+                let code = values[0][*index];
+                moved(warped[*index], code) && !moved(built_in[*index], code)
             })
             .count();
         println!("{sample}: {held_back} samples the built-in mask would have held back");
@@ -410,7 +369,8 @@ fn a_bound_mask_replaces_the_built_in_one() {
             held_back > 0,
             "{sample} has nothing the built-in mask would have held back"
         );
-        assert_eq!(found, warped_codes, "{sample} under a mask of 255");
+        let full_label = format!("{sample} under a mask of 255");
+        assert_matches(found, &warped, &full_label);
     }
 }
 
@@ -420,20 +380,14 @@ fn a_flat_thin_frame_is_unchanged() {
         for radius in [0, 1] {
             let format = yuv420(sample);
             let flat = if sample == SampleFormat::U8 { 128u16 } else { 512 };
-            let element = element_of(sample);
-            let planes: Vec<Vec<u8>> = format
-                .channels()
-                .iter()
-                .map(|channel| {
-                    let samples = format.channel_samples(*channel).expect("a listed channel");
-                    to_bytes(&vec![flat; samples], element)
-                })
-                .collect();
+            let values = flat_values(&format, flat);
+            let planes = encoded(&format, &values);
             let args = json!({ "mrad": radius, "planes": ["y", "u", "v"] });
 
-            let filtered = run_once(THIN, format, format, args, &planes);
+            let found = run_codes(THIN, format, args, &planes);
 
-            assert_eq!(filtered, planes, "{sample} mrad {radius}");
+            let label = format!("{sample} mrad {radius}");
+            assert_unchanged(&found, &values, &label);
         }
     }
 }
@@ -487,21 +441,15 @@ fn thin_switches_at_the_mask_threshold_on_the_device() {
             let args = json!({ "blur": 1, "depth": 24, "mthr": mthr });
             let settings = thin_settings_for(sample, 1, 1, 24, threshold);
 
-            let filtered = run_once(THIN, format, format, args, &planes);
+            let found = run_codes(THIN, format, args, &planes);
 
-            let found = luma_codes(&filtered, sample);
-            let moved = changed(&found, &values[0]);
-            println!("{sample} threshold {threshold}: {moved} samples moved");
+            let thinned = changed(&found[0], &values[0]);
+            let label = format!("{sample} threshold {threshold}");
+            println!("{label}: {thinned} samples moved");
             if offset > 0.0 {
-                assert_eq!(filtered, planes, "{sample} threshold {threshold}");
+                assert_unchanged(&found, &values, &label);
             } else {
-                assert_matches_thin(
-                    &format,
-                    &values,
-                    &filtered,
-                    &settings,
-                    &format!("{sample} {threshold}"),
-                );
+                assert_matches_thin(&format, &values, &found, &settings, &label);
             }
         }
     }
@@ -509,7 +457,7 @@ fn thin_switches_at_the_mask_threshold_on_the_device() {
 
 #[test]
 fn thin_leaves_unselected_planes_as_the_input_buffers() {
-    let format = yuv420(SampleFormat::U8);
+    let format = yuv420(SampleFormat::F32);
 
     let shared = shared_planes(THIN, format, json!({}));
 
@@ -519,12 +467,21 @@ fn thin_leaves_unselected_planes_as_the_input_buffers() {
 /// The split line `40 140 140 40` that a warp can make of a plain line has two dips, not one.
 #[test]
 fn a_split_line_has_no_single_dip() {
-    let row = [200u16, 200, 40, 140, 140, 40, 200, 200];
-    let mut codes = vec![200u16; (WIDTH * HEIGHT) as usize];
+    let row = [200.0f32, 200.0, 40.0, 140.0, 140.0, 40.0, 200.0, 200.0];
+    let mut codes = vec![200.0f32; (WIDTH * HEIGHT) as usize];
     let start = (HEIGHT / 2 * WIDTH) as usize + 28;
     codes[start..start + row.len()].copy_from_slice(&row);
 
     let width = dip_width(&codes, 120.0);
 
     assert_eq!(width, None);
+}
+
+#[test]
+fn thin_f32_matches_sixteen_bit() {
+    let format = yuv420(sixteen_bit());
+    let values = lined_scene(&format);
+    let args = json!({ "planes": ["y", "u", "v"] });
+
+    assert_f32_matches_sixteen_bit(THIN, args, &values, 1.0, 0.0);
 }

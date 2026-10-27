@@ -49,6 +49,7 @@ pub(crate) use self::float::{
     assert_planes_match,
     f32_parity,
     float_bytes,
+    float_planes,
     float_samples,
     kept_sample_parity,
     run_into_codes,
@@ -779,18 +780,6 @@ impl BuildTask for MaskedOnce {
             })
             .collect()
     }
-}
-
-/// Runs `stage` on `planes` with a mask of `mask` and `mask_chroma` bytes.
-pub(crate) fn run_masked(
-    stage: &str,
-    format: FrameFormat,
-    args: serde_json::Value,
-    planes: &[Vec<u8>],
-    mask: Vec<u8>,
-    mask_chroma: Vec<u8>,
-) -> Vec<Vec<u8>> {
-    run_masked_into(stage, format, format, args, planes, (mask, mask_chroma))
 }
 
 /// Runs `stage` on `planes` into `output` frames, with a mask of the full and chroma bytes in `mask`.

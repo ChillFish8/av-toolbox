@@ -589,7 +589,7 @@ impl<R: Runtime> Filter for Antialiaser<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
-            peak: self.planewise.codes.peak(),
+            codes: self.planewise.codes,
             inner: &*self,
         };
 

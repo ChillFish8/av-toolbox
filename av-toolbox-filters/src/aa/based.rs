@@ -24,7 +24,7 @@ use av_toolbox_cubek::aa::{
     transpose,
 };
 use av_toolbox_cubek::bilateral::{BilateralPlanes, BilateralSettings, bilateral};
-use av_toolbox_cubek::lineart::{MergePlanes, clamped_merge};
+use av_toolbox_cubek::lineart::{MergePlanes, merge};
 use av_toolbox_cubek::neighbourhood::{
     Extreme,
     NeighbourPlanes,
@@ -609,12 +609,12 @@ impl<R: Runtime> BasedChain<R> {
 
         if let Some(edges) = planes.edges {
             let sizing = Sizing(context);
-            let merge = MergePlanes {
+            let merge_planes = MergePlanes {
                 input: planes.luma,
                 filtered: planes.merged,
                 weight: edges.mask,
             };
-            clamped_merge(&self.client, &sizing, merge, mask_peak, self.peak);
+            merge(&self.client, &sizing, merge_planes, mask_peak);
         }
 
         Ok(())

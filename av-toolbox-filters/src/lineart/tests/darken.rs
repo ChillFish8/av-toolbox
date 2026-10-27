@@ -242,7 +242,7 @@ fn a_plane_the_layout_lacks_is_refused_through_produces() {
 }
 
 #[test]
-fn the_output_format_is_the_input_format() {
+fn the_output_is_f32_for_every_input() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let chroma = FrameLayout::Chroma {
@@ -253,6 +253,7 @@ fn the_output_format_is_the_input_format() {
         format(FrameLayout::Grey, ten_bit()),
         format(chroma, ten_bit()),
         format(FrameLayout::Rgb, SampleFormat::U8),
+        format(FrameLayout::Grey, SampleFormat::F32),
     ];
 
     for input in inputs {
@@ -262,7 +263,12 @@ fn the_output_format_is_the_input_format() {
         let sample = outputs.samples.preferences()[0];
         let output = outputs.template.with_sample(sample);
 
-        assert_eq!(output, offered);
+        let float = FrameFormat {
+            sample: SampleFormat::F32,
+            ..input
+        };
+
+        assert_eq!(output, StreamFormat::Frames(float));
     }
 }
 

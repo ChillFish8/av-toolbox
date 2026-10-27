@@ -3,9 +3,17 @@ mod thin;
 mod toon;
 mod vinverse;
 
-use av_toolbox_gpu::{Channel, ChromaLocation, FrameFormat, FrameLayout, SampleFormat, Subsampling};
+use av_toolbox_gpu::{Channel, ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 
-use crate::support::{element_of, frame, from_bytes, peak_of, to_bytes};
+use crate::support::{
+    ROUND_TRIP,
+    assert_codes_within,
+    f32_parity,
+    frame,
+    run_into_codes,
+    run_masked_into_codes,
+    widened,
+};
 
 pub(super) const WIDTH: u32 = 64;
 
@@ -19,33 +27,113 @@ pub(super) fn yuv420(sample: SampleFormat) -> FrameFormat {
     frame(WIDTH, HEIGHT, layout, sample, ChromaLocation::Left)
 }
 
-/// How far a plane is from the reference.
-pub(super) struct Agreement {
-    pub(super) largest: u16,
-    pub(super) off_by_one: usize,
+/// Runs `stage` on one `format` frame into F32, and reads every plane back as codes of the input's depth.
+pub(super) fn run_codes(
+    stage: &str,
+    format: FrameFormat,
+    args: serde_json::Value,
+    planes: &[Vec<u8>],
+) -> Vec<Vec<f32>> {
+    let bits = bits_of(format.sample);
+
+    run_into_codes(stage, format, args, planes, bits)
 }
 
-pub(super) fn agreement(actual: &[u16], expected: &[u16]) -> Agreement {
-    assert_eq!(actual.len(), expected.len());
+/// Runs `stage` on one `format` frame with `mask` into F32, and reads every plane back as codes of the
+/// input's depth.
+pub(super) fn run_masked_codes(
+    stage: &str,
+    format: FrameFormat,
+    args: serde_json::Value,
+    planes: &[Vec<u8>],
+    mask: (Vec<u8>, Vec<u8>),
+) -> Vec<Vec<f32>> {
+    let bits = bits_of(format.sample);
 
-    let differences: Vec<u16> = actual
+    run_masked_into_codes(stage, format, args, planes, mask, bits)
+}
+
+pub(super) fn sixteen_bit() -> SampleFormat {
+    SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    }
+}
+
+pub(super) fn bits_of(sample: SampleFormat) -> u32 {
+    match sample {
+        SampleFormat::U8 => 8,
+        SampleFormat::U16 { depth } => u32::from(depth.bits()),
+        SampleFormat::F32 => 16,
+    }
+}
+
+pub(super) fn peak_of(sample: SampleFormat) -> u32 {
+    (1 << bits_of(sample)) - 1
+}
+
+/// Whether the code `found` is more than a round trip through F32 away from `code`.
+pub(super) fn moved(found: f32, code: u16) -> bool {
+    (found - f32::from(code)).abs() > ROUND_TRIP
+}
+
+/// The samples of `found` that moved away from `input`.
+pub(super) fn changed(found: &[f32], input: &[u16]) -> usize {
+    found
+        .iter()
+        .zip(input)
+        .filter(|(sample, code)| moved(**sample, **code))
+        .count()
+}
+
+/// Checks `found` matches the reference's `expected` codes, and prints the largest difference.
+pub(super) fn assert_matches(found: &[f32], expected: &[f32], label: &str) {
+    let largest = found
         .iter()
         .zip(expected)
-        .map(|(found, wanted)| found.abs_diff(*wanted))
-        .collect();
-    let largest = differences.iter().copied().max().unwrap_or(0);
-    let off_by_one = differences.iter().filter(|difference| **difference == 1).count();
+        .map(|(sample, wanted)| (sample - wanted).abs())
+        .fold(0.0, f32::max);
+    println!("{label}: largest difference {largest}");
 
-    Agreement { largest, off_by_one }
+    assert_codes_within(found, expected, ROUND_TRIP, label);
 }
 
-/// The samples of `plane` that differ from `other`.
-pub(super) fn changed(plane: &[u16], other: &[u16]) -> usize {
-    plane
+/// Checks every plane of `found` still holds the codes of `values`.
+pub(super) fn assert_unchanged(found: &[Vec<f32>], values: &[Vec<u16>], label: &str) {
+    for (plane, (samples, codes)) in found.iter().zip(values).enumerate() {
+        let expected = widened(codes);
+        let plane_label = format!("{label} plane {plane}");
+        assert_codes_within(samples, &expected, ROUND_TRIP, &plane_label);
+    }
+}
+
+/// Checks `stage`'s F32 and 16-bit runs on `values` differ by at most `largest` codes, with no more than a
+/// `beyond_one` share of samples more than one code apart.
+pub(super) fn assert_f32_matches_sixteen_bit(
+    stage: &str,
+    args: serde_json::Value,
+    values: &[Vec<u16>],
+    largest: f32,
+    beyond_one: f32,
+) {
+    let input = yuv420(sixteen_bit());
+
+    let parity = f32_parity(stage, input, args, values);
+    println!("{stage}: {parity:?}");
+
+    assert!(parity.largest <= largest, "{stage}: {parity:?}");
+    assert!(parity.beyond_one <= beyond_one, "{stage}: {parity:?}");
+}
+
+/// Every plane of `format` held at `flat`.
+pub(super) fn flat_values(format: &FrameFormat, flat: u16) -> Vec<Vec<u16>> {
+    format
+        .channels()
         .iter()
-        .zip(other)
-        .filter(|(left, right)| left != right)
-        .count()
+        .map(|channel| {
+            let samples = format.channel_samples(*channel).expect("a listed channel");
+            vec![flat; samples]
+        })
+        .collect()
 }
 
 /// A scene of three bands of rows, scaled to the sample's depth.
@@ -99,65 +187,20 @@ pub(super) fn lined_scene(format: &FrameFormat) -> Vec<Vec<u16>> {
         .collect()
 }
 
-/// The distance from a rounding boundary within which an f32 result may round the other way.
-///
-/// It is about 16 f32 steps at 1023, generous for the dozen operations a sample goes through.
-pub(super) const RISK: f32 = 1e-3;
-
-/// How close the reference's samples sit to a rounding boundary.
-pub(super) struct Rounding {
-    /// The indices of the samples within `RISK` of one, boundary included.
-    pub(super) at_risk: Vec<usize>,
-    /// The distance of the closest sample that is not exactly on one.
-    pub(super) nearest: f32,
-}
-
-/// How close the samples of `filtered` sit to a rounding boundary.
-pub(super) fn rounding_of(filtered: &[f32]) -> Rounding {
-    let margins: Vec<f32> = filtered
-        .iter()
-        .map(|value| ((value - value.floor()) - 0.5).abs())
-        .collect();
-    let at_risk: Vec<usize> = margins
-        .iter()
-        .enumerate()
-        .filter(|(_, margin)| **margin < RISK)
-        .map(|(index, _)| index)
-        .collect();
-    let nearest = margins
-        .iter()
-        .copied()
-        .filter(|margin| *margin > 0.0)
-        .fold(f32::MAX, f32::min);
-
-    Rounding { at_risk, nearest }
-}
-
 /// A `yuv420` frame whose planes are `background`, with a 1-wide vertical line of `line` down the
 /// middle column of the luma plane.
-pub(super) fn faded_line_planes(format: &FrameFormat, background: u16, line: u16) -> Vec<Vec<u8>> {
-    let element = element_of(format.sample);
-
+pub(super) fn faded_line_values(format: &FrameFormat, background: u16, line: u16) -> Vec<Vec<u16>> {
     format
         .channels()
         .iter()
         .map(|channel| {
             let (width, height) = format.channel_dimensions(*channel).expect("a listed channel");
-            let values: Vec<u16> = (0..width * height)
+            (0..width * height)
                 .map(|index| {
                     let on_line = *channel == Channel::Y && index % width == width / 2;
                     if on_line { line } else { background }
                 })
-                .collect();
-
-            to_bytes(&values, element)
+                .collect()
         })
         .collect()
-}
-
-/// The luma samples of a 64x48 frame, as a plane of codes.
-pub(super) fn luma_codes(planes: &[Vec<u8>], sample: SampleFormat) -> Vec<u16> {
-    let element = element_of(sample);
-
-    from_bytes(&planes[0], element)
 }

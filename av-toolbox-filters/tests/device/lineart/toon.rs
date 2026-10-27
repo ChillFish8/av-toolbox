@@ -1,21 +1,33 @@
 use av_toolbox_cubek::lineart::ToonSettings;
-use av_toolbox_cubek::testing::{reference_narrow, reference_toon};
+use av_toolbox_cubek::testing::reference_toon;
 use av_toolbox_cubek::warp::{BlurKind, WarpParams};
 use av_toolbox_gpu::{FrameFormat, SampleFormat};
 use serde_json::json;
 
-use super::{Rounding, WIDTH, agreement, changed, faded_line_planes, luma_codes, rounding_of, yuv420};
+use super::{
+    WIDTH,
+    assert_f32_matches_sixteen_bit,
+    assert_matches,
+    assert_unchanged,
+    bits_of,
+    changed,
+    faded_line_values,
+    flat_values,
+    peak_of,
+    run_codes,
+    run_masked_codes,
+    sixteen_bit,
+    yuv420,
+};
 use crate::support::{
+    ROUND_TRIP,
+    assert_codes_within,
     element_of,
     encoded,
-    from_bytes,
-    peak_of,
-    run_masked,
-    run_once,
     shared_planes,
     ten_bit,
-    to_bytes,
     uniform_mask,
+    widened,
 };
 
 const TOON: &str = "lineart/toon";
@@ -26,10 +38,9 @@ const TOON: &str = "lineart/toon";
 fn toon_settings_for(sample: SampleFormat, depth: i32) -> ToonSettings {
     let peak = peak_of(sample) as f32;
     let scale = (peak + 1.0) / 256.0;
-    let bits = if sample == SampleFormat::U8 { 8 } else { 10 };
     let warp = WarpParams {
         element: element_of(sample),
-        bits,
+        bits: bits_of(sample),
         thresh: 128,
         blur: BlurKind::R6,
         passes: 2,
@@ -101,63 +112,31 @@ fn toon_scene(format: &FrameFormat) -> Vec<Vec<u16>> {
         .collect()
 }
 
-/// The reference's answer for one plane as codes, and how close it sits to a rounding boundary.
-fn toon_reference(values: &[u16], width: u32, height: u32, settings: &ToonSettings) -> (Vec<u16>, Rounding) {
-    let widened: Vec<f32> = values.iter().map(|value| f32::from(*value)).collect();
-    let filtered = reference_toon(&widened, width, height, settings);
-    let rounding = rounding_of(&filtered);
-    let codes = reference_narrow(&filtered, settings.peak);
+/// The reference's answer for one plane as codes.
+fn toon_reference(values: &[u16], width: u32, height: u32, settings: &ToonSettings) -> Vec<f32> {
+    let codes = widened(values);
 
-    (codes, rounding)
+    reference_toon(&codes, width, height, settings)
 }
 
-/// Checks every plane of `actual` is within a code of the reference.
-///
-/// The interpolation divides by `u - l`, so the reference lands on tenths at 8 bits and fortieths at
-/// 10 bits. Only the samples within `RISK` of a rounding boundary may sit a code away, and every other
-/// sample is exact. Returns the count of samples a code away across the frame.
+/// Checks every plane of `found` matches the reference, and that each one darkened a sample.
 fn assert_matches_toon(
     format: &FrameFormat,
     values: &[Vec<u16>],
-    actual: &[Vec<u8>],
+    found: &[Vec<f32>],
     settings: &ToonSettings,
     label: &str,
-) -> usize {
-    let element = element_of(format.sample);
-    let mut total_off_by_one = 0usize;
-
+) {
     for (plane, channel) in format.channels().iter().enumerate() {
         let (width, height) = format.channel_dimensions(*channel).expect("a listed channel");
-        let found = from_bytes(&actual[plane], element);
-        let (expected, rounding) = toon_reference(&values[plane], width, height, settings);
-        let result = agreement(&found, &expected);
-        let moved = changed(&found, &values[plane]);
-        let stray: Vec<usize> = (0..found.len())
-            .filter(|index| found[*index] != expected[*index] && !rounding.at_risk.contains(index))
-            .collect();
-        total_off_by_one += result.off_by_one;
+        let expected = toon_reference(&values[plane], width, height, settings);
+        let moved = changed(&found[plane], &values[plane]);
+        let plane_label = format!("{label} {channel}");
 
-        println!(
-            "{label} {channel}: largest {}, {} of {} off, {} at risk, {moved} moved, nearest margin {}",
-            result.largest,
-            result.off_by_one,
-            found.len(),
-            rounding.at_risk.len(),
-            rounding.nearest,
-        );
-        assert!(moved > 0, "{label} {channel} never darkened a sample");
-        assert!(
-            result.largest <= 1,
-            "{label} {channel} differs by {}",
-            result.largest
-        );
-        assert!(
-            stray.is_empty(),
-            "{label} {channel} differs at {stray:?}, which do not sit near a boundary"
-        );
+        println!("{plane_label}: {moved} moved");
+        assert!(moved > 0, "{plane_label} never darkened a sample");
+        assert_matches(&found[plane], &expected, &plane_label);
     }
-
-    total_off_by_one
 }
 
 /// The samples of the scene's planes the warp at `depth` changes the answer for.
@@ -168,12 +147,32 @@ fn warp_sensitive_samples(format: &FrameFormat, values: &[Vec<u16>], depth: i32)
 
     for (plane, channel) in format.channels().iter().enumerate() {
         let (width, height) = format.channel_dimensions(*channel).expect("a listed channel");
-        let (unwarped, _) = toon_reference(&values[plane], width, height, &flat);
-        let (moved, _) = toon_reference(&values[plane], width, height, &warped);
-        differing += changed(&moved, &unwarped);
+        let unwarped = toon_reference(&values[plane], width, height, &flat);
+        let moved = toon_reference(&values[plane], width, height, &warped);
+        differing += moved
+            .iter()
+            .zip(&unwarped)
+            .filter(|(left, right)| (*left - *right).abs() > ROUND_TRIP)
+            .count();
     }
 
     differing
+}
+
+/// Checks the luma line of `found` holds `line` and every other sample `background`.
+fn assert_faded_line(found: &[Vec<f32>], background: u16, line: f32, label: &str) {
+    let column = (WIDTH / 2) as usize;
+    let expected: Vec<f32> = (0..found[0].len())
+        .map(|index| {
+            if index % WIDTH as usize == column {
+                line
+            } else {
+                f32::from(background)
+            }
+        })
+        .collect();
+
+    assert_codes_within(&found[0], &expected, ROUND_TRIP, label);
 }
 
 #[test]
@@ -186,12 +185,12 @@ fn toon_matches_the_reference() {
             let settings = toon_settings_for(sample, depth);
             let args = json!({ "depth": depth, "planes": ["y", "u", "v"] });
 
-            let filtered = run_once(TOON, format, format, args, &planes);
+            let found = run_codes(TOON, format, args, &planes);
 
             let label = format!("{sample} depth {depth}");
-            let off_by_one = assert_matches_toon(&format, &values, &filtered, &settings, &label);
+            assert_matches_toon(&format, &values, &found, &settings, &label);
             let sensitive = warp_sensitive_samples(&format, &values, depth);
-            println!("{label}: {off_by_one} samples a code away, {sensitive} moved by the warp");
+            println!("{label}: {sensitive} moved by the warp");
             if depth != 0 {
                 assert!(sensitive > 0, "{label} never reaches the warp");
             }
@@ -203,28 +202,21 @@ fn toon_matches_the_reference() {
 #[test]
 fn toon_deepens_a_faded_line_on_the_device() {
     let cases = [
-        (SampleFormat::U8, 200u16, 150u16, 100u16),
-        (SampleFormat::U8, 200, 190, 182),
-        (ten_bit(), 800, 600, 400),
-        (ten_bit(), 800, 760, 728),
+        (SampleFormat::U8, 200u16, 150u16, 100.0f32),
+        (SampleFormat::U8, 200, 190, 182.0),
+        (ten_bit(), 800, 600, 400.0),
+        (ten_bit(), 800, 760, 728.0),
     ];
 
     for (sample, background, line, expected) in cases {
         let format = yuv420(sample);
-        let planes = faded_line_planes(&format, background, line);
+        let values = faded_line_values(&format, background, line);
+        let planes = encoded(&format, &values);
 
-        let filtered = run_once(TOON, format, format, json!({ "depth": 0 }), &planes);
+        let found = run_codes(TOON, format, json!({ "depth": 0 }), &planes);
 
-        let luma = luma_codes(&filtered, sample);
-        let column = (WIDTH / 2) as usize;
-        for (index, value) in luma.iter().enumerate() {
-            let want = if index % WIDTH as usize == column {
-                expected
-            } else {
-                background
-            };
-            assert_eq!(*value, want, "{sample} line {line} at {index}");
-        }
+        let label = format!("{sample} line {line}");
+        assert_faded_line(&found, background, expected, &label);
     }
 }
 
@@ -235,18 +227,25 @@ fn toon_switches_branches_at_the_thresholds_on_the_device() {
         (
             SampleFormat::U8,
             100u16,
-            [(99u16, 99u16), (98, 98), (97, 97), (89, 79), (88, 76), (87, 74)],
+            [
+                (99u16, 99.0f32),
+                (98, 98.0),
+                (97, 96.7),
+                (89, 79.1),
+                (88, 76.0),
+                (87, 74.0),
+            ],
         ),
         (
             ten_bit(),
             400,
             [
-                (393, 393),
-                (392, 392),
-                (391, 391),
-                (353, 307),
-                (352, 304),
-                (351, 302),
+                (393, 393.0),
+                (392, 392.0),
+                (391, 390.775),
+                (353, 307.175),
+                (352, 304.0),
+                (351, 302.0),
             ],
         ),
     ];
@@ -254,13 +253,13 @@ fn toon_switches_branches_at_the_thresholds_on_the_device() {
     for (sample, background, lines) in cases {
         for (line, expected) in lines {
             let format = yuv420(sample);
-            let planes = faded_line_planes(&format, background, line);
+            let values = faded_line_values(&format, background, line);
+            let planes = encoded(&format, &values);
 
-            let filtered = run_once(TOON, format, format, json!({ "depth": 0 }), &planes);
+            let found = run_codes(TOON, format, json!({ "depth": 0 }), &planes);
 
-            let luma = luma_codes(&filtered, sample);
-            let column = (WIDTH / 2) as usize;
-            assert_eq!(luma[column], expected, "{sample} line {line}");
+            let label = format!("{sample} line {line}");
+            assert_faded_line(&found, background, expected, &label);
         }
     }
 }
@@ -271,20 +270,14 @@ fn a_flat_toon_frame_is_unchanged() {
         for depth in [0, 32] {
             let format = yuv420(sample);
             let flat = if sample == SampleFormat::U8 { 128u16 } else { 512 };
-            let element = element_of(sample);
-            let planes: Vec<Vec<u8>> = format
-                .channels()
-                .iter()
-                .map(|channel| {
-                    let samples = format.channel_samples(*channel).expect("a listed channel");
-                    to_bytes(&vec![flat; samples], element)
-                })
-                .collect();
+            let values = flat_values(&format, flat);
+            let planes = encoded(&format, &values);
             let args = json!({ "depth": depth, "planes": ["y", "u", "v"] });
 
-            let filtered = run_once(TOON, format, format, args, &planes);
+            let found = run_codes(TOON, format, args, &planes);
 
-            assert_eq!(filtered, planes, "{sample} depth {depth}");
+            let label = format!("{sample} depth {depth}");
+            assert_unchanged(&found, &values, &label);
         }
     }
 }
@@ -296,87 +289,77 @@ fn a_zero_mask_hands_back_the_toon_input() {
             let format = yuv420(sample);
             let values = toon_scene(&format);
             let planes = encoded(&format, &values);
-            let (mask, mask_chroma) = uniform_mask(&format, 0);
+            let mask = uniform_mask(&format, 0);
             let args = json!({ "depth": depth, "planes": ["y", "u", "v"] });
 
-            let filtered = run_masked(TOON, format, args, &planes, mask, mask_chroma);
+            let found = run_masked_codes(TOON, format, args, &planes, mask);
 
-            assert_eq!(filtered, planes, "{sample} depth {depth}");
+            let label = format!("{sample} depth {depth}");
+            assert_unchanged(&found, &values, &label);
         }
     }
 }
 
-/// Blends `filtered` over `input` by a uniform mask of `weight`, as `blend/masked` does, in f64.
-fn blended(input: &[u16], filtered: &[u16], weight: u8) -> Vec<f64> {
-    let share = f64::from(weight) / 255.0;
+/// Blends `filtered` over `input` by a uniform mask of `weight`, as `blend/masked` does.
+fn blended(input: &[u16], filtered: &[f32], weight: u8) -> Vec<f32> {
+    let share = f32::from(weight) / 255.0;
 
     input
         .iter()
         .zip(filtered)
         .map(|(sample, target)| {
-            let value = f64::from(*sample);
-            let change = f64::from(*target) - value;
+            let value = f32::from(*sample);
 
-            value + change * share
+            value + (target - value) * share
         })
         .collect()
 }
 
-/// A mask of 128 over a 60 line in 220 lands between the input and what toon alone outputs, as
-/// `blend/masked` does. Toon alone takes that line below 0, so the line checks the merge clamps.
+/// Toon alone takes a 60 line in 220 below 0, and a mask of 128 lands halfway between the input and
+/// that unclamped output.
 #[test]
-fn a_half_mask_lands_between_the_input_and_toon_alone() {
+fn a_masked_f32_merge_keeps_values_outside_the_range() {
     for sample in [SampleFormat::U8, ten_bit()] {
         let scale = (peak_of(sample) as u16 + 1) / 256;
         let format = yuv420(sample);
-        let planes = faded_line_planes(&format, 220 * scale, 60 * scale);
-        let (mask, mask_chroma) = uniform_mask(&format, 128);
+        let values = faded_line_values(&format, 220 * scale, 60 * scale);
+        let planes = encoded(&format, &values);
+        let mask = uniform_mask(&format, 128);
 
-        let alone = run_once(TOON, format, format, json!({}), &planes);
-        let masked = run_masked(TOON, format, json!({}), &planes, mask, mask_chroma);
+        let alone = run_codes(TOON, format, json!({}), &planes);
+        let masked = run_masked_codes(TOON, format, json!({}), &planes, mask);
 
-        let input = luma_codes(&planes, sample);
-        let alone_luma = luma_codes(&alone, sample);
-        let masked_luma = luma_codes(&masked, sample);
-        let expected = blended(&input, &alone_luma, 128);
-        let as_f32: Vec<f32> = expected.iter().map(|value| *value as f32).collect();
-        let rounding = rounding_of(&as_f32);
-        let expected_codes = reference_narrow(&as_f32, peak_of(sample) as f32);
-        let result = agreement(&masked_luma, &expected_codes);
-        let stray: Vec<usize> = (0..masked_luma.len())
-            .filter(|index| masked_luma[*index] != expected_codes[*index])
-            .filter(|index| !rounding.at_risk.contains(index))
-            .collect();
+        let expected = blended(&values[0], &alone[0], 128);
         let column = (WIDTH / 2) as usize;
+        let label = format!("{sample}");
 
         println!(
-            "{sample}: toon alone gives {} on the line, masked {}, blended {}, largest {}, {} off, \
-             {} at risk, nearest margin {}",
-            alone_luma[column],
-            masked_luma[column],
-            expected_codes[column],
-            result.largest,
-            result.off_by_one,
-            rounding.at_risk.len(),
-            rounding.nearest,
+            "{label}: toon alone gives {} on the line, masked {}, blended {}",
+            alone[0][column], masked[0][column], expected[column],
         );
-        assert_eq!(
-            alone_luma[column], 0,
-            "{sample} toon alone keeps the line above 0"
-        );
-        assert!(result.largest <= 1, "{sample} differs by {}", result.largest);
         assert!(
-            stray.is_empty(),
-            "{sample} differs at {stray:?}, which do not sit near a boundary"
+            alone[0][column] < 0.0,
+            "{label} toon alone keeps the line at or above 0"
         );
+        assert!(masked[0][column] < 0.0, "{label} the merge held the line at 0");
+        assert_matches(&masked[0], &expected, &label);
     }
 }
 
 #[test]
 fn toon_leaves_unselected_planes_as_the_input_buffers() {
-    let format = yuv420(SampleFormat::U8);
+    let format = yuv420(SampleFormat::F32);
 
     let shared = shared_planes(TOON, format, json!({}));
 
     assert_eq!(shared, vec![false, true, true]);
+}
+
+#[test]
+fn toon_f32_matches_sixteen_bit() {
+    let format = yuv420(sixteen_bit());
+    let values = toon_scene(&format);
+    let args = json!({ "planes": ["y", "u", "v"] });
+
+    assert_f32_matches_sixteen_bit(TOON, args, &values, 1.0, 0.0);
 }

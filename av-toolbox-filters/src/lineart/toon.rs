@@ -209,7 +209,7 @@ impl FilterDefinition for Toon {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
@@ -226,7 +226,7 @@ impl FilterDefinition for Toon {
         let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
         checked_mask(STAGE, &input, mask)?;
 
-        let codes = CodeValues::new(&input, input.sample);
+        let codes = CodeValues::new(&input, SampleFormat::F32);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
@@ -312,7 +312,7 @@ impl<R: Runtime> Filter for Toner<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
-            peak: self.planewise.codes.peak(),
+            codes: self.planewise.codes,
             inner: &*self,
         };
 
