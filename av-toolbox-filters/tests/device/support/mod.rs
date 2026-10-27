@@ -43,15 +43,18 @@ use av_toolbox_gpu::{
 use cubecl::prelude::Runtime;
 
 pub(crate) use self::float::{
+    Parity,
     ROUND_TRIP,
     assert_a_flat_frame_is_unchanged,
     assert_codes_within,
     assert_planes_match,
+    code_bits,
     f32_parity,
     float_bytes,
     float_planes,
     float_samples,
     kept_sample_parity,
+    planes_as_codes,
     run_into_codes,
     run_masked_into_codes,
 };

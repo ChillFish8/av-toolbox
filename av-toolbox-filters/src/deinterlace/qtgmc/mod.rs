@@ -50,8 +50,7 @@ use self::front::kept_parity;
 #[cfg(feature = "test-support")]
 pub use self::testing::{QtgmcMotion, QtgmcMotionLog, QtgmcRepairFlag, qtgmc_with_motion_log};
 use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
-use crate::bits::bits_of;
-use crate::checks::accepts_frames;
+use crate::checks::accepts_integer_or_f32_frames;
 use crate::deinterlace::bwdif::{Order, Rate, half_frame, output_format, output_metas, resolved_order};
 use crate::deinterlace::rebuild::FieldRebuilder;
 use crate::deinterlace::spatial::{Predictor, checked_predictor, checked_predictor_planes};
@@ -65,21 +64,17 @@ fn not_frames() -> StageError {
     StageError::msg(message)
 }
 
-fn unsupported_format(input: &FrameFormat) -> StageError {
-    let message = format!(
-        "{STAGE} needs integer YUV or Gray frames, got {:?} samples in a {:?} layout",
-        input.sample, input.layout
-    );
+fn unsupported_layout(layout: FrameLayout) -> StageError {
+    let message = format!("{STAGE} needs YUV or Gray frames, got {layout:?}");
 
     StageError::msg(message)
 }
 
-/// Refuses a format that is not integer YUV or Gray.
+/// Refuses a layout that is not YUV or Gray.
 fn checked_format(input: &FrameFormat) -> Result<(), StageError> {
-    let is_integer = matches!(input.sample, SampleFormat::U8 | SampleFormat::U16 { .. });
     let is_layout = matches!(input.layout, FrameLayout::Yuv { .. } | FrameLayout::Grey);
-    if !is_integer || !is_layout {
-        return Err(unsupported_format(input));
+    if !is_layout {
+        return Err(unsupported_layout(input.layout));
     }
 
     Ok(())
@@ -167,7 +162,11 @@ fn deinterlacer<R: Runtime>(
 ) -> Result<Deinterlacer<R>, StageError> {
     let predictor = checked_stage(args, &input)?;
     let order = stage_order(args, &input)?;
-    let output = output_format(&input, args.resolved_rate())?;
+    let progressive = output_format(&input, args.resolved_rate())?;
+    let output = FrameFormat {
+        sample: SampleFormat::F32,
+        ..progressive
+    };
     let shapes = plane_shapes(&input)?;
 
     let client = context.client();
@@ -183,7 +182,8 @@ fn deinterlacer<R: Runtime>(
         .input
         .is_repair()
         .then(|| SadMaskTables::new(client, &grid, PROGRESSIVE_SAD_MASK, luma));
-    let rebuilder = FieldRebuilder::new(STAGE, client.clone(), input, input.sample, predictor);
+    let rebuilder = FieldRebuilder::new(STAGE, client.clone(), input, SampleFormat::F32, predictor);
+    let bits = rebuilder.codes().bits();
 
     let chain = Chain {
         rebuilder,
@@ -196,7 +196,7 @@ fn deinterlacer<R: Runtime>(
         shapes,
         grid,
         settings,
-        bits: bits_of(input.sample),
+        bits,
     };
     let first = match order {
         Order::Top => Parity::Top,
@@ -265,7 +265,7 @@ impl FilterDefinition for Qtgmc {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_frames(offered).ok_or_else(not_frames)
+        accepts_integer_or_f32_frames(offered).ok_or_else(not_frames)
     }
 
     fn produces(
@@ -281,7 +281,7 @@ impl FilterDefinition for Qtgmc {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 

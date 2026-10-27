@@ -11,12 +11,12 @@ use super::qtgmc::{
     inputs,
     interlaced,
     mode_args,
+    narrowed_codes,
     progressive_format,
     run_chunks,
     run_clip,
 };
 use crate::stream::Output;
-use crate::support::{element_of, from_bytes};
 
 /// A clip's planes as code values, one entry per frame.
 type Frames = Vec<[Vec<i32>; 3]>;
@@ -216,20 +216,15 @@ fn normalised_luma(frames: &Frames, bits: u32) -> Vec<Vec<f32>> {
         .collect()
 }
 
-/// A stage's outputs as code values.
+/// A stage's outputs as the codes an integer output of the clip's depth would hold.
 fn output_frames(outputs: &[Output], clip: &Clip) -> Frames {
-    let element = element_of(clip.sample());
-
     outputs
         .iter()
         .map(|output| {
-            let planes: Vec<Vec<i32>> = output
-                .planes
-                .iter()
-                .map(|bytes| {
-                    let codes = from_bytes(bytes, element);
-                    codes.into_iter().map(i32::from).collect()
-                })
+            let codes = narrowed_codes(clip, output);
+            let planes: Vec<Vec<i32>> = codes
+                .into_iter()
+                .map(|plane| plane.into_iter().map(i32::from).collect())
                 .collect();
 
             let mut planes = planes.into_iter();

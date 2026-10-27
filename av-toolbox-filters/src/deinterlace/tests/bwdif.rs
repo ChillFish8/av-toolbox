@@ -4,10 +4,10 @@ use av_toolbox_gpu::{
     ColourInfo,
     Depth as BitDepth,
     FieldOrder,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     FrameRate,
-    MaskFormat,
     Offered,
     OutputFormats,
     ResolvedFormats,
@@ -22,6 +22,7 @@ use serde_json::json;
 use crate::deinterlace::Bwdif;
 use crate::deinterlace::bwdif::{BwdifArgs, Order, Rate};
 use crate::deinterlace::spatial::Spatial;
+use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
 
 const STAGE: &str = "deinterlace/bwdif";
 
@@ -47,6 +48,14 @@ fn yuv420(width: u32, height: u32, field_order: Option<FieldOrder>) -> FrameForm
 
 fn interlaced() -> FrameFormat {
     yuv420(16, 8, Some(FieldOrder::TopFirst))
+}
+
+fn sampled(layout: FrameLayout, sample: SampleFormat) -> FrameFormat {
+    FrameFormat {
+        layout,
+        sample,
+        ..interlaced()
+    }
 }
 
 fn capabilities() -> Capabilities {
@@ -218,28 +227,27 @@ fn a_plane_shorter_than_four_rows_is_refused() {
 }
 
 #[test]
-fn floats_are_left_out_and_masks_refused() {
+fn floats_are_accepted_and_masks_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let inputs = [Offered::Unknown];
-    let float_format = FrameFormat {
-        sample: SampleFormat::F32,
-        ..interlaced()
-    };
-    let float = StreamFormat::Frames(float_format);
-    let mask = StreamFormat::Mask(MaskFormat {
-        frame_rate: None,
-        width: 16,
-        height: 8,
-        sample: SampleFormat::U8,
-        chroma: None,
-    });
+    let layout = interlaced().layout;
+    let accepted = |offered| Bwdif::accepts_input(&capabilities, &parsed, 0, offered, &inputs);
 
-    let accepted = Bwdif::accepts_input(&capabilities, &parsed, 0, float, &inputs).expect("readable");
-    let refused = Bwdif::accepts_input(&capabilities, &parsed, 0, mask, &inputs);
+    assert_integers_and_floats_accepted_and_mask_refused(STAGE, layout, sampled, accepted);
+}
 
-    assert!(accepted.is_empty());
-    assert!(refused.is_err());
+#[test]
+fn the_output_is_f32_for_every_input() {
+    let ten_bit = SampleFormat::U16 { depth: BitDepth::TEN };
+    let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = sampled(interlaced().layout, sample);
+        let outputs = produces(json!({}), input).expect("should be accepted");
+
+        assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]));
+    }
 }
 
 #[test]

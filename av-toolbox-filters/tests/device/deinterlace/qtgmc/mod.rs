@@ -40,7 +40,7 @@ use cubecl::prelude::Runtime;
 
 pub(super) use self::progressive::{mode_args, progressive_format};
 use crate::stream::{Input, Output, run_chunk};
-use crate::support::{backend, element_of, frame, from_bytes, ten_bit, to_bytes};
+use crate::support::{backend, element_of, float_planes, frame, planes_as_codes, ten_bit, to_bytes};
 
 /// How far an output sample may sit from the CPU reference, in code values.
 const TOLERANCE: u16 = 1;
@@ -182,13 +182,28 @@ pub(super) fn deinterlaced(input: FrameFormat, double: bool) -> FrameFormat {
     FrameFormat {
         frame_rate,
         field_order: Some(FieldOrder::Progressive),
+        sample: SampleFormat::F32,
         ..input
     }
 }
 
-/// The frames of `clip` as inputs of `format`, numbered from `first` and 40 ms apart.
-pub(super) fn inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input> {
+/// The planes of `codes`, one frame of `format`, as bytes.
+///
+/// An F32 frame holds `bits` deep codes.
+fn frame_bytes(format: &FrameFormat, codes: &[Vec<u16>], bits: u32) -> Vec<Vec<u8>> {
+    if format.sample == SampleFormat::F32 {
+        return float_planes(format, codes, bits);
+    }
+
     let element = element_of(format.sample);
+
+    codes.iter().map(|plane| to_bytes(plane, element)).collect()
+}
+
+/// The frames of `clip` as inputs of `format`, numbered from `first` and 40 ms apart.
+///
+/// An F32 input holds the clip's codes at its depth.
+pub(super) fn inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input> {
     let plane_count = format.channels().len();
 
     clip.frames
@@ -201,15 +216,41 @@ pub(super) fn inputs(clip: &Clip, format: &FrameFormat, first: u64) -> Vec<Input
                 timestamp: Some(timestamp),
                 ..FrameMeta::at(index)
             };
-            let bytes = planes[..plane_count]
+            let codes: Vec<Vec<u16>> = planes[..plane_count]
                 .iter()
-                .map(|plane| {
-                    let codes: Vec<u16> = plane.iter().map(|sample| *sample as u16).collect();
-                    to_bytes(&codes, element)
-                })
+                .map(|plane| plane.iter().map(|sample| *sample as u16).collect())
                 .collect();
+            let bytes = frame_bytes(format, &codes, clip.bits);
 
             Input { meta, planes: bytes }
+        })
+        .collect()
+}
+
+/// Every plane of `output`, an F32 output of `clip`, as unrounded codes of the clip's depth.
+pub(super) fn output_codes(clip: &Clip, output: &Output) -> Vec<Vec<f32>> {
+    let input = interlaced(clip, FieldOrder::TopFirst);
+    let float = FrameFormat {
+        sample: SampleFormat::F32,
+        ..input
+    };
+
+    planes_as_codes(&float, &output.planes, clip.bits)
+}
+
+/// Every plane of `output`, an F32 output of `clip`, as the codes an integer output of the clip's depth
+/// would hold.
+pub(super) fn narrowed_codes(clip: &Clip, output: &Output) -> Vec<Vec<u16>> {
+    let peak = f32::from(peak_code(clip.sample()));
+    let planes = output_codes(clip, output);
+
+    planes
+        .iter()
+        .map(|plane| {
+            plane
+                .iter()
+                .map(|code| code.round().clamp(0.0, peak) as u16)
+                .collect()
         })
         .collect()
 }
@@ -504,11 +545,9 @@ fn largest_allowed(sample: SampleFormat) -> u16 {
     LARGEST_8_BIT << (depth - 8)
 }
 
-/// How far plane `plane` of output `field` sits from `wanted`, narrowed to `sample`.
-fn closeness(found: &[u8], wanted: &[f32], sample: SampleFormat, field: usize, plane: usize) -> Closeness {
-    let element = element_of(sample);
+/// How far `codes`, plane `plane` of output `field`, sits from `wanted`, narrowed to `sample`.
+fn closeness(codes: &[u16], wanted: &[f32], sample: SampleFormat, field: usize, plane: usize) -> Closeness {
     let peak = f32::from(peak_code(sample));
-    let codes = from_bytes(found, element);
     assert_eq!(
         codes.len(),
         wanted.len(),
@@ -554,16 +593,18 @@ fn allowed_share(input: ReferenceInput, plane: usize) -> f64 {
 /// Each pair is an output and the reference's planes for it, from a run with `input`.
 fn assert_paired_outputs<'a>(
     pairs: impl Iterator<Item = (usize, &'a Output, &'a [Vec<f32>; 3])>,
-    sample: SampleFormat,
+    clip: &Clip,
     input: ReferenceInput,
     label: &str,
 ) -> Closeness {
+    let sample = clip.sample();
     let ceiling = largest_allowed(sample);
 
     let mut worst = Closeness::default();
     let mut worst_planes: Vec<Closeness> = Vec::new();
     for (field, output, wanted) in pairs {
-        for (plane, found) in output.planes.iter().enumerate() {
+        let planes = narrowed_codes(clip, output);
+        for (plane, found) in planes.iter().enumerate() {
             let found_closeness = closeness(found, &wanted[plane], sample, field, plane);
             let allowed = allowed_share(input, plane);
             assert!(
@@ -611,7 +652,7 @@ fn assert_paired_outputs<'a>(
 }
 
 /// Asserts each of `outputs` lies within the tolerance of the reference field of the same number.
-fn assert_outputs(outputs: &[Output], expected: &Expected, sample: SampleFormat, label: &str) -> Closeness {
+fn assert_outputs(outputs: &[Output], expected: &Expected, clip: &Clip, label: &str) -> Closeness {
     assert_eq!(
         outputs.len(),
         expected.fields.len(),
@@ -624,12 +665,12 @@ fn assert_outputs(outputs: &[Output], expected: &Expected, sample: SampleFormat,
         .enumerate()
         .map(|(field, (output, wanted))| (field, output, wanted));
 
-    assert_paired_outputs(pairs, sample, expected.input, label)
+    assert_paired_outputs(pairs, clip, expected.input, label)
 }
 
 /// Asserts `run` matches the reference, its motion first and then its outputs.
 fn assert_matches(run: &ChunkRun, expected: &Expected, clip: &Clip, label: &str) -> Closeness {
     assert_motion(&run.motion, expected, label);
 
-    assert_outputs(&run.outputs, expected, clip.sample(), label)
+    assert_outputs(&run.outputs, expected, clip, label)
 }

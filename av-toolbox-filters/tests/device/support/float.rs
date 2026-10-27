@@ -49,6 +49,15 @@ pub(crate) fn assert_codes_within(found: &[f32], expected: &[f32], tolerance: f3
     }
 }
 
+/// The depth of the codes `sample` maps onto. F32 maps onto 16-bit codes.
+pub(crate) fn code_bits(sample: SampleFormat) -> u32 {
+    match sample {
+        SampleFormat::U8 => 8,
+        SampleFormat::U16 { depth } => u32::from(depth.bits()),
+        SampleFormat::F32 => 16,
+    }
+}
+
 /// The integer range `format` returns to. Anything not labelled full range is limited.
 pub(crate) fn range_of(format: &FrameFormat) -> SampleRange {
     match format.colour.range {
@@ -130,7 +139,7 @@ pub(crate) fn run_masked_into_codes(
 /// The planes of a `format` frame, held in `planes`, as `bits` deep codes.
 ///
 /// Integer samples are their own codes. F32 samples map onto codes in the range `format` is labelled with.
-fn planes_as_codes(format: &FrameFormat, planes: &[Vec<u8>], bits: u32) -> Vec<Vec<f32>> {
+pub(crate) fn planes_as_codes(format: &FrameFormat, planes: &[Vec<u8>], bits: u32) -> Vec<Vec<f32>> {
     let range = range_of(format);
     let element = element_of(format.sample);
 
@@ -161,7 +170,8 @@ pub(crate) struct Parity {
 }
 
 impl Parity {
-    fn between(sixteen_bit: &[Vec<f32>], float: &[Vec<f32>]) -> Self {
+    /// How far `float` strays from `sixteen_bit`, both planes of codes.
+    pub(crate) fn between(sixteen_bit: &[Vec<f32>], float: &[Vec<f32>]) -> Self {
         let differences: Vec<f32> = sixteen_bit
             .iter()
             .flatten()

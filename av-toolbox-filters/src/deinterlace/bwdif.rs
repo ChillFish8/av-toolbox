@@ -33,6 +33,7 @@ use av_toolbox_gpu::{
     Plane,
     ResolvedFormats,
     Runtime,
+    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -41,7 +42,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::aa::direction::{Direction, checked_dimensions, missing_plane};
-use crate::checks::accepts_frames;
+use crate::checks::accepts_integer_or_f32_frames;
 use crate::deinterlace::rebuild::{FieldRebuilder, Window, channel_plane};
 use crate::deinterlace::spatial::{Spatial, SpatialStage, checked_predictor, checked_predictor_planes};
 use crate::masked::{INPUT, checked_input, missing_input};
@@ -271,7 +272,7 @@ impl FilterDefinition for Bwdif {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        accepts_frames(offered).ok_or_else(not_frames)
+        accepts_integer_or_f32_frames(offered).ok_or_else(not_frames)
     }
 
     fn produces(
@@ -290,7 +291,7 @@ impl FilterDefinition for Bwdif {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
@@ -306,10 +307,14 @@ impl FilterDefinition for Bwdif {
         let selected = checked_planes(&args, &input)?;
         let predictor = checked_predictor(STAGE, &args.spatial)?;
         checked_predictor_planes(STAGE, predictor, &input, &selected)?;
-        let output = output_format(&input, args.rate)?;
+        let progressive = output_format(&input, args.rate)?;
+        let output = FrameFormat {
+            sample: SampleFormat::F32,
+            ..progressive
+        };
 
         let client = context.client().clone();
-        let rebuilder = FieldRebuilder::new(STAGE, client, input, input.sample, predictor);
+        let rebuilder = FieldRebuilder::new(STAGE, client, input, SampleFormat::F32, predictor);
         let fields = fields_of(order, args.rate);
         let half_frame = half_frame(input.frame_rate);
 
@@ -388,15 +393,32 @@ struct Deinterlacer<R: Runtime> {
 }
 
 impl<R: Runtime> Deinterlacer<R> {
+    /// The plane of `channel` in `frame`, shared when it is already stored as the output's sample, and
+    /// converted when not.
+    fn kept_plane(
+        &self,
+        context: &FrameContext,
+        frame: &Frame,
+        channel: Channel,
+    ) -> Result<Plane, StageError> {
+        let source = channel_plane(STAGE, frame, channel)?;
+        if self.output.sample == self.input.sample {
+            return Ok(source.clone());
+        }
+
+        let values = self.rebuilder.widened(context, source, channel);
+        self.rebuilder.stored(context, &values, frame.meta(), channel)
+    }
+
     /// Every output of the window's current frame.
     fn deinterlace(&self, context: &FrameContext, window: &Window<'_>) -> Result<Vec<Frame>, StageError> {
         let mut planes: Vec<Vec<Plane>> = vec![Vec::new(); self.fields.len()];
 
         for (plane_index, channel) in self.input.channels().iter().enumerate() {
             if !self.selected[plane_index] {
-                let shared = channel_plane(STAGE, window.current, *channel)?;
+                let kept = self.kept_plane(context, window.current, *channel)?;
                 for output_planes in &mut planes {
-                    output_planes.push(shared.clone());
+                    output_planes.push(kept.clone());
                 }
 
                 continue;

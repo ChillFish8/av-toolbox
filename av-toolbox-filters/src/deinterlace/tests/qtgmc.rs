@@ -3,9 +3,11 @@ use av_toolbox_gpu::{
     Capabilities,
     ColourInfo,
     FieldOrder,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     FrameRate,
+    Offered,
     OutputFormats,
     ResolvedFormats,
     SampleFormat,
@@ -20,6 +22,7 @@ use crate::deinterlace::Qtgmc;
 use crate::deinterlace::bwdif::Order;
 use crate::deinterlace::qtgmc::{Input, QtgmcArgs};
 use crate::deinterlace::spatial::Spatial;
+use crate::sample_checks::assert_integers_and_floats_accepted_and_mask_refused;
 
 fn args(value: serde_json::Value) -> QtgmcArgs {
     serde_json::from_value(value).expect("parses")
@@ -47,6 +50,14 @@ fn yuv420(width: u32, height: u32, field_order: Option<FieldOrder>) -> FrameForm
 
 fn interlaced() -> FrameFormat {
     yuv420(64, 64, Some(FieldOrder::TopFirst))
+}
+
+fn sampled(layout: FrameLayout, sample: SampleFormat) -> FrameFormat {
+    FrameFormat {
+        layout,
+        sample,
+        ..interlaced()
+    }
 }
 
 fn capabilities() -> Capabilities {
@@ -207,14 +218,13 @@ fn a_non_finite_threshold_is_refused() {
 }
 
 #[test]
-fn a_float_format_is_refused() {
+fn a_float_format_is_accepted() {
     let input = FrameFormat {
         sample: SampleFormat::F32,
         ..interlaced()
     };
-    let message = refusal(json!({}), input);
 
-    assert!(message.contains("integer YUV or Gray"), "{message}");
+    assert!(produces(json!({}), input).is_ok());
 }
 
 #[test]
@@ -222,7 +232,33 @@ fn an_rgb_format_is_refused() {
     let input = frame(64, 64, FrameLayout::Rgb, Some(FieldOrder::TopFirst));
     let message = refusal(json!({}), input);
 
-    assert!(message.contains("integer YUV or Gray"), "{message}");
+    assert!(message.contains("needs YUV or Gray frames, got Rgb"), "{message}");
+}
+
+#[test]
+fn floats_are_accepted_and_masks_refused() {
+    let capabilities = capabilities();
+    let parsed = args(json!({}));
+    let inputs = [Offered::Unknown];
+    let layout = interlaced().layout;
+    let accepted = |offered| Qtgmc::accepts_input(&capabilities, &parsed, 0, offered, &inputs);
+
+    assert_integers_and_floats_accepted_and_mask_refused("deinterlace/qtgmc", layout, sampled, accepted);
+}
+
+#[test]
+fn the_output_is_f32_for_every_input() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: av_toolbox_gpu::Depth::SIXTEEN,
+    };
+    let samples = [SampleFormat::U8, sixteen_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = sampled(interlaced().layout, sample);
+        let outputs = produces(json!({}), input).expect("should be accepted");
+
+        assert_eq!(outputs.samples, FormatSet::of([SampleFormat::F32]));
+    }
 }
 
 #[test]

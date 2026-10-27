@@ -120,6 +120,9 @@ pub(crate) struct FieldRebuilder<R: Runtime> {
 impl<R: Runtime> FieldRebuilder<R> {
     /// A rebuilder for frames of `input` storing its results as `output`, whose errors are reported
     /// under `stage`.
+    ///
+    /// The EEDI2, EEDI3 and Sangnom predictors decide on integer codes, so F32 samples widen to whole codes
+    /// for them.
     pub(crate) fn new(
         stage: &'static str,
         client: ComputeClient<R>,
@@ -128,6 +131,10 @@ impl<R: Runtime> FieldRebuilder<R> {
         predictor: Predictor,
     ) -> Self {
         let codes = CodeValues::new(&input, output);
+        let codes = match predictor {
+            Predictor::Cubic => codes,
+            _ => codes.whole_codes(),
+        };
 
         Self {
             stage,
@@ -142,10 +149,6 @@ impl<R: Runtime> FieldRebuilder<R> {
         &self.client
     }
 
-    #[expect(
-        dead_code,
-        reason = "the stages choosing their output sample read the codes here"
-    )]
     pub(crate) fn codes(&self) -> CodeValues {
         self.codes
     }

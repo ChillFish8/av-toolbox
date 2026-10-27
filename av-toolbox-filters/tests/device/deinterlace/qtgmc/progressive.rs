@@ -25,10 +25,10 @@ use super::{
     expected,
     inputs,
     interlaced,
+    narrowed_codes,
     reference_defaults,
     run_chunks,
 };
-use crate::support::{element_of, from_bytes};
 
 /// Every progressive mode, with the reference's input for it.
 const MODES: [(&str, ReferenceInput); 3] = [
@@ -332,8 +332,6 @@ fn the_last_repaired_frame_of_a_chunk_is_the_original_luma() {
     let repaired: Vec<usize> = run.repairs.iter().map(|repair| repair.field).collect();
     assert_eq!(repaired, [0, 1], "only frames with a next frame build a mask");
 
-    let format = progressive_format(&clip);
-    let element = element_of(format.sample);
     let luma: Vec<Vec<f32>> = clip
         .frames
         .iter()
@@ -347,11 +345,11 @@ fn the_last_repaired_frame_of_a_chunk_is_the_original_luma() {
         })
         .collect();
 
-    let last = from_bytes(&run.outputs[2].planes[0], element);
-    assert_eq!(last, kept[2], "the last frame keeps its own luma");
+    let last = narrowed_codes(&clip, &run.outputs[2]);
+    assert_eq!(last[0], kept[2], "the last frame keeps its own luma");
 
-    let first = from_bytes(&run.outputs[0].planes[0], element);
-    assert_ne!(first, kept[0], "an earlier frame rebuilds where it moves");
+    let first = narrowed_codes(&clip, &run.outputs[0]);
+    assert_ne!(first[0], kept[0], "an earlier frame rebuilds where it moves");
 }
 
 // With every radius and the sharpening off, a frame's output reads only itself and the next frame, so it

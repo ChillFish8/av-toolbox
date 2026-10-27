@@ -1,24 +1,34 @@
-use av_toolbox_gpu::{FieldOrder, Subsampling};
+use av_toolbox_gpu::{FieldOrder, FrameFormat, SampleFormat, Subsampling};
 use serde_json::json;
 
 use super::{
     Clip,
     assert_matches,
     cubic,
+    deinterlaced,
     depth_of,
     expected,
+    inputs,
     interlaced,
+    narrowed_codes,
+    output_codes,
     peak_code,
     reference_defaults,
+    run_chunks,
     run_clip,
 };
-use crate::support::{element_of, from_bytes};
+use crate::support::{Parity, ROUND_TRIP};
 
 /// The furthest a kept row's sample may move from the input, in 8-bit code values.
 const KEPT_LARGEST_8_BIT: u32 = 48;
 
 /// The furthest a kept row may move from the input on average, in 8-bit code values.
 const KEPT_MEAN_8_BIT: f64 = 2.0;
+
+/// The share of samples an F32 run may sit more than one code from its 16-bit run.
+///
+/// The rounding of the vertical midpoint can land on either side of a code.
+const F32_BEYOND_ONE_SHARE: f32 = 0.005;
 
 /// The U and V planes made from `luma`, U at half its contrast around the middle code and V inverted.
 fn luma_chroma(luma: &[i32], bits: u32) -> [Vec<i32>; 2] {
@@ -186,10 +196,8 @@ fn kept_row_drift(found: &[u16], input: &[i32], width: usize, parity: usize) -> 
     (total as f64 / count as f64, largest)
 }
 
-/// Runs `clip` with the `spatial` named and asserts every output has the input's size, every sample is in
-/// range, and each field keeps its own rows of the input within tolerance.
-///
-/// Outputs are integer codes, so every sample is finite once it is in range.
+/// Runs `clip` with the `spatial` named and asserts every output has the input's size, every sample is
+/// finite and in range, and each field keeps its own rows of the input within tolerance.
 fn assert_spatial_runs(clip: &Clip, spatial: &str) {
     let run = run_clip(json!({ "spatial": { "kind": spatial } }), clip);
     assert_eq!(
@@ -199,8 +207,7 @@ fn assert_spatial_runs(clip: &Clip, spatial: &str) {
     );
 
     let format = interlaced(clip, FieldOrder::TopFirst);
-    let element = element_of(format.sample);
-    let peak = peak_code(format.sample);
+    let peak = f32::from(peak_code(format.sample));
     let scale = 1u32 << (depth_of(format.sample) - 8);
     let channels = format.channels();
 
@@ -215,18 +222,26 @@ fn assert_spatial_runs(clip: &Clip, spatial: &str) {
 
         let kept_parity = field % 2;
         let source = &clip.frames[field / 2];
+        let found = output_codes(clip, output);
+        let narrowed = narrowed_codes(clip, output);
         for (plane, channel) in channels.iter().enumerate() {
             let (width, height) = format
                 .channel_dimensions(*channel)
                 .expect("the format carries the channel");
-            let codes = from_bytes(&output.planes[plane], element);
+            let codes = &found[plane];
             let label = format!("{spatial}: field {field} plane {plane}");
             assert_eq!(codes.len(), (width * height) as usize, "{label} has another size");
 
-            let above = codes.iter().find(|code| **code > peak);
-            assert!(above.is_none(), "{label} has a sample {above:?} over {peak}");
+            let outside = codes
+                .iter()
+                .find(|code| !code.is_finite() || **code < -ROUND_TRIP || **code > peak + ROUND_TRIP);
+            assert!(
+                outside.is_none(),
+                "{label} has a sample {outside:?} outside 0..={peak}"
+            );
 
-            let (mean, largest) = kept_row_drift(&codes, &source[plane], width as usize, kept_parity);
+            let width = width as usize;
+            let (mean, largest) = kept_row_drift(&narrowed[plane], &source[plane], width, kept_parity);
             worst_mean = worst_mean.max(mean);
             worst_largest = worst_largest.max(largest);
         }
@@ -297,4 +312,42 @@ fn spatial_sangnom_runs_and_keeps_each_fields_rows() {
     let clip = Clip::named("field_objects_8");
 
     assert_spatial_runs(&clip, "sangnom");
+}
+
+/// Every output plane of `clip` run as `input` with `args`, as unrounded codes of the clip's depth.
+fn run_codes(clip: &Clip, input: FrameFormat, args: serde_json::Value) -> Vec<Vec<f32>> {
+    let output = deinterlaced(input, true);
+    let chunk = inputs(clip, &input, 0);
+
+    let mut runs = run_chunks(args, input, output, vec![chunk]);
+    let run = runs.pop().expect("one chunk was run");
+
+    run.outputs
+        .iter()
+        .flat_map(|emitted| output_codes(clip, emitted))
+        .collect()
+}
+
+#[test]
+fn qtgmc_f32_matches_sixteen_bit() {
+    let clip = Clip::named("field_noisy_10");
+    let lifted = at_16_bit(&clip);
+    let sixteen = interlaced(&lifted, FieldOrder::TopFirst);
+    let float = FrameFormat {
+        sample: SampleFormat::F32,
+        ..sixteen
+    };
+    let spatials = [json!({ "kind": "cubic" }), json!({ "kind": "eedi3" })];
+
+    for spatial in spatials {
+        let args = json!({ "spatial": spatial });
+
+        let sixteen_codes = run_codes(&lifted, sixteen, args.clone());
+        let float_codes = run_codes(&lifted, float, args);
+
+        let parity = Parity::between(&sixteen_codes, &float_codes);
+        println!("{spatial}: {parity:?}");
+
+        assert!(parity.beyond_one <= F32_BEYOND_ONE_SHARE, "{spatial}: {parity:?}");
+    }
 }

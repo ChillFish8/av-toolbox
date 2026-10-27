@@ -14,6 +14,7 @@ use av_toolbox_cubek::testing::{
 };
 use av_toolbox_gpu::{
     ChromaLocation,
+    Depth,
     FieldOrder,
     FrameFormat,
     FrameLayout,
@@ -28,15 +29,20 @@ use serde_json::json;
 
 use crate::stream::{Input, Output, Stream};
 use crate::support::{
-    assert_within_one,
+    Parity,
+    ROUND_TRIP,
+    assert_codes_within,
     backend,
     built_filter,
+    code_bits,
     element_of,
+    encoded,
+    float_planes,
     frame,
     from_bytes,
     peak_of,
+    planes_as_codes,
     ten_bit,
-    to_bytes,
 };
 
 const STAGE: &str = "deinterlace/bwdif";
@@ -63,8 +69,51 @@ fn deinterlaced(input: FrameFormat, double: bool) -> FrameFormat {
     FrameFormat {
         frame_rate,
         field_order: Some(FieldOrder::Progressive),
+        sample: SampleFormat::F32,
         ..input
     }
+}
+
+fn sixteen_bit() -> SampleFormat {
+    SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    }
+}
+
+/// Every plane of `emitted`, an output for `input`, as codes of the input's depth.
+fn output_codes(input: &FrameFormat, emitted: &Output) -> Vec<Vec<f32>> {
+    let float = FrameFormat {
+        sample: SampleFormat::F32,
+        ..*input
+    };
+    let bits = code_bits(input.sample);
+
+    planes_as_codes(&float, &emitted.planes, bits)
+}
+
+/// Every plane of `given`, an input of `input`, as codes.
+fn input_codes(input: &FrameFormat, given: &Input) -> Vec<Vec<f32>> {
+    let bits = code_bits(input.sample);
+
+    planes_as_codes(input, &given.planes, bits)
+}
+
+/// Checks every plane of `emitted` still holds the codes of `original`.
+fn assert_unchanged(input: &FrameFormat, emitted: &Output, original: &Input, label: &str) {
+    let found = output_codes(input, emitted);
+    let expected = input_codes(input, original);
+
+    for (plane, (found_plane, expected_plane)) in found.iter().zip(&expected).enumerate() {
+        let plane_label = format!("{label} plane {plane}");
+        assert_codes_within(found_plane, expected_plane, ROUND_TRIP, &plane_label);
+    }
+}
+
+/// Checks plane `plane` of `emitted` is within one code of the reference's `expected`.
+fn assert_within_one(input: &FrameFormat, emitted: &Output, plane: usize, expected: &[f32], label: &str) {
+    let found = output_codes(input, emitted);
+
+    assert_codes_within(&found[plane], expected, 1.0, label);
 }
 
 pub(super) fn run(
@@ -120,6 +169,21 @@ const TEN_BIT_LEVELS: Levels = Levels {
     noise: 64,
 };
 
+/// Levels whose bar reaches the 16-bit peak of 65535.
+const SIXTEEN_BIT_LEVELS: Levels = Levels {
+    low: 2560,
+    high: 61440,
+    noise: 4096,
+};
+
+fn levels_of(sample: SampleFormat) -> Levels {
+    match sample {
+        SampleFormat::U8 => EIGHT_BIT_LEVELS,
+        SampleFormat::U16 { depth } if depth == Depth::TEN => TEN_BIT_LEVELS,
+        _ => SIXTEEN_BIT_LEVELS,
+    }
+}
+
 /// A plane of combed noise with a bar that moves 2 samples right each frame, wrapping every 32 columns.
 fn moving_plane(width: u32, height: u32, frame: u32, levels: Levels) -> Vec<u16> {
     let shift = (frame * 2) % 32;
@@ -140,29 +204,33 @@ fn moving_plane(width: u32, height: u32, frame: u32, levels: Levels) -> Vec<u16>
     plane
 }
 
+/// The code values of frame `index` of a moving 4:2:0 clip of `format`.
+///
+/// An F32 clip holds 16-bit codes.
+fn moving_values(format: &FrameFormat, index: u64) -> Vec<Vec<u16>> {
+    let frame = index as u32;
+    let levels = levels_of(format.sample);
+
+    let luma = moving_plane(format.width, format.height, frame, levels);
+    let chroma = moving_plane(format.width / 2, format.height / 2, frame + 7, levels);
+
+    vec![luma, chroma.clone(), chroma]
+}
+
 /// Frame `index` of a moving 4:2:0 clip of `format`, at 25 frames per second.
 fn moving_frame(format: &FrameFormat, index: u64) -> Input {
-    let frame = index as u32;
-    let levels = match format.sample {
-        SampleFormat::U8 => EIGHT_BIT_LEVELS,
-        _ => TEN_BIT_LEVELS,
+    let values = moving_values(format, index);
+    let planes = match format.sample {
+        SampleFormat::F32 => float_planes(format, &values, 16),
+        _ => encoded(format, &values),
     };
-    let element = element_of(format.sample);
-
-    let luma_values = moving_plane(format.width, format.height, frame, levels);
-    let chroma_values = moving_plane(format.width / 2, format.height / 2, frame + 7, levels);
-    let luma = to_bytes(&luma_values, element);
-    let chroma = to_bytes(&chroma_values, element);
     let timestamp = Duration::from_millis(40 * index);
     let meta = FrameMeta {
         timestamp: Some(timestamp),
         ..FrameMeta::at(index)
     };
 
-    Input {
-        meta,
-        planes: vec![luma, chroma.clone(), chroma],
-    }
+    Input { meta, planes }
 }
 
 fn moving_clip(format: &FrameFormat, indices: std::ops::Range<u64>) -> Vec<Input> {
@@ -181,14 +249,14 @@ fn narrowed(values: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-/// The 8-bit luma bwdif's reference gives for `field` of `current`, rounded and clamped as the stage narrows.
+/// The 8-bit luma bwdif's reference gives for `field` of `current`.
 fn reference_luma(
     format: &FrameFormat,
     previous: &Input,
     current: &Input,
     next: &Input,
     field: BwdifField,
-) -> Vec<u8> {
+) -> Vec<f32> {
     let previous_values = widened(&previous.planes[0]);
     let current_values = widened(&current.planes[0]);
     let next_values = widened(&next.planes[0]);
@@ -199,12 +267,7 @@ fn reference_luma(
         spatial: None,
     };
 
-    let values = reference_bwdif(&planes, format.width, format.height, field);
-
-    values
-        .iter()
-        .map(|value| value.round().clamp(0.0, 255.0) as u8)
-        .collect()
+    reference_bwdif(&planes, format.width, format.height, field)
 }
 
 #[test]
@@ -224,7 +287,9 @@ fn a_static_clip_comes_out_unchanged_at_double_rate() {
     assert_eq!(outputs.len(), 6);
     for (index, emitted) in outputs.iter().enumerate() {
         assert_eq!(emitted.meta.index, index as u64);
-        assert_eq!(emitted.planes, still.planes, "output {index}");
+
+        let label = format!("output {index}");
+        assert_unchanged(&input, emitted, &still, &label);
     }
 }
 
@@ -299,10 +364,10 @@ fn every_field_matches_the_reference_on_luma() {
     for (frame, (previous, current, next)) in windows.into_iter().enumerate() {
         for (field_index, field) in [first, second].into_iter().enumerate() {
             let expected = reference_luma(&input, &clip[previous], &clip[current], &clip[next], field);
-            let found = &outputs[frame * 2 + field_index].planes[0];
+            let emitted = &outputs[frame * 2 + field_index];
 
             let label = format!("frame {frame}, field {field_index}");
-            assert_within_one(found, &expected, &label);
+            assert_within_one(&input, emitted, 0, &expected, &label);
         }
     }
 }
@@ -310,12 +375,14 @@ fn every_field_matches_the_reference_on_luma() {
 /// Asserts the first output's luma keeps the odd rows of the first input's luma.
 fn assert_odd_rows_kept_first(format: &FrameFormat, outputs: &[Output], clip: &[Input]) {
     let width = format.width as usize;
-    let kept_rows = outputs[0].planes[0]
-        .chunks(width)
-        .zip(clip[0].planes[0].chunks(width));
-    for (row, (found, original)) in kept_rows.enumerate() {
+    let found = output_codes(format, &outputs[0]);
+    let original = input_codes(format, &clip[0]);
+
+    let kept_rows = found[0].chunks(width).zip(original[0].chunks(width));
+    for (row, (found_row, original_row)) in kept_rows.enumerate() {
         if row % 2 == 1 {
-            assert_eq!(found, original, "row {row}");
+            let label = format!("row {row}");
+            assert_codes_within(found_row, original_row, ROUND_TRIP, &label);
         }
     }
 }
@@ -373,12 +440,36 @@ fn a_one_frame_chunk_uses_its_frame_for_every_neighbour() {
         first: true,
     };
     let expected = reference_luma(&input, &only, &only, &only, first);
-    assert_within_one(&outputs[0].planes[0], &expected, "the first field");
+    assert_within_one(&input, &outputs[0], 0, &expected, "the first field");
 }
 
 #[test]
-fn an_unselected_plane_is_the_input() {
+fn an_unselected_plane_of_an_eight_bit_clip_becomes_f32() {
     let input = interlaced(16, 8, SampleFormat::U8);
+    let output = deinterlaced(input, false);
+    let clip = moving_clip(&input, 0..3);
+    let chroma_samples = (input.width / 2 * input.height / 2) as usize;
+
+    let outputs = run(
+        json!({ "rate": "single", "planes": ["y"] }),
+        input,
+        output,
+        vec![clip.clone()],
+    );
+
+    for (emitted, original) in outputs.iter().zip(&clip) {
+        assert_eq!(emitted.planes[1].len(), 4 * chroma_samples);
+
+        let found = output_codes(&input, emitted);
+        let expected = input_codes(&input, original);
+        assert_codes_within(&found[1], &expected[1], ROUND_TRIP, "plane U");
+        assert_codes_within(&found[2], &expected[2], ROUND_TRIP, "plane V");
+    }
+}
+
+#[test]
+fn an_unselected_plane_of_a_float_clip_is_the_input() {
+    let input = interlaced(16, 8, SampleFormat::F32);
     let output = deinterlaced(input, false);
     let clip = moving_clip(&input, 0..3);
 
@@ -415,7 +506,7 @@ fn a_static_clip_comes_out_unchanged_with_every_spatial_kind() {
         assert_eq!(outputs.len(), 4, "{kind}");
 
         for emitted in &outputs {
-            assert_eq!(emitted.planes, still.planes, "{kind}");
+            assert_unchanged(&input, emitted, &still, kind);
         }
     }
 }
@@ -447,13 +538,9 @@ fn sangnom_prediction_matches_the_reference_on_luma() {
         spatial: Some(&spatial),
     };
 
-    let values = reference_bwdif(&planes, input.width, input.height, field);
-    let expected: Vec<u8> = values
-        .iter()
-        .map(|value| value.round().clamp(0.0, 255.0) as u8)
-        .collect();
+    let expected = reference_bwdif(&planes, input.width, input.height, field);
 
-    assert_within_one(&outputs[1].planes[0], &expected, "frame 1 luma");
+    assert_within_one(&input, &outputs[1], 0, &expected, "frame 1 luma");
 }
 
 #[test]
@@ -488,26 +575,10 @@ fn sangnom_prediction_matches_the_reference_for_both_fields_at_double_rate() {
             spatial: Some(&spatial),
         };
 
-        let values = reference_bwdif(&planes, input.width, input.height, field);
-        let expected: Vec<u8> = values
-            .iter()
-            .map(|value| value.round().clamp(0.0, 255.0) as u8)
-            .collect();
+        let expected = reference_bwdif(&planes, input.width, input.height, field);
 
         let label = format!("frame 1, field {field_index}");
-        assert_within_one(&outputs[2 + field_index].planes[0], &expected, &label);
-    }
-}
-
-/// Asserts each of `found` lies within one code value of the same sample of `expected`.
-fn assert_codes_within_one(found: &[u16], expected: &[u16], label: &str) {
-    assert_eq!(found.len(), expected.len(), "{label}");
-
-    for (index, (got, want)) in found.iter().zip(expected).enumerate() {
-        assert!(
-            got.abs_diff(*want) <= 1,
-            "{label}: sample {index} was {got}, expected {want}"
-        );
+        assert_within_one(&input, &outputs[2 + field_index], 0, &expected, &label);
     }
 }
 
@@ -553,16 +624,12 @@ fn every_field_matches_the_reference_on_ten_bit_luma() {
         };
 
         for (field_index, field) in [first, second].into_iter().enumerate() {
-            let values = reference_bwdif(&planes, input.width, input.height, field);
-            let expected: Vec<u16> = values
-                .iter()
-                .map(|value| value.round().clamp(0.0, peak as f32) as u16)
-                .collect();
-            let emitted = &outputs[frame * 2 + field_index].planes[0];
-            let found = from_bytes(emitted, element);
+            let expected = reference_bwdif(&planes, input.width, input.height, field);
+            let emitted = &outputs[frame * 2 + field_index];
+            let found = output_codes(&input, emitted);
 
             let label = format!("frame {frame}, field {field_index}");
-            assert_codes_within_one(&found, &expected, &label);
+            assert_codes_within(&found[0], &expected, 1.0, &label);
         }
     }
 }
@@ -685,8 +752,8 @@ fn eedi2_prediction_matches_the_reference_on_every_plane_at_double_rate() {
                 assert!(largest_gap > 1, "{label} reads the same without the shift");
             }
 
-            let found = &outputs[2 + field_index].planes[plane_index];
-            assert_within_one(found, &expected, &label);
+            let emitted = &outputs[2 + field_index];
+            assert_within_one(&input, emitted, plane_index, &values, &label);
         }
     }
 }
@@ -694,7 +761,12 @@ fn eedi2_prediction_matches_the_reference_on_every_plane_at_double_rate() {
 /// Asserts `found` is within one of `expected` wherever `touched` is unset, giving how many samples it sets.
 ///
 /// A touched sample is one where a close decision of EEDI3 can change its prediction.
-fn assert_within_one_where_untouched(found: &[u8], expected: &[u8], touched: &[bool], label: &str) -> usize {
+fn assert_within_one_where_untouched(
+    found: &[f32],
+    expected: &[f32],
+    touched: &[bool],
+    label: &str,
+) -> usize {
     assert_eq!(found.len(), expected.len(), "{label}");
     assert_eq!(touched.len(), expected.len(), "{label}");
 
@@ -706,7 +778,7 @@ fn assert_within_one_where_untouched(found: &[u8], expected: &[u8], touched: &[b
         }
 
         assert!(
-            got.abs_diff(*want) <= 1,
+            (got - want).abs() <= 1.0,
             "{label}: sample {index} was {got}, expected {want}"
         );
     }
@@ -761,13 +833,51 @@ fn eedi3_prediction_matches_the_reference_for_both_fields_at_double_rate() {
         let label = format!("frame 1, field {field_index}");
         assert_ne!(expected, cubic, "{label}: the prediction changes nothing");
 
-        let found = &outputs[2 + field_index].planes[0];
+        let found = output_codes(&input, &outputs[2 + field_index]);
         compared += expected.len();
-        touched += assert_within_one_where_untouched(found, &expected, &pass.touched, &label);
+        touched += assert_within_one_where_untouched(&found[0], &values, &pass.touched, &label);
     }
 
     assert!(
         touched * 50 <= compared,
         "{touched} of {compared} samples are touched, more than 2 %"
     );
+}
+
+/// How far bwdif's F32 run of a moving clip strays from its 16-bit run, with the spatial prediction `spatial`.
+fn spatial_parity(spatial: serde_json::Value) -> Parity {
+    let sixteen = interlaced(64, 32, sixteen_bit());
+    let float = interlaced(64, 32, SampleFormat::F32);
+    let sixteen_clip = moving_clip(&sixteen, 0..3);
+    let float_clip = moving_clip(&float, 0..3);
+    let args = json!({ "spatial": spatial });
+
+    let sixteen_output = deinterlaced(sixteen, true);
+    let float_output = deinterlaced(float, true);
+
+    let sixteen_outputs = run(args.clone(), sixteen, sixteen_output, vec![sixteen_clip]);
+    let float_outputs = run(args, float, float_output, vec![float_clip]);
+
+    let sixteen_codes: Vec<Vec<f32>> = sixteen_outputs
+        .iter()
+        .flat_map(|emitted| output_codes(&sixteen, emitted))
+        .collect();
+    let float_codes: Vec<Vec<f32>> = float_outputs
+        .iter()
+        .flat_map(|emitted| output_codes(&float, emitted))
+        .collect();
+
+    Parity::between(&sixteen_codes, &float_codes)
+}
+
+#[test]
+fn bwdif_f32_matches_sixteen_bit() {
+    let kinds = ["cubic", "eedi2", "eedi3", "sangnom"];
+
+    for kind in kinds {
+        let parity = spatial_parity(json!({ "kind": kind }));
+        println!("{kind}: {parity:?}");
+
+        assert!(parity.largest <= 1.0, "{kind}: {parity:?}");
+    }
 }
