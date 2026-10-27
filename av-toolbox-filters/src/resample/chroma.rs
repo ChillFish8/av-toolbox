@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     Plane,
     ResolvedFormats,
     Runtime,
-    SampleFormat,
     StreamFormat,
     StreamTemplate,
     Subsampling,
@@ -40,7 +39,8 @@ use av_toolbox_gpu::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::resize::KernelChoice;
+use crate::checks::accepts_integer_or_f32_frames;
+use crate::resize::{KernelChoice, samples_for};
 use crate::sizing::Sizing;
 
 const STAGE: &str = "resample/chroma";
@@ -302,15 +302,11 @@ impl FilterDefinition for Chroma {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        let Some(format) = offered.as_frames() else {
+        let Some(samples) = accepts_integer_or_f32_frames(offered) else {
             return Err(not_frames());
         };
 
-        if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-            return Ok(FormatSet::new());
-        }
-
-        Ok(FormatSet::of([format.sample]))
+        Ok(samples)
     }
 
     fn produces(
@@ -357,12 +353,7 @@ impl FilterDefinition for Chroma {
         let down_taps = taps(axes.height, axes.down.0, axes.down.1, &kernel);
         let across = upload(&client, &across_taps);
         let down = upload(&client, &down_taps);
-        let samples = match output.sample {
-            SampleFormat::U16 { depth } => Samples::U16 {
-                largest: depth.max_value(),
-            },
-            _ => Samples::U8,
-        };
+        let samples = samples_for(output.sample);
 
         let resampler = ChromaResampler {
             client,

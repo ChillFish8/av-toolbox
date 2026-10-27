@@ -3,6 +3,7 @@ use av_toolbox_gpu::{
     Capabilities,
     ChromaLocation,
     ColourInfo,
+    FormatSet,
     FrameFormat,
     FrameLayout,
     MaskFormat,
@@ -199,7 +200,7 @@ fn a_mask_is_refused() {
 }
 
 #[test]
-fn floats_give_an_empty_set() {
+fn floats_are_accepted() {
     let capabilities = capabilities();
     let arguments: ChromaArgs = serde_json::from_value(json!({ "subsampling": "4:4:4" })).expect("parses");
     let inputs = [Offered::Unknown];
@@ -211,7 +212,7 @@ fn floats_give_an_empty_set() {
     let accepted =
         Chroma::accepts_input(&capabilities, &arguments, 0, float, &inputs).expect("frames are readable");
 
-    assert!(accepted.is_empty());
+    assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
 }
 
 #[test]

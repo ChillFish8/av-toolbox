@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::fmt;
 
 use av_toolbox_core::{ProbeDefinition, Seeker, StageError};
+use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{Channel, ColourRange, FrameFormat, FrameLayout, HostFrame, SampleFormat};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::Edges;
+use crate::codes::{FLOAT_CODE_BITS, sample_range};
 
 /// Finds the black bars around a source's picture.
 pub(crate) struct Crop;
@@ -75,12 +77,6 @@ fn not_luma(layout: FrameLayout) -> StageError {
     StageError::msg(message)
 }
 
-fn not_integer(sample: SampleFormat) -> StageError {
-    let message = format!("crop/auto needs integer samples, not {sample}");
-
-    StageError::msg(message)
-}
-
 fn different_sizes(first: (u32, u32), second: (u32, u32)) -> StageError {
     let message = format!(
         "crop measured {}x{} at one source and {}x{} at another",
@@ -96,11 +92,10 @@ fn bar_test(format: &FrameFormat) -> Result<BarTest, StageError> {
         return Err(not_luma(format.layout));
     }
 
-    let Some(largest) = format.sample.max_value() else {
-        return Err(not_integer(format.sample));
+    let bits = match format.sample.max_value() {
+        Some(largest) => u16::BITS - largest.leading_zeros(),
+        None => FLOAT_CODE_BITS,
     };
-
-    let bits = u16::BITS - largest.leading_zeros();
     let shift = bits - 8;
     let tolerance = 16u64 << shift;
     let black = match format.colour.range {
@@ -111,12 +106,28 @@ fn bar_test(format: &FrameFormat) -> Result<BarTest, StageError> {
     Ok(BarTest { black, tolerance })
 }
 
+/// F32 luma as whole 16-bit codes in the frame's range, held to `0..=65535`.
+fn float_codes(bytes: &[u8], range: ColourRange) -> Vec<u16> {
+    let mapping = FloatCodes::new(FLOAT_CODE_BITS, sample_range(range), false);
+    let (words, _) = bytes.as_chunks::<4>();
+
+    words
+        .iter()
+        .map(|word| {
+            let sample = f32::from_le_bytes(*word);
+            let code = sample * mapping.scale + mapping.offset;
+            code.round().clamp(0.0, mapping.peak) as u16
+        })
+        .collect()
+}
+
 fn luma_of(frame: &HostFrame) -> Luma {
     let format = frame.format();
     let plane = frame.plane(Channel::Y).expect("a YUV or grey frame carries luma");
     let bytes = plane.bytes();
     let samples = match format.sample {
         SampleFormat::U8 => bytes.iter().map(|value| u16::from(*value)).collect(),
+        SampleFormat::F32 => float_codes(bytes, format.colour.range),
         _ => {
             let (pairs, _) = bytes.as_chunks::<2>();
             pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()

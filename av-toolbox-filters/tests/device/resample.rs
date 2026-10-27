@@ -8,6 +8,7 @@ use av_toolbox_cubek::testing::{
     reference_float_depth,
     reference_matrix,
     reference_resize,
+    reference_resize_float,
 };
 use av_toolbox_gpu::{
     Channel,
@@ -24,12 +25,16 @@ use av_toolbox_gpu::{
 use serde_json::json;
 
 use crate::support::{
+    assert_codes_within,
     assert_within_one,
+    encoded,
     every_plane_is_shared,
+    float_planes,
     frame,
     luma_is_shared,
     passes_through,
     patterned_planes,
+    planes_as_codes,
     run_once,
 };
 
@@ -674,5 +679,70 @@ fn a_float_round_trip_through_both_stages_returns_the_input() {
     let expected = values.concat();
     for (value, wanted) in back.iter().zip(&expected) {
         assert!((value - wanted).abs() <= 1e-5, "{value} against {wanted}");
+    }
+}
+
+#[test]
+fn an_f32_clip_resamples_its_chroma_unrounded() {
+    let sixteen = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let wide = frame(
+        32,
+        16,
+        FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv420,
+        },
+        sixteen,
+        ChromaLocation::Left,
+    );
+    let float = FrameFormat {
+        sample: SampleFormat::F32,
+        ..wide
+    };
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv444,
+    };
+    let wide_output = FrameFormat { layout, ..wide };
+    let float_output = FrameFormat { layout, ..float };
+    let args = json!({ "subsampling": "4:4:4", "kernel": "bilinear" });
+    let values: Vec<Vec<u16>> = wide
+        .channels()
+        .iter()
+        .map(|channel| {
+            let samples = wide.channel_samples(*channel).expect("a listed channel");
+            (0..samples)
+                .map(|index| (index * 997 % 40000 + 8000) as u16)
+                .collect()
+        })
+        .collect();
+    let integer_planes = encoded(&wide, &values);
+    let float_input_planes = float_planes(&float, &values, 16);
+
+    let integer = run_once(
+        "resample/chroma",
+        wide,
+        wide_output,
+        args.clone(),
+        &integer_planes,
+    );
+    let floats = run_once("resample/chroma", float, float_output, args, &float_input_planes);
+
+    let twin = planes_as_codes(&wide_output, &integer, 16);
+    let found = planes_as_codes(&float_output, &floats, 16);
+    let (in_width, in_height) = wide.channel_dimensions(Channel::U).expect("carried");
+    let (out_width, out_height) = wide_output.channel_dimensions(Channel::U).expect("carried");
+    let (siting_x, siting_y) = ChromaLocation::Left.offsets(2, 2);
+    let across = taps(out_width, 0.5, (0.0 - siting_x) / 2.0, &Kernel::Bilinear);
+    let down = taps(out_height, 0.5, (0.0 - siting_y) / 2.0, &Kernel::Bilinear);
+
+    for index in [1, 2] {
+        let codes: Vec<f32> = values[index].iter().map(|code| f32::from(*code)).collect();
+        let expected = reference_resize_float(&codes, in_width, in_height, &across, &down);
+        let fractional = found[index].iter().any(|code| (code - code.round()).abs() > 0.05);
+
+        assert_codes_within(&found[index], &expected, 0.01, "chroma");
+        assert_codes_within(&found[index], &twin[index], 1.0, "chroma against the 16-bit twin");
+        assert!(fractional, "chroma was rounded to whole codes");
     }
 }

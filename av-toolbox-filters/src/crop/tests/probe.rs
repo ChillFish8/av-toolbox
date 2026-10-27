@@ -1,4 +1,5 @@
 use av_toolbox_core::{ProbeDefinition, Seeker, StageError};
+use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{
     Channel,
     ColourInfo,
@@ -13,6 +14,7 @@ use av_toolbox_gpu::{
     Subsampling,
 };
 
+use crate::codes::sample_range;
 use crate::crop::probe::sample_indices;
 use crate::crop::{Crop, CropBox, CropRequest, Edges};
 
@@ -313,16 +315,59 @@ fn reading_stops_once_every_edge_is_zero() {
 }
 
 #[test]
-fn rgb_and_float_sources_are_refused() {
+fn rgb_sources_are_refused() {
     let requests = [CropRequest { samples: 13 }];
-
     let rgb = format(SampleFormat::U8, ColourRange::Full, FrameLayout::Rgb);
     let mut seeker = seeker_of(rgb, Vec::new());
-    assert!(Crop::probe(&mut seeker, &requests).is_err());
 
-    let float = format(SampleFormat::F32, ColourRange::Full, yuv420());
-    let mut seeker = seeker_of(float, Vec::new());
     assert!(Crop::probe(&mut seeker, &requests).is_err());
+}
+
+/// A frame like [boxed_with] for F32 luma, with `black` and `content` as 16-bit codes in the format's range.
+fn float_boxed(format: &FrameFormat, edges: Edges, black: u16, content: u16) -> HostFrame {
+    let mapping = FloatCodes::new(16, sample_range(format.colour.range), false);
+    let to_float = |code: u16| (f32::from(code) - mapping.offset) / mapping.scale;
+    let pool = HostPool::new();
+    let mut frame = pool.alloc_frame(format, FrameMeta::at(0));
+
+    for channel in format.channels() {
+        let plane = frame.plane_mut(*channel).expect("listed");
+        plane.fill(0);
+    }
+
+    let plane = frame.plane_mut(Channel::Y).expect("luma");
+    for row in 0..HEIGHT {
+        for column in 0..WIDTH {
+            let inside = column >= edges.left
+                && column < WIDTH - edges.right
+                && row >= edges.top
+                && row < HEIGHT - edges.bottom;
+            let code = if inside { content } else { black };
+            let position = (row * WIDTH + column) as usize * 4;
+            plane[position..position + 4].copy_from_slice(&to_float(code).to_le_bytes());
+        }
+    }
+
+    frame.freeze()
+}
+
+#[test]
+fn a_float_source_measures_like_its_sixteen_bit_twin() {
+    let sixteen = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let integer_format = format(sixteen, ColourRange::Limited, yuv420());
+    let float_format = format(SampleFormat::F32, ColourRange::Limited, yuv420());
+    let integer_frame = boxed(&integer_format, letterbox(), 4096, 30000);
+    let float_frame = float_boxed(&float_format, letterbox(), 4096, 30000);
+    let mut integer_seeker = seeker_of(integer_format, vec![integer_frame]);
+    let mut float_seeker = seeker_of(float_format, vec![float_frame]);
+
+    let expected = probe_one(&mut integer_seeker, 13);
+    let found = probe_one(&mut float_seeker, 13);
+
+    assert_eq!(expected.edges, letterbox());
+    assert_eq!(found, expected);
 }
 
 #[test]
