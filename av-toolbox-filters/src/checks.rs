@@ -3,6 +3,24 @@ use std::fmt::Display;
 use av_toolbox_core::StageError;
 use av_toolbox_gpu::{FormatSet, SampleFormat, StreamFormat};
 
+/// The sample both `first` and `second` can be held in without loss, or `None` when neither widens
+/// to the other.
+pub(crate) fn wider_sample(first: SampleFormat, second: SampleFormat) -> Option<SampleFormat> {
+    if first == second {
+        return Some(first);
+    }
+
+    if first.lossless_widenings().contains(&second) {
+        return Some(second);
+    }
+
+    if second.lossless_widenings().contains(&first) {
+        return Some(first);
+    }
+
+    None
+}
+
 /// The samples a stage over frames accepts, U8 and U16, or `None` when `offered` is not frames.
 pub(crate) fn accepts_frames(offered: StreamFormat) -> Option<FormatSet> {
     let format = offered.as_frames()?;
@@ -130,9 +148,33 @@ pub(crate) fn between_f64(
 
 #[cfg(test)]
 mod tests {
+    use av_toolbox_gpu::Depth;
+
     use super::*;
 
     const STAGE: &str = "test/stage";
+
+    #[test]
+    fn u8_meets_f32_at_f32() {
+        let wider = wider_sample(SampleFormat::U8, SampleFormat::F32);
+
+        assert_eq!(wider, Some(SampleFormat::F32));
+    }
+
+    #[test]
+    fn ten_bit_meets_u8_at_ten_bit() {
+        let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+        let wider = wider_sample(ten_bit, SampleFormat::U8);
+
+        assert_eq!(wider, Some(ten_bit));
+    }
+
+    #[test]
+    fn matching_samples_meet_at_themselves() {
+        let wider = wider_sample(SampleFormat::F32, SampleFormat::F32);
+
+        assert_eq!(wider, Some(SampleFormat::F32));
+    }
 
     #[test]
     fn at_least_accepts_the_minimum_itself() {

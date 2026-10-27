@@ -19,9 +19,23 @@ fn blend_plane<E: Int>(base: &Array<E>, overlay: &Array<E>, mask: &Array<u8>, ou
     output[ABSOLUTE_POS] = E::cast_from(blended);
 }
 
+/// Blends one float sample as `base + (overlay - base) * m / 255`, without rounding.
+#[cube(launch_unchecked)]
+fn blend_float_plane(base: &Array<f32>, overlay: &Array<f32>, mask: &Array<u8>, output: &mut Array<f32>) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let weight = f32::cast_from(mask[ABSOLUTE_POS]) / 255.0;
+    let low = base[ABSOLUTE_POS];
+    let high = overlay[ABSOLUTE_POS];
+
+    output[ABSOLUTE_POS] = low + (high - low) * weight;
+}
+
 /// Copies one plane unchanged, for the planes `blend/masked` was not asked to blend.
 #[cube(launch_unchecked)]
-fn copy_plane<E: Int>(base: &Array<E>, output: &mut Array<E>) {
+fn copy_plane<E: Numeric>(base: &Array<E>, output: &mut Array<E>) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -88,6 +102,20 @@ impl<R: Runtime> MaskedBlend<R> {
                         output,
                     );
                 },
+                SampleFormat::F32 => {
+                    let base = planes.base.array::<f32, R>();
+                    let overlay = planes.overlay.array::<f32, R>();
+                    let output = planes.output.array::<f32, R>();
+                    blend_float_plane::launch_unchecked::<R>(
+                        &self.client,
+                        cubes,
+                        shape,
+                        base,
+                        overlay,
+                        mask,
+                        output,
+                    );
+                },
                 _ => {
                     let base = planes.base.array::<u16, R>();
                     let overlay = planes.overlay.array::<u16, R>();
@@ -119,6 +147,11 @@ impl<R: Runtime> MaskedBlend<R> {
                     let base = base.array::<u8, R>();
                     let output = output.array::<u8, R>();
                     copy_plane::launch_unchecked::<u8, R>(&self.client, cubes, shape, base, output);
+                },
+                SampleFormat::F32 => {
+                    let base = base.array::<f32, R>();
+                    let output = output.array::<f32, R>();
+                    copy_plane::launch_unchecked::<f32, R>(&self.client, cubes, shape, base, output);
                 },
                 _ => {
                     let base = base.array::<u16, R>();

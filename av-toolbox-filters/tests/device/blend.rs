@@ -617,3 +617,35 @@ fn planes_leaves_the_other_planes_as_base() {
     assert_eq!(planes[1], expected_u);
     assert_eq!(planes[2], expected_v);
 }
+
+#[test]
+fn float_clips_blend_without_rounding() {
+    let format = frame(8, 8, FrameLayout::Grey, SampleFormat::F32);
+    let base: Vec<u8> = vec![0.0f32; 64]
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect();
+    let overlay: Vec<u8> = vec![1.0f32; 64]
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect();
+
+    let backend = backend();
+    let args = serde_json::json!({});
+    let filter = built_blend(&backend, format, args);
+    let planes = backend.build(BlendOnce {
+        filter,
+        format,
+        base: vec![base],
+        overlay: vec![overlay],
+        mask: vec![128; 64],
+        mask_chroma: None,
+    });
+
+    let (samples, _) = planes[0].as_chunks::<4>();
+    assert_eq!(samples.len(), 64);
+    for bytes in samples {
+        let blended = f32::from_le_bytes(*bytes);
+        assert!((blended - 128.0 / 255.0).abs() < 1e-6, "{blended}");
+    }
+}

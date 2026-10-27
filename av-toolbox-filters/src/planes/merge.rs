@@ -35,6 +35,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::ChannelName;
+use crate::checks::wider_sample;
 
 const STAGE: &str = "planes/merge";
 
@@ -372,18 +373,20 @@ fn accepts_clip(offered: StreamFormat, index: usize, inputs: &[Offered]) -> Resu
         return Err(not_frames());
     };
 
-    let mismatched = inputs
+    let mut wider = format.sample;
+    let others = inputs
         .iter()
         .enumerate()
         .filter(|(other_index, _)| *other_index != index)
-        .filter_map(|(_, other)| other.format())
-        .any(|other_format| other_format.sample() != format.sample);
-
-    if mismatched {
-        return Ok(FormatSet::new());
+        .filter_map(|(_, other)| other.format());
+    for other in others {
+        match wider_sample(wider, other.sample()) {
+            Some(sample) => wider = sample,
+            None => return Ok(FormatSet::new()),
+        }
     }
 
-    Ok(FormatSet::of([format.sample]))
+    Ok(FormatSet::of([wider]))
 }
 
 fn missing_input() -> StageError {

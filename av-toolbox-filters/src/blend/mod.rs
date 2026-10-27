@@ -32,6 +32,7 @@ use serde::Deserialize;
 
 pub(crate) use self::heatmap::Heatmap;
 use self::kernel::MaskedBlend;
+use crate::checks::wider_sample;
 
 const BASE: usize = 0;
 const OVERLAY: usize = 1;
@@ -87,7 +88,10 @@ impl StageDefinition for Masked {
 
 /// The samples a clip can be blended in.
 fn blendable(sample: SampleFormat) -> bool {
-    matches!(sample, SampleFormat::U8 | SampleFormat::U16 { .. })
+    matches!(
+        sample,
+        SampleFormat::U8 | SampleFormat::U16 { .. } | SampleFormat::F32
+    )
 }
 
 /// Whether two clips can be blended sample for sample, ignoring colour and rate.
@@ -116,13 +120,16 @@ fn accepts_clip(offered: StreamFormat, other: Offered) -> Result<FormatSet, Stag
     }
 
     let other_sample = other.format().map(|format| format.sample());
-    if let Some(sample) = other_sample
-        && sample != format.sample
-    {
-        return Ok(FormatSet::new());
-    }
+    let Some(other_sample) = other_sample else {
+        return Ok(FormatSet::of([format.sample]));
+    };
 
-    Ok(FormatSet::of([format.sample]))
+    let accepted = match wider_sample(format.sample, other_sample) {
+        Some(wider) => FormatSet::of([wider]),
+        None => FormatSet::new(),
+    };
+
+    Ok(accepted)
 }
 
 fn accepts_mask(offered: StreamFormat) -> Result<FormatSet, StageError> {
@@ -309,23 +316,33 @@ mod tests {
     }
 
     #[test]
-    fn a_float_clip_is_left_out() {
+    fn a_float_clip_is_accepted() {
         let clip = yuv444(SampleFormat::F32);
         let accepted = accepts_clip(clip, Offered::Unknown).expect("frames are readable");
 
-        assert!(accepted.is_empty());
+        assert!(accepted.accepts(SampleFormat::F32));
     }
 
     #[test]
-    fn a_clip_whose_partner_carries_another_sample_is_left_out() {
-        let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
-        let partner_format = yuv444(ten_bit);
+    fn a_narrower_clip_is_answered_with_the_wider_sample() {
+        let partner_format = yuv444(SampleFormat::F32);
         let partner = Offered::Proposed(partner_format);
 
         let clip = yuv444(SampleFormat::U8);
         let accepted = accepts_clip(clip, partner).expect("frames are readable");
 
-        assert!(accepted.is_empty());
+        assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
+    }
+
+    #[test]
+    fn a_wider_clip_keeps_its_own_sample() {
+        let partner_format = yuv444(SampleFormat::U8);
+        let partner = Offered::Proposed(partner_format);
+
+        let clip = yuv444(SampleFormat::F32);
+        let accepted = accepts_clip(clip, partner).expect("frames are readable");
+
+        assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
     }
 
     #[test]

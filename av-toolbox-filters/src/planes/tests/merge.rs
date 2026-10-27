@@ -5,6 +5,7 @@ use av_toolbox_gpu::{
     ChromaLocation,
     ColourInfo,
     Depth,
+    FormatSet,
     Frame,
     FrameFormat,
     FrameLayout,
@@ -269,21 +270,47 @@ fn a_mask_is_refused() {
 }
 
 #[test]
-fn a_different_proposed_sample_gives_an_empty_set() {
+fn a_narrower_clip_is_answered_with_the_wider_sample() {
     let capabilities = capabilities();
     let arguments = rejoin();
     let original = yuv(64, 32, Subsampling::Yuv420);
-    let ten_bit = FrameFormat {
-        sample: SampleFormat::U16 { depth: Depth::TEN },
+    let float = FrameFormat {
+        sample: SampleFormat::F32,
         ..original
     };
-    let inputs = [Offered::Proposed(StreamFormat::Frames(ten_bit)), Offered::Unknown];
+    let inputs = [
+        Offered::Proposed(StreamFormat::Frames(float)),
+        Offered::Unknown,
+        Offered::Proposed(StreamFormat::Frames(float)),
+    ];
     let offered = StreamFormat::Frames(original);
 
     let accepted =
         Merge::accepts_input(&capabilities, &arguments, 1, offered, &inputs).expect("frames readable");
 
-    assert!(accepted.is_empty());
+    assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
+}
+
+#[test]
+fn a_wider_clip_keeps_its_own_sample() {
+    let capabilities = capabilities();
+    let arguments = rejoin();
+    let original = yuv(64, 32, Subsampling::Yuv420);
+    let float = FrameFormat {
+        sample: SampleFormat::F32,
+        ..original
+    };
+    let inputs = [
+        Offered::Proposed(StreamFormat::Frames(original)),
+        Offered::Unknown,
+        Offered::Proposed(StreamFormat::Frames(original)),
+    ];
+    let offered = StreamFormat::Frames(float);
+
+    let accepted =
+        Merge::accepts_input(&capabilities, &arguments, 1, offered, &inputs).expect("frames readable");
+
+    assert_eq!(accepted, FormatSet::of([SampleFormat::F32]));
 }
 
 #[test]
