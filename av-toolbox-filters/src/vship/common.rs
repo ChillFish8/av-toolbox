@@ -141,6 +141,7 @@ pub(crate) fn color_space(format: &FrameFormat, fallbacks: &mut Fallbacks) -> Re
     };
 
     let range = match colour.range {
+        _ if format.sample == SampleFormat::F32 => Range::Full,
         ColourRange::Limited => Range::Limited,
         ColourRange::Full => Range::Full,
         ColourRange::Unspecified if is_yuv => {
@@ -679,6 +680,32 @@ mod tests {
         assert_eq!(mapped.matrix, 1);
         assert_eq!((mapped.sub_sampling_w, mapped.sub_sampling_h), (1, 1));
         assert!(fallbacks.noted(Fallback::Matrix));
+    }
+
+    #[test]
+    fn an_f32_clip_is_scored_as_full_range_whatever_its_label() {
+        let mut format = yuv(Subsampling::Yuv420, bt709_limited());
+        format.sample = SampleFormat::F32;
+
+        let (mapped, fallbacks) = map_format(&format);
+
+        assert_eq!(mapped.range, Range::Full);
+        assert!(fallbacks.logged.is_empty());
+    }
+
+    #[test]
+    fn an_unspecified_f32_range_does_not_warn() {
+        let colour = ColourInfo {
+            range: ColourRange::Unspecified,
+            ..bt709_limited()
+        };
+        let mut format = yuv(Subsampling::Yuv420, colour);
+        format.sample = SampleFormat::F32;
+
+        let (mapped, fallbacks) = map_format(&format);
+
+        assert_eq!(mapped.range, Range::Full);
+        assert!(!fallbacks.noted(Fallback::Range));
     }
 
     #[test]
