@@ -2,8 +2,6 @@ use av_toolbox_core::StageError;
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::aa::{Eedi2Settings, Eedi3DeviceClips, Eedi3Settings, sangnom_aaf, sangnom_max};
 use av_toolbox_cubek::deinterlace::{BwdifField, BwdifPlanes, bwdif_field};
-use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::values::{narrow, widen};
 use av_toolbox_gpu::{
     Channel,
     ComputeClient,
@@ -14,13 +12,14 @@ use av_toolbox_gpu::{
     FrameMeta,
     Plane,
     Runtime,
+    SampleFormat,
 };
 
 use crate::aa::direction::FieldPass;
 use crate::aa::eedi2::{Eedi2Pass, subsampling_shifts};
 use crate::aa::eedi3::Eedi3FieldPass;
 use crate::aa::sangnom::SangnomPass;
-use crate::bits::bits_of;
+use crate::codes::CodeValues;
 use crate::deinterlace::spatial::Predictor;
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
@@ -50,12 +49,13 @@ pub(crate) fn channel_plane<'a>(
     }
 }
 
-/// Widens `source`, whose samples are `element`s, into a new f32 scratch plane.
+/// Widens `source` into a new f32 scratch plane of code values.
 pub(crate) fn widened_plane<R: Runtime>(
     client: &ComputeClient<R>,
     context: &FrameContext,
     source: &Plane,
-    element: Element,
+    codes: CodeValues,
+    channel: Channel,
 ) -> Scratch {
     let (width, height) = source.dimensions();
     let values = Scratch::new::<f32>(context, width, height);
@@ -67,7 +67,7 @@ pub(crate) fn widened_plane<R: Runtime>(
     let source_plane = unsafe { DevicePlane::new(source_handle, width, height) };
     let values_plane = values.plane();
 
-    widen(client, &sizing, source_plane, values_plane, element);
+    codes.widen(client, &sizing, source_plane, values_plane, channel);
 
     values
 }
@@ -114,31 +114,27 @@ pub(crate) struct FieldRebuilder<R: Runtime> {
     client: ComputeClient<R>,
     input: FrameFormat,
     predictor: Predictor,
-    bits: u32,
-    element: Element,
-    peak: f32,
+    codes: CodeValues,
 }
 
 impl<R: Runtime> FieldRebuilder<R> {
-    /// A rebuilder for frames of `input`, whose errors are reported under `stage`.
+    /// A rebuilder for frames of `input` storing its results as `output`, whose errors are reported
+    /// under `stage`.
     pub(crate) fn new(
         stage: &'static str,
         client: ComputeClient<R>,
         input: FrameFormat,
+        output: SampleFormat,
         predictor: Predictor,
     ) -> Self {
-        let bits = bits_of(input.sample);
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = ((1u32 << bits) - 1) as f32;
+        let codes = CodeValues::new(&input, output);
 
         Self {
             stage,
             client,
             input,
             predictor,
-            bits,
-            element,
-            peak,
+            codes,
         }
     }
 
@@ -146,17 +142,26 @@ impl<R: Runtime> FieldRebuilder<R> {
         &self.client
     }
 
-    /// Widens `source` into a new f32 scratch plane.
-    pub(crate) fn widened(&self, context: &FrameContext, source: &Plane) -> Scratch {
-        widened_plane(&self.client, context, source, self.element)
+    #[expect(
+        dead_code,
+        reason = "the stages choosing their output sample read the codes here"
+    )]
+    pub(crate) fn codes(&self) -> CodeValues {
+        self.codes
     }
 
-    /// Narrows `values` into a new plane of the input's sample format.
-    pub(crate) fn narrowed(
+    /// Widens `source` into a new f32 scratch plane.
+    pub(crate) fn widened(&self, context: &FrameContext, source: &Plane, channel: Channel) -> Scratch {
+        widened_plane(&self.client, context, source, self.codes, channel)
+    }
+
+    /// Stores `values` into a new plane of the output's sample format.
+    pub(crate) fn stored(
         &self,
         context: &FrameContext,
         values: &Scratch,
         meta: &FrameMeta,
+        channel: Channel,
     ) -> Result<Plane, StageError> {
         let device_values = values.plane();
         let width = device_values.width();
@@ -165,6 +170,7 @@ impl<R: Runtime> FieldRebuilder<R> {
             width,
             height,
             layout: FrameLayout::Grey,
+            sample: self.codes.output_sample(),
             ..self.input
         };
         let target = context.alloc_frame(&plane_format, meta.clone());
@@ -176,14 +182,8 @@ impl<R: Runtime> FieldRebuilder<R> {
         // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
         let target_plane = unsafe { DevicePlane::new(target_handle, width, height) };
 
-        narrow(
-            &self.client,
-            &sizing,
-            device_values,
-            target_plane,
-            self.element,
-            self.peak,
-        );
+        self.codes
+            .store(&self.client, &sizing, device_values, target_plane, channel);
 
         Ok(output.clone())
     }
@@ -203,7 +203,7 @@ impl<R: Runtime> FieldRebuilder<R> {
             Predictor::Eedi2(arguments) => {
                 let layout = self.input.layout;
                 let (across, _) = subsampling_shifts(layout, plane_index);
-                let settings = Eedi2Settings::new(&arguments, self.bits, across);
+                let settings = Eedi2Settings::new(&arguments, self.codes.bits(), across);
                 let pass = Eedi2Pass {
                     client: &self.client,
                     settings,
@@ -212,7 +212,7 @@ impl<R: Runtime> FieldRebuilder<R> {
                 run_fields(&pass, context, current, fields)
             },
             Predictor::Eedi3(arguments) => {
-                let settings = Eedi3Settings::new(&arguments, self.bits);
+                let settings = Eedi3Settings::new(&arguments, self.codes.bits());
                 let pass = Eedi3FieldPass {
                     client: &self.client,
                     settings,
@@ -222,8 +222,8 @@ impl<R: Runtime> FieldRebuilder<R> {
                 run_fields(&pass, context, current, fields)
             },
             Predictor::Sangnom { aa } => {
-                let aaf = sangnom_aaf(aa, self.bits);
-                let max = sangnom_max(self.bits);
+                let aaf = sangnom_aaf(aa, self.codes.bits());
+                let max = sangnom_max(self.codes.bits());
                 let pass = SangnomPass {
                     client: &self.client,
                     aaf,
@@ -290,9 +290,9 @@ impl<R: Runtime> FieldRebuilder<R> {
         let current_source = channel_plane(self.stage, window.current, channel)?;
         let next_source = channel_plane(self.stage, window.next, channel)?;
 
-        let previous = self.widened(context, previous_source);
-        let current = self.widened(context, current_source);
-        let next = self.widened(context, next_source);
+        let previous = self.widened(context, previous_source, channel);
+        let current = self.widened(context, current_source, channel);
+        let next = self.widened(context, next_source, channel);
         let (width, height) = current_source.dimensions();
         let sizing = Sizing(context);
         let meta = window.current.meta();
@@ -312,7 +312,7 @@ impl<R: Runtime> FieldRebuilder<R> {
             };
             bwdif_field(&self.client, &sizing, planes, *field);
 
-            let plane = self.narrowed(context, &output, meta)?;
+            let plane = self.stored(context, &output, meta, channel)?;
             rebuilt.push(plane);
         }
 

@@ -21,7 +21,6 @@ use av_toolbox_cubek::aa::{
     eedi3_planned_check,
     eedi3_scratch,
 };
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -47,6 +46,7 @@ use crate::aa::based::Eedi3Tuning;
 use crate::aa::direction::{Direction, FieldPass, checked_dimensions, missing_plane, run_direction};
 use crate::bits::bits_of;
 use crate::checks::between_u32;
+use crate::codes::CodeValues;
 use crate::masked::{
     INPUT,
     MASK,
@@ -434,16 +434,14 @@ impl FilterDefinition for Eedi3 {
         checked_mask(STAGE, &input, mask)?;
 
         let bits = bits_of(input.sample);
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = ((1u32 << bits) - 1) as f32;
         let settings = Eedi3Settings::new(&arguments, bits);
 
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element,
-            peak,
+            codes,
         };
         let antialiaser = Antialiaser {
             client: context.client().clone(),
@@ -588,7 +586,7 @@ impl<R: Runtime> Filter for Antialiaser<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
-            peak: self.planewise.peak,
+            peak: self.planewise.codes.peak(),
             inner: &*self,
         };
 

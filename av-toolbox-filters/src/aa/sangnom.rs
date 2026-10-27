@@ -11,7 +11,6 @@ use av_toolbox_core::{
 };
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::aa::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_max, sangnom_scratch};
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
@@ -34,6 +33,7 @@ use serde::Deserialize;
 use crate::aa::direction::{Direction, FieldPass, checked_dimensions, run_direction};
 use crate::bits::bits_of;
 use crate::checks::between_u32;
+use crate::codes::CodeValues;
 use crate::masked::{
     INPUT,
     MASK,
@@ -176,17 +176,15 @@ impl FilterDefinition for Sangnom {
         checked_mask(STAGE, &input, mask)?;
 
         let bits = bits_of(input.sample);
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = ((1u32 << bits) - 1) as f32;
         let max = sangnom_max(bits);
         let aaf = sangnom_aaf(args.aa, bits);
 
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element,
-            peak,
+            codes,
         };
         let antialiaser = Antialiaser {
             client: context.client().clone(),
@@ -264,7 +262,7 @@ impl<R: Runtime> Filter for Antialiaser<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
-            peak: self.planewise.peak,
+            peak: self.planewise.codes.peak(),
             inner: &*self,
         };
 

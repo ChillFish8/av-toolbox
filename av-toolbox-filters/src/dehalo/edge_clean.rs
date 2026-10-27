@@ -48,6 +48,7 @@ use serde::Deserialize;
 
 use crate::bits::bits_of;
 use crate::checks::between_u32;
+use crate::codes::CodeValues;
 use crate::padded_warp::padded_warp;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
@@ -457,15 +458,13 @@ impl FilterDefinition for EdgeClean {
         let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
 
         let client = context.client().clone();
-        let element = params.element;
-        let peak = params.peak();
 
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element,
-            peak,
+            codes,
         };
         let cleaner = Cleaner {
             client,

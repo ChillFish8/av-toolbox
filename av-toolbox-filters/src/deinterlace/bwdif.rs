@@ -309,7 +309,7 @@ impl FilterDefinition for Bwdif {
         let output = output_format(&input, args.rate)?;
 
         let client = context.client().clone();
-        let rebuilder = FieldRebuilder::new(STAGE, client, input, predictor);
+        let rebuilder = FieldRebuilder::new(STAGE, client, input, input.sample, predictor);
         let fields = fields_of(order, args.rate);
         let half_frame = half_frame(input.frame_rate);
 

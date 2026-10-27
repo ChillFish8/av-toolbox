@@ -25,7 +25,6 @@ use av_toolbox_cubek::dehalo::alpha::{
     clamp_between,
     m4,
 };
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::neighbourhood::{Extreme, NeighbourPlanes, Shape, extreme};
 use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Weights, apply_float, centred_taps, upload};
 use av_toolbox_cubek::rgvs::{RepairMode, RepairPlanes, repair};
@@ -52,6 +51,7 @@ use serde::Deserialize;
 
 use crate::bits::bits_of;
 use crate::checks::{at_least, between_f32};
+use crate::codes::CodeValues;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
 use crate::scratch::Scratch;
@@ -527,9 +527,6 @@ impl FilterDefinition for Alpha {
         let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
 
         let client = context.client().clone();
-        let bits = params.bits;
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = params.peak();
 
         let mut tables = Vec::with_capacity(input.channels().len());
         for (plane_index, channel) in input.channels().iter().enumerate() {
@@ -546,12 +543,12 @@ impl FilterDefinition for Alpha {
             tables.push(Some(plane_tables));
         }
 
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element,
-            peak,
+            codes,
         };
         let dehaloer = Dehaloer {
             client,

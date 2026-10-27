@@ -1,7 +1,5 @@
 use av_toolbox_core::StageError;
 use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::values::{narrow, widen};
 use av_toolbox_gpu::{
     Channel,
     ComputeClient,
@@ -15,6 +13,7 @@ use av_toolbox_gpu::{
     Runtime,
 };
 
+use crate::codes::CodeValues;
 use crate::scratch::Scratch;
 use crate::sizing::Sizing;
 
@@ -48,8 +47,7 @@ pub(crate) struct Planewise {
     pub(crate) format: FrameFormat,
     /// Whether each plane, in channel order, is filtered.
     pub(crate) selected: Vec<bool>,
-    pub(crate) element: Element,
-    pub(crate) peak: f32,
+    pub(crate) codes: CodeValues,
 }
 
 impl Planewise {
@@ -79,7 +77,12 @@ impl Planewise {
             planes.push(filtered);
         }
 
-        match Frame::from_planes(self.format, planes, meta) {
+        let output_format = FrameFormat {
+            sample: self.codes.output_sample(),
+            ..self.format
+        };
+
+        match Frame::from_planes(output_format, planes, meta) {
             Ok(output) => Ok(output),
             Err(error) => Err(bad_frame(self.stage, error)),
         }
@@ -100,6 +103,7 @@ impl Planewise {
             width,
             height,
             layout: FrameLayout::Grey,
+            sample: self.codes.output_sample(),
             ..self.format
         };
         let target = context.alloc_frame(&plane_format, meta.clone());
@@ -121,16 +125,13 @@ impl Planewise {
         // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
         let target_plane = unsafe { DevicePlane::new(target_handle, width, height) };
 
-        widen(client, &sizing, source_plane, input_plane, self.element);
+        let channel = self.format.channels()[plane_index];
+
+        self.codes
+            .widen(client, &sizing, source_plane, input_plane, channel);
         filter.filter(context, plane_index, input_plane, output_plane)?;
-        narrow(
-            client,
-            &sizing,
-            output_plane,
-            target_plane,
-            self.element,
-            self.peak,
-        );
+        self.codes
+            .store(client, &sizing, output_plane, target_plane, channel);
 
         Ok(output.clone())
     }

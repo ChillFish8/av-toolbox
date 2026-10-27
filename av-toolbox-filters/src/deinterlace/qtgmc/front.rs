@@ -64,7 +64,7 @@ impl<R: Runtime> Chain<R> {
         let mut edi = Vec::with_capacity(channels.len());
         for channel in channels {
             let source = channel_plane(STAGE, frame, *channel)?;
-            let widened = self.rebuilder.widened(context, source);
+            let widened = self.rebuilder.widened(context, source, *channel);
             edi.push(widened);
         }
 
@@ -74,7 +74,7 @@ impl<R: Runtime> Chain<R> {
 
         if !self.mode.is_repair() {
             let source = channel_plane(STAGE, frame, channels[0])?;
-            let bob = self.rebuilder.widened(context, source);
+            let bob = self.rebuilder.widened(context, source, channels[0]);
             return Ok(FieldState::new(Some(meta), bob, edi));
         }
 

@@ -183,7 +183,7 @@ fn deinterlacer<R: Runtime>(
         .input
         .is_repair()
         .then(|| SadMaskTables::new(client, &grid, PROGRESSIVE_SAD_MASK, luma));
-    let rebuilder = FieldRebuilder::new(STAGE, client.clone(), input, predictor);
+    let rebuilder = FieldRebuilder::new(STAGE, client.clone(), input, input.sample, predictor);
 
     let chain = Chain {
         rebuilder,

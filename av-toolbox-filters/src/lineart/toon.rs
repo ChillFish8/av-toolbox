@@ -40,6 +40,7 @@ use serde::Deserialize;
 
 use crate::bits::bits_of;
 use crate::checks::{at_least, between_f32, between_i32, between_u32};
+use crate::codes::CodeValues;
 use crate::masked::{
     INPUT,
     MASK,
@@ -225,12 +226,12 @@ impl FilterDefinition for Toon {
         let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
         checked_mask(STAGE, &input, mask)?;
 
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element: settings.warp.element,
-            peak: settings.peak,
+            codes,
         };
         let toon = Toner {
             client: context.client().clone(),
@@ -311,7 +312,7 @@ impl<R: Runtime> Filter for Toner<R> {
             stage: STAGE,
             format: &self.planewise.format,
             mask: mask.as_ref(),
-            peak: self.planewise.peak,
+            peak: self.planewise.codes.peak(),
             inner: &*self,
         };
 

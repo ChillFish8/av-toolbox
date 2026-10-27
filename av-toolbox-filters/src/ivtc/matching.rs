@@ -471,7 +471,7 @@ impl FilterDefinition for Match {
 
         let client = context.client().clone();
         let predictor = checked.fallback.unwrap_or(Predictor::Cubic);
-        let rebuilder = FieldRebuilder::new(STAGE, client, input, predictor);
+        let rebuilder = FieldRebuilder::new(STAGE, client, input, input.sample, predictor);
         let gatherer_client = rebuilder.client().clone();
         let gatherer = MetricGatherer::new(gatherer_client, input, settings, bits);
         let kept = BwdifField {
@@ -516,7 +516,7 @@ impl<R: Runtime> Matcher<R> {
         let mut planes = Vec::new();
         for channel in self.input.channels() {
             let source = channel_plane(STAGE, frame, *channel)?;
-            let widened = self.rebuilder.widened(context, source);
+            let widened = self.rebuilder.widened(context, source, *channel);
             planes.push(widened);
         }
 
@@ -558,8 +558,8 @@ impl<R: Runtime> Matcher<R> {
 
         let meta = window.current.meta();
         let mut planes = Vec::with_capacity(channels.len());
-        for woven in &gathered.woven[matched] {
-            let plane = self.rebuilder.narrowed(context, woven, meta)?;
+        for (woven, channel) in gathered.woven[matched].iter().zip(channels) {
+            let plane = self.rebuilder.stored(context, woven, meta, *channel)?;
             planes.push(plane);
         }
 

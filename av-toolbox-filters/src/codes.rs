@@ -18,20 +18,12 @@ pub(crate) fn sample_range(range: ColourRange) -> SampleRange {
 }
 
 /// How the samples of a plane are held in memory.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the runners using code values arrive in later changes")
-)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) enum Storage {
     Integer(Element),
     Float,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the runners using code values arrive in later changes")
-)]
 impl Storage {
     fn of(sample: SampleFormat) -> Self {
         match sample {
@@ -46,7 +38,6 @@ impl Storage {
 ///
 /// Integer samples widen to their codes. F32 samples map onto 16-bit codes in the range the clip is
 /// labelled with, and map back when stored.
-#[expect(dead_code, reason = "the runners using code values arrive in later changes")]
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct CodeValues {
     input: Storage,
@@ -56,7 +47,6 @@ pub(crate) struct CodeValues {
     range: SampleRange,
 }
 
-#[expect(dead_code, reason = "the runners using code values arrive in later changes")]
 impl CodeValues {
     /// Code values for `input`, stored as `output`, which is the input's sample or F32.
     ///

@@ -24,7 +24,6 @@ use av_toolbox_cubek::dehalo::fine::{
     scale_values,
 };
 use av_toolbox_cubek::dehalo::{MergePlanes, merge_masked};
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::neighbourhood::{
     Expansion,
     Extreme,
@@ -70,6 +69,7 @@ use super::alpha::{
 };
 use crate::bits::bits_of;
 use crate::checks::{at_least, between_f32};
+use crate::codes::CodeValues;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
 use crate::scratch::Scratch;
@@ -550,9 +550,6 @@ impl FilterDefinition for Fine {
         let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
 
         let client = context.client().clone();
-        let bits = params.alpha.bits;
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
-        let peak = params.alpha.peak();
 
         let mut tables = Vec::with_capacity(input.channels().len());
         for (plane_index, channel) in input.channels().iter().enumerate() {
@@ -569,12 +566,12 @@ impl FilterDefinition for Fine {
             tables.push(Some(plane_tables));
         }
 
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element,
-            peak,
+            codes,
         };
         let shrink_blur = Separable::new(&client, &SHRINK_WEIGHTS);
         let dehaloer = FineDehaloer {

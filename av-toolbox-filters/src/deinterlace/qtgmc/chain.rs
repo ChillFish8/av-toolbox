@@ -224,7 +224,7 @@ impl<R: Runtime> Chain<R> {
 
         for (plane, channel) in self.input.channels().iter().enumerate() {
             let source = channel_plane(STAGE, frame, *channel)?;
-            let widened = self.rebuilder.widened(context, source);
+            let widened = self.rebuilder.widened(context, source, *channel);
 
             if plane == 0 {
                 let bobbed = parities.map(|parity| self.bobbed(context, widened.plane(), 0, parity));
@@ -821,7 +821,9 @@ impl<R: Runtime> Chain<R> {
         };
         shimmer(client, &sizing, repair, self.bits);
 
-        self.rebuilder.narrowed(context, &output, meta)
+        let channel = self.input.channels()[plane];
+
+        self.rebuilder.stored(context, &output, meta, channel)
     }
 
     /// Builds the output of `field` once the neighbours TR2 reads are limited, answering whether it ran.

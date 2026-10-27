@@ -24,7 +24,6 @@ use av_toolbox_cubek::aa::{
     transpose,
 };
 use av_toolbox_cubek::bilateral::{BilateralPlanes, BilateralSettings, bilateral};
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::lineart::{MergePlanes, clamped_merge};
 use av_toolbox_cubek::neighbourhood::{
     Extreme,
@@ -76,6 +75,7 @@ use crate::artcnn::{ModelName, Supersampler, locate};
 use crate::bits::bits_of;
 use crate::checks::{between_f32, between_u32};
 use crate::cnn::{PrecisionName, checked_precision};
+use crate::codes::CodeValues;
 use crate::masked::{
     INPUT,
     MASK,
@@ -424,15 +424,14 @@ impl FilterDefinition for Based {
         let bits = bits_of(input.sample);
         let chain = BasedChain::new(context, &args, &plan.arguments, bits, input.width, input.height)?;
 
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
         let channels = input.channels();
         let selected = channels.iter().map(|channel| *channel == Channel::Y).collect();
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element,
-            peak: chain.peak,
+            codes,
         };
         let antialiaser = Antialiaser {
             chain,

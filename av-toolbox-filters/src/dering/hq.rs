@@ -24,7 +24,6 @@ use av_toolbox_cubek::dehalo::dering::{
 use av_toolbox_cubek::dehalo::edge_clean::threshold_mask;
 use av_toolbox_cubek::dehalo::fine::RampPlanes;
 use av_toolbox_cubek::dehalo::{DifferencePlanes, MergePlanes, difference, merge_masked};
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::hysteresis::{HysteresisPlanes, hysteresis};
 use av_toolbox_cubek::neighbourhood::{
     BinomialChain,
@@ -62,6 +61,7 @@ use serde::Deserialize;
 
 use crate::bits::bits_of;
 use crate::checks::{at_least, between_f32, between_u32};
+use crate::codes::CodeValues;
 use crate::planes::ChannelName;
 use crate::planewise::{PlaneFilter, Planewise};
 use crate::scratch::Scratch;
@@ -636,19 +636,13 @@ impl FilterDefinition for Hq {
         let selected = selected_planes(STAGE, args.planes.as_deref(), input.layout, PlaneDefault::First)?;
 
         let client = context.client().clone();
-        let element = if params.bits == 8 {
-            Element::U8
-        } else {
-            Element::U16
-        };
-        let peak = params.peak();
 
+        let codes = CodeValues::new(&input, input.sample);
         let planewise = Planewise {
             stage: STAGE,
             format: input,
             selected,
-            element,
-            peak,
+            codes,
         };
         let chains = DeringChains::new(&client, &params);
         let deringer = Deringer {

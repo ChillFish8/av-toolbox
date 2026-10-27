@@ -16,7 +16,6 @@ use av_toolbox_core::{
     Tag,
 };
 use av_toolbox_cubek::DevicePlane;
-use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::ivtc::{
     BlockPlanes,
     DecimateMetric,
@@ -51,6 +50,7 @@ use serde::Deserialize;
 use crate::aa::eedi2::subsampling_shifts;
 use crate::bits::bits_of;
 use crate::checks::{accepts_frames, between_u32};
+use crate::codes::CodeValues;
 use crate::deinterlace::rebuild::{channel_plane, widened_plane};
 use crate::ivtc::checks::checked_block;
 use crate::ivtc::decimation::{Thresholds, find_drop, first_cycle_metrics};
@@ -350,7 +350,7 @@ impl FilterDefinition for Decimate {
         let checked = checked(&args, &input)?;
 
         let bits = bits_of(input.sample);
-        let element = if bits == 8 { Element::U8 } else { Element::U16 };
+        let codes = CodeValues::new(&input, input.sample);
         let planes = if checked.chroma { input.channels().len() } else { 1 };
         let halves = half_blocks(&args, &input, planes);
         let (across, down) = half_block_grid(input.width, input.height, halves[0]);
@@ -368,7 +368,7 @@ impl FilterDefinition for Decimate {
             client: context.client().clone(),
             input,
             output: checked.output,
-            element,
+            codes,
             halves,
             across,
             down,
@@ -398,7 +398,7 @@ struct Decimator<R: Runtime> {
     client: ComputeClient<R>,
     input: FrameFormat,
     output: FrameFormat,
-    element: Element,
+    codes: CodeValues,
     /// The half block of each counted plane, luma first.
     halves: Vec<HalfBlocks>,
     across: u32,
@@ -422,7 +422,7 @@ impl<R: Runtime> Decimator<R> {
         let mut planes = Vec::with_capacity(counted.len());
         for channel in counted {
             let source = channel_plane(STAGE, frame, *channel)?;
-            let widened = widened_plane(&self.client, context, source, self.element);
+            let widened = widened_plane(&self.client, context, source, self.codes, *channel);
             planes.push(widened);
         }
 
