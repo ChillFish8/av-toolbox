@@ -88,7 +88,7 @@ fn lowering_a_ten_bit_frame_matches_the_reference() {
     let planes: Vec<Vec<u8>> = values.iter().map(|plane| widen(plane)).collect();
     let converted = run_once("resample/depth", input, output, args, &planes);
 
-    let conversion = Conversion::new(10, 8, false);
+    let conversion = Conversion::new(10, 8, SampleRange::Limited, false);
     let thresholds = Thresholds::ordered();
     for (index, channel) in input.channels().iter().enumerate() {
         let (width, _) = input.channel_dimensions(*channel).expect("carried");
@@ -191,6 +191,79 @@ fn an_eight_bit_round_trip_through_float_matches_a_direct_shift() {
     assert_eq!(&round_trip[..3], [64, 512, 940]);
 }
 
+fn yuv420_in(range: ColourRange, sample: SampleFormat) -> FrameFormat {
+    let layout = FrameLayout::Yuv {
+        subsampling: Subsampling::Yuv420,
+    };
+    let yuv = frame(16, 16, layout, sample, ChromaLocation::Left);
+    let colour = ColourInfo { range, ..yuv.colour };
+
+    FrameFormat { colour, ..yuv }
+}
+
+fn read_floats(bytes: &[u8]) -> Vec<f32> {
+    let (chunks, _) = bytes.as_chunks::<4>();
+
+    chunks.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect()
+}
+
+#[test]
+fn limited_yuv_becomes_full_range_floats_with_centred_chroma() {
+    let input = yuv420_in(ColourRange::Limited, SampleFormat::U8);
+    let output = yuv420_in(ColourRange::Limited, SampleFormat::F32);
+    let args = json!({ "depth": "f32" });
+
+    let luma_levels = [16u8, 235];
+    let luma: Vec<u8> = (0..16 * 16).map(|index| luma_levels[index % 2]).collect();
+    let chroma = vec![128u8; 8 * 8];
+    let planes = vec![luma, chroma.clone(), chroma];
+
+    let converted = run_once("resample/depth", input, output, args, &planes);
+
+    let luma = read_floats(&converted[0]);
+    assert!(luma[0].abs() <= 1e-6, "{}", luma[0]);
+    assert!((luma[1] - 1.0).abs() <= 1e-6, "{}", luma[1]);
+    for plane in &converted[1..] {
+        let chroma = read_floats(plane);
+        assert!(chroma.iter().all(|value| value.abs() <= 1e-6), "{chroma:?}");
+    }
+}
+
+#[test]
+fn full_range_chroma_through_float_matches_a_direct_change() {
+    let eight_bit = yuv420_in(ColourRange::Full, SampleFormat::U8);
+    let float = yuv420_in(ColourRange::Full, SampleFormat::F32);
+    let ten_bit = yuv420_in(ColourRange::Full, SampleFormat::U16 { depth: Depth::TEN });
+    let raised = json!({ "depth": "f32" });
+    let lowered = json!({ "depth": 10, "dither": "none" });
+
+    let planes = eight_bit_values(&eight_bit);
+    let floats = run_once("resample/depth", eight_bit, float, raised, &planes);
+    let round_trip = run_once("resample/depth", float, ten_bit, lowered.clone(), &floats);
+    let direct = run_once("resample/depth", eight_bit, ten_bit, lowered, &planes);
+
+    for (index, channel) in eight_bit.channels().iter().enumerate() {
+        let through_float = unwiden(&round_trip[index]);
+        let changed = unwiden(&direct[index]);
+
+        assert_eq!(through_float, changed, "{channel}");
+    }
+
+    let neutral = vec![128u8; 8 * 8];
+    let planes = vec![planes[0].clone(), neutral.clone(), neutral];
+    let direct = run_once(
+        "resample/depth",
+        eight_bit,
+        ten_bit,
+        json!({ "depth": 10 }),
+        &planes,
+    );
+    for plane in &direct[1..] {
+        let chroma = unwiden(plane);
+        assert!(chroma.iter().all(|value| *value == 512), "{chroma:?}");
+    }
+}
+
 #[test]
 fn build_converts_to_the_settled_sample() {
     let input = limited_grey(SampleFormat::U8);
@@ -228,10 +301,11 @@ fn raising_the_depth_ignores_the_dither() {
     let planes = eight_bit_values(&input);
     let converted = run_once("resample/depth", input, output, args, &planes);
 
-    let conversion = Conversion::new(8, 10, true);
     let thresholds = Thresholds::rounding();
     for (index, channel) in input.channels().iter().enumerate() {
         let (width, _) = input.channel_dimensions(*channel).expect("carried");
+        let chroma = matches!(channel, Channel::U | Channel::V);
+        let conversion = Conversion::new(8, 10, SampleRange::Full, chroma);
         let shift = plane_shift(index as u32);
         let values = widen_u8(&planes[index]);
         let expected = reference_depth(&values, width, &conversion, &thresholds, shift);
@@ -275,11 +349,15 @@ fn raising_to_a_minimum_depth_matches_the_reference_in_either_range() {
         let planes = eight_bit_values(&input);
         let raised = run_once("resample/min_depth", input, output, args, &planes);
 
-        let full_range = range == ColourRange::Full;
-        let conversion = Conversion::new(8, 10, full_range);
+        let sample_range = match range {
+            ColourRange::Full => SampleRange::Full,
+            _ => SampleRange::Limited,
+        };
         let thresholds = Thresholds::rounding();
         for (index, channel) in input.channels().iter().enumerate() {
             let (width, _) = input.channel_dimensions(*channel).expect("carried");
+            let chroma = matches!(channel, Channel::U | Channel::V);
+            let conversion = Conversion::new(8, 10, sample_range, chroma);
             let shift = plane_shift(index as u32);
             let values = widen_u8(&planes[index]);
             let expected = reference_depth(&values, width, &conversion, &thresholds, shift);
@@ -296,6 +374,7 @@ fn a_depth_at_or_above_the_minimum_hands_back_the_input() {
     let kept = [
         SampleFormat::U16 { depth: Depth::TEN },
         SampleFormat::U16 { depth: twelve_bit },
+        SampleFormat::F32,
     ];
 
     for sample in kept {

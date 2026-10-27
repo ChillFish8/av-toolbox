@@ -327,6 +327,8 @@ impl Solver<'_> {
     }
 
     /// The narrowest lossless widening of `offered` that `reader` takes, confirmed by asking again.
+    ///
+    /// Only frames widen, since a widening is carried out by a `resample/depth`.
     fn widening(
         &mut self,
         reader: Reader,
@@ -334,6 +336,8 @@ impl Solver<'_> {
         accepted: &FormatSet,
         proposals: Proposals,
     ) -> Option<StreamFormat> {
+        offered.as_frames()?;
+
         let widenings = offered.sample().lossless_widenings();
         let sample = widenings.into_iter().find(|wider| accepted.accepts(*wider))?;
 

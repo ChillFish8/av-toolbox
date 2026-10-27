@@ -25,6 +25,7 @@ use self::endpoints::{
     File,
     Float,
     FloatFirst,
+    FloatMask,
     Grey,
     Sixteen,
     Stdout,
@@ -98,6 +99,7 @@ pub(crate) fn registry_without_probe_kinds() -> PipelineRegistry {
     registry.register_filter::<Failing>().expect("should register");
     registry.register_mask::<Merge>().expect("should register");
     registry.register_sink::<Stdout>().expect("should register");
+    registry.register_sink::<FloatMask>().expect("should register");
     registry.register_filter::<Deband>().expect("should register");
     registry.register_filter::<Recording>().expect("should register");
     registry.register_source::<Wide>().expect("should register");
@@ -179,7 +181,8 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 58);
+        assert_eq!(identifiers.len(), 59);
+        assert!(identifiers.contains(&"test/float-mask"));
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
         assert!(identifiers.contains(&"test/unopenable"));

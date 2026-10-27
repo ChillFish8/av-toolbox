@@ -1,4 +1,4 @@
-# Copies a y4m stream from standard input to standard output.
+# Reads a y4m stream from standard input and writes it to standard output at 10 bits or more.
 
 [source.input]
 type = "y4m/stdin"

@@ -2,6 +2,7 @@
 
 use std::io::Write;
 use std::os::fd::{IntoRawFd, RawFd};
+use std::path::Path;
 use std::thread::JoinHandle;
 use std::{fs, thread};
 
@@ -38,6 +39,7 @@ use av_toolbox_pipeline::{DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::json;
 
 const FRAME_SIZE: usize = 64;
 
@@ -269,5 +271,126 @@ args.path = "{output_path}"
         .position(|byte| *byte == b'\n')
         .expect("the output has a header line");
     let header = String::from_utf8_lossy(&written[..header_end]);
+    assert!(header.contains(" C420p10"), "{header}");
+}
+
+/// The first line of the y4m file at `path`.
+fn y4m_header(path: &Path) -> String {
+    let written = fs::read(path).expect("reads the output");
+    let header_end = written
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .expect("the output has a header line");
+
+    String::from_utf8_lossy(&written[..header_end]).into_owned()
+}
+
+#[test]
+fn a_nine_bit_clip_widens_to_ten_bits_before_a_y4m_sink() {
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let output = folder.path().join("output.y4m");
+    let output_path = output.to_str().expect("a utf-8 path");
+
+    let text = format!(
+        r##"
+[source.input]
+type = "solid/fill"
+args.colour = "#808080"
+args.width = 64
+args.height = 64
+args.frames = {FRAME_COUNT}
+args.frame_rate = [24, 1]
+
+[filter.nine]
+type = "resample/depth"
+inputs = ["input"]
+args.depth = 9
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["nine"]
+args.path = "{output_path}"
+"##
+    );
+
+    let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+    let specs = loaded_specs(&text);
+    let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
+    let compiled = pipeline.compile(&backend).expect("should compile");
+
+    let graph = compiled.graph();
+    let depths: Vec<_> = graph
+        .nodes()
+        .iter()
+        .filter(|node| node.identifier() == "resample/depth")
+        .collect();
+    assert_eq!(depths.len(), 2);
+
+    let widen = depths
+        .iter()
+        .find(|node| node.name() != "nine")
+        .expect("an injected widen");
+    assert_eq!(*widen.args(), json!({ "depth": 10 }));
+
+    let engine = compiled
+        .engine(Settings::default())
+        .expect("should build the engine");
+    let report = engine.run().expect("should run");
+
+    assert_eq!(report.frames, FRAME_COUNT);
+
+    let header = y4m_header(&output);
+    assert!(header.contains(" C420p10"), "{header}");
+}
+
+#[test]
+fn the_depth_args_the_graph_writes_run_against_the_real_stage() {
+    let folder = tempfile::tempdir().expect("a temp dir");
+    let output = folder.path().join("output.y4m");
+    let output_path = output.to_str().expect("a utf-8 path");
+
+    let text = format!(
+        r##"
+[source.input]
+type = "solid/fill"
+args.colour = "#808080"
+args.width = 64
+args.height = 64
+args.frames = {FRAME_COUNT}
+args.frame_rate = [24, 1]
+
+[filter.float]
+type = "resample/depth"
+inputs = ["input"]
+args.depth = "f32"
+
+[filter.ten]
+type = "resample/depth"
+inputs = ["float"]
+args.depth = 10
+args.at_least = true
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["ten"]
+args.path = "{output_path}"
+"##
+    );
+
+    let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+    let specs = loaded_specs(&text);
+    let pipeline = Pipeline::build(&registry, &specs).expect("should build");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
+    let compiled = pipeline.compile(&backend).expect("should compile");
+
+    let engine = compiled
+        .engine(Settings::default())
+        .expect("should build the engine");
+    let report = engine.run().expect("should run");
+
+    assert_eq!(report.frames, FRAME_COUNT);
+
+    let header = y4m_header(&output);
     assert!(header.contains(" C420p10"), "{header}");
 }

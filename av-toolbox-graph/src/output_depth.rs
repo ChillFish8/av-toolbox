@@ -1,4 +1,4 @@
-use av_toolbox_core::{PipelineRegistry, PreparedStage, StageKind};
+use av_toolbox_core::{PipelineRegistry, PreparedStage, StageKind, StreamType};
 use av_toolbox_gpu::{Capabilities, SampleFormat};
 use serde_json::json;
 
@@ -11,8 +11,8 @@ const OUTPUT_DEPTH: u8 = 10;
 
 /// Puts a `resample/depth` in front of every sink that wants the output depth, unless the user wrote one there.
 ///
-/// The conversion targets the deepest integer sample a source would rather emit, or [OUTPUT_DEPTH] when that
-/// is deeper. It allows any deeper integer sample too, so the sink settles on the first one it can write.
+/// The conversion targets the deepest integer sample a source would rather emit, or 10 bits when that is
+/// deeper. It allows any deeper integer sample too, so the sink settles on the first one it can write.
 pub fn inject_output_depth(
     graph: &mut CompiledGraph,
     registry: &PipelineRegistry,
@@ -52,7 +52,9 @@ pub fn inject_output_depth(
     Ok(())
 }
 
-/// Every edge into a sink that wants the output depth and is not already fed by a `resample/depth`.
+/// Every frames edge into a sink that wants the output depth and is not already fed by a `resample/depth`.
+///
+/// A mask edge is left alone so the sink reports it.
 fn unconverted_edges(graph: &CompiledGraph, registry: &PipelineRegistry) -> Vec<(NodeId, usize)> {
     let mut edges = Vec::new();
 
@@ -63,9 +65,13 @@ fn unconverted_edges(graph: &CompiledGraph, registry: &PipelineRegistry) -> Vec<
         .filter(|node| wants_output_depth(registry, node.kind(), node.identifier()));
     for sink in sinks {
         for (edge, input) in sink.inputs().iter().enumerate() {
-            if !is_converted(graph, input.source()) {
-                edges.push((sink.id(), edge));
+            let source = input.source();
+            let carries_mask = graph.node(source).output_stream() == Some(StreamType::Mask);
+            if carries_mask || is_converted(graph, source) {
+                continue;
             }
+
+            edges.push((sink.id(), edge));
         }
     }
 

@@ -11,9 +11,9 @@ fn through_float(value: f32, conversion: &Conversion) -> u16 {
     convert_sample(value, conversion, 0.5)
 }
 
-fn round_trips(input_bits: u32, output_bits: u32, full_range: bool) -> bool {
-    let up = Conversion::new(input_bits, output_bits, full_range);
-    let down = Conversion::new(output_bits, input_bits, full_range);
+fn round_trips(input_bits: u32, output_bits: u32, range: SampleRange, chroma: bool) -> bool {
+    let up = Conversion::new(input_bits, output_bits, range, chroma);
+    let down = Conversion::new(output_bits, input_bits, range, chroma);
     let largest = (1u32 << input_bits) - 1;
 
     (0..=largest).all(|value| {
@@ -26,15 +26,39 @@ fn round_trips(input_bits: u32, output_bits: u32, full_range: bool) -> bool {
 
 #[test]
 fn eight_bit_round_trips_through_ten_and_sixteen() {
-    assert!(round_trips(8, 10, false));
-    assert!(round_trips(8, 16, false));
-    assert!(round_trips(8, 10, true));
+    assert!(round_trips(8, 10, SampleRange::Limited, false));
+    assert!(round_trips(8, 16, SampleRange::Limited, false));
+    assert!(round_trips(8, 10, SampleRange::Full, false));
+}
+
+#[test]
+fn chroma_round_trips_through_ten_and_sixteen() {
+    assert!(round_trips(8, 10, SampleRange::Limited, true));
+    assert!(round_trips(8, 10, SampleRange::Full, true));
+    assert!(round_trips(8, 16, SampleRange::Full, true));
+}
+
+#[test]
+fn full_range_chroma_stays_centred() {
+    let raise = Conversion::new(8, 10, SampleRange::Full, true);
+    let lower = Conversion::new(10, 8, SampleRange::Full, true);
+
+    assert_eq!(through(128, &raise), 512);
+    assert_eq!(through(512, &lower), 128);
+}
+
+#[test]
+fn limited_chroma_shifts_like_luma() {
+    let luma = Conversion::new(8, 10, SampleRange::Limited, false);
+    let chroma = Conversion::new(8, 10, SampleRange::Limited, true);
+
+    assert_eq!(chroma, luma);
 }
 
 #[test]
 fn limited_range_shifts_and_full_range_stretches() {
-    let limited = Conversion::new(8, 10, false);
-    let full = Conversion::new(8, 10, true);
+    let limited = Conversion::new(8, 10, SampleRange::Limited, false);
+    let full = Conversion::new(8, 10, SampleRange::Full, false);
 
     assert_eq!(through(235, &limited), 940);
     assert_eq!(through(255, &full), 1023);
@@ -42,8 +66,8 @@ fn limited_range_shifts_and_full_range_stretches() {
 
 #[test]
 fn lowering_clamps_at_the_largest_value() {
-    let limited = Conversion::new(10, 8, false);
-    let full = Conversion::new(16, 8, true);
+    let limited = Conversion::new(10, 8, SampleRange::Limited, false);
+    let full = Conversion::new(16, 8, SampleRange::Full, false);
 
     assert_eq!(through(1023, &limited), 255);
     assert_eq!(through(65535, &full), 255);
@@ -51,7 +75,7 @@ fn lowering_clamps_at_the_largest_value() {
 
 #[test]
 fn eight_bits_is_stored_as_u8_and_more_as_u16() {
-    let conversion = Conversion::new(8, 12, false);
+    let conversion = Conversion::new(8, 12, SampleRange::Limited, false);
 
     assert_eq!(conversion.input, Source::U8);
     assert_eq!(conversion.output, Destination::U16);
@@ -118,7 +142,7 @@ fn limited_chroma_centres_on_zero_as_a_float() {
 fn a_float_round_trip_lands_where_a_shift_would() {
     let widen = Conversion::to_float(8, SampleRange::Limited, false);
     let narrow = Conversion::from_float(10, SampleRange::Limited, false);
-    let shift = Conversion::new(8, 10, false);
+    let shift = Conversion::new(8, 10, SampleRange::Limited, false);
 
     for code in [16.0, 128.0, 235.0] {
         let float = convert_to_float_sample(code, &widen);
@@ -126,6 +150,22 @@ fn a_float_round_trip_lands_where_a_shift_would() {
         let shifted = convert_sample(code, &shift, 0.5);
 
         assert_eq!(through_float, shifted);
+    }
+}
+
+#[test]
+fn a_full_range_chroma_float_round_trip_lands_where_a_direct_change_would() {
+    let widen = Conversion::to_float(8, SampleRange::Full, true);
+    let narrow = Conversion::from_float(10, SampleRange::Full, true);
+    let direct = Conversion::new(8, 10, SampleRange::Full, true);
+
+    for code in 0..=255u16 {
+        let value = f32::from(code);
+        let float = convert_to_float_sample(value, &widen);
+        let through_float = convert_sample(float, &narrow, 0.5);
+        let changed = convert_sample(value, &direct, 0.5);
+
+        assert_eq!(through_float, changed, "code {code}");
     }
 }
 

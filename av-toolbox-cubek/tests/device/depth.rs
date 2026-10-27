@@ -145,16 +145,18 @@ fn every_mode_matches_the_reference() {
         Thresholds::blue_noise(),
     ];
     let changes = [
-        (8, 10, false),
-        (10, 8, false),
-        (8, 16, true),
-        (16, 8, true),
-        (12, 10, false),
+        (8, 10, SampleRange::Limited, false),
+        (10, 8, SampleRange::Limited, false),
+        (8, 16, SampleRange::Full, false),
+        (16, 8, SampleRange::Full, false),
+        (12, 10, SampleRange::Limited, false),
+        (8, 10, SampleRange::Full, true),
+        (10, 8, SampleRange::Full, true),
     ];
 
     for thresholds in &modes {
-        for (input_bits, output_bits, full_range) in changes {
-            let conversion = Conversion::new(input_bits, output_bits, full_range);
+        for (input_bits, output_bits, range, chroma) in changes {
+            let conversion = Conversion::new(input_bits, output_bits, range, chroma);
             let input = gradient(96, 80, input_bits);
             let shift = plane_shift(1);
 
@@ -163,7 +165,7 @@ fn every_mode_matches_the_reference() {
 
             assert_eq!(
                 converted, expected,
-                "{input_bits} to {output_bits}, full range {full_range}"
+                "{input_bits} to {output_bits}, {range:?}, chroma {chroma}"
             );
         }
     }
@@ -172,7 +174,7 @@ fn every_mode_matches_the_reference() {
 /// Dithering keeps the average of a flat area where the extra bits put it.
 #[test]
 fn blue_noise_keeps_a_flat_areas_mean() {
-    let conversion = Conversion::new(10, 8, false);
+    let conversion = Conversion::new(10, 8, SampleRange::Limited, false);
     let thresholds = Thresholds::blue_noise();
     let shift = plane_shift(0);
 
@@ -272,5 +274,39 @@ fn u8_planes_convert_to_floats_like_the_reference() {
             (found - expected).abs() <= 1e-6,
             "code {code} was {found}, expected {expected}"
         );
+    }
+}
+
+/// Converts ten-bit chroma to F32 on the device.
+#[test]
+fn ten_bit_chroma_converts_to_centred_floats_like_the_reference() {
+    let ranges = [SampleRange::Limited, SampleRange::Full];
+
+    for range in ranges {
+        let conversion = Conversion::to_float(10, range, true);
+        let input: Vec<u16> = (0..1024).collect();
+        let bytes = input.iter().flat_map(|value| value.to_le_bytes()).collect();
+        let thresholds = Thresholds::rounding();
+
+        let output = backend().build(Depth {
+            input: bytes,
+            width: 1024,
+            height: 1,
+            conversion,
+            thresholds,
+            shift: plane_shift(1),
+        });
+
+        let (chunks, _) = output.as_chunks::<4>();
+        let converted: Vec<f32> = chunks.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect();
+        for (code, found) in input.iter().zip(&converted) {
+            let expected = convert_to_float_sample(f32::from(*code), &conversion);
+            assert!(
+                (found - expected).abs() <= 1e-6,
+                "{range:?} code {code} was {found}, expected {expected}"
+            );
+        }
+
+        assert_eq!(converted[512], 0.0, "{range:?}");
     }
 }

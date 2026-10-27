@@ -27,7 +27,7 @@ use av_toolbox_runtime::{Engine, Settings};
 
 use crate::PipelineError;
 
-/// A stage as the pipeline wrote it.
+/// A stage in the pipeline, written or injected by the graph.
 #[derive(Debug, Copy, Clone)]
 pub struct StageRef<'a> {
     pub kind: StageKind,

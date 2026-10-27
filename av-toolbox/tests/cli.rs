@@ -617,8 +617,8 @@ mod device {
 
         let luma_size = FRAME_SIZE * FRAME_SIZE;
         let chroma_size = (FRAME_SIZE / 2) * (FRAME_SIZE / 2);
-        let u_plane = ten_bit_plane(100, chroma_size);
-        let v_plane = ten_bit_plane(150, chroma_size);
+        let u_plane = ten_bit_chroma_plane(100, chroma_size);
+        let v_plane = ten_bit_chroma_plane(150, chroma_size);
         for index in 0..FRAME_COUNT {
             let luma = ten_bit_plane(index as u8, luma_size);
             let frame = y4m::Frame::new([&luma, &u_plane, &v_plane], None);
@@ -631,6 +631,15 @@ mod device {
     /// A plane of `size` little-endian 10-bit samples, each the full range equivalent of `sample`.
     fn ten_bit_plane(sample: u8, size: usize) -> Vec<u8> {
         let scaled = (u32::from(sample) * 1023 + 127) / 255;
+        let scaled = u16::try_from(scaled).expect("a 10-bit sample");
+
+        scaled.to_le_bytes().repeat(size)
+    }
+
+    /// The same as [ten_bit_plane] for chroma, which stays centred on the middle value.
+    fn ten_bit_chroma_plane(sample: u8, size: usize) -> Vec<u8> {
+        let from_centre = (i32::from(sample) - 128) * 1023;
+        let scaled = (from_centre + 127).div_euclid(255) + 512;
         let scaled = u16::try_from(scaled).expect("a 10-bit sample");
 
         scaled.to_le_bytes().repeat(size)

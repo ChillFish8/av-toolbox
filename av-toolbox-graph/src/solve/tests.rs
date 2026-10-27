@@ -1044,3 +1044,21 @@ fn a_retimed_stream_matches_a_sibling_at_its_new_rate() {
 
     assert!(solves(&specs));
 }
+
+#[test]
+fn a_mask_edge_is_never_widened() {
+    let registry = testing::registry();
+    let mut edges = testing::spec(StageKind::Mask, "edges", "test/merge");
+    edges.inputs = vec![testing::positional("input")];
+    let mut out = testing::spec(StageKind::Sink, "out", "test/float-mask");
+    out.inputs = vec![testing::positional("edges")];
+    let specs = vec![source("input", "test/eight"), edges, out];
+    let graph = build(&registry, &specs).expect("should build").into_graph();
+
+    let diagnostics = solve(&graph, &registry, &capabilities()).expect_err("should fail");
+    let reported: Vec<&Diagnostic> = diagnostics.iter().collect();
+
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].code(), DiagnosticCode::NoCommonFormat);
+    assert_eq!(reported[0].path(), "sink.out.inputs[0]");
+}

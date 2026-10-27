@@ -123,7 +123,18 @@ fn a_depth_outside_eight_to_sixteen_is_refused() {
 }
 
 #[test]
-fn floats_are_left_out_and_masks_refused() {
+fn a_float_clip_is_kept() {
+    let input = yuv420(SampleFormat::F32);
+
+    for depth in [8, 10, 16] {
+        let output = produced(input, json!({ "depth": depth })).expect("keeps");
+
+        assert_eq!(output.sample(), SampleFormat::F32);
+    }
+}
+
+#[test]
+fn floats_are_accepted_and_masks_refused() {
     let capabilities = capabilities();
     let arguments = args(json!({ "depth": 10 })).expect("parses");
     let inputs = [Offered::Unknown];
@@ -140,6 +151,6 @@ fn floats_are_left_out_and_masks_refused() {
         MinDepth::accepts_input(&capabilities, &arguments, 0, float, &inputs).expect("frames are readable");
     let refused = MinDepth::accepts_input(&capabilities, &arguments, 0, mask, &inputs);
 
-    assert!(accepted.is_empty());
+    assert!(accepted.accepts(SampleFormat::F32));
     assert!(refused.is_err());
 }

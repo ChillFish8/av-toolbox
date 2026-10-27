@@ -28,7 +28,7 @@ use serde::Deserialize;
 
 use super::depth::{Dither, checked_input, converter, not_frames, target_sample};
 use crate::bits::bits_of;
-use crate::checks::accepts_frames;
+use crate::checks::accepts_integer_or_f32_frames;
 
 const STAGE: &str = "resample/min_depth";
 
@@ -41,8 +41,14 @@ pub(crate) struct MinDepthArgs {
 }
 
 /// The sample format `input` leaves as, raised to `depth` when it holds fewer bits.
+///
+/// A float clip is already deeper than any integer depth, so it is kept.
 fn raised_sample(input: &FrameFormat, depth: u8) -> Result<SampleFormat, StageError> {
     let minimum = target_sample(STAGE, depth)?;
+    if input.sample == SampleFormat::F32 {
+        return Ok(input.sample);
+    }
+
     let input_bits = bits_of(input.sample);
     let minimum_bits = bits_of(minimum);
 
@@ -68,7 +74,7 @@ impl StageDefinition for MinDepth {
     }
 
     fn description() -> &'static str {
-        "Raises a clip to at least a given bit depth, leaving clips already that deep untouched."
+        "Raises a clip to at least a given bit depth, leaving clips already that deep, or float, untouched."
     }
 
     fn parallelism(_args: &Self::Args) -> Parallelism {
@@ -92,7 +98,7 @@ impl FilterDefinition for MinDepth {
         offered: StreamFormat,
         _inputs: &[Offered],
     ) -> Result<FormatSet, StageError> {
-        let Some(samples) = accepts_frames(offered) else {
+        let Some(samples) = accepts_integer_or_f32_frames(offered) else {
             return Err(not_frames(STAGE));
         };
 

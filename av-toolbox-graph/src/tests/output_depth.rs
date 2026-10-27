@@ -203,3 +203,23 @@ fn a_sink_that_does_not_want_it_is_left_alone() {
     assert_eq!(graph.len(), specs.len());
     assert!(depth_stages(&graph).is_empty());
 }
+
+#[test]
+fn a_mask_into_the_sink_is_left_for_the_sink_to_refuse() {
+    let mut edges = testing::spec(StageKind::Mask, "edges", "test/merge");
+    edges.inputs = vec![testing::positional("input")];
+    let specs = vec![
+        source("input", "test/eight"),
+        edges,
+        y4m("out", "edges", json!({})),
+    ];
+    let graph = injected(&specs);
+
+    assert!(depth_stages(&graph).is_empty());
+
+    let diagnostics = solved(&graph).expect_err("should fail");
+    let reported: Vec<_> = diagnostics.iter().collect();
+
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].path(), "sink.out.inputs[0]");
+}

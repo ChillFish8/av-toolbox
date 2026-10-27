@@ -74,28 +74,29 @@ pub struct Conversion {
 }
 
 impl Conversion {
-    /// A change from `input_bits` to `output_bits`.
+    /// A change from `input_bits` to `output_bits` integers in `range`.
     ///
-    /// Full range stretches so the largest input becomes the largest output. Any other range
-    /// shifts, which keeps limited range black and white where video expects them.
-    pub fn new(input_bits: u32, output_bits: u32, full_range: bool) -> Self {
-        let output_peak = ((1u32 << output_bits) - 1) as f32;
-        let input_peak = ((1u32 << input_bits) - 1) as f32;
-        let difference = output_bits as i32 - input_bits as i32;
-
-        let multiplier = if full_range {
-            output_peak / input_peak
-        } else {
-            2f32.powi(difference)
-        };
-
+    /// Full range stretches so the largest input becomes the largest output, with `chroma` staying
+    /// centred on the middle value. Limited range shifts, which keeps black and white where video
+    /// expects them.
+    pub fn new(input_bits: u32, output_bits: u32, range: SampleRange, chroma: bool) -> Self {
         let input = Element::for_bits(input_bits);
+        let output = Element::for_bits(output_bits);
+
+        let input_samples = integer_samples(input, input_bits);
+        let output_samples = integer_samples(output, output_bits);
+        let (input_offset, input_scale) = scaling(input_samples, range, chroma);
+        let (output_offset, output_scale) = scaling(output_samples, range, chroma);
+
+        let multiplier = output_scale / input_scale;
+        let offset = output_offset - input_offset * multiplier;
+        let output_peak = ((1u32 << output_bits) - 1) as f32;
 
         Self {
             input: Source::from(input),
-            output: Destination::from(Element::for_bits(output_bits)),
-            multiplier,
-            offset: 0.0,
+            output: Destination::from(output),
+            multiplier: multiplier as f32,
+            offset: offset as f32,
             divisor: 1.0,
             largest: output_peak,
         }

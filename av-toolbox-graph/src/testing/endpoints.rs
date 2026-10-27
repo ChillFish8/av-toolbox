@@ -13,6 +13,7 @@ use av_toolbox_core::{
     StageDefinition,
     StageError,
     StageInstance,
+    StreamType,
 };
 use av_toolbox_gpu::{
     BuildContext,
@@ -47,6 +48,64 @@ fixture_sink!(
     NoArgs,
     &InputSignature::new(&[InputParam::required("input")])
 );
+
+struct FloatMaskStage;
+
+impl StageInstance for FloatMaskStage {}
+
+impl Sink for FloatMaskStage {
+    fn consume(&mut self, _context: &mut FrameContext, _inputs: Inputs) -> Result<(), StageError> {
+        Ok(())
+    }
+}
+
+/// A sink reading a mask, taking it only as F32.
+pub(super) struct FloatMask;
+
+impl StageDefinition for FloatMask {
+    type Args = NoArgs;
+
+    fn package() -> &'static str {
+        "test"
+    }
+
+    fn identifier() -> &'static str {
+        "float-mask"
+    }
+
+    fn description() -> &'static str {
+        "A stage used by tests."
+    }
+
+    fn inputs() -> &'static InputSignature {
+        const SIGNATURE: &InputSignature =
+            &InputSignature::new(&[InputParam::required("mask").accepting(StreamType::Mask)]);
+        SIGNATURE
+    }
+}
+
+impl SinkDefinition for FloatMask {
+    type Side = DeviceSide;
+
+    fn accepts_input(
+        _capabilities: &Capabilities,
+        _args: &Self::Args,
+        _index: usize,
+        _offered: StreamFormat,
+        _inputs: &[Offered],
+    ) -> Result<FormatSet, StageError> {
+        Ok(FormatSet::of([SampleFormat::F32]))
+    }
+
+    fn build<R: Runtime>(
+        _context: &BuildContext<R>,
+        _args: Self::Args,
+        _inputs: BoundInputs,
+        _formats: &ResolvedFormats,
+    ) -> Result<Box<dyn Sink>, StageError> {
+        Ok(Box::new(FloatMaskStage))
+    }
+}
 
 opinionated_source!(
     Wide,

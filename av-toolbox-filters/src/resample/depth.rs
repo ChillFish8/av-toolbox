@@ -349,8 +349,8 @@ fn float_identity() -> Conversion {
 
 /// The conversions from `input` to `output`, and whether they lose precision.
 ///
-/// Float samples are full range and centre chroma on zero, so the clip's range label decides how
-/// integers stretch into floats and back, and chroma takes its own conversion. Float samples always
+/// The clip's range label decides how integers stretch, and chroma takes its own conversion since it
+/// is centred on the middle value. Float samples are full range with chroma centred on zero, and always
 /// lose precision when they become integers.
 fn plan_conversion(input: FrameFormat, output: SampleFormat) -> ConversionPlan {
     let range = sample_range(input.colour.range);
@@ -392,12 +392,12 @@ fn plan_conversion(input: FrameFormat, output: SampleFormat) -> ConversionPlan {
     }
 
     let output_bits = bits_of(output);
-    let full_range = range == SampleRange::Full;
-    let conversion = Conversion::new(input_bits, output_bits, full_range);
+    let conversion = Conversion::new(input_bits, output_bits, range, false);
+    let chroma_conversion = Conversion::new(input_bits, output_bits, range, true);
 
     ConversionPlan {
         conversion,
-        chroma_conversion: conversion,
+        chroma_conversion,
         lowering: output_bits < input_bits,
     }
 }
