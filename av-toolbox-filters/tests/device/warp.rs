@@ -4,7 +4,7 @@ use av_toolbox_cubek::warp::{BlurKind, WarpParams};
 use av_toolbox_gpu::{ChromaLocation, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
 use serde_json::json;
 
-use crate::support::{frame, from_bytes, luma_is_shared, run_once, to_bytes};
+use crate::support::{frame, from_bytes, kept_sample_parity, luma_is_shared, run_once, to_bytes};
 
 fn yuv420(sample: SampleFormat) -> FrameFormat {
     let layout = FrameLayout::Yuv {
@@ -109,6 +109,27 @@ fn only_the_named_rgb_plane_changes() {
 #[test]
 fn an_unselected_luma_plane_is_shared() {
     let input = yuv420(SampleFormat::U8);
+    let args = json!({ "planes": ["u", "v"] });
+
+    assert!(luma_is_shared("warp/awarpsharp", input, input, args));
+}
+
+#[test]
+fn awarpsharp_f32_matches_sixteen_bit() {
+    let sixteen_bit = SampleFormat::U16 {
+        depth: Depth::SIXTEEN,
+    };
+    let input = yuv420(sixteen_bit);
+    let values = patterned(&input, 65535);
+
+    let parity = kept_sample_parity("warp/awarpsharp", input, json!({}), &values);
+
+    parity.assert_within("warp/awarpsharp", 1.0, 0.0);
+}
+
+#[test]
+fn an_unselected_f32_luma_plane_is_shared() {
+    let input = yuv420(SampleFormat::F32);
     let args = json!({ "planes": ["u", "v"] });
 
     assert!(luma_is_shared("warp/awarpsharp", input, input, args));

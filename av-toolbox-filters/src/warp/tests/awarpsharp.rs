@@ -152,6 +152,7 @@ fn the_output_format_is_the_input_format() {
         format(FrameLayout::Grey, ten_bit),
         format(FrameLayout::Rgb, SampleFormat::U8),
         format(chroma, ten_bit),
+        format(FrameLayout::Grey, SampleFormat::F32),
     ];
 
     for input in inputs {
@@ -166,7 +167,7 @@ fn the_output_format_is_the_input_format() {
 }
 
 #[test]
-fn floats_are_left_out_and_masks_refused() {
+fn floats_are_accepted_and_masks_refused() {
     let capabilities = capabilities();
     let parsed = args(json!({}));
     let inputs = [Offered::Unknown];
@@ -187,6 +188,6 @@ fn floats_are_left_out_and_masks_refused() {
         Awarpsharp::accepts_input(&capabilities, &parsed, 0, float, &inputs).expect("frames are readable");
     let refused = Awarpsharp::accepts_input(&capabilities, &parsed, 0, mask, &inputs);
 
-    assert!(accepted.is_empty());
+    assert_eq!(accepted.preferences(), [SampleFormat::F32]);
     assert!(refused.is_err());
 }

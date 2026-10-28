@@ -13,6 +13,7 @@ use av_toolbox_core::{
 };
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::values::{narrow, widen};
 use av_toolbox_cubek::warp::{BlurKind, WarpParams, WarpPlanes, warp_sharp};
 use av_toolbox_gpu::{
     BuildContext,
@@ -40,7 +41,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::bits::bits_of;
+use crate::codes::CodeValues;
 use crate::planes::ChannelName;
+use crate::scratch::{self, Scratch};
 use crate::selection::{PlaneDefault, selected_planes};
 use crate::sizing::Sizing;
 
@@ -237,10 +240,6 @@ impl FilterDefinition for Awarpsharp {
             return Err(not_frames());
         };
 
-        if !matches!(format.sample, SampleFormat::U8 | SampleFormat::U16 { .. }) {
-            return Ok(FormatSet::new());
-        }
-
         Ok(FormatSet::of([format.sample]))
     }
 
@@ -270,14 +269,27 @@ impl FilterDefinition for Awarpsharp {
         let input = checked_input(inputs)?;
         let settings = warp_settings(&args, &input)?;
         let client = context.client().clone();
+        let codes = float_codes(&input);
         let warper = Warper {
             client,
             output: input,
             settings,
+            codes,
         };
 
         Ok(Box::new(warper))
     }
+}
+
+/// The code values an F32 `input` warps as, or `None` for integer input, which warps as it is.
+fn float_codes(input: &FrameFormat) -> Option<CodeValues> {
+    if input.sample != SampleFormat::F32 {
+        return None;
+    }
+
+    let codes = CodeValues::new(input, SampleFormat::F32).whole_codes();
+
+    Some(codes)
 }
 
 /// Warps every selected plane of a frame, sharing the rest.
@@ -285,11 +297,19 @@ struct Warper<R: Runtime> {
     client: ComputeClient<R>,
     output: FrameFormat,
     settings: WarpSettings,
+    /// How F32 planes map onto the 16-bit codes the warp runs on.
+    codes: Option<CodeValues>,
 }
 
 impl<R: Runtime> Warper<R> {
     /// Warps `source` into a fresh plane of the same size and hands that plane back.
-    fn warp(&self, context: &FrameContext, source: &Plane, meta: &FrameMeta) -> Result<Plane, StageError> {
+    fn warp(
+        &self,
+        context: &FrameContext,
+        source: &Plane,
+        channel: Channel,
+        meta: &FrameMeta,
+    ) -> Result<Plane, StageError> {
         let (width, height) = source.dimensions();
         let plane_format = FrameFormat {
             width,
@@ -302,39 +322,74 @@ impl<R: Runtime> Warper<R> {
             return Err(missing_channel(Channel::Y));
         };
 
-        let samples = width as usize * height as usize;
-        let mask_bytes = samples * size_of::<u32>();
-        let mask_buffer = context.scratch(mask_bytes);
-        let scratch_buffer = context.scratch(mask_bytes);
+        // Safety: every kernel given this plane reads it as the frame's sample format.
+        let source_plane = unsafe { scratch::device_plane(source) };
 
-        let source_handle = source.buffer().handle();
-        let output_handle = output.buffer().handle();
-        let mask_handle = mask_buffer.handle();
-        let scratch_handle = scratch_buffer.handle();
+        // Safety: every kernel given this plane writes it as the frame's sample format.
+        let output_plane = unsafe { scratch::device_plane(output) };
 
-        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let input_plane = unsafe { DevicePlane::new(source_handle, width, height) };
-
-        // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
-        let output_plane = unsafe { DevicePlane::new(output_handle, width, height) };
-
-        // Safety: the buffer was sized for `width * height` u32 values.
-        let mask_plane = unsafe { DevicePlane::new(mask_handle, width, height) };
-
-        // Safety: the buffer was sized for `width * height` u32 values.
-        let scratch_plane = unsafe { DevicePlane::new(scratch_handle, width, height) };
-
-        let planes = WarpPlanes {
-            input: input_plane,
-            mask: mask_plane,
-            scratch: scratch_plane,
-            output: output_plane,
-        };
-        let sizing = Sizing(context);
-
-        warp_sharp(&self.client, &sizing, planes, &self.settings.params);
+        match &self.codes {
+            Some(codes) => self.warp_float(context, codes, source_plane, output_plane, channel),
+            None => self.warp_samples(context, source_plane, output_plane),
+        }
 
         Ok(output.clone())
+    }
+
+    /// Warps the integer samples of `source` into `output`.
+    fn warp_samples(&self, context: &FrameContext, source: DevicePlane<'_>, output: DevicePlane<'_>) {
+        let sizing = Sizing(context);
+        let width = source.width();
+        let height = source.height();
+
+        let mask = Scratch::new::<u32>(context, width, height);
+        let warp_scratch = Scratch::new::<u32>(context, width, height);
+        let mask_plane = mask.plane();
+        let warp_scratch_plane = warp_scratch.plane();
+        let planes = WarpPlanes {
+            input: source,
+            mask: mask_plane,
+            scratch: warp_scratch_plane,
+            output,
+        };
+        warp_sharp(&self.client, &sizing, planes, &self.settings.params);
+    }
+
+    /// Warps an F32 `source` as whole 16-bit codes into `output`.
+    fn warp_float(
+        &self,
+        context: &FrameContext,
+        codes: &CodeValues,
+        source: DevicePlane<'_>,
+        output: DevicePlane<'_>,
+        channel: Channel,
+    ) {
+        let sizing = Sizing(context);
+        let width = source.width();
+        let height = source.height();
+        let params = &self.settings.params;
+
+        let values = Scratch::new::<f32>(context, width, height);
+        let values_plane = values.plane();
+        codes.widen(&self.client, &sizing, source, values_plane, channel);
+
+        let narrowed = scratch::samples(context, width, height, params.element);
+        let narrowed_plane = narrowed.plane();
+        narrow(
+            &self.client,
+            &sizing,
+            values_plane,
+            narrowed_plane,
+            params.element,
+            codes.peak(),
+        );
+
+        let warped = scratch::samples(context, width, height, params.element);
+        let warped_plane = warped.plane();
+        self.warp_samples(context, narrowed_plane, warped_plane);
+
+        widen(&self.client, &sizing, warped_plane, values_plane, params.element);
+        codes.store(&self.client, &sizing, values_plane, output, channel);
     }
 }
 
@@ -360,7 +415,7 @@ impl<R: Runtime> Filter for Warper<R> {
                 continue;
             }
 
-            let warped = self.warp(context, source, &meta)?;
+            let warped = self.warp(context, source, *channel, &meta)?;
             planes.push(warped);
         }
 
