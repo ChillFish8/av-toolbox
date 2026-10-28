@@ -33,8 +33,8 @@ fn open<'a, 'v, 'i>(
     };
 
     if !is_stage_name(written_name) {
-        let message = format!("the name {written_name:?} may only use letters, digits, _ and -");
-        reader.error("", header, message);
+        let message = format!("the name {written_name:?} may only use letters, digits and _");
+        reader.invalid_name(header, written_name, message);
     }
 
     let inner = value.get_ref();

@@ -33,6 +33,20 @@ impl TableReader<'_> {
         self.report(diagnostic);
     }
 
+    /// Reports the stage name `written_name` as invalid, suggesting the name with `_` for each `-` when that is valid.
+    pub(super) fn invalid_name(&mut self, header: Span, written_name: &str, message: String) {
+        let path = self.key_path("");
+        let mut diagnostic = Diagnostic::error(DiagnosticCode::InvalidDefinition, path, header, message);
+
+        let suggestion = written_name.replace('-', "_");
+        if is_stage_name(&suggestion) {
+            let note = format!("did you mean `{suggestion}`?");
+            diagnostic = diagnostic.with_note(note, Span::unknown());
+        }
+
+        self.report(diagnostic);
+    }
+
     pub(super) fn key_path(&self, key: &str) -> String {
         match key {
             "" => self.path.clone(),
@@ -174,7 +188,7 @@ pub(super) fn entry<'t, 'i>(table: &'t DeTable<'i>, key: &str) -> Option<&'t Tom
 
 /// Whether `name` may name a stage, call, input or output.
 pub(super) fn is_stage_name(name: &str) -> bool {
-    let allowed = |character: char| character.is_ascii_alphanumeric() || character == '_' || character == '-';
+    let allowed = |character: char| character.is_ascii_alphanumeric() || character == '_';
 
     !name.is_empty() && name.chars().all(allowed)
 }

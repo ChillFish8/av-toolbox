@@ -298,3 +298,18 @@ fn an_output_with_inputs_that_are_not_names_is_one_error() {
     assert_eq!(codes(&listed), [DiagnosticCode::InvalidDefinition]);
     assert_eq!(codes(&text), [DiagnosticCode::InvalidDefinition]);
 }
+
+#[test]
+fn a_hyphenated_stage_name_suggests_an_underscore() {
+    let text = "[filter.my-clip]\ntype = \"a/b\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    let notes: Vec<&str> = diagnostics[0]
+        .notes()
+        .iter()
+        .map(|note| note.message.as_str())
+        .collect();
+    assert_eq!(notes, ["did you mean `my_clip`?"]);
+}
