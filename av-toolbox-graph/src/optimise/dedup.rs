@@ -21,6 +21,7 @@ struct StageKey {
 /// Merges stages that do the same work on the same inputs.
 ///
 /// A stage an artefact sink reads is never merged, since each one's artefacts are written under its own name.
+/// A deferred stage is never merged either, since its args are not known yet.
 pub struct CommonStageElimination;
 
 impl OptimisationPass for CommonStageElimination {
@@ -36,11 +37,11 @@ impl OptimisationPass for CommonStageElimination {
         let producers = graph.artefact_producers();
 
         for id in graph.order() {
-            if producers.contains(id) {
+            let node = graph.node(*id);
+            if producers.contains(id) || node.is_deferred() {
                 continue;
             }
 
-            let node = graph.node(*id);
             let key = key_for(node, &replacements);
 
             let Some(kept) = seen.get(&key).copied() else {

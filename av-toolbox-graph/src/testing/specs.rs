@@ -1,7 +1,7 @@
 use av_toolbox_core::StageKind;
 use serde_json::json;
 
-use crate::{ArgSpans, InputRef, Span, Spanned, StageSpec};
+use crate::{ArgSpans, DeferredArg, Expr, InputRef, Piece, Span, Spanned, StageSpec, Template};
 
 /// Builds a spec with no inputs, empty arguments and unknown spans.
 ///
@@ -32,4 +32,39 @@ pub(crate) fn named(name: &str, target: &str) -> Spanned<InputRef> {
         name: Some(name.to_string()),
         target: target.to_string(),
     })
+}
+
+/// Builds a deferred arg at `pointer` from template `text`, reading each `stage.field` path as a field.
+pub(crate) fn deferred(pointer: &str, text: &str) -> DeferredArg {
+    let mut template = Template::parse(text).expect("the template parses");
+    for piece in template.pieces_mut() {
+        let Piece::Expr(found) = piece else {
+            continue;
+        };
+
+        found.expr.rewrite(&mut path_to_field).expect("the paths rewrite");
+    }
+
+    DeferredArg {
+        pointer: pointer.to_string(),
+        template,
+        span: Span::unknown(),
+    }
+}
+
+fn path_to_field(expr: &mut Expr) -> Result<(), String> {
+    let Expr::Path(segments) = expr else {
+        return Ok(());
+    };
+
+    let [stage, field] = segments.as_slice() else {
+        return Ok(());
+    };
+
+    *expr = Expr::Field {
+        stage: stage.clone(),
+        field: field.clone(),
+    };
+
+    Ok(())
 }

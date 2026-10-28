@@ -70,7 +70,7 @@ use self::probing::{Pair, Probing, Seekable};
 use self::providers::{Breaking, Demanding, DemandingPair, Marking, Relaying, TagReading, Tagging};
 pub(crate) use self::providers::{BreaksRequest, FixtureBreaks, FixtureMarks, MarksRequest};
 use self::rated::{Rated, Retime};
-pub(crate) use self::specs::{named, positional, spec};
+pub(crate) use self::specs::{deferred, named, positional, spec};
 
 /// One chunk at a time, chunked by the fixture demand kind.
 pub(crate) fn chunked() -> Parallelism {

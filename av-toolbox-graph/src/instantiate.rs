@@ -94,7 +94,8 @@ impl CompiledGraph {
     ///
     /// Every node is attempted, so a node whose arguments or inputs are invalid does not stop
     /// another from being prepared in the same run. Its failure is pushed onto `diagnostics` and
-    /// its slot in the result is left empty, rather than stopping the whole run early.
+    /// its slot in the result is left empty, rather than stopping the whole run early. A deferred
+    /// node's slot is left empty too, with no diagnostic, since its args are not filled yet.
     pub(crate) fn prepare_stages(
         &self,
         registry: &PipelineRegistry,
@@ -104,6 +105,10 @@ impl CompiledGraph {
 
         for id in self.order() {
             let node = self.node(*id);
+            if node.is_deferred() {
+                continue;
+            }
+
             prepared[id.index()] = self.prepared_node(registry, node, diagnostics);
         }
 

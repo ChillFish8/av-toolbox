@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use av_toolbox_core::{BindInputsError, InputArgument, InputSignature, StageHandle};
+use av_toolbox_core::{BindInputsError, InputArgument, InputSignature, StageHandle, StageKind};
 
 use super::resolve::{Resolution, ResolvedStage};
-use crate::diagnostic::{input_path, stage_path};
-use crate::graph::{Edge, Node, NodeId, NodeParts};
-use crate::{Diagnostic, DiagnosticCode, Diagnostics, StageSpec};
+use crate::diagnostic::{args_path, input_path, stage_path};
+use crate::graph::{Edge, Node, NodeId, NodeParts, Reference};
+use crate::{DeferredArg, Diagnostic, DiagnosticCode, Diagnostics, StageSpec, suggest_name};
 
 /// Binds every resolved stage against its signature and turns it into a node.
 pub(crate) fn bind(
@@ -16,6 +16,7 @@ pub(crate) fn bind(
     let mut accepted: Vec<bool> = resolution.stages.iter().map(|stage| stage.is_some()).collect();
 
     check_signatures(specs, resolution, &mut accepted, diagnostics);
+    check_references(specs, resolution, &mut accepted, diagnostics);
     drop_broken_consumers(resolution, &mut accepted);
 
     let ids = assign_ids(&accepted);
@@ -125,6 +126,85 @@ fn describe(spec: &StageSpec, error: &BindInputsError, position: Option<usize>) 
     format!("the input {name} takes {expected}, but {producer} produces {found}")
 }
 
+/// Rejects any stage whose deferred args read a stage that is not defined or produces no output.
+fn check_references(
+    specs: &[StageSpec],
+    resolution: &Resolution<'_>,
+    accepted: &mut [bool],
+    diagnostics: &mut Diagnostics,
+) {
+    for (index, stage) in resolution.stages.iter().enumerate() {
+        let Some(stage) = stage else {
+            continue;
+        };
+
+        for deferred in &stage.spec.deferred {
+            let names = unique_stages(deferred);
+            for name in names {
+                let reported = reference_diagnostic(stage.spec, deferred, name, specs, &resolution.by_name);
+                let Some(diagnostic) = reported else {
+                    continue;
+                };
+
+                diagnostics.push(diagnostic);
+                accepted[index] = false;
+            }
+        }
+    }
+}
+
+/// Every stage `deferred` reads, listed once each in the order written.
+fn unique_stages(deferred: &DeferredArg) -> Vec<&str> {
+    let mut names: Vec<&str> = Vec::new();
+
+    for name in deferred.template.stages() {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+
+    names
+}
+
+/// Explains why `deferred` cannot read the stage called `name`, or `None` when it can.
+fn reference_diagnostic(
+    spec: &StageSpec,
+    deferred: &DeferredArg,
+    name: &str,
+    specs: &[StageSpec],
+    by_name: &HashMap<String, usize>,
+) -> Option<Diagnostic> {
+    let path = args_path(spec.kind, &spec.name.value);
+    let target = by_name.get(name).copied();
+
+    let Some(position) = target else {
+        let message = format!("no stage named {name} is defined");
+        let mut diagnostic = Diagnostic::error(
+            DiagnosticCode::UnknownStageReference,
+            path,
+            deferred.span,
+            message,
+        );
+
+        let known_names = by_name.keys().map(String::as_str);
+        if let Some(closest) = suggest_name(name, known_names) {
+            let note = format!("did you mean `{closest}`?");
+            diagnostic = diagnostic.with_note(note, deferred.span);
+        }
+
+        return Some(diagnostic);
+    };
+
+    if specs[position].kind != StageKind::Sink {
+        return None;
+    }
+
+    let message = format!("{name} is a sink, which produces no output");
+    let diagnostic = Diagnostic::error(DiagnosticCode::SinkHasNoOutput, path, deferred.span, message);
+
+    Some(diagnostic)
+}
+
 /// Drops any stage that reads a stage which was itself rejected, until nothing changes.
 fn drop_broken_consumers(resolution: &Resolution<'_>, accepted: &mut [bool]) {
     loop {
@@ -139,12 +219,7 @@ fn drop_broken_consumers(resolution: &Resolution<'_>, accepted: &mut [bool]) {
                 continue;
             };
 
-            let reads_a_rejected_stage = stage.spec.inputs.iter().any(|input| {
-                let target = resolution.by_name.get(&input.value.target).copied();
-                target.is_none_or(|position| !accepted[position])
-            });
-
-            if reads_a_rejected_stage {
+            if reads_a_rejected_stage(stage.spec, resolution, accepted) {
                 accepted[index] = false;
                 changed = true;
             }
@@ -154,6 +229,20 @@ fn drop_broken_consumers(resolution: &Resolution<'_>, accepted: &mut [bool]) {
             return;
         }
     }
+}
+
+/// Whether `spec` reads or references a stage that is undefined or was rejected.
+fn reads_a_rejected_stage(spec: &StageSpec, resolution: &Resolution<'_>, accepted: &[bool]) -> bool {
+    let inputs = spec.inputs.iter().map(|input| input.value.target.as_str());
+    let references = spec
+        .deferred
+        .iter()
+        .flat_map(|deferred| deferred.template.stages());
+
+    inputs.chain(references).any(|name| {
+        let target = resolution.by_name.get(name).copied();
+        target.is_none_or(|position| !accepted[position])
+    })
 }
 
 /// Numbers the surviving stages in declaration order.
@@ -185,6 +274,7 @@ fn build_nodes(resolution: &Resolution<'_>, accepted: &[bool], ids: &HashMap<usi
 
         let id = ids[&index];
         let inputs = build_edges(stage, resolution, ids);
+        let references = build_references(stage, resolution, ids);
 
         nodes.push(Node::new(NodeParts {
             id,
@@ -195,6 +285,8 @@ fn build_nodes(resolution: &Resolution<'_>, accepted: &[bool], ids: &HashMap<usi
             args_span: stage.spec.args.span,
             arg_spans: stage.spec.arg_spans.clone(),
             inputs,
+            deferred: stage.spec.deferred.clone(),
+            references,
             workers: stage.spec.workers,
             span: stage.spec.span,
             artefacts: stage.info.artefacts(),
@@ -234,6 +326,34 @@ fn build_edges(
     }
 
     edges
+}
+
+/// Binds every stage the deferred args read, listing each once at the first arg naming it.
+fn build_references(
+    stage: &ResolvedStage<'_>,
+    resolution: &Resolution<'_>,
+    ids: &HashMap<usize, NodeId>,
+) -> Vec<Reference> {
+    let mut references: Vec<Reference> = Vec::new();
+
+    for deferred in &stage.spec.deferred {
+        for name in deferred.template.stages() {
+            let position = resolution.by_name[name];
+            let source = ids[&position];
+
+            let already_bound = references.iter().any(|reference| reference.source == source);
+            if already_bound {
+                continue;
+            }
+
+            references.push(Reference {
+                source,
+                span: deferred.span,
+            });
+        }
+    }
+
+    references
 }
 
 /// Works out which signature param an input filled and the `Inputs` slot it lines up with.

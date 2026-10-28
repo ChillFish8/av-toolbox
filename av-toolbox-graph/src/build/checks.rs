@@ -47,8 +47,11 @@ fn walk(
     colours[id.index()] = Colour::OnStack;
     stack.push(id);
 
-    for edge in nodes[id.index()].inputs() {
-        let found = walk(nodes, edge.source(), colours, stack, diagnostics);
+    let node = &nodes[id.index()];
+    let inputs = node.inputs().iter().map(|edge| edge.source());
+    let references = node.references().iter().map(|reference| reference.source);
+    for source in inputs.chain(references) {
+        let found = walk(nodes, source, colours, stack, diagnostics);
         if found {
             return true;
         }
@@ -89,12 +92,21 @@ fn report_cycle(nodes: &[Node], repeated: NodeId, stack: &[NodeId], diagnostics:
                 diagnostic = diagnostic.with_note(note, edge.span());
             }
         }
+
+        for reference in member.references() {
+            if cycle.contains(&reference.source) {
+                let read = nodes[reference.source.index()].name();
+                let note = format!("{} reads the format of {read}", member.name());
+
+                diagnostic = diagnostic.with_note(note, reference.span);
+            }
+        }
     }
 
     diagnostics.push(diagnostic);
 }
 
-/// Warns about every stage in the root file that no sink depends on, frame or artefact.
+/// Warns about every stage in the root file that no sink depends on, through frames, artefacts or references.
 pub(crate) fn report_unused(graph: &CompiledGraph, diagnostics: &mut Diagnostics) {
     let mut reachable = vec![false; graph.len()];
     let producers = graph.artefact_producers();
@@ -107,9 +119,11 @@ pub(crate) fn report_unused(graph: &CompiledGraph, diagnostics: &mut Diagnostics
         }
 
         reachable[id.index()] = true;
-        for edge in graph.node(id).inputs() {
-            pending.push(edge.source());
-        }
+
+        let node = graph.node(id);
+        let inputs = node.inputs().iter().map(|edge| edge.source());
+        let references = node.references().iter().map(|reference| reference.source);
+        pending.extend(inputs.chain(references));
     }
 
     for node in graph.nodes() {
@@ -173,6 +187,8 @@ mod tests {
             args_span: Span::unknown(),
             arg_spans: ArgSpans::default(),
             inputs: edges,
+            deferred: Vec::new(),
+            references: Vec::new(),
             workers: None,
             span,
             artefacts: StageArtefacts::NONE,

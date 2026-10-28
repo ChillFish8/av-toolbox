@@ -18,7 +18,7 @@ use crate::demands::{NodeDemand, ProviderPlacement};
 use crate::diagnostic::stage_path;
 use crate::plan::ExecutionPlan;
 use crate::probes::NodeProbe;
-use crate::{ArgSpans, ArtefactSinkNode, Span};
+use crate::{ArgSpans, ArtefactSinkNode, DeferredArg, Span};
 
 /// A node's position in the graph.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -130,6 +130,14 @@ impl Edge {
     }
 }
 
+/// One stage reading another stage's natural format through a template in its args.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct Reference {
+    pub source: NodeId,
+    /// The deferred arg that first named the stage.
+    pub span: Span,
+}
+
 /// A node is a stage the pipeline declared, a crossing the graph inserted between two stages on
 /// different sides, or a provider the graph inserted to serve what stages demand.
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +186,8 @@ pub(crate) struct NodeParts {
     pub(crate) args_span: Span,
     pub(crate) arg_spans: ArgSpans,
     pub(crate) inputs: Vec<Edge>,
+    pub(crate) deferred: Vec<DeferredArg>,
+    pub(crate) references: Vec<Reference>,
     pub(crate) workers: Option<usize>,
     pub(crate) span: Span,
     pub(crate) artefacts: StageArtefacts,
@@ -194,6 +204,10 @@ pub struct Node {
     args_span: Span,
     arg_spans: ArgSpans,
     inputs: Vec<Edge>,
+    /// The args still holding templates that read other stages.
+    deferred: Vec<DeferredArg>,
+    /// Every stage the deferred args read, listed once each.
+    references: Vec<Reference>,
     consumers: Vec<NodeId>,
     workers: Option<usize>,
     span: Span,
@@ -227,6 +241,8 @@ impl Node {
             args_span: parts.args_span,
             arg_spans: parts.arg_spans,
             inputs: parts.inputs,
+            deferred: parts.deferred,
+            references: parts.references,
             consumers: Vec::new(),
             workers: parts.workers,
             span: parts.span,
@@ -288,6 +304,21 @@ impl Node {
     /// The inputs in the order the definition wrote them.
     pub fn inputs(&self) -> &[Edge] {
         &self.inputs
+    }
+
+    /// The args still holding templates that read other stages.
+    pub fn deferred(&self) -> &[DeferredArg] {
+        &self.deferred
+    }
+
+    /// Every stage this node's deferred args read.
+    pub fn references(&self) -> &[Reference] {
+        &self.references
+    }
+
+    /// Whether some args can only be filled once other stages' formats are known.
+    pub fn is_deferred(&self) -> bool {
+        !self.deferred.is_empty()
     }
 
     /// Every read of this node's output, listed once per edge.
@@ -447,7 +478,7 @@ impl CompiledGraph {
             .collect()
     }
 
-    /// Drops nodes and points every edge that read a dropped node at its replacement.
+    /// Drops nodes and points every edge or reference that read a dropped node at its replacement.
     ///
     /// Surviving nodes are reindexed, so every [NodeId](crate::NodeId) held across this call is
     /// stale afterwards. A stored plan is keyed by those same stale ids, so it does not survive
@@ -477,6 +508,8 @@ impl CompiledGraph {
 
                 edge.set_source(reindexed);
             }
+
+            remap_references(&mut node.references, replacements, &moved);
         }
 
         for sink in &mut self.artefact_sinks {
@@ -509,6 +542,8 @@ impl CompiledGraph {
             args_span: source.span(),
             arg_spans: ArgSpans::default(),
             inputs: vec![Edge::new(None, None, 0, producer, source.span())],
+            deferred: Vec::new(),
+            references: Vec::new(),
             consumers: Vec::new(),
             workers: None,
             span: source.span(),
@@ -544,6 +579,8 @@ impl CompiledGraph {
             args_span: stage.span,
             arg_spans: ArgSpans::default(),
             inputs: vec![Edge::new(None, Some(stage.input), 0, producer, source.span())],
+            deferred: Vec::new(),
+            references: Vec::new(),
             consumers: Vec::new(),
             workers: None,
             span: stage.span,
@@ -589,6 +626,8 @@ impl CompiledGraph {
             args_span: provider.span,
             arg_spans: ArgSpans::default(),
             inputs: vec![input],
+            deferred: Vec::new(),
+            references: Vec::new(),
             consumers: Vec::new(),
             workers: None,
             span: provider.span,
@@ -625,6 +664,16 @@ impl CompiledGraph {
 
     pub(crate) fn redirect(&mut self, consumer: NodeId, edge: usize, source: NodeId) {
         self.nodes[consumer.index()].inputs[edge].set_source(source);
+    }
+
+    /// Sets the filled args and clears the node's deferred args and references.
+    #[cfg_attr(not(test), expect(dead_code, reason = "only tests fill args so far"))]
+    pub(crate) fn fill_args(&mut self, id: NodeId, args: Value) {
+        let node = &mut self.nodes[id.index()];
+
+        node.args = args;
+        node.deferred.clear();
+        node.references.clear();
     }
 
     pub(crate) fn set_residency(&mut self, id: NodeId, residency: Residency) {
@@ -677,11 +726,57 @@ fn follow_replacements(replacements: &HashMap<NodeId, NodeId>, node: NodeId) -> 
     current
 }
 
-/// Orders the nodes so every node follows the nodes it reads.
+/// Points each reference at the reindexed survivor of its source, keeping one per source.
+fn remap_references(
+    references: &mut Vec<Reference>,
+    replacements: &HashMap<NodeId, NodeId>,
+    moved: &HashMap<NodeId, NodeId>,
+) {
+    let mut remapped: Vec<Reference> = Vec::with_capacity(references.len());
+
+    for reference in references.drain(..) {
+        let survivor = follow_replacements(replacements, reference.source);
+        let source = moved
+            .get(&survivor)
+            .copied()
+            .expect("a reference reads a dropped node that has no replacement");
+
+        let already_remapped = remapped.iter().any(|kept| kept.source == source);
+        if already_remapped {
+            continue;
+        }
+
+        remapped.push(Reference {
+            source,
+            span: reference.span,
+        });
+    }
+
+    *references = remapped;
+}
+
+/// Every node that references each node, indexed by the referenced node.
+fn referencing_nodes(nodes: &[Node]) -> Vec<Vec<NodeId>> {
+    let mut readers: Vec<Vec<NodeId>> = vec![Vec::new(); nodes.len()];
+
+    for node in nodes {
+        for reference in node.references() {
+            readers[reference.source.index()].push(node.id());
+        }
+    }
+
+    readers
+}
+
+/// Orders the nodes so every node follows the nodes it reads or references.
 ///
 /// Ready nodes are taken in index order, so the same nodes always produce the same order.
 fn topological_order(nodes: &[Node]) -> Vec<NodeId> {
-    let mut remaining: Vec<usize> = nodes.iter().map(|node| node.inputs().len()).collect();
+    let readers = referencing_nodes(nodes);
+    let mut remaining: Vec<usize> = nodes
+        .iter()
+        .map(|node| node.inputs().len() + node.references().len())
+        .collect();
     let mut ready: BinaryHeap<Reverse<usize>> = remaining
         .iter()
         .enumerate()
@@ -693,7 +788,8 @@ fn topological_order(nodes: &[Node]) -> Vec<NodeId> {
     while let Some(Reverse(index)) = ready.pop() {
         order.push(NodeId::new(index));
 
-        for consumer in nodes[index].consumers() {
+        let consumers = nodes[index].consumers().iter().chain(&readers[index]);
+        for consumer in consumers {
             let count = &mut remaining[consumer.index()];
             *count -= 1;
 
@@ -735,6 +831,8 @@ pub(crate) mod tests {
             args_span: Span::unknown(),
             arg_spans: ArgSpans::default(),
             inputs: edges,
+            deferred: Vec::new(),
+            references: Vec::new(),
             workers: None,
             span: Span::unknown(),
             artefacts: StageArtefacts::NONE,
