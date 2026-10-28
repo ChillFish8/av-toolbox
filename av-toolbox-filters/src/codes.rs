@@ -1,4 +1,4 @@
-use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::depth::{Element, Source};
 use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_cubek::values::{
     FloatCodes,
@@ -140,9 +140,32 @@ impl CodeValues {
             Storage::Integer(element) => narrow(client, dispatch, values, target, element, self.peak()),
             Storage::Float => {
                 let codes = self.float_codes(channel);
-                codes_to_float(client, dispatch, values, target, codes);
+                codes_to_float(client, dispatch, values, target, Source::F32, codes);
             },
         }
+    }
+
+    /// Converts integer samples in `source` straight into F32 samples in `target`.
+    ///
+    /// It matches a widen and a store in one pass.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless integer samples are stored as F32. Planes kept in their own sample are shared instead.
+    pub(crate) fn convert<R: Runtime>(
+        &self,
+        client: &ComputeClient<R>,
+        dispatch: &impl Dispatch,
+        source: DevicePlane<'_>,
+        target: DevicePlane<'_>,
+        channel: Channel,
+    ) {
+        let (Storage::Integer(element), Storage::Float) = (self.input, self.output) else {
+            panic!("only integer samples stored as F32 are converted, not {self:?}");
+        };
+
+        let codes = self.float_codes(channel);
+        codes_to_float(client, dispatch, source, target, element.into(), codes);
     }
 
     fn float_codes(&self, channel: Channel) -> FloatCodes {

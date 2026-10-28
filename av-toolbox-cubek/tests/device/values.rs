@@ -1,4 +1,4 @@
-use av_toolbox_cubek::depth::Element;
+use av_toolbox_cubek::depth::{Element, Source};
 use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_cubek::testing::reference_narrow;
 use av_toolbox_cubek::values::{
@@ -8,7 +8,6 @@ use av_toolbox_cubek::values::{
     float_to_whole_codes,
     narrow,
     offset,
-    unit_to_float,
     widen,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
@@ -173,7 +172,6 @@ enum Mapping {
     Codes,
     WholeCodes,
     Float,
-    Unit,
 }
 
 struct MapCodes {
@@ -201,8 +199,16 @@ impl BuildTask for MapCodes {
             Mapping::WholeCodes => {
                 float_to_whole_codes(client, &sizing, input_plane, output_plane, self.codes);
             },
-            Mapping::Float => codes_to_float(client, &sizing, input_plane, output_plane, self.codes),
-            Mapping::Unit => unit_to_float(client, &sizing, input_plane, output_plane, self.codes),
+            Mapping::Float => {
+                codes_to_float(
+                    client,
+                    &sizing,
+                    input_plane,
+                    output_plane,
+                    Source::F32,
+                    self.codes,
+                );
+            },
         }
 
         read_f32(client, &output)
@@ -300,9 +306,62 @@ fn unit_floats_land_on_their_float_samples() {
     let chroma = FloatCodes::new(8, SampleRange::Limited, true);
     let units = vec![16.0 / 255.0, 235.0 / 255.0, 0.0, 1.0];
 
-    let luma_samples = mapped(units, luma, Mapping::Unit);
-    let chroma_samples = mapped(vec![128.0 / 255.0, 16.0 / 255.0], chroma, Mapping::Unit);
+    let luma_samples = codes_floats(units, luma.per_unit());
+    let chroma_samples = codes_floats(vec![128.0 / 255.0, 16.0 / 255.0], chroma.per_unit());
 
     assert_close(&luma_samples, &[0.0, 1.0, -16.0 / 219.0, 239.0 / 219.0], 1e-6);
     assert_close(&chroma_samples, &[0.0, -0.5], 1e-6);
+}
+
+struct IntegerCodes {
+    input: Vec<u16>,
+    element: Element,
+    codes: FloatCodes,
+}
+
+impl BuildTask for IntegerCodes {
+    type Output = Vec<f32>;
+
+    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        let client = build.client();
+        let frame_context = build.frame_context();
+        let sizing = Sizing(frame_context);
+        let bytes = to_bytes(&self.input, self.element);
+        let samples = self.input.len() as u32;
+        let output_bytes = self.input.len() * size_of::<f32>();
+
+        let input = upload_u8(client, &bytes);
+        let output = empty(client, output_bytes);
+        let input_plane = plane(&input, samples, 1);
+        let output_plane = plane(&output, samples, 1);
+        let source = Source::from(self.element);
+        codes_to_float(client, &sizing, input_plane, output_plane, source, self.codes);
+
+        read_f32(client, &output)
+    }
+}
+
+#[test]
+fn integer_codes_land_where_widened_codes_do() {
+    let cases = [
+        (Element::U8, 8, vec![0u16, 16, 128, 235, 240, 255]),
+        (Element::U16, 10, vec![0u16, 64, 512, 940, 960, 1023]),
+    ];
+
+    for (element, bits, input) in cases {
+        for chroma in [false, true] {
+            let codes = FloatCodes::new(bits, SampleRange::Limited, chroma);
+            let widened = input.iter().map(|code| f32::from(*code)).collect();
+            let expected = codes_floats(widened, codes);
+            let task = IntegerCodes {
+                input: input.clone(),
+                element,
+                codes,
+            };
+
+            let converted = backend().build(task);
+
+            assert_eq!(converted, expected, "{bits}-bit, chroma {chroma}");
+        }
+    }
 }

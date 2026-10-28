@@ -44,7 +44,7 @@ use serde::Deserialize;
 use crate::checks::accepts_integer_or_f32_frames;
 use crate::codes::CodeValues;
 use crate::resize::{KernelChoice, samples_between};
-use crate::scratch::{Scratch, device_plane};
+use crate::scratch::device_plane;
 use crate::sizing::Sizing;
 
 const STAGE: &str = "resample/chroma";
@@ -439,8 +439,6 @@ impl<R: Runtime> ChromaResampler<R> {
             return Err(missing_channel());
         };
 
-        let values = Scratch::new::<f32>(context, width, height);
-        let values_plane = values.plane();
         let sizing = Sizing(context);
 
         // Safety: the luma plane is read with its own sample format as the element type.
@@ -449,8 +447,7 @@ impl<R: Runtime> ChromaResampler<R> {
         // Safety: the output plane is written with the output's sample format as the element type.
         let target_plane = unsafe { device_plane(output) };
 
-        codes.widen(&self.client, &sizing, source_plane, values_plane, Channel::Y);
-        codes.store(&self.client, &sizing, values_plane, target_plane, Channel::Y);
+        codes.convert(&self.client, &sizing, source_plane, target_plane, Channel::Y);
 
         Ok(output.clone())
     }

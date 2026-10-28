@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use av_denoise_core::{ChannelMode, Engine, Geometry, Nl4d, Nlmeans};
 use av_toolbox_core::{Artefact, Filter, Inputs, StageError, StageInstance, WantedArtefacts};
-use av_toolbox_cubek::depth::Element;
-use av_toolbox_cubek::values::{FloatCodes, offset, unit_to_float};
+use av_toolbox_cubek::depth::{Element, Source};
+use av_toolbox_cubek::values::{FloatCodes, codes_to_float, offset};
 use av_toolbox_cubek::words::copy_plane;
 use av_toolbox_gpu::{
     BuildContext,
@@ -28,7 +28,6 @@ use super::planes::{EngineSpec, engine_sample, engine_specs, needs_padding};
 use crate::bits::bits_of;
 use crate::codes::{CodeValues, sample_range};
 use crate::masked::INPUT;
-use crate::scratch::Scratch;
 use crate::sizing::Sizing;
 
 fn refused(stage: &str, error: av_denoise_core::Error) -> StageError {
@@ -604,7 +603,8 @@ impl<R: Runtime> AvdFilter<R> {
         // Safety: the output is an F32 plane of `samples` values.
         let target = unsafe { av_toolbox_cubek::DevicePlane::new(output.buffer().handle(), samples, 1) };
 
-        unit_to_float(&self.client, &sizing, source, target, codes);
+        let unit_codes = codes.per_unit();
+        codes_to_float(&self.client, &sizing, source, target, Source::F32, unit_codes);
     }
 
     /// The plane at `index` of `held`, which no engine covers, as F32.
@@ -625,7 +625,6 @@ impl<R: Runtime> AvdFilter<R> {
         let target = self.fresh_plane(context, dimensions, meta)?;
         let channel = self.format.channels()[index];
         let sizing = Sizing(context);
-        let values = Scratch::new::<f32>(context, width, height);
 
         // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
         let source_plane =
@@ -636,9 +635,7 @@ impl<R: Runtime> AvdFilter<R> {
             unsafe { av_toolbox_cubek::DevicePlane::new(target.buffer().handle(), width, height) };
 
         self.codes
-            .widen(&self.client, &sizing, source_plane, values.plane(), channel);
-        self.codes
-            .store(&self.client, &sizing, values.plane(), target_plane, channel);
+            .convert(&self.client, &sizing, source_plane, target_plane, channel);
 
         Ok(target)
     }

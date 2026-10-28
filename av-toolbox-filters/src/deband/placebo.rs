@@ -408,22 +408,22 @@ impl<R: Runtime> Debander<R> {
         // Safety: a frame's plane holds exactly `width * height` samples of its sample format.
         let target_plane = unsafe { DevicePlane::new(target_handle, width, height) };
 
-        let values = Scratch::new::<f32>(context, width, height);
-        let values_plane = values.plane();
         let sizing = Sizing(context);
 
         if settings.skipped {
-            self.codes.widen(
+            self.codes.convert(
                 &self.client,
                 &sizing,
                 source_plane,
-                values_plane,
+                target_plane,
                 settings.channel,
             );
-        } else {
-            self.deband_values(context, source_plane, values_plane, settings, plane_index, meta);
+            return Ok(output.clone());
         }
 
+        let values = Scratch::new::<f32>(context, width, height);
+        let values_plane = values.plane();
+        self.deband_values(context, source_plane, values_plane, settings, plane_index, meta);
         self.codes.store(
             &self.client,
             &sizing,

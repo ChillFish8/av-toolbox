@@ -2,7 +2,7 @@
 // by name.
 use cubecl::prelude::*;
 
-use crate::depth::Element;
+use crate::depth::{Element, Source};
 use crate::matrix::{MatrixSamples, SampleRange, scaling};
 use crate::{DevicePlane, Dispatch};
 
@@ -70,21 +70,12 @@ fn float_to_whole_codes_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn codes_to_float_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f32, scale: f32) {
+fn codes_to_float_kernel<I: Numeric>(input: &Array<I>, output: &mut Array<f32>, offset: f32, scale: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
 
-    output[ABSOLUTE_POS] = (input[ABSOLUTE_POS] - offset) / scale;
-}
-
-#[cube(launch_unchecked)]
-fn unit_to_float_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f32, scale: f32, peak: f32) {
-    if ABSOLUTE_POS >= output.len() {
-        terminate!();
-    }
-
-    let code = input[ABSOLUTE_POS] * peak;
+    let code = f32::cast_from(input[ABSOLUTE_POS]);
 
     output[ABSOLUTE_POS] = (code - offset) / scale;
 }
@@ -198,6 +189,15 @@ impl FloatCodes {
             peak,
         }
     }
+
+    /// The same mapping for floats holding `code / peak` rather than codes.
+    pub fn per_unit(self) -> Self {
+        Self {
+            offset: self.offset / self.peak,
+            scale: self.scale / self.peak,
+            peak: 1.0,
+        }
+    }
 }
 
 /// Maps float samples to f32 code values held to `0..=peak`, without rounding. A NaN sample reads as 0.
@@ -261,7 +261,7 @@ pub fn float_to_whole_codes<R: Runtime>(
     }
 }
 
-/// Maps f32 code values back to float samples, neither rounded nor clamped.
+/// Maps code values held as `source` samples back to float samples, neither rounded nor clamped.
 ///
 /// It divides by the scale rather than multiplying by its inverse, which keeps black and white on 0 and 1.
 pub fn codes_to_float<R: Runtime>(
@@ -269,30 +269,17 @@ pub fn codes_to_float<R: Runtime>(
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
+    source: Source,
     codes: FloatCodes,
 ) {
-    let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
-    let cubes = dispatch.cube_count(samples);
-    let unit = dispatch.cube_dim();
-
-    // Safety: the input and the output each hold `samples` f32 values.
-    unsafe {
-        codes_to_float_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            input_array,
-            output_array,
-            codes.offset,
-            codes.scale,
-        );
+    match source {
+        Source::U8 => launch_codes_to_float::<u8, R>(client, dispatch, input, output, codes),
+        Source::U16 => launch_codes_to_float::<u16, R>(client, dispatch, input, output, codes),
+        Source::F32 => launch_codes_to_float::<f32, R>(client, dispatch, input, output, codes),
     }
 }
 
-/// Maps floats holding `code / peak` onto full range float samples, neither rounded nor clamped.
-pub fn unit_to_float<R: Runtime>(
+fn launch_codes_to_float<I: Numeric, R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
@@ -305,9 +292,9 @@ pub fn unit_to_float<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: the input and the output each hold `samples` f32 values.
+    // Safety: the input holds `samples` values of `I` and the output as many f32 values.
     unsafe {
-        unit_to_float_kernel::launch_unchecked::<R>(
+        codes_to_float_kernel::launch_unchecked::<I, R>(
             client,
             cubes,
             unit,
@@ -315,7 +302,6 @@ pub fn unit_to_float<R: Runtime>(
             output_array,
             codes.offset,
             codes.scale,
-            codes.peak,
         );
     }
 }

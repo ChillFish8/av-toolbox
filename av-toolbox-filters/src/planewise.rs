@@ -117,9 +117,6 @@ impl Planewise {
             return Err(missing_channel(self.stage, Channel::Y));
         };
 
-        let input_values = Scratch::new::<f32>(context, width, height);
-        let input_plane = input_values.plane();
-
         let source_handle = source.buffer().handle();
         let target_handle = output.buffer().handle();
 
@@ -131,14 +128,16 @@ impl Planewise {
 
         let channel = self.format.channels()[plane_index];
 
-        self.codes
-            .widen(client, &sizing, source_plane, input_plane, channel);
-
         let Some(filter) = filter else {
             self.codes
-                .store(client, &sizing, input_plane, target_plane, channel);
+                .convert(client, &sizing, source_plane, target_plane, channel);
             return Ok(output.clone());
         };
+
+        let input_values = Scratch::new::<f32>(context, width, height);
+        let input_plane = input_values.plane();
+        self.codes
+            .widen(client, &sizing, source_plane, input_plane, channel);
 
         let output_values = Scratch::new::<f32>(context, width, height);
         let output_plane = output_values.plane();

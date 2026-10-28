@@ -69,7 +69,7 @@ use crate::cnn::{
 };
 use crate::deblock::staging::{Staging, centre_of, stage_in, stage_out};
 use crate::planes::ChannelName;
-use crate::scratch::Scratch;
+use crate::scratch::{Scratch, device_plane};
 use crate::selection::{PlaneDefault, selected_planes};
 use crate::sizing::Sizing;
 
@@ -717,25 +717,20 @@ impl<R: Runtime> Deblocker<R> {
         source: &Plane,
         meta: &FrameMeta,
     ) -> Result<Plane, StageError> {
-        if matches!(self.staging, Staging::Float) {
+        let Staging::Integer { codes, .. } = self.staging else {
             return Ok(source.clone());
-        }
+        };
+
+        let target = self.fresh_plane(context, source, meta)?;
+        let sizing = Sizing(context);
 
         // Safety: `staging` was made from the clip's sample format, which every source plane holds.
-        let values = unsafe { stage_in(&self.client, context, self.staging, source, 0.0) };
-        let target = self.fresh_plane(context, source, meta)?;
+        let source_plane = unsafe { device_plane(source) };
 
         // Safety: `fresh_plane` allocates F32 planes.
-        unsafe {
-            stage_out(
-                &self.client,
-                context,
-                self.staging,
-                values.plane(),
-                &target,
-                channel,
-            );
-        }
+        let target_plane = unsafe { device_plane(&target) };
+
+        codes.convert(&self.client, &sizing, source_plane, target_plane, channel);
 
         Ok(target)
     }
