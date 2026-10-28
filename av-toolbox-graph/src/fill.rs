@@ -7,8 +7,11 @@ use serde_json::Value;
 use crate::diagnostic::args_path;
 use crate::graph::{CompiledGraph, Node, NodeId, Reference};
 use crate::natural::{lineage, natural_formats};
+use crate::spec::holds;
 use crate::template::{Literal, Scope, TemplateError, field_of};
 use crate::{DeferredArg, Diagnostic, DiagnosticCode, Diagnostics};
+
+const FILLED_FROM: &str = "filled from this template";
 
 /// Fills every deferred node in dependency order, returning the nodes filled.
 ///
@@ -53,6 +56,31 @@ pub fn fill_references(
     }
 
     Ok(filled)
+}
+
+/// Adds a note at each template that filled `node`.
+pub(crate) fn note_templates(node: &Node, diagnostic: Diagnostic) -> Diagnostic {
+    let mut noted = diagnostic;
+
+    for template in node.filled_from() {
+        noted = noted.with_note(FILLED_FROM, template.span);
+    }
+
+    noted
+}
+
+/// Adds a note at each template that filled `node` at or around `pointer`.
+pub(crate) fn note_templates_at(node: &Node, pointer: &str, diagnostic: Diagnostic) -> Diagnostic {
+    let mut noted = diagnostic;
+
+    for template in node.filled_from() {
+        let involved = holds(&template.pointer, pointer) || holds(pointer, &template.pointer);
+        if involved {
+            noted = noted.with_note(FILLED_FROM, template.span);
+        }
+    }
+
+    noted
 }
 
 fn reads_unfilled(graph: &CompiledGraph, node: &Node, unfilled: &HashSet<NodeId>) -> bool {

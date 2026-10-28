@@ -111,7 +111,7 @@ impl ArgSpans {
     }
 }
 
-fn holds(recorded: &str, pointer: &str) -> bool {
+pub(crate) fn holds(recorded: &str, pointer: &str) -> bool {
     let Some(rest) = pointer.strip_prefix(recorded) else {
         return false;
     };

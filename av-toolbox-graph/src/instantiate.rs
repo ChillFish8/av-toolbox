@@ -23,6 +23,7 @@ use av_toolbox_gpu::{Backend, HostSide, ResolvedFormats};
 
 use crate::demands::note_demanders;
 use crate::diagnostic::{args_path, stage_path};
+use crate::fill::{note_templates, note_templates_at};
 use crate::graph::{CompiledGraph, Edge, Node, NodeId, NodeRole};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics, Region, SolvedFormats};
 
@@ -359,19 +360,22 @@ fn report(graph: &CompiledGraph, node: &Node, error: BuildStageError, diagnostic
             node.span(),
             describe(&error),
         );
-        let noted = note_demanders(graph, node, diagnostic);
+        let demanders_noted = note_demanders(graph, node, diagnostic);
+        let noted = note_templates(node, demanders_noted);
         diagnostics.push(noted);
 
         return;
     };
 
     let ArgsError::SchemaViolations(violations) = source else {
-        diagnostics.push(Diagnostic::error(
+        let diagnostic = Diagnostic::error(
             DiagnosticCode::InvalidArgs,
             args_path(node.kind(), node.name()),
             node.args_span(),
             describe(&error),
-        ));
+        );
+        let noted = note_templates(node, diagnostic);
+        diagnostics.push(noted);
 
         return;
     };
@@ -388,12 +392,9 @@ fn report(graph: &CompiledGraph, node: &Node, error: BuildStageError, diagnostic
         let fallback = node.args_span();
         let span = narrowed.unwrap_or(fallback);
 
-        diagnostics.push(Diagnostic::error(
-            DiagnosticCode::InvalidArgs,
-            path,
-            span,
-            violation.message(),
-        ));
+        let diagnostic = Diagnostic::error(DiagnosticCode::InvalidArgs, path, span, violation.message());
+        let noted = note_templates_at(node, pointer, diagnostic);
+        diagnostics.push(noted);
     }
 }
 
@@ -422,7 +423,9 @@ fn settle_stage(node: &Node, stage: &mut PreparedStage) -> Result<(), StageError
 fn settle_failed(node: &Node, error: StageError) -> Diagnostic {
     let message = format!("`{}` could not use what its probes found: {error}", node.name());
 
-    Diagnostic::error(DiagnosticCode::ProbeFailed, node.path(), node.span(), message)
+    let diagnostic = Diagnostic::error(DiagnosticCode::ProbeFailed, node.path(), node.span(), message);
+
+    note_templates(node, diagnostic)
 }
 
 /// Diagnostics raised while preparing a graph need no device, so these tests join the fast suite

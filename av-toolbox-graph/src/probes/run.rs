@@ -58,13 +58,24 @@ struct Answer {
 
 type JobResult = (NodeId, Result<Vec<Answer>, StageError>);
 
-fn has_probes(graph: &CompiledGraph) -> bool {
-    graph.nodes().iter().any(|node| !node.probes().is_empty())
+fn has_probes(graph: &CompiledGraph, nodes: &[NodeId]) -> bool {
+    nodes.iter().any(|id| !graph.node(*id).probes().is_empty())
 }
 
 /// Runs every recorded probe against the sources it reaches, and stores what each stage's probes found.
 pub fn run_probes(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Result<(), Diagnostics> {
-    if !has_probes(graph) {
+    let nodes = graph.filled_order();
+    run_probes_for(graph, registry, &nodes)
+}
+
+/// Runs the probes recorded on each node in `nodes` against the sources they reach, and stores
+/// what each found.
+pub fn run_probes_for(
+    graph: &mut CompiledGraph,
+    registry: &PipelineRegistry,
+    nodes: &[NodeId],
+) -> Result<(), Diagnostics> {
+    if !has_probes(graph, nodes) {
         return Ok(());
     }
 
@@ -74,7 +85,7 @@ pub fn run_probes(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Res
         return Err(diagnostics);
     }
 
-    let mut asked = asked_probes(graph);
+    let mut asked = asked_probes(graph, nodes);
     let jobs = jobs_for(graph, registry, &prepared, &asked, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
@@ -105,10 +116,10 @@ pub fn run_probes(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Res
     Ok(())
 }
 
-fn asked_probes(graph: &CompiledGraph) -> Vec<Asked> {
+fn asked_probes(graph: &CompiledGraph, nodes: &[NodeId]) -> Vec<Asked> {
     let mut asked = Vec::new();
 
-    for id in graph.order() {
+    for id in nodes {
         let node = graph.node(*id);
         for (index, probe) in node.probes().iter().enumerate() {
             let Some(edge) = bound_edge(node, probe.input) else {

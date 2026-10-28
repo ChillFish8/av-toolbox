@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
 
 use crate::demands::note_demanders;
 use crate::diagnostic::{input_path, stage_path};
+use crate::fill::note_templates;
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 
@@ -764,7 +765,8 @@ impl Solver<'_> {
             node.span(),
             error.to_string(),
         );
-        let noted = note_demanders(self.graph, node, diagnostic);
+        let demanders_noted = note_demanders(self.graph, node, diagnostic);
+        let noted = note_templates(node, demanders_noted);
 
         self.diagnostics.push(noted);
     }

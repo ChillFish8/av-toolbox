@@ -57,7 +57,7 @@ mod widen;
 pub use self::artefacts::ArtefactSinkNode;
 pub use self::build::{Built, build};
 pub use self::chroma::settle_mask_planes;
-pub use self::demands::{NodeDemand, ProviderPlacement, ServedLayer, satisfy_demands};
+pub use self::demands::{NodeDemand, ProviderPlacement, ServedLayer, satisfy_demands, satisfy_demands_for};
 pub use self::diagnostic::{Diagnostic, DiagnosticCode, Diagnostics, Note, Severity};
 pub use self::fill::fill_references;
 pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, NodeRole, Reference, Sharing};
@@ -74,7 +74,7 @@ pub use self::optimise::{
 };
 pub use self::output_depth::inject_output_depth;
 pub use self::plan::{ExecutionPlan, Narrowed, NodePlan, Region, RegionId, Routing, plan};
-pub use self::probes::{NodeProbe, record_probes, run_probes};
+pub use self::probes::{NodeProbe, record_probes, record_probes_for, run_probes, run_probes_for};
 pub use self::render::{RenderOptions, render_ascii, render_html};
 pub use self::residency::place_transfers;
 pub use self::solve::{SolvedFormats, Widen, solve};

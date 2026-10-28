@@ -3,7 +3,7 @@ mod run;
 
 use av_toolbox_core::{AnyProbe, PipelineRegistry, PreparedStage};
 
-pub use self::run::run_probes;
+pub use self::run::{run_probes, run_probes_for};
 use crate::demands::bound_edge;
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
@@ -31,13 +31,23 @@ fn unknown_probe(node: &Node, probe: &AnyProbe) -> Diagnostic {
 
 /// Records on each node the probes its stage makes of bound inputs.
 pub fn record_probes(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Result<(), Diagnostics> {
+    let nodes = graph.filled_order();
+    record_probes_for(graph, registry, &nodes)
+}
+
+/// Records on each node in `nodes` the probes its stage makes of bound inputs.
+pub fn record_probes_for(
+    graph: &mut CompiledGraph,
+    registry: &PipelineRegistry,
+    nodes: &[NodeId],
+) -> Result<(), Diagnostics> {
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
 
-    let recorded = recorded_probes(graph, registry, &prepared, &mut diagnostics);
+    let recorded = recorded_probes(graph, registry, &prepared, nodes, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
@@ -53,11 +63,12 @@ fn recorded_probes(
     graph: &CompiledGraph,
     registry: &PipelineRegistry,
     prepared: &[Option<PreparedStage>],
+    nodes: &[NodeId],
     diagnostics: &mut Diagnostics,
 ) -> Vec<(NodeId, Vec<NodeProbe>)> {
     let mut recorded = Vec::new();
 
-    for id in graph.order() {
+    for id in nodes {
         let Some(stage) = prepared[id.index()].as_ref() else {
             continue;
         };

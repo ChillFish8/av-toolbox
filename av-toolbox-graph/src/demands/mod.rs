@@ -121,6 +121,13 @@ struct Placements {
 
 /// Inserts a provider for every group of demands that place themselves behind the same node, and
 /// gives each demanding node its layer.
+pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Result<(), Diagnostics> {
+    let nodes = graph.filled_order();
+    satisfy_demands_for(graph, registry, &nodes)
+}
+
+/// Inserts a provider for every group of demands the stages in `nodes` make, and gives each
+/// demanding node its layer.
 ///
 /// Each demand is traced upstream to its source, following a node's chunk authority where it has
 /// several inputs. The demand's provider picks an edge on that path. Demands of one kind placed
@@ -132,19 +139,29 @@ struct Placements {
 /// whose layers or edges changed is asked again, and its new demands replace its old ones. A demand
 /// that would make a provider serve itself, directly or through others, is refused. The providers
 /// behind one node are stacked so each sits after every provider it demands.
-pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Result<(), Diagnostics> {
+///
+/// Only demands from `nodes` share providers with each other.
+pub fn satisfy_demands_for(
+    graph: &mut CompiledGraph,
+    registry: &PipelineRegistry,
+    nodes: &[NodeId],
+) -> Result<(), Diagnostics> {
     let mut diagnostics = Diagnostics::new();
     let prepared = graph.prepare_stages(registry, &mut diagnostics);
     if diagnostics.has_errors() {
         return Err(diagnostics);
     }
 
-    let mut asked = collect_demands(graph, &prepared);
+    let mut asked = collect_demands(graph, &prepared, nodes);
     if asked.is_empty() {
         return Ok(());
     }
 
-    let mut placements = Placements::default();
+    let next_layer = next_free_layer(graph);
+    let mut placements = Placements {
+        next_layer,
+        ..Placements::default()
+    };
     let mut before = placements.snapshot();
     let mut reasked = Vec::new();
     loop {
@@ -181,6 +198,25 @@ pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -
     record_demands(graph, registry, &prepared, &placements, &inserted);
 
     Ok(())
+}
+
+/// One past the highest layer any node in `graph` already serves or reads.
+fn next_free_layer(graph: &CompiledGraph) -> u32 {
+    let mut next = 0;
+
+    for node in graph.nodes() {
+        for demand in node.demands() {
+            next = next.max(demand.layer.0 + 1);
+        }
+
+        if let NodeRole::Provider(placement) = node.role() {
+            for served in &placement.layers {
+                next = next.max(served.layer.0 + 1);
+            }
+        }
+    }
+
+    next
 }
 
 /// Adds notes to `diagnostic` naming what `node` reads and how each demand it serves reached it,
@@ -265,11 +301,15 @@ fn chain_text(kind: DemandKind, names: &[String]) -> String {
     format!("`{}` {}", kind.name(), links.join(", "))
 }
 
-/// Every demand every stage makes on an input it has bound, in the graph's order.
-fn collect_demands(graph: &CompiledGraph, prepared: &[Option<PreparedStage>]) -> Vec<Asked> {
+/// Every demand each stage in `nodes` makes on an input it has bound, in the order given.
+fn collect_demands(
+    graph: &CompiledGraph,
+    prepared: &[Option<PreparedStage>],
+    nodes: &[NodeId],
+) -> Vec<Asked> {
     let mut asked = Vec::new();
 
-    for id in graph.order() {
+    for id in nodes {
         let Some(stage) = prepared[id.index()].as_ref() else {
             continue;
         };

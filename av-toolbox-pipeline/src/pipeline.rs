@@ -2,24 +2,30 @@ use av_toolbox_core::{PipelineRegistry, StageKind};
 use av_toolbox_gpu::Backend;
 use av_toolbox_graph::{
     CompiledGraph,
+    DeadStageElimination,
     Diagnostic,
     NodeId,
     NodeRole,
+    OptimisationPass,
     RenderOptions,
     SolvedFormats,
     Span,
     StageSpec,
     default_passes,
+    fill_references,
     inject_output_depth,
     insert_widens,
     optimise,
     place_transfers,
     plan,
     record_probes,
+    record_probes_for,
     render_ascii,
     render_html,
     run_probes,
+    run_probes_for,
     satisfy_demands,
+    satisfy_demands_for,
     settle_mask_planes,
     solve,
 };
@@ -106,6 +112,11 @@ impl<'r> Pipeline<'r> {
         run_probes(&mut graph, registry)?;
 
         let capabilities = backend.capabilities();
+        let filled = fill_references(&mut graph, registry, capabilities)?;
+        if !filled.is_empty() {
+            prepare_filled(&mut graph, registry, &filled)?;
+        }
+
         inject_output_depth(&mut graph, registry, capabilities)?;
 
         let mut formats = solve(&graph, registry, capabilities)?;
@@ -171,6 +182,35 @@ impl CompiledPipeline<'_, '_> {
 
         Ok(engine)
     }
+}
+
+/// Places the demands of the `filled` nodes, runs the probes of those nodes and the providers
+/// placed for them, then drops the stages that were only read by references.
+fn prepare_filled(
+    graph: &mut CompiledGraph,
+    registry: &PipelineRegistry,
+    filled: &[NodeId],
+) -> Result<(), PipelineError> {
+    let first_inserted = graph.len();
+    satisfy_demands_for(graph, registry, filled)?;
+
+    let probing = filled_or_inserted(graph, filled, first_inserted);
+    record_probes_for(graph, registry, &probing)?;
+    run_probes_for(graph, registry, &probing)?;
+
+    DeadStageElimination.run(graph);
+
+    Ok(())
+}
+
+/// Every node in `filled`, or added at or after `first_inserted`, in dependency order.
+fn filled_or_inserted(graph: &CompiledGraph, filled: &[NodeId], first_inserted: usize) -> Vec<NodeId> {
+    graph
+        .order()
+        .iter()
+        .copied()
+        .filter(|id| filled.contains(id) || id.index() >= first_inserted)
+        .collect()
 }
 
 /// The stage behind a node, whether written or injected by the graph, or `None` for a provider or crossing.

@@ -209,6 +209,8 @@ pub struct Node {
     deferred: Vec<DeferredArg>,
     /// Every stage the deferred args read, listed once each.
     references: Vec<Reference>,
+    /// The templates that filled this node's deferred args.
+    filled_from: Vec<DeferredArg>,
     consumers: Vec<NodeId>,
     workers: Option<usize>,
     span: Span,
@@ -244,6 +246,7 @@ impl Node {
             inputs: parts.inputs,
             deferred: parts.deferred,
             references: parts.references,
+            filled_from: Vec::new(),
             consumers: Vec::new(),
             workers: parts.workers,
             span: parts.span,
@@ -315,6 +318,11 @@ impl Node {
     /// Every stage this node's deferred args read.
     pub fn references(&self) -> &[Reference] {
         &self.references
+    }
+
+    /// The templates that filled this node's args, empty when nothing was deferred.
+    pub fn filled_from(&self) -> &[DeferredArg] {
+        &self.filled_from
     }
 
     /// Whether some args can only be filled once other stages' formats are known.
@@ -451,6 +459,15 @@ impl CompiledGraph {
         &self.order
     }
 
+    /// Every node with filled args, in dependency order.
+    pub(crate) fn filled_order(&self) -> Vec<NodeId> {
+        self.order
+            .iter()
+            .copied()
+            .filter(|id| !self.node(*id).is_deferred())
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
@@ -547,6 +564,7 @@ impl CompiledGraph {
             inputs: vec![Edge::new(None, None, 0, producer, source.span())],
             deferred: Vec::new(),
             references: Vec::new(),
+            filled_from: Vec::new(),
             consumers: Vec::new(),
             workers: None,
             span: source.span(),
@@ -584,6 +602,7 @@ impl CompiledGraph {
             inputs: vec![Edge::new(None, Some(stage.input), 0, producer, source.span())],
             deferred: Vec::new(),
             references: Vec::new(),
+            filled_from: Vec::new(),
             consumers: Vec::new(),
             workers: None,
             span: stage.span,
@@ -631,6 +650,7 @@ impl CompiledGraph {
             inputs: vec![input],
             deferred: Vec::new(),
             references: Vec::new(),
+            filled_from: Vec::new(),
             consumers: Vec::new(),
             workers: None,
             span: provider.span,
@@ -669,12 +689,13 @@ impl CompiledGraph {
         self.nodes[consumer.index()].inputs[edge].set_source(source);
     }
 
-    /// Sets the filled args and clears the node's deferred args and references.
+    /// Sets the filled args, keeps the templates that filled them, and clears the node's references.
     pub(crate) fn fill_args(&mut self, id: NodeId, args: Value) {
         let node = &mut self.nodes[id.index()];
+        let deferred = std::mem::take(&mut node.deferred);
 
         node.args = args;
-        node.deferred.clear();
+        node.filled_from = deferred;
         node.references.clear();
     }
 
