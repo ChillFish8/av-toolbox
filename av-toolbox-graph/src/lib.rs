@@ -45,6 +45,7 @@ mod residency;
 mod solve;
 mod spec;
 mod suggest;
+mod template;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]
@@ -76,4 +77,19 @@ pub use self::residency::place_transfers;
 pub use self::solve::{SolvedFormats, Widen, solve};
 pub use self::spec::{ArgSpans, FileId, InputRef, Span, Spanned, StageSpec};
 pub use self::suggest::suggest_name;
+pub use self::template::{
+    BinaryOp,
+    EvalError,
+    Expr,
+    Function,
+    Literal,
+    LiteralKind,
+    Piece,
+    Scope,
+    Template,
+    TemplateError,
+    TemplateExpr,
+    UnaryOp,
+    VariableRules,
+};
 pub use self::widen::insert_widens;
