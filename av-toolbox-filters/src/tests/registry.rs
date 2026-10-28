@@ -50,7 +50,7 @@ fn every_filter_is_registered() {
     assert!(registered("resize/spline36"));
     assert!(registered("resize/spline64"));
     assert!(registered("resample/depth"));
-    assert!(registered("resample/min_depth"));
+    assert!(!registered("resample/min_depth"));
     assert!(registered("resample/chroma"));
     assert!(registered("resample/matrix"));
     assert!(registered("planes/extract"));

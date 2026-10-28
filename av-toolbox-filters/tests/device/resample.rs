@@ -339,7 +339,7 @@ fn an_unchanged_depth_hands_back_the_input() {
 }
 
 #[test]
-fn raising_to_a_minimum_depth_matches_the_reference_in_either_range() {
+fn raising_to_at_least_a_depth_matches_the_reference_in_either_range() {
     let layout = FrameLayout::Yuv {
         subsampling: Subsampling::Yuv420,
     };
@@ -356,10 +356,10 @@ fn raising_to_a_minimum_depth_matches_the_reference_in_either_range() {
             sample: ten_bit,
             ..input
         };
-        let args = json!({ "depth": 10 });
+        let args = json!({ "depth": 10, "at_least": true });
 
         let planes = eight_bit_values(&input);
-        let raised = run_once("resample/min_depth", input, output, args, &planes);
+        let raised = run_once("resample/depth", input, output, args, &planes);
 
         let sample_range = range_of(&input);
         let thresholds = Thresholds::rounding();
@@ -387,9 +387,9 @@ fn a_depth_at_or_above_the_minimum_hands_back_the_input() {
 
     for sample in kept {
         let input = frame(16, 16, FrameLayout::Grey, sample, ChromaLocation::Left);
-        let args = json!({ "depth": 10 });
+        let args = json!({ "depth": 10, "at_least": true });
 
-        let same = passes_through("resample/min_depth", input, input, args);
+        let same = passes_through("resample/depth", input, input, args);
 
         assert!(same, "{sample:?}");
     }

@@ -2,7 +2,7 @@
 # video as a heatmap.
 #
 # CVVDP scales both clips to fit the display before scoring, so its map comes out at the display's size. The map is
-# scaled back to the clip's size before it is painted, so `width` and `height` must be the clip's size.
+# scaled back to the distorted clip's size before it is painted.
 # Needs the `vship` feature.
 
 [variable.reference]
@@ -28,18 +28,6 @@ choices = [
     "standard_hdr_linear_zoom",
 ]
 
-[variable.width]
-type = "integer"
-description = "The clip's width"
-default = 1920
-min = 1
-
-[variable.height]
-type = "integer"
-description = "The clip's height"
-default = 1080
-min = 1
-
 [variable.style]
 type = "string"
 description = "The colours of the heatmap"
@@ -64,8 +52,8 @@ args.output = "map"
 [filter.clip_sized]
 type = "resize/bilinear"
 inputs = ["score"]
-args.width = "{{ width }}"
-args.height = "{{ height }}"
+args.width = "{{ distorted.width }}"
+args.height = "{{ distorted.height }}"
 
 [filter.heatmap]
 type = "blend/heatmap"

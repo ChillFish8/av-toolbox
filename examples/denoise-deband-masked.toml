@@ -21,9 +21,9 @@ args.path = "{{ input }}"
 
 # Debanding at 10-bit keeps the smoothed gradient from snapping back into 8-bit steps.
 [filter.ten_bit]
-type = "resample/min_depth"
+type = "resample/depth"
 inputs = ["input"]
-args.depth = 10
+args.depth = "{{ max(10, input.bit_depth) }}"
 
 [filter.denoise]
 type = "av-denoise/nl4d"
