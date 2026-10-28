@@ -172,6 +172,7 @@ fn stage(kind: StageKind, name: &str, stage_type: &str, args: serde_json::Value)
         args: Spanned::unknown(args),
         arg_spans: ArgSpans::default(),
         workers: None,
+        deferred: Vec::new(),
         span: Span::unknown(),
     }
 }

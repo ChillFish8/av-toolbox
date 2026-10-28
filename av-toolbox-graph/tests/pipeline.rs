@@ -197,6 +197,7 @@ fn spec(kind: StageKind, name: &str, stage_type: &str, inputs: Vec<&str>, args: 
         args: Spanned::unknown(args),
         arg_spans: ArgSpans::default(),
         workers: None,
+        deferred: Vec::new(),
         span: Span::unknown(),
     }
 }

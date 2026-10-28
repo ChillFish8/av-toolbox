@@ -115,6 +115,7 @@ mod tests {
             args: Spanned::unknown(json!({})),
             arg_spans: ArgSpans::default(),
             workers,
+            deferred: Vec::new(),
             span: Span::unknown(),
         }
     }

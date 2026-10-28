@@ -77,7 +77,7 @@ pub(super) fn drop_unread(
     });
 }
 
-/// Every stage named in `roots` and every stage they read from, directly or not.
+/// Every stage named in `roots` and every stage they read from or reference, directly or not.
 fn upstream_of(specs: &[StageSpec], roots: Vec<String>) -> HashSet<String> {
     let by_name: HashMap<&str, &StageSpec> = specs
         .iter()
@@ -97,6 +97,14 @@ fn upstream_of(specs: &[StageSpec], roots: Vec<String>) -> HashSet<String> {
 
         for input in &spec.inputs {
             pending.push(input.value.target.clone());
+        }
+
+        let referenced = spec
+            .deferred
+            .iter()
+            .flat_map(|deferred| deferred.template.stages());
+        for stage in referenced {
+            pending.push(stage.to_string());
         }
     }
 

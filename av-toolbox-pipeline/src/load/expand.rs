@@ -1,27 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use av_toolbox_graph::{
-    ArgSpans,
-    Diagnostic,
-    DiagnosticCode,
-    Diagnostics,
-    FileId,
-    Span,
-    Spanned,
-    StageSpec,
-    suggest_name,
-};
-use serde_json::{Map, Value};
+use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, FileId, Span, Spanned, StageSpec};
 
 use super::aliases::{drop_unread, follow};
 use super::calls::{CallSite, Link};
+use super::deferred::follow_references;
 use super::files::{Files, SourceMap};
-use super::fill::{FillFailure, fill_template, narrowed};
+use super::fill::Filling;
 use super::resolve::{Given, resolve_variables};
 use super::{LoadFailure, Loaded};
 use crate::toml::{self, RawFile, RawStage, RawWorkers};
-use crate::variables::{Declaration, ResolvedVariable, Supplied, Values};
+use crate::variables::{Bound, Declaration, ResolvedVariable, Supplied, Values};
 
 /// Reads a pipeline and every file it calls into one flat list of stages.
 pub(super) struct Loader<'a> {
@@ -49,14 +39,6 @@ pub(super) struct Instance<'a> {
     pub(super) chain: Vec<Link>,
     /// The call that named this file, or `None` for the root file.
     pub(super) call: Option<CallSite>,
-}
-
-/// What filling templates needs, and the path problems are reported under.
-pub(super) struct Filling<'a> {
-    pub(super) values: &'a Values,
-    /// The file's declared variable names, in the order they are declared.
-    pub(super) declared: &'a [&'a str],
-    pub(super) path: &'a str,
 }
 
 impl<'a> Loader<'a> {
@@ -140,6 +122,14 @@ impl<'a> Loader<'a> {
                     },
                 }
             }
+
+            follow_references(
+                spec,
+                &aliases,
+                &outputs,
+                &mut read_outputs,
+                &mut resolve_diagnostics,
+            );
         }
 
         if !resolve_diagnostics.is_empty() {
@@ -271,10 +261,19 @@ impl<'a> Loader<'a> {
         let args_filling = Filling {
             values,
             declared,
+            prefix: &instance.prefix,
             path: &path,
         };
-        let filled_args = self.fill_value(&args.value, "", &arg_spans, args.span, &args_filling);
-        let workers = self.workers(workers, values, declared, &path);
+        let mut deferred = Vec::new();
+        let filled_args = self.fill_value(
+            &args.value,
+            "",
+            &arg_spans,
+            args.span,
+            &args_filling,
+            &mut deferred,
+        );
+        let workers = self.workers(workers, &args_filling);
 
         let (Some(filled_args), Ok(workers)) = (filled_args, workers) else {
             return None;
@@ -289,107 +288,16 @@ impl<'a> Loader<'a> {
             args: Spanned::new(filled_args, args.span),
             arg_spans,
             workers,
+            deferred,
             span,
         })
     }
 
-    /// Fills every template under `value`, or `None` after reporting each that cannot be.
-    ///
-    /// A template is reported at its span in `arg_spans`, or at `fallback` when it has none.
-    pub(super) fn fill_value(
-        &mut self,
-        value: &Value,
-        pointer: &str,
-        arg_spans: &ArgSpans,
-        fallback: Span,
-        filling: &Filling<'_>,
-    ) -> Option<Value> {
-        match value {
-            Value::String(text) => {
-                let span = arg_spans.narrowest(pointer).unwrap_or(fallback);
-                self.fill_string(text, span, filling)
-            },
-            Value::Array(items) => {
-                let mut filled = Vec::with_capacity(items.len());
-                let mut failed = false;
-
-                for (index, item) in items.iter().enumerate() {
-                    let nested = format!("{pointer}/{index}");
-                    let converted = self.fill_value(item, &nested, arg_spans, fallback, filling);
-                    match converted {
-                        Some(converted) => filled.push(converted),
-                        None => failed = true,
-                    }
-                }
-
-                (!failed).then_some(Value::Array(filled))
-            },
-            Value::Object(entries) => {
-                let mut filled = Map::new();
-                let mut failed = false;
-
-                for (key, item) in entries {
-                    let escaped = key.replace('~', "~0").replace('/', "~1");
-                    let nested = format!("{pointer}/{escaped}");
-                    let converted = self.fill_value(item, &nested, arg_spans, fallback, filling);
-                    match converted {
-                        Some(converted) => {
-                            filled.insert(key.clone(), converted);
-                        },
-                        None => failed = true,
-                    }
-                }
-
-                (!failed).then_some(Value::Object(filled))
-            },
-            other => Some(other.clone()),
-        }
-    }
-
-    /// Fills `text`'s templates, or `None` after reporting the problem.
-    ///
-    /// A template naming a variable that was declared but could not be resolved is left
-    /// unreported here, since resolving it already reported the problem.
-    pub(super) fn fill_string(&mut self, text: &str, span: Span, filling: &Filling<'_>) -> Option<Value> {
-        let filled = fill_template(text, filling.values);
-
-        match filled {
-            Ok(value) => Some(value),
-            Err(FillFailure::Unknown { name }) => {
-                if filling.declared.contains(&name.as_str()) {
-                    return None;
-                }
-
-                let message = format!("no variable named {name} is declared in this file");
-                let mut diagnostic =
-                    Diagnostic::error(DiagnosticCode::UnknownVariable, filling.path, span, message);
-
-                let closest = suggest_name(&name, filling.declared.iter().copied());
-                if let Some(closest) = closest {
-                    let note = format!("did you mean `{closest}`?");
-                    diagnostic = diagnostic.with_note(note, Span::unknown());
-                }
-
-                self.diagnostics.push(diagnostic);
-                None
-            },
-            Err(FillFailure::Invalid { message, range }) => {
-                let narrow = narrowed(&self.sources, text, span, &range);
-                let diagnostic =
-                    Diagnostic::error(DiagnosticCode::InvalidDefinition, filling.path, narrow, message);
-
-                self.diagnostics.push(diagnostic);
-                None
-            },
-        }
-    }
-
+    /// The stage's worker count, filling a template with `filling` under the `workers` path.
     fn workers(
         &mut self,
         workers: Option<Spanned<RawWorkers>>,
-        values: &Values,
-        declared: &[&str],
-        path: &str,
+        filling: &Filling<'_>,
     ) -> Result<Option<usize>, ()> {
         let Some(workers) = workers else {
             return Ok(None);
@@ -400,13 +308,12 @@ impl<'a> Loader<'a> {
             RawWorkers::Template(template) => template,
         };
 
-        let workers_path = format!("{path}.workers");
+        let workers_path = format!("{}.workers", filling.path);
         let workers_filling = Filling {
-            values,
-            declared,
             path: &workers_path,
+            ..*filling
         };
-        let filled = self.fill_string(&template, workers.span, &workers_filling);
+        let filled = self.fill_now(&template, workers.span, &workers_filling);
         let Some(filled) = filled else {
             return Err(());
         };
@@ -445,7 +352,7 @@ fn resolved_variables(declarations: &[Declaration], values: &Values) -> Vec<Reso
 
     for declaration in declarations {
         let name = &declaration.name.value;
-        let Some(value) = values.get(name) else {
+        let Some(Bound::Ready(value)) = values.get(name) else {
             continue;
         };
 

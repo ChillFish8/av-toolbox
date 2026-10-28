@@ -6,14 +6,22 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-use av_toolbox_graph::{Literal, Spanned};
+use av_toolbox_graph::{Expr, Literal, LiteralKind, Span, Spanned, VariableRules};
 use serde_json::{Number, Value};
 
 pub use self::supplied::Supplied;
 pub(crate) use self::supplied::{SuppliedValue, environment_name};
 
 /// Every variable of one file, by name, once resolved.
-pub(crate) type Values = HashMap<String, VariableValue>;
+pub(crate) type Values = HashMap<String, Bound>;
+
+/// A resolved variable, either known now or read from other stages once their formats are known.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Bound {
+    Ready(VariableValue),
+    /// An expression reading other stages, already checked against the variable's rules.
+    Deferred(Expr),
+}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum VariableType {
@@ -52,6 +60,17 @@ impl VariableType {
 
     pub fn allows_choices(self) -> bool {
         matches!(self, Self::String | Self::Integer)
+    }
+
+    /// The kind of value a template must give, or `None` for a path, which no template may give late.
+    pub fn literal_kind(self) -> Option<LiteralKind> {
+        match self {
+            Self::String => Some(LiteralKind::String),
+            Self::Path => None,
+            Self::Integer => Some(LiteralKind::Integer),
+            Self::Float => Some(LiteralKind::Float),
+            Self::Bool => Some(LiteralKind::Bool),
+        }
     }
 }
 
@@ -124,6 +143,39 @@ pub struct Declaration {
     pub min: Option<Spanned<Value>>,
     pub max: Option<Spanned<Value>>,
     pub choices: Option<Spanned<Vec<Value>>>,
+}
+
+impl Declaration {
+    /// The rules a value filled late must follow, reported at `span` when it breaks them.
+    pub(crate) fn rules(&self, expected: LiteralKind, span: Span) -> VariableRules {
+        let min = self.min.as_ref().and_then(|min| min.value.as_f64());
+        let max = self.max.as_ref().and_then(|max| max.value.as_f64());
+        let choices = self.choices.as_ref().map(|choices| {
+            let literals = choices.value.iter().filter_map(literal_from_json);
+            literals.collect()
+        });
+
+        VariableRules {
+            name: self.name.value.clone(),
+            expected,
+            min,
+            max,
+            choices,
+            span,
+        }
+    }
+}
+
+fn literal_from_json(value: &Value) -> Option<Literal> {
+    match value {
+        Value::String(text) => Some(Literal::String(text.clone())),
+        Value::Bool(flag) => Some(Literal::Bool(*flag)),
+        Value::Number(number) => match number.as_i64() {
+            Some(integer) => Some(Literal::Integer(integer)),
+            None => number.as_f64().map(Literal::Float),
+        },
+        _ => None,
+    }
 }
 
 pub(crate) fn is_variable_name(name: &str) -> bool {

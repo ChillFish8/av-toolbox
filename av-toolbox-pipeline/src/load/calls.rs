@@ -2,11 +2,22 @@ use std::collections::{HashMap, HashSet};
 use std::io::Error;
 use std::path::{Path, PathBuf};
 
-use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, InputRef, Span, Spanned};
+use av_toolbox_graph::{
+    ArgSpans,
+    Diagnostic,
+    DiagnosticCode,
+    Expr,
+    InputRef,
+    Piece,
+    Span,
+    Spanned,
+    Template,
+};
 use serde_json::Value;
 
-use super::expand::{Filling, Instance, Loader, directory_of};
-use super::resolve::{Given, GivenValue};
+use super::expand::{Instance, Loader, directory_of};
+use super::fill::{Filled, Filling};
+use super::resolve::{Given, GivenValue, Passed};
 use crate::toml::{RawCall, RawFile};
 use crate::variables::Values;
 
@@ -45,9 +56,10 @@ impl Loader<'_> {
         let path_filling = Filling {
             values,
             declared,
+            prefix: &instance.prefix,
             path: &call_path,
         };
-        let filled = self.fill_string(&call.path.value, call.path.span, &path_filling)?;
+        let filled = self.fill_now(&call.path.value, call.path.span, &path_filling)?;
         let Value::String(written) = filled else {
             let message = "path must be text, such as \"parts/denoise.toml\"";
             let diagnostic = Diagnostic::error(
@@ -173,24 +185,60 @@ impl Loader<'_> {
         let filling = Filling {
             values,
             declared,
+            prefix: &instance.prefix,
             path: &path,
         };
-        let no_spans = ArgSpans::new();
 
         for variable in &call.variables {
             let span = variable.value.span;
-            let filled = self.fill_value(&variable.value.value, "", &no_spans, span, &filling);
+            let passed = self.passed(&variable.value.value, span, &filling);
 
             given.push(GivenValue {
                 name: variable.name.value.clone(),
                 name_span: variable.name.span,
-                value: filled,
+                value: passed,
                 value_span: span,
                 directory: instance.directory.clone(),
             });
         }
 
         given
+    }
+
+    /// One `variables` entry with the caller's templates filled, or `None` after reporting.
+    ///
+    /// A string reading the caller's stages is passed on as its expression.
+    fn passed(&mut self, value: &Value, span: Span, filling: &Filling<'_>) -> Option<Passed> {
+        let Value::String(text) = value else {
+            let no_spans = ArgSpans::new();
+            let mut ignored = Vec::new();
+            let filled = self.fill_value(value, "", &no_spans, span, filling, &mut ignored)?;
+
+            return Some(Passed::Value(filled));
+        };
+
+        let filled = self.fill_string(text, span, filling)?;
+        match filled {
+            Filled::Ready(ready) => Some(Passed::Value(ready)),
+            Filled::Deferred(template) => {
+                let expr = self.whole_expression(&template, span, filling.path)?;
+                Some(Passed::Reference(expr))
+            },
+        }
+    }
+
+    /// The expression `template` is made of, or `None` after reporting text around it.
+    fn whole_expression(&mut self, template: &Template, span: Span, path: &str) -> Option<Expr> {
+        if let [Piece::Expr(only)] = template.pieces() {
+            return Some(only.expr.clone());
+        }
+
+        let message =
+            "a variable given a stage reference must hold only the template, such as \"{{ src.width }}\"";
+        let diagnostic = Diagnostic::error(DiagnosticCode::InvalidDefinition, path, span, message);
+
+        self.diagnostics.push(diagnostic);
+        None
     }
 
     /// Makes each of the called file's inputs an alias of the stage its call passed.

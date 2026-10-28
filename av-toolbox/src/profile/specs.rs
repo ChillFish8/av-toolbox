@@ -86,6 +86,7 @@ mod tests {
             args: Spanned::unknown(json!({ "frame_rate": "25" })),
             arg_spans: ArgSpans::default(),
             workers: Some(2),
+            deferred: Vec::new(),
             span: Span::unknown(),
         }
     }

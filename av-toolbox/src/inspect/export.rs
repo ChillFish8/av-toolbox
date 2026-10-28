@@ -206,6 +206,7 @@ mod tests {
             args: Spanned::unknown(json!({ "sigma": 1.5 })),
             arg_spans: ArgSpans::default(),
             workers: Some(2),
+            deferred: Vec::new(),
             span: Span::unknown(),
         }
     }

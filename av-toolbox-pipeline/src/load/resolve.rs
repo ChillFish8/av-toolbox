@@ -1,10 +1,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, Span, suggest_name};
+use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, Expr, Span, suggest_name};
 use serde_json::Value;
 
 use crate::variables::{
+    Bound,
     Declaration,
     Supplied,
     SuppliedValue,
@@ -24,12 +25,19 @@ pub(super) enum Given<'a> {
     Call(&'a [GivenValue]),
 }
 
+/// A call's `variables` entry once the caller's templates are filled.
+pub(super) enum Passed {
+    Value(Value),
+    /// An expression reading the caller's stages, filled once their formats are known.
+    Reference(Expr),
+}
+
 /// One entry of a call's `variables` table, with its templates already filled.
 pub(super) struct GivenValue {
     pub(super) name: String,
     pub(super) name_span: Span,
     /// The filled value, or `None` when filling it failed and was already reported.
-    pub(super) value: Option<Value>,
+    pub(super) value: Option<Passed>,
     pub(super) value_span: Span,
     /// The directory of the calling file, which a path value is relative to.
     pub(super) directory: PathBuf,
@@ -47,7 +55,8 @@ pub(super) fn resolve_variables(
     let mut values = Values::new();
 
     for declaration in declarations {
-        let default = default_value(declaration, directory, diagnostics);
+        let found_default = default_value(declaration, directory, diagnostics);
+        let default = found_default.map(Bound::Ready);
         let supplied = supplied_value(declaration, given, diagnostics);
 
         let chosen = match (supplied, default) {
@@ -105,7 +114,7 @@ fn supplied_value(
     declaration: &Declaration,
     given: &Given<'_>,
     diagnostics: &mut Diagnostics,
-) -> Option<VariableValue> {
+) -> Option<Bound> {
     let name = &declaration.name.value;
     let variable_type = declaration.variable_type;
     let working_directory = Path::new("");
@@ -125,7 +134,11 @@ fn supplied_value(
         },
         Given::Call(values) => {
             let entry = values.iter().find(|entry| entry.name == *name)?;
-            let value = entry.value.as_ref()?;
+            let passed = entry.value.as_ref()?;
+            let value = match passed {
+                Passed::Value(value) => value,
+                Passed::Reference(expr) => return deferred_value(declaration, entry, expr, diagnostics),
+            };
             let read = from_json(variable_type, value, &entry.directory);
             let origin = String::from("the call");
             (read, origin, entry.value_span)
@@ -134,7 +147,7 @@ fn supplied_value(
 
     let checked = read.and_then(|value| check_rules(declaration, &value).map(|()| value));
     match checked {
-        Ok(value) => Some(value),
+        Ok(value) => Some(Bound::Ready(value)),
         Err(problem) => {
             let message = format!("the value of {name} from {origin} is invalid, {problem}");
             let path = format!("variable.{name}");
@@ -146,6 +159,32 @@ fn supplied_value(
             None
         },
     }
+}
+
+/// A variable filled late from the caller's stages, checked against its declaration once filled.
+///
+/// A path variable is refused, since it must resolve against a directory while loading.
+fn deferred_value(
+    declaration: &Declaration,
+    entry: &GivenValue,
+    expr: &Expr,
+    diagnostics: &mut Diagnostics,
+) -> Option<Bound> {
+    let Some(expected) = declaration.variable_type.literal_kind() else {
+        let path = format!("variable.{}", declaration.name.value);
+        let message = "a path variable cannot come from a stage reference";
+        let header = declaration.name.span;
+        let diagnostic = Diagnostic::error(DiagnosticCode::InvalidVariable, path, entry.value_span, message)
+            .with_note("declared here", header);
+
+        diagnostics.push(diagnostic);
+        return None;
+    };
+
+    let rules = declaration.rules(expected, entry.value_span);
+    let inner = Box::new(expr.clone());
+
+    Some(Bound::Deferred(Expr::Checked { inner, rules }))
 }
 
 /// Whether a value was given from outside the file, valid or not.

@@ -357,24 +357,6 @@ fn an_error_inside_an_expression_is_narrowed_to_it() {
 }
 
 #[test]
-fn a_stage_reference_is_not_supported_yet() {
-    let pipeline = EXPRESSION_PIPELINE.replace("{{ sigma * 2 }}", "{{ other.clean.width }}");
-    let supplied = with_flag("sigma", "1.5");
-
-    let diagnostics = failed(
-        &[("/work/main.toml", pipeline.as_str())],
-        "/work/main.toml",
-        &supplied,
-    );
-
-    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
-    assert_eq!(
-        diagnostics[0].message(),
-        "stage references are not supported here"
-    );
-}
-
-#[test]
 fn a_template_without_spaces_fills() {
     let pipeline = EXPRESSION_PIPELINE.replace("{{ sigma * 2 }}", "{{sigma}}");
     let supplied = with_flag("sigma", "1.5");

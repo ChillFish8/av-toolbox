@@ -322,6 +322,7 @@ fn stage(kind: StageKind, name: &str, stage_type: &str) -> StageSpec {
         args: Spanned::unknown(json!({})),
         arg_spans: ArgSpans::default(),
         workers: None,
+        deferred: Vec::new(),
         span: Span::unknown(),
     }
 }

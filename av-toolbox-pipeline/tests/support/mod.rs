@@ -28,6 +28,7 @@ pub(crate) fn written_at(specs: &mut Vec<StageSpec>, bits: u32) {
             args: Spanned::new(json!({ "depth": bits, "dither": "none" }), sink.args.span),
             arg_spans: ArgSpans::new(),
             workers: None,
+            deferred: Vec::new(),
             span: sink.span,
         });
     }

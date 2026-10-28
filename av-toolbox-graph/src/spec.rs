@@ -1,6 +1,8 @@
 use av_toolbox_core::StageKind;
 use serde_json::Value;
 
+use crate::template::Template;
+
 /// Which file a span points into.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
 pub struct FileId(u32);
@@ -126,6 +128,15 @@ pub struct InputRef {
     pub target: String,
 }
 
+/// An arg whose template reads other stages, so it can only be filled once their formats are known.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredArg {
+    /// JSON pointer under `args`, such as `/depth`.
+    pub pointer: String,
+    pub template: Template,
+    pub span: Span,
+}
+
 /// One stage as the caller's definition file wrote it.
 #[derive(Debug, Clone)]
 pub struct StageSpec {
@@ -138,6 +149,8 @@ pub struct StageSpec {
     pub arg_spans: ArgSpans,
     /// How many instances of this stage to run, or `None` when the pipeline did not say.
     pub workers: Option<usize>,
+    /// The args still holding templates that read other stages.
+    pub deferred: Vec<DeferredArg>,
     pub span: Span,
 }
 
