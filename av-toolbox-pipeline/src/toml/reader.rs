@@ -2,9 +2,7 @@ use std::ops::Range;
 
 use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeArray, DeTable, DeValue};
-use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, FileId, InputRef, Span, Spanned};
-
-use crate::variables::has_template;
+use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, FileId, InputRef, Span, Spanned, Template};
 
 /// One table being read, remembering whether anything in it was wrong.
 pub(super) struct TableReader<'a> {
@@ -94,7 +92,7 @@ impl TableReader<'_> {
 
     /// Refuses a template in a string that must be taken as written.
     pub(super) fn refuse_template(&mut self, key: &str, text: &Spanned<String>) {
-        if !has_template(&text.value) {
+        if !Template::has_template(&text.value) {
             return;
         }
 
@@ -154,7 +152,7 @@ impl TableReader<'_> {
             let item_range = item.span();
             let span = Span::in_file(self.file, slot_range.start, item_range.end);
 
-            if has_template(slot.get_ref()) {
+            if Template::has_template(slot.get_ref()) {
                 let slot_span = self.span(slot_range);
                 self.error("inputs", slot_span, "templates cannot be used in input names");
                 continue;

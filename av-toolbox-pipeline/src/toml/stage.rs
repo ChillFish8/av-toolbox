@@ -3,13 +3,12 @@ use std::borrow::Cow;
 use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeTable, DeValue};
 use av_toolbox_core::StageKind;
-use av_toolbox_graph::{ArgSpans, Diagnostics, FileId, Span, Spanned};
+use av_toolbox_graph::{ArgSpans, Diagnostics, FileId, Span, Spanned, Template};
 use serde_json::{Map, Value};
 
 use super::args::convert_args;
 use super::reader::{TableReader, entry, is_stage_name};
 use super::{RawStage, RawWorkers};
-use crate::variables::{has_template, pieces};
 
 const KEYS: [&str; 4] = ["type", "inputs", "workers", "args"];
 
@@ -112,11 +111,11 @@ fn workers(reader: &mut TableReader<'_>, table: &DeTable<'_>) -> Option<Spanned<
     let span = reader.span(range);
     let inner = value.get_ref();
 
-    let template = inner.as_str().filter(|text| has_template(text));
+    let template = inner.as_str().filter(|text| Template::has_template(text));
     if let Some(text) = template {
-        let checked = pieces(text);
+        let checked = Template::parse(text);
         if let Err(problem) = checked {
-            reader.error("workers", span, problem.message());
+            reader.error("workers", span, &problem.message);
             return None;
         }
 

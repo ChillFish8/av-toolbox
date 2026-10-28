@@ -1,5 +1,4 @@
 mod supplied;
-mod template;
 #[cfg(test)]
 mod tests;
 
@@ -7,14 +6,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-use av_toolbox_graph::Spanned;
+use av_toolbox_graph::{Literal, Spanned};
 use serde_json::{Number, Value};
 
 pub use self::supplied::Supplied;
 pub(crate) use self::supplied::{SuppliedValue, environment_name};
-pub(crate) use self::template::{FillError, fill, has_template, pieces};
-#[cfg(test)]
-pub(crate) use self::template::{Piece, TemplateError};
 
 /// Every variable of one file, by name, once resolved.
 pub(crate) type Values = HashMap<String, VariableValue>;
@@ -87,6 +83,15 @@ impl VariableValue {
                 converted.map(Value::Number).unwrap_or(Value::Null)
             },
             Self::Bool(flag) => Value::Bool(*flag),
+        }
+    }
+
+    pub fn to_literal(&self) -> Literal {
+        match self {
+            Self::String(text) | Self::Path(text) => Literal::String(text.clone()),
+            Self::Integer(number) => Literal::Integer(*number),
+            Self::Float(number) => Literal::Float(*number),
+            Self::Bool(flag) => Literal::Bool(*flag),
         }
     }
 

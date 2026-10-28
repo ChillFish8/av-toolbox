@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use av_toolbox_graph::DiagnosticCode;
+use av_toolbox_graph::{DiagnosticCode, Span};
 use serde_json::json;
 
 use super::{codes, failed, loaded, stage};
@@ -297,5 +297,113 @@ fn the_root_variables_are_listed_in_declaration_order() {
     assert_eq!(
         loaded.variables[1].value,
         VariableValue::Path("/work/out".to_string())
+    );
+}
+
+const EXPRESSION_PIPELINE: &str = r#"
+[variable.sigma]
+type = "float"
+
+[source.src]
+type = "y4m/pipe"
+args.sigma = "{{ sigma * 2 }}"
+"#;
+
+#[test]
+fn an_expression_fills_from_variables() {
+    let supplied = with_flag("sigma", "1.5");
+
+    let loaded = loaded(
+        &[("/work/main.toml", EXPRESSION_PIPELINE)],
+        "/work/main.toml",
+        &supplied,
+    );
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value["sigma"], json!(3.0));
+}
+
+#[test]
+fn an_unknown_variable_in_an_expression_is_reported() {
+    let pipeline = EXPRESSION_PIPELINE.replace("{{ sigma * 2 }}", "{{ sigmaa + 1 }}");
+    let supplied = with_flag("sigma", "1.5");
+
+    let diagnostics = failed(
+        &[("/work/main.toml", pipeline.as_str())],
+        "/work/main.toml",
+        &supplied,
+    );
+    let note = &diagnostics[0].notes()[0].message;
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::UnknownVariable]);
+    assert!(note.contains("did you mean `sigma`?"));
+}
+
+#[test]
+fn an_error_inside_an_expression_is_narrowed_to_it() {
+    let pipeline = EXPRESSION_PIPELINE.replace("{{ sigma * 2 }}", "x {{ sigma + true }}");
+    let supplied = with_flag("sigma", "1.5");
+
+    let diagnostics = failed(
+        &[("/work/main.toml", pipeline.as_str())],
+        "/work/main.toml",
+        &supplied,
+    );
+    let start = pipeline.find("{{ sigma").expect("template start");
+    let end = start + "{{ sigma + true }}".len();
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert_eq!(diagnostics[0].span(), Span::new(start, end));
+}
+
+#[test]
+fn a_stage_reference_is_not_supported_yet() {
+    let pipeline = EXPRESSION_PIPELINE.replace("{{ sigma * 2 }}", "{{ other.clean.width }}");
+    let supplied = with_flag("sigma", "1.5");
+
+    let diagnostics = failed(
+        &[("/work/main.toml", pipeline.as_str())],
+        "/work/main.toml",
+        &supplied,
+    );
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert_eq!(
+        diagnostics[0].message(),
+        "stage references are not supported here"
+    );
+}
+
+#[test]
+fn a_template_without_spaces_fills() {
+    let pipeline = EXPRESSION_PIPELINE.replace("{{ sigma * 2 }}", "{{sigma}}");
+    let supplied = with_flag("sigma", "1.5");
+
+    let loaded = loaded(
+        &[("/work/main.toml", pipeline.as_str())],
+        "/work/main.toml",
+        &supplied,
+    );
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value["sigma"], json!(1.5));
+}
+
+#[test]
+fn an_empty_template_is_refused() {
+    let pipeline = EXPRESSION_PIPELINE.replace("{{ sigma * 2 }}", "{{ }}");
+    let supplied = with_flag("sigma", "1.5");
+
+    let diagnostics = failed(
+        &[("/work/main.toml", pipeline.as_str())],
+        "/work/main.toml",
+        &supplied,
+    );
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(
+        diagnostics[0]
+            .message()
+            .contains("a template must hold an expression")
     );
 }

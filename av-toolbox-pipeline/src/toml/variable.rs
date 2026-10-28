@@ -2,12 +2,12 @@ use std::borrow::Cow;
 
 use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeTable, DeValue};
-use av_toolbox_graph::{Diagnostics, FileId, Span, Spanned};
+use av_toolbox_graph::{Diagnostics, FileId, Span, Spanned, Template};
 use serde_json::Value;
 
 use super::args::convert_value;
 use super::reader::{TableReader, entry};
-use crate::variables::{Declaration, VariableType, has_template, is_variable_name};
+use crate::variables::{Declaration, VariableType, is_variable_name};
 
 const KEYS: [&str; 6] = ["type", "description", "default", "min", "max", "choices"];
 
@@ -147,7 +147,7 @@ fn refuse_templates(reader: &mut TableReader<'_>, key: &str, value: &TomlSpanned
             continue;
         };
 
-        if !has_template(text) {
+        if !Template::has_template(text) {
             continue;
         }
 

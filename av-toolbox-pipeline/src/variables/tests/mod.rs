@@ -1,5 +1,4 @@
 mod supplied;
-mod template;
 mod values;
 
 use av_toolbox_graph::{Span, Spanned};

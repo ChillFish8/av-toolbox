@@ -17,10 +17,11 @@ use serde_json::{Map, Value};
 use super::aliases::{drop_unread, follow};
 use super::calls::{CallSite, Link};
 use super::files::{Files, SourceMap};
+use super::fill::{FillFailure, fill_template, narrowed};
 use super::resolve::{Given, resolve_variables};
 use super::{LoadFailure, Loaded};
 use crate::toml::{self, RawFile, RawStage, RawWorkers};
-use crate::variables::{Declaration, FillError, ResolvedVariable, Supplied, Values, fill};
+use crate::variables::{Declaration, ResolvedVariable, Supplied, Values};
 
 /// Reads a pipeline and every file it calls into one flat list of stages.
 pub(super) struct Loader<'a> {
@@ -350,11 +351,11 @@ impl<'a> Loader<'a> {
     /// A template naming a variable that was declared but could not be resolved is left
     /// unreported here, since resolving it already reported the problem.
     pub(super) fn fill_string(&mut self, text: &str, span: Span, filling: &Filling<'_>) -> Option<Value> {
-        let filled = fill(text, filling.values);
+        let filled = fill_template(text, filling.values);
 
         match filled {
             Ok(value) => Some(value),
-            Err(FillError::Unknown(name)) => {
+            Err(FillFailure::Unknown { name }) => {
                 if filling.declared.contains(&name.as_str()) {
                     return None;
                 }
@@ -372,10 +373,10 @@ impl<'a> Loader<'a> {
                 self.diagnostics.push(diagnostic);
                 None
             },
-            Err(FillError::Template(problem)) => {
-                let message = problem.message();
+            Err(FillFailure::Invalid { message, range }) => {
+                let narrow = narrowed(&self.sources, text, span, &range);
                 let diagnostic =
-                    Diagnostic::error(DiagnosticCode::InvalidDefinition, filling.path, span, message);
+                    Diagnostic::error(DiagnosticCode::InvalidDefinition, filling.path, narrow, message);
 
                 self.diagnostics.push(diagnostic);
                 None

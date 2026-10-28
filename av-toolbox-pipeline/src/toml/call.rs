@@ -2,12 +2,11 @@ use std::borrow::Cow;
 
 use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeTable, DeValue};
-use av_toolbox_graph::{Diagnostics, FileId, Span, Spanned};
+use av_toolbox_graph::{Diagnostics, FileId, Span, Spanned, Template};
 
 use super::args::convert_value;
 use super::reader::{TableReader, entry, is_stage_name};
 use super::{RawCall, RawCallVariable, RawInput, RawOutput};
-use crate::variables::{has_template, pieces};
 
 const CALL_KEYS: [&str; 3] = ["path", "inputs", "variables"];
 const INPUT_KEYS: [&str; 1] = ["description"];
@@ -106,9 +105,9 @@ fn call_path(reader: &mut TableReader<'_>, table: &DeTable<'_>) -> Option<Spanne
     }
 
     let path = reader.string(table, "path")?;
-    let checked = pieces(&path.value);
+    let checked = Template::parse(&path.value);
     if let Err(problem) = checked {
-        reader.error("path", path.span, problem.message());
+        reader.error("path", path.span, &problem.message);
         return None;
     }
 
@@ -140,7 +139,7 @@ fn call_variables(reader: &mut TableReader<'_>, table: &DeTable<'_>) -> Vec<RawC
         let item_span = reader.span(item_range);
         let written_name = key.get_ref().to_string();
 
-        if has_template(&written_name) {
+        if Template::has_template(&written_name) {
             reader.error(
                 "variables",
                 key_span,

@@ -1,9 +1,7 @@
 use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeArray, DeFloat, DeInteger, DeTable, DeValue};
-use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, Diagnostics, FileId, Span};
+use av_toolbox_graph::{ArgSpans, Diagnostic, DiagnosticCode, Diagnostics, FileId, Span, Template};
 use serde_json::{Map, Number, Value};
-
-use crate::variables::{has_template, pieces};
 
 /// Converts a stage's `args` table to JSON, recording where every value was written.
 ///
@@ -70,7 +68,7 @@ impl Conversion<'_> {
             let escaped = escape(name);
             let nested = format!("{pointer}/{escaped}");
 
-            if has_template(name) {
+            if Template::has_template(name) {
                 let range = key.span();
                 let span = Span::in_file(self.file, range.start, range.end);
                 self.refuse(&nested, span, "templates cannot be used in argument names");
@@ -94,9 +92,9 @@ impl Conversion<'_> {
         let inner = value.get_ref();
         match inner {
             DeValue::String(text) => {
-                let checked = pieces(text);
+                let checked = Template::parse(text);
                 if let Err(problem) = checked {
-                    return self.refuse(pointer, span, problem.message());
+                    return self.refuse(pointer, span, &problem.message);
                 }
 
                 let owned = text.to_string();
