@@ -8,6 +8,7 @@ use av_toolbox_cubek::values::{
     float_to_whole_codes,
     narrow,
     offset,
+    unit_to_float,
     widen,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
@@ -172,6 +173,7 @@ enum Mapping {
     Codes,
     WholeCodes,
     Float,
+    Unit,
 }
 
 struct MapCodes {
@@ -200,6 +202,7 @@ impl BuildTask for MapCodes {
                 float_to_whole_codes(client, &sizing, input_plane, output_plane, self.codes);
             },
             Mapping::Float => codes_to_float(client, &sizing, input_plane, output_plane, self.codes),
+            Mapping::Unit => unit_to_float(client, &sizing, input_plane, output_plane, self.codes),
         }
 
         read_f32(client, &output)
@@ -289,4 +292,17 @@ fn whole_codes_round_to_the_nearest_code() {
     assert_eq!(whole, spread);
     // A NaN reads as the sample 0, which is chroma's centre.
     assert_eq!(rounded, vec![1000.0, 1001.0, 32768.0]);
+}
+
+#[test]
+fn unit_floats_land_on_their_float_samples() {
+    let luma = FloatCodes::new(8, SampleRange::Limited, false);
+    let chroma = FloatCodes::new(8, SampleRange::Limited, true);
+    let units = vec![16.0 / 255.0, 235.0 / 255.0, 0.0, 1.0];
+
+    let luma_samples = mapped(units, luma, Mapping::Unit);
+    let chroma_samples = mapped(vec![128.0 / 255.0, 16.0 / 255.0], chroma, Mapping::Unit);
+
+    assert_close(&luma_samples, &[0.0, 1.0, -16.0 / 219.0, 239.0 / 219.0], 1e-6);
+    assert_close(&chroma_samples, &[0.0, -0.5], 1e-6);
 }

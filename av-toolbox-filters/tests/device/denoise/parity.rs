@@ -16,6 +16,7 @@ use av_denoise_core::{
     NlmeansOptions,
     nl4d_spatial_radius_for,
 };
+use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{
     BuildContext,
     BuildTask,
@@ -34,10 +35,10 @@ use serde_json::json;
 
 use super::{float_clip, noisy_clip, run, yuv420};
 use crate::stream::{Input, Output};
-use crate::support::{backend, frame};
+use crate::support::{assert_codes_within, backend, code_bits, float_samples, frame, range_of};
 
-/// Every plane of every output frame, in channel order.
-type ClipBytes = Vec<Vec<Vec<u8>>>;
+/// Every F32 plane of every output frame, in channel order.
+type ClipSamples = Vec<Vec<Vec<f32>>>;
 
 /// One engine of the reference, its settings and the planes of each frame it takes.
 #[derive(Clone)]
@@ -50,8 +51,8 @@ struct ReferenceEngine {
 }
 
 impl ReferenceEngine {
-    fn plane_bytes(&self, sample_bytes: usize) -> usize {
-        self.width as usize * self.height as usize * sample_bytes
+    fn plane_bytes(&self) -> usize {
+        self.width as usize * self.height as usize * size_of::<f32>()
     }
 }
 
@@ -61,14 +62,14 @@ enum ReferenceOptions {
     Nl4d(Nl4dOptions),
 }
 
-/// Drives av-denoise-core directly over a clip, one engine per plane group.
+/// Drives av-denoise-core directly over a clip into F32, one engine per plane group.
 ///
-/// Each frame's planes are uploaded into word-rounded handles, and planes no engine covers are
-/// copied from the input.
+/// Each frame's planes are uploaded into word-rounded handles. Planes no engine covers are left empty.
 struct Reference {
     engines: Vec<ReferenceEngine>,
     sample: av_denoise_core::SampleFormat,
-    sample_bytes: usize,
+    /// How each plane's `code / max` output maps onto full range samples, for integer input.
+    units: Option<Vec<FloatCodes>>,
     clip: Vec<Input>,
 }
 
@@ -86,7 +87,7 @@ fn built_engine<R: Runtime>(
         height: spec.height,
         channels: spec.channels,
         input: sample,
-        output: sample,
+        output: av_denoise_core::SampleFormat::F32,
     };
 
     match spec.options {
@@ -136,20 +137,26 @@ fn pushed<R: Runtime>(
     ready
 }
 
-/// Emits the oldest ready frame of every engine over the planes of `held`.
+/// Maps an engine's `code / max` float onto the full range sample of the same code.
+fn unit_to_float(unit: f32, codes: FloatCodes) -> f32 {
+    let code = unit * codes.peak;
+
+    (code - codes.offset) / codes.scale
+}
+
+/// Emits the oldest ready frame of every engine as F32 planes, `plane_count` in all.
 fn emitted<R: Runtime>(
     client: &ComputeClient<R>,
     built: &mut [Box<dyn Engine>],
     specs: &[ReferenceEngine],
-    sample_bytes: usize,
-    held: &Input,
-) -> Vec<Vec<u8>> {
-    let mut planes = held.planes.clone();
+    units: Option<&[FloatCodes]>,
+    plane_count: usize,
+) -> Vec<Vec<f32>> {
+    let mut planes = vec![Vec::new(); plane_count];
 
     for (engine, spec) in built.iter_mut().zip(specs) {
-        let bytes = spec.plane_bytes(sample_bytes);
-        let padded_bytes = rounded(bytes);
-        let handles: Vec<Handle> = spec.planes.iter().map(|_| client.empty(padded_bytes)).collect();
+        let bytes = spec.plane_bytes();
+        let handles: Vec<Handle> = spec.planes.iter().map(|_| client.empty(bytes)).collect();
         let device_planes: Vec<DevicePlane<'_>> = handles
             .iter()
             .map(|handle| DevicePlane::new(handle, spec.width, spec.height))
@@ -162,7 +169,15 @@ fn emitted<R: Runtime>(
             let read = client
                 .read_one(handle.clone())
                 .expect("the device should hand back the plane");
-            planes[*plane_index] = read[..bytes].to_vec();
+            let samples = float_samples(&read[..bytes]);
+
+            planes[*plane_index] = match units {
+                Some(units) => {
+                    let codes = units[*plane_index];
+                    samples.iter().map(|unit| unit_to_float(*unit, codes)).collect()
+                },
+                None => samples,
+            };
         }
     }
 
@@ -170,7 +185,7 @@ fn emitted<R: Runtime>(
 }
 
 impl BuildTask for Reference {
-    type Output = ClipBytes;
+    type Output = ClipSamples;
 
     fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
         let client = build.client();
@@ -179,6 +194,7 @@ impl BuildTask for Reference {
             .iter()
             .map(|spec| built_engine(client, spec, self.sample))
             .collect();
+        let units = self.units.as_deref();
 
         let mut outputs = Vec::with_capacity(self.clip.len());
         let mut held = VecDeque::new();
@@ -189,7 +205,8 @@ impl BuildTask for Reference {
 
             for _ in 0..ready {
                 let held_frame = held.pop_front().expect("a held frame");
-                let planes = emitted(client, &mut built, &self.engines, self.sample_bytes, held_frame);
+                let plane_count = held_frame.planes.len();
+                let planes = emitted(client, &mut built, &self.engines, units, plane_count);
                 outputs.push(planes);
             }
         }
@@ -201,7 +218,8 @@ impl BuildTask for Reference {
 
         for _ in 0..tail {
             let held_frame = held.pop_front().expect("a held frame");
-            let planes = emitted(client, &mut built, &self.engines, self.sample_bytes, held_frame);
+            let plane_count = held_frame.planes.len();
+            let planes = emitted(client, &mut built, &self.engines, units, plane_count);
             outputs.push(planes);
         }
 
@@ -211,16 +229,37 @@ impl BuildTask for Reference {
     }
 }
 
-fn reference(engines: Vec<ReferenceEngine>, format: &FrameFormat, clip: Vec<Input>) -> ClipBytes {
+/// How each plane of `format` maps from `code / max` onto full range samples, for integer input.
+fn units_of(format: &FrameFormat) -> Option<Vec<FloatCodes>> {
+    if format.sample == SampleFormat::F32 {
+        return None;
+    }
+
+    let bits = code_bits(format.sample);
+    let range = range_of(format);
+    let units = format
+        .channels()
+        .iter()
+        .map(|channel| {
+            let chroma = matches!(channel, Channel::U | Channel::V);
+            FloatCodes::new(bits, range, chroma)
+        })
+        .collect();
+
+    Some(units)
+}
+
+fn reference(engines: Vec<ReferenceEngine>, format: &FrameFormat, clip: Vec<Input>) -> ClipSamples {
     let sample = match format.sample {
         SampleFormat::U8 => av_denoise_core::SampleFormat::U8,
         SampleFormat::U16 { depth } => av_denoise_core::SampleFormat::U16 { depth: depth.bits() },
         SampleFormat::F32 => av_denoise_core::SampleFormat::F32,
     };
+    let units = units_of(format);
     let task = Reference {
         engines,
         sample,
-        sample_bytes: format.sample.bytes(),
+        units,
         clip,
     };
 
@@ -313,18 +352,25 @@ fn shift_chroma(planes: &mut [Vec<u8>], amount: f32) {
     }
 }
 
-fn assert_same(stage: &str, found: &[Output], expected: &[Vec<Vec<u8>>]) {
+/// Moves every chroma sample of a frame's F32 planes by `amount`.
+fn shift_float_chroma(planes: &mut [Vec<f32>], amount: f32) {
+    for plane in planes.iter_mut().skip(1) {
+        for sample in plane.iter_mut() {
+            *sample += amount;
+        }
+    }
+}
+
+fn assert_same(stage: &str, found: &[Output], expected: &[Vec<Vec<f32>>]) {
     assert_eq!(found.len(), expected.len(), "{stage}");
 
     for (index, (output, planes)) in found.iter().zip(expected).enumerate() {
         assert_eq!(output.planes.len(), planes.len(), "{stage} frame {index}");
 
         for (plane, (found_plane, expected_plane)) in output.planes.iter().zip(planes).enumerate() {
-            let same = found_plane == expected_plane;
-            assert!(
-                same,
-                "{stage} frame {index} plane {plane} differs from av-denoise"
-            );
+            let samples = float_samples(found_plane);
+            let label = format!("{stage} frame {index} plane {plane}");
+            assert_codes_within(&samples, expected_plane, 1e-5, &label);
         }
     }
 }
@@ -533,7 +579,7 @@ fn centred_float_chroma_matches_the_engine() {
 
         let mut expected = reference(engines, &format, uncentred.clone());
         for planes in &mut expected {
-            shift_chroma(planes, -0.5);
+            shift_float_chroma(planes, -0.5);
         }
 
         let found = run(stage, json!({}), format, vec![clip.clone()]);

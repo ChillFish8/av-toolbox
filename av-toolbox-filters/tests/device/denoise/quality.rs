@@ -2,7 +2,7 @@ use av_toolbox_cubek::testing::{FieldClip, field_clips, psnr};
 use av_toolbox_gpu::{Depth, FrameFormat, FrameMeta, SampleFormat};
 use serde_json::json;
 
-use super::{run, yuv420};
+use super::{output_codes, run, yuv420};
 use crate::stream::{Input, Output};
 
 /// How many dB a stage must gain over the noisy input on one clip.
@@ -88,22 +88,6 @@ fn inputs(clip: &FieldClip) -> Vec<Input> {
         .collect()
 }
 
-fn decoded_luma(bytes: &[u8], bits: u32) -> Vec<f32> {
-    match bits {
-        8 => bytes.iter().map(|byte| f32::from(*byte)).collect(),
-        _ => {
-            let (pairs, _) = bytes.as_chunks::<2>();
-            pairs
-                .iter()
-                .map(|pair| {
-                    let code = u16::from_le_bytes(*pair);
-                    f32::from(code)
-                })
-                .collect()
-        },
-    }
-}
-
 fn mean_luma_psnr(frames: &[Vec<f32>], clean: &[[Vec<i32>; 3]], peak: f32) -> f64 {
     let total: f64 = frames
         .iter()
@@ -117,10 +101,13 @@ fn mean_luma_psnr(frames: &[Vec<f32>], clean: &[[Vec<i32>; 3]], peak: f32) -> f6
     total / frames.len() as f64
 }
 
-fn output_luma(outputs: &[Output], bits: u32) -> Vec<Vec<f32>> {
+fn output_luma(outputs: &[Output], format: &FrameFormat) -> Vec<Vec<f32>> {
     outputs
         .iter()
-        .map(|output| decoded_luma(&output.planes[0], bits))
+        .map(|output| {
+            let mut planes = output_codes(format, output);
+            planes.swap_remove(0)
+        })
         .collect()
 }
 
@@ -144,7 +131,7 @@ fn every_stage_beats_the_noisy_input() {
         let peak = ((1u32 << clip.bits) - 1) as f32;
 
         let outputs = run(floor.stage, json!({}), format, vec![inputs(clip)]);
-        let denoised = output_luma(&outputs, clip.bits);
+        let denoised = output_luma(&outputs, &format);
         let noisy = noisy_luma(clip);
 
         let denoised_psnr = mean_luma_psnr(&denoised, &clip.clean, peak);

@@ -6,7 +6,7 @@ mod stream;
 use av_toolbox_gpu::{ChromaLocation, FrameFormat, FrameLayout, FrameMeta, SampleFormat, Subsampling};
 
 use crate::stream::{Input, Output, Stream};
-use crate::support::{backend, built_filter, frame};
+use crate::support::{backend, built_filter, code_bits, frame, planes_as_codes};
 
 pub(super) fn yuv420(width: u32, height: u32, sample: SampleFormat) -> FrameFormat {
     let layout = FrameLayout::Yuv {
@@ -66,6 +66,22 @@ pub(super) fn float_clip(format: &FrameFormat, frames: u64) -> Vec<Input> {
     clip
 }
 
+/// `format` with F32 samples, which every av-denoise stage emits.
+pub(super) fn float_of(format: &FrameFormat) -> FrameFormat {
+    FrameFormat {
+        sample: SampleFormat::F32,
+        ..*format
+    }
+}
+
+/// The F32 planes of `output`, from a run on `format`, as codes of `format`'s depth.
+pub(super) fn output_codes(format: &FrameFormat, output: &Output) -> Vec<Vec<f32>> {
+    let float = float_of(format);
+    let bits = code_bits(format.sample);
+
+    planes_as_codes(&float, &output.planes, bits)
+}
+
 pub(super) fn run(
     stage: &str,
     args: serde_json::Value,
@@ -73,11 +89,12 @@ pub(super) fn run(
     chunks: Vec<Vec<Input>>,
 ) -> Vec<Output> {
     let backend = backend();
-    let filter = built_filter(&backend, stage, format, format, args);
+    let output = float_of(&format);
+    let filter = built_filter(&backend, stage, format, output, args);
     let stream = Stream {
         filter,
         input: format,
-        output: format,
+        output,
         chunks,
     };
 

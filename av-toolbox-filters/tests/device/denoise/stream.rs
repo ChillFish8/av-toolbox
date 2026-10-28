@@ -1,11 +1,22 @@
 use std::error::Error;
 
 use av_toolbox_core::{InputArgument, PipelineRegistry, PreparedStage, StageHandle, StageKind, StreamType};
-use av_toolbox_gpu::{ChromaLocation, FrameLayout, ResolvedFormats, SampleFormat, StreamFormat, Subsampling};
+use av_toolbox_gpu::{
+    Channel,
+    ChromaLocation,
+    ColourRange,
+    FrameLayout,
+    FrameMeta,
+    ResolvedFormats,
+    SampleFormat,
+    StreamFormat,
+    Subsampling,
+};
 use serde_json::json;
 
-use super::{float_clip, noisy_clip, run, yuv420};
-use crate::support::{backend, frame};
+use super::{float_clip, noisy_clip, output_codes, run, yuv420};
+use crate::stream::Input;
+use crate::support::{assert_codes_within, backend, float_planes, float_samples, frame, widened};
 
 fn error_chain(error: &dyn Error) -> String {
     let mut message = error.to_string();
@@ -17,6 +28,17 @@ fn error_chain(error: &dyn Error) -> String {
     }
 
     message
+}
+
+/// Whether any code of `found` is more than half a code from the 8-bit `input`.
+fn differs(found: &[f32], input: &[u8]) -> bool {
+    let codes: Vec<u16> = input.iter().map(|code| u16::from(*code)).collect();
+    let expected = widened(&codes);
+
+    found
+        .iter()
+        .zip(&expected)
+        .any(|(got, want)| (got - want).abs() > 0.5)
 }
 
 #[test]
@@ -42,22 +64,27 @@ fn every_stage_changes_the_selected_planes() {
     for stage in ["av-denoise/nlmeans", "av-denoise/nlmeans-hq", "av-denoise/nl4d"] {
         let outputs = run(stage, json!({}), format, vec![clip.clone()]);
 
-        let changed = outputs
+        let codes: Vec<Vec<Vec<f32>>> = outputs
+            .iter()
+            .map(|output| output_codes(&format, output))
+            .collect();
+
+        let changed = codes
             .iter()
             .zip(&clip)
-            .any(|(output, input)| output.planes[0] != input.planes[0]);
+            .any(|(planes, input)| differs(&planes[0], &input.planes[0]));
         assert!(changed, "{stage} left luma untouched");
 
-        let chroma_changed = outputs
+        let chroma_changed = codes
             .iter()
             .zip(&clip)
-            .any(|(output, input)| output.planes[1] != input.planes[1]);
+            .any(|(planes, input)| differs(&planes[1], &input.planes[1]));
         assert!(chroma_changed, "{stage} left chroma untouched");
     }
 }
 
 #[test]
-fn unselected_planes_are_the_input() {
+fn unselected_planes_are_the_input_as_f32() {
     let format = yuv420(64, 32, SampleFormat::U8);
     let clip = noisy_clip(&format, 4);
 
@@ -69,8 +96,54 @@ fn unselected_planes_are_the_input() {
     );
 
     for (output, input) in outputs.iter().zip(&clip) {
-        assert_eq!(output.planes[1], input.planes[1]);
-        assert_eq!(output.planes[2], input.planes[2]);
+        let codes: Vec<Vec<u16>> = input
+            .planes
+            .iter()
+            .map(|plane| plane.iter().map(|code| u16::from(*code)).collect())
+            .collect();
+        let expected = float_planes(&format, &codes, 8);
+
+        for plane in [1, 2] {
+            let found = float_samples(&output.planes[plane]);
+            let wanted = float_samples(&expected[plane]);
+            let label = format!("plane {plane}");
+            assert_codes_within(&found, &wanted, 1e-6, &label);
+        }
+    }
+}
+
+/// How far a flat plane may drift, about 0.02 of an 8-bit code. NL4D's transforms move it by about 4e-5.
+const FLAT_TOLERANCE: f32 = 1e-4;
+
+#[test]
+fn an_eight_bit_limited_clip_lands_on_full_range() {
+    let mut format = yuv420(64, 32, SampleFormat::U8);
+    format.colour.range = ColourRange::Limited;
+    let luma_samples = format.channel_samples(Channel::Y).expect("a listed channel");
+    let chroma_samples = format.channel_samples(Channel::U).expect("a listed channel");
+    let clip: Vec<Input> = (0..4)
+        .map(|index| Input {
+            meta: FrameMeta::at(index),
+            planes: vec![
+                vec![235; luma_samples],
+                vec![128; chroma_samples],
+                vec![128; chroma_samples],
+            ],
+        })
+        .collect();
+
+    for stage in ["av-denoise/nlmeans", "av-denoise/nlmeans-hq", "av-denoise/nl4d"] {
+        let outputs = run(stage, json!({}), format, vec![clip.clone()]);
+
+        for output in &outputs {
+            let luma = float_samples(&output.planes[0]);
+            let chroma = float_samples(&output.planes[1]);
+            let white = vec![1.0; luma.len()];
+            let neutral = vec![0.0; chroma.len()];
+
+            assert_codes_within(&luma, &white, FLAT_TOLERANCE, stage);
+            assert_codes_within(&chroma, &neutral, FLAT_TOLERANCE, stage);
+        }
     }
 }
 

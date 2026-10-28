@@ -12,7 +12,7 @@ use av_toolbox_gpu::{
 use cubecl::prelude::Runtime;
 use serde_json::json;
 
-use super::{noisy_clip, yuv420};
+use super::{float_of, noisy_clip, yuv420};
 use crate::stream::{Input, run_chunk};
 use crate::support::{backend, built_filter, frame};
 
@@ -36,7 +36,8 @@ impl BuildTask for GrainStream {
         let mut taken = Vec::new();
 
         for chunk in self.chunks {
-            let formats = (&self.format, &self.format);
+            let output = float_of(&self.format);
+            let formats = (&self.format, &output);
             run_chunk(build, &mut context, self.filter.as_mut(), formats, chunk);
 
             let artefacts = self
@@ -122,7 +123,8 @@ fn grainy_clip(format: &FrameFormat, scenes: u64) -> Vec<Vec<Input>> {
 
 fn run_wanting(format: FrameFormat, wanted: &WantedArtefacts, chunks: Vec<Vec<Input>>) -> Vec<Vec<Artefact>> {
     let backend = backend();
-    let mut filter = built_filter(&backend, STAGE, format, format, json!({}));
+    let output = float_of(&format);
+    let mut filter = built_filter(&backend, STAGE, format, output, json!({}));
     filter.wants_artefacts(wanted).expect("accepts");
 
     let stream = GrainStream {

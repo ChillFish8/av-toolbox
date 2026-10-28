@@ -78,6 +78,17 @@ fn codes_to_float_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f3
     output[ABSOLUTE_POS] = (input[ABSOLUTE_POS] - offset) / scale;
 }
 
+#[cube(launch_unchecked)]
+fn unit_to_float_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f32, scale: f32, peak: f32) {
+    if ABSOLUTE_POS >= output.len() {
+        terminate!();
+    }
+
+    let code = input[ABSOLUTE_POS] * peak;
+
+    output[ABSOLUTE_POS] = (code - offset) / scale;
+}
+
 /// Copies an integer plane into f32 code values.
 pub fn widen<R: Runtime>(
     client: &ComputeClient<R>,
@@ -276,6 +287,35 @@ pub fn codes_to_float<R: Runtime>(
             output_array,
             codes.offset,
             codes.scale,
+        );
+    }
+}
+
+/// Maps floats holding `code / peak` onto full range float samples, neither rounded nor clamped.
+pub fn unit_to_float<R: Runtime>(
+    client: &ComputeClient<R>,
+    dispatch: &impl Dispatch,
+    input: DevicePlane<'_>,
+    output: DevicePlane<'_>,
+    codes: FloatCodes,
+) {
+    let samples = output.samples();
+    let input_array = input.array::<R>();
+    let output_array = output.array::<R>();
+    let cubes = dispatch.cube_count(samples);
+    let unit = dispatch.cube_dim();
+
+    // Safety: the input and the output each hold `samples` f32 values.
+    unsafe {
+        unit_to_float_kernel::launch_unchecked::<R>(
+            client,
+            cubes,
+            unit,
+            input_array,
+            output_array,
+            codes.offset,
+            codes.scale,
+            codes.peak,
         );
     }
 }

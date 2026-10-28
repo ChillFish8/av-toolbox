@@ -32,6 +32,7 @@ use av_toolbox_gpu::{
     OutputFormats,
     ResolvedFormats,
     Runtime,
+    SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
@@ -140,7 +141,7 @@ impl<A: AvdArgs> FilterDefinition for Denoise<A> {
 
         Ok(OutputFormats {
             template: StreamTemplate::from_format(&format),
-            samples: FormatSet::of([input.sample]),
+            samples: FormatSet::of([SampleFormat::F32]),
         })
     }
 
