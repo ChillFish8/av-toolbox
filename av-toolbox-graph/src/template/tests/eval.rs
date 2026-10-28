@@ -198,6 +198,55 @@ fn a_checked_value_outside_its_choices_is_an_error() {
     assert!(error.message.contains("fast"), "{}", error.message);
 }
 
+/// Rules that accept any integer, for the call variable written at `span`.
+fn any_integer(span: Span) -> VariableRules {
+    VariableRules {
+        name: "width".to_string(),
+        expected: LiteralKind::Integer,
+        min: None,
+        max: None,
+        choices: None,
+        span,
+    }
+}
+
+#[test]
+fn a_failure_inside_a_checked_value_belongs_to_its_variable() {
+    let unknown = Expr::Field {
+        stage: "input".to_string(),
+        field: "widht".to_string(),
+    };
+    let checked = Expr::Checked {
+        inner: Box::new(unknown),
+        rules: any_integer(Span::new(3, 9)),
+    };
+
+    let error = checked.evaluate(&TestScope).expect_err("widht is no field");
+
+    assert_eq!(error.variable, Some(Span::new(3, 9)));
+    assert_eq!(error.checked, None);
+}
+
+#[test]
+fn a_failure_belongs_to_the_innermost_variable() {
+    let unknown = Expr::Field {
+        stage: "input".to_string(),
+        field: "widht".to_string(),
+    };
+    let inner = Expr::Checked {
+        inner: Box::new(unknown),
+        rules: any_integer(Span::new(3, 9)),
+    };
+    let outer = Expr::Checked {
+        inner: Box::new(inner),
+        rules: any_integer(Span::new(20, 30)),
+    };
+
+    let error = outer.evaluate(&TestScope).expect_err("widht is no field");
+
+    assert_eq!(error.variable, Some(Span::new(3, 9)));
+}
+
 #[test]
 fn a_failed_fill_points_at_its_template() {
     let template = parse_resolved("ab{{ unknown }}");

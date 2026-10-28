@@ -7,7 +7,7 @@ use av_toolbox_graph::{ArgSpans, Diagnostics, FileId, Span, Spanned, Template};
 use serde_json::{Map, Value};
 
 use super::args::convert_args;
-use super::reader::{TableReader, entry, is_stage_name};
+use super::reader::{TableReader, entry, stage_name_problem};
 use super::{RawStage, RawWorkers};
 
 const KEYS: [&str; 4] = ["type", "inputs", "workers", "args"];
@@ -31,8 +31,8 @@ pub(super) fn read_stage(
         failed: false,
     };
 
-    if !is_stage_name(written_name) {
-        let message = format!("the stage name {written_name:?} may only use letters, digits and _");
+    if let Some(problem) = stage_name_problem(written_name) {
+        let message = format!("the stage name {written_name:?} {problem}");
         reader.invalid_name(header, written_name, message);
     }
 

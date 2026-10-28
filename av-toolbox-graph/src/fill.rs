@@ -7,26 +7,33 @@ use serde_json::Value;
 use crate::diagnostic::args_path;
 use crate::graph::{CompiledGraph, Node, NodeId, Reference};
 use crate::natural::{lineage, natural_formats};
+use crate::probes::{record_probes_for, run_probes_for};
 use crate::spec::holds;
 use crate::template::{Literal, Scope, TemplateError, field_of};
 use crate::{DeferredArg, Diagnostic, DiagnosticCode, Diagnostics};
 
 const FILLED_FROM: &str = "filled from this template";
+/// The note at an arg that used a failing call variable.
+pub(crate) const USED_HERE: &str = "used here";
 
 /// Fills every deferred node in dependency order, returning the nodes filled.
 ///
-/// Each template reads the natural formats of the stages it names. Every node is attempted, but a
-/// node whose references read an unfilled node is skipped quietly, since that node's own failure
-/// is already reported.
+/// Each template reads the natural formats of the stages it names. A filled node that a later
+/// template reads through has its probes recorded and run straight away, so its format is known.
+/// Every node is attempted, but a node whose references read an unfilled node is skipped quietly,
+/// since that node's own failure is already reported. A call variable that fails in several places
+/// is reported once, with a note at each place.
 pub fn fill_references(
     graph: &mut CompiledGraph,
     registry: &PipelineRegistry,
     capabilities: &Capabilities,
 ) -> Result<Vec<NodeId>, Diagnostics> {
     let mut diagnostics = Diagnostics::new();
+    let mut template_failures = Diagnostics::new();
     let mut filled = Vec::new();
     let mut unfilled: HashSet<NodeId> = HashSet::new();
 
+    let read_through = read_by_references(graph);
     let order = graph.order().to_vec();
     for id in order {
         let node = graph.node(id);
@@ -39,17 +46,42 @@ pub fn fill_references(
             continue;
         }
 
-        match filled_args(graph, registry, capabilities, node) {
-            Ok(args) => {
-                graph.fill_args(id, args);
-                filled.push(id);
-            },
+        let formats = match referenced_formats(graph, registry, capabilities, node) {
+            Ok(formats) => formats,
             Err(errors) => {
                 diagnostics.extend(errors);
                 unfilled.insert(id);
+                continue;
             },
+        };
+
+        let args = match filled_args(node, formats) {
+            Ok(args) => args,
+            Err(failures) => {
+                for failure in failures {
+                    template_failures.push_merged(failure);
+                }
+
+                unfilled.insert(id);
+                continue;
+            },
+        };
+
+        graph.fill_args(id, args);
+
+        if read_through.contains(&id) {
+            let settled = settle_probes(graph, registry, id);
+            if let Err(errors) = settled {
+                diagnostics.extend(errors);
+                unfilled.insert(id);
+                continue;
+            }
         }
+
+        filled.push(id);
     }
+
+    diagnostics.extend(template_failures);
 
     if diagnostics.has_errors() {
         return Err(diagnostics);
@@ -94,18 +126,34 @@ fn reads_unfilled(graph: &CompiledGraph, node: &Node, unfilled: &HashSet<NodeId>
     needed.iter().any(|id| unfilled.contains(id))
 }
 
-/// A copy of `node`'s args with every deferred arg filled in.
-fn filled_args(
-    graph: &CompiledGraph,
+/// Every node a reference reads, directly or through its inputs.
+fn read_by_references(graph: &CompiledGraph) -> HashSet<NodeId> {
+    let sources: Vec<NodeId> = graph
+        .nodes()
+        .iter()
+        .flat_map(|node| node.references())
+        .map(|reference| reference.source)
+        .collect();
+
+    lineage(graph, &sources)
+}
+
+/// Records and runs the probes of the filled node `id`.
+fn settle_probes(
+    graph: &mut CompiledGraph,
     registry: &PipelineRegistry,
-    capabilities: &Capabilities,
-    node: &Node,
-) -> Result<Value, Diagnostics> {
-    let formats = referenced_formats(graph, registry, capabilities, node)?;
+    id: NodeId,
+) -> Result<(), Diagnostics> {
+    record_probes_for(graph, registry, &[id])?;
+    run_probes_for(graph, registry, &[id])
+}
+
+/// A copy of `node`'s args with every deferred arg filled from `formats`.
+fn filled_args(node: &Node, formats: HashMap<&str, StreamFormat>) -> Result<Value, Vec<Diagnostic>> {
     let scope = NaturalScope { formats };
 
     let mut args = node.args().clone();
-    let mut diagnostics = Diagnostics::new();
+    let mut failures = Vec::new();
 
     for deferred in node.deferred() {
         let filled = deferred.template.fill(&scope);
@@ -113,13 +161,13 @@ fn filled_args(
             Ok(value) => write_at(&mut args, &deferred.pointer, value),
             Err(error) => {
                 let diagnostic = fill_failed(node, deferred, error);
-                diagnostics.push(diagnostic);
+                failures.push(diagnostic);
             },
         }
     }
 
-    if diagnostics.has_errors() {
-        return Err(diagnostics);
+    if !failures.is_empty() {
+        return Err(failures);
     }
 
     Ok(args)
@@ -179,13 +227,15 @@ fn write_at(args: &mut Value, pointer: &str, value: Value) {
     *slot = value;
 }
 
-/// Places a template failure at the deferred arg, or at the call's variable when its rules broke.
+/// Places a template failure at the deferred arg, or at the call's variable when it came from one.
+///
+/// A variable whose rules broke is an invalid variable, anything else is an invalid expression.
 fn fill_failed(node: &Node, deferred: &DeferredArg, error: TemplateError) -> Diagnostic {
     let field = deferred.pointer.replace('/', ".");
     let args = args_path(node.kind(), node.name());
     let path = format!("{args}{field}");
 
-    let Some(rules_span) = error.checked else {
+    let Some(variable_span) = error.variable else {
         return Diagnostic::error(
             DiagnosticCode::InvalidExpression,
             path,
@@ -194,7 +244,12 @@ fn fill_failed(node: &Node, deferred: &DeferredArg, error: TemplateError) -> Dia
         );
     };
 
-    Diagnostic::error(DiagnosticCode::InvalidVariable, path, rules_span, error.message)
+    let code = match error.checked {
+        Some(_) => DiagnosticCode::InvalidVariable,
+        None => DiagnosticCode::InvalidExpression,
+    };
+
+    Diagnostic::error(code, path, variable_span, error.message).with_note(USED_HERE, deferred.span)
 }
 
 /// Answers fields from the natural formats of the stages a node references.

@@ -138,33 +138,42 @@ impl Expr {
         visit(self)
     }
 
-    /// Pushes the stage of every [Expr::Field] below this one, in the order written.
-    pub(crate) fn collect_stages<'a>(&'a self, stages: &mut Vec<&'a str>) {
+    /// Pushes a [StageRead] for every [Expr::Field] below this one, in the order written.
+    ///
+    /// `variable` is the span of the innermost call variable around this expression, if any.
+    pub(crate) fn collect_stage_reads<'a>(&'a self, variable: Option<Span>, reads: &mut Vec<StageRead<'a>>) {
         match self {
             Self::Literal(_) | Self::Path(_) | Self::Variable(_) => {},
-            Self::Field { stage, .. } => stages.push(stage),
-            Self::Unary { operand, .. } => operand.collect_stages(stages),
+            Self::Field { stage, .. } => reads.push(StageRead { stage, variable }),
+            Self::Unary { operand, .. } => operand.collect_stage_reads(variable, reads),
             Self::Binary { left, right, .. } => {
-                left.collect_stages(stages);
-                right.collect_stages(stages);
+                left.collect_stage_reads(variable, reads);
+                right.collect_stage_reads(variable, reads);
             },
             Self::If {
                 condition,
                 then,
                 otherwise,
             } => {
-                condition.collect_stages(stages);
-                then.collect_stages(stages);
-                otherwise.collect_stages(stages);
+                condition.collect_stage_reads(variable, reads);
+                then.collect_stage_reads(variable, reads);
+                otherwise.collect_stage_reads(variable, reads);
             },
             Self::Call { arguments, .. } => {
                 for argument in arguments {
-                    argument.collect_stages(stages);
+                    argument.collect_stage_reads(variable, reads);
                 }
             },
-            Self::Checked { inner, .. } => inner.collect_stages(stages),
+            Self::Checked { inner, rules } => inner.collect_stage_reads(Some(rules.span), reads),
         }
     }
+}
+
+/// A stage an expression reads, with the span of the call variable it was written in, if any.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct StageRead<'a> {
+    pub stage: &'a str,
+    pub variable: Option<Span>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

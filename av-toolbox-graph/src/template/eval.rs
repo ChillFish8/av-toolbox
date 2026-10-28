@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use super::expr::{BinaryOp, Expr, Function, Literal, LiteralKind, UnaryOp, VariableRules};
 use crate::Span;
 
-/// The largest magnitude a float may have and still round into an `i64`.
+/// The smallest magnitude too large for an `i64`.
 const INTEGER_LIMIT: f64 = 9_223_372_036_854_775_808.0;
 
 /// Where an expression reads its variables and stage fields from.
@@ -16,11 +16,13 @@ pub trait Scope {
 
 /// Why an expression could not be evaluated.
 ///
-/// `checked` holds the span of a variable's rules when the value broke them.
+/// `variable` holds the span of the call variable a failure came from. `checked` holds the span
+/// of that variable's rules when the value broke them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvalError {
     pub message: String,
     pub checked: Option<Span>,
+    pub variable: Option<Span>,
 }
 
 impl Expr {
@@ -66,11 +68,17 @@ impl Expr {
                 call(*function, values)
             },
             Self::Checked { inner, rules } => {
-                let value = inner.evaluate(scope)?;
-                check_rules(rules, value).map_err(|message| EvalError {
-                    message,
-                    checked: Some(rules.span),
-                })
+                let evaluated = inner.evaluate(scope);
+                let value = match evaluated {
+                    Ok(value) => value,
+                    Err(error) => return Err(within_variable(error, rules)),
+                };
+
+                let checked = check_rules(rules, value);
+                match checked {
+                    Ok(value) => Ok(value),
+                    Err(message) => Err(broke_rules(message, rules)),
+                }
             },
         }
     }
@@ -80,6 +88,28 @@ fn failure(message: String) -> EvalError {
     EvalError {
         message,
         checked: None,
+        variable: None,
+    }
+}
+
+/// Marks a failure as coming from the call variable `rules` belongs to, unless a variable nested
+/// inside it already claimed it.
+fn within_variable(error: EvalError, rules: &VariableRules) -> EvalError {
+    if error.variable.is_some() {
+        return error;
+    }
+
+    EvalError {
+        variable: Some(rules.span),
+        ..error
+    }
+}
+
+fn broke_rules(message: String, rules: &VariableRules) -> EvalError {
+    EvalError {
+        message,
+        checked: Some(rules.span),
+        variable: Some(rules.span),
     }
 }
 

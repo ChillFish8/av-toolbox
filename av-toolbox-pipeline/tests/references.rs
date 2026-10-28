@@ -180,3 +180,46 @@ fn a_rejected_depth_notes_its_template() {
 
     assert!(noted, "{diagnostics:?}");
 }
+
+const CHUNKED_AFTER_A_LATE_JOIN: &str = r##"
+[source.map]
+type = "solid/fill"
+args.colour = "#404040"
+args.format = "gray"
+args.width = 32
+args.height = 24
+args.frames = 2
+args.frame_rate = [24, 1]
+
+[filter.float_map]
+type = "resample/depth"
+inputs = ["map"]
+args.depth = "f32"
+
+[filter.painted]
+type = "blend/heatmap"
+inputs = { clip = "clip", map = "float_map" }
+args.scale = "{{ clip.width }}"
+
+[filter.deinterlaced]
+type = "deinterlace/bwdif"
+inputs = ["painted"]
+args.order = "top"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["deinterlaced"]
+args.path = "/dev/null"
+"##;
+
+#[test]
+fn a_chunk_stage_after_a_join_with_a_reference_compiles() {
+    let text = format!("{CLIP}{CHUNKED_AFTER_A_LATE_JOIN}");
+    let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
+    let pipeline = compiled(&text, &registry, &backend);
+
+    let deinterlaced = node_named(&pipeline, "deinterlaced").expect("the deinterlace node");
+
+    assert_eq!(deinterlaced.demands().len(), 1);
+}

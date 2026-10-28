@@ -11,6 +11,7 @@ use crate::{
     Spanned,
     StageSpec,
     build,
+    demands_waiting_on_fill,
     fill_references,
     record_probes,
     record_probes_for,
@@ -59,8 +60,19 @@ fn late_probing(name: &str, input: &str, text: &str) -> StageSpec {
     spec
 }
 
+/// A resize reading `input` whose width is the template `text`.
+fn late_resize(name: &str, input: &str, text: &str) -> StageSpec {
+    let mut spec = testing::spec(StageKind::Filter, name, "test/resize");
+    spec.inputs = vec![testing::positional(input)];
+    spec.args = Spanned::unknown(json!({ "width": text }));
+    spec.deferred = vec![testing::deferred("/width", text)];
+
+    spec
+}
+
 /// Runs the passes `Pipeline::build` and `Pipeline::compile` run up to filling references, then
-/// places the demands and runs the probes of the filled nodes and the providers placed for them.
+/// places the demands of the filled and waiting nodes and runs the probes of the filled nodes and
+/// the providers placed for them.
 fn filled(specs: &[StageSpec]) -> CompiledGraph {
     let registry = testing::registry();
     let capabilities = residency::tests::capabilities();
@@ -68,17 +80,25 @@ fn filled(specs: &[StageSpec]) -> CompiledGraph {
 
     satisfy_demands(&mut graph, &registry).expect("should satisfy");
     record_probes(&mut graph, &registry).expect("should record");
+    let waiting = demands_waiting_on_fill(&graph);
     run_probes(&mut graph, &registry).expect("should probe");
 
     let filled = fill_references(&mut graph, &registry, &capabilities).expect("should fill");
+    let demanders: Vec<NodeId> = graph
+        .order()
+        .iter()
+        .copied()
+        .filter(|id| filled.contains(id) || waiting.contains(id))
+        .collect();
     let first_inserted = graph.len();
-    satisfy_demands_for(&mut graph, &registry, &filled).expect("should satisfy the filled nodes");
+    satisfy_demands_for(&mut graph, &registry, &demanders).expect("should satisfy the filled nodes");
 
     let probing: Vec<NodeId> = graph
         .order()
         .iter()
         .copied()
         .filter(|id| filled.contains(id) || id.index() >= first_inserted)
+        .filter(|id| graph.node(*id).probed().is_none())
         .collect();
     record_probes_for(&mut graph, &registry, &probing).expect("should record the filled nodes");
     run_probes_for(&mut graph, &registry, &probing).expect("should probe the filled nodes");
@@ -150,4 +170,70 @@ fn a_filled_stage_that_probes_is_probed_once() {
     assert_eq!(late.probes().len(), 1);
     assert!(late.probes()[0].found.is_some());
     assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_filled_stage_that_probes_can_be_read_by_a_later_reference() {
+    let specs = [
+        seekable("input"),
+        sized("size", 3),
+        late_probing("late", "input", "{{ size.width }}"),
+        late_resize("reader", "input", "{{ late.width }}"),
+        sink("late_out", "late"),
+        sink("reader_out", "reader"),
+    ];
+
+    let graph = filled(&specs);
+
+    let reader = named(&graph, "reader");
+    assert!(!reader.is_deferred());
+    assert!(named(&graph, "late").probed().is_some());
+    assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 1);
+}
+
+/// A chunk stage reading a join whose args are filled late.
+fn behind_a_late_join() -> [StageSpec; 6] {
+    let mut join = testing::spec(StageKind::Filter, "join", "test/host-join");
+    join.inputs = vec![testing::named("input", "other"), testing::named("guide", "clip")];
+    join.args = Spanned::unknown(json!({ "note": "{{ size.width }}" }));
+    join.deferred = vec![testing::deferred("/note", "{{ size.width }}")];
+
+    let mut denoise = testing::spec(StageKind::Filter, "denoise", "test/temporal");
+    denoise.inputs = vec![testing::positional("join")];
+    denoise.args = Spanned::unknown(json!({ "radius": 1 }));
+
+    [
+        source("clip"),
+        source("other"),
+        sized("size", 64),
+        join,
+        denoise,
+        sink("out", "denoise"),
+    ]
+}
+
+#[test]
+fn a_chunk_stage_behind_a_late_join_waits_for_the_fill() {
+    let specs = behind_a_late_join();
+    let registry = testing::registry();
+    let graph = build(&registry, &specs).expect("should build").into_graph();
+
+    let waiting = demands_waiting_on_fill(&graph);
+
+    assert_eq!(
+        waiting,
+        vec![node_named(&graph, "denoise"), node_named(&graph, "out")]
+    );
+}
+
+#[test]
+fn a_chunk_stage_behind_a_late_join_is_served_after_the_fill() {
+    let specs = behind_a_late_join();
+
+    let graph = filled(&specs);
+
+    let found = providers(&graph);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].name(), "fixture-cuts(clip)");
+    assert_eq!(named(&graph, "denoise").demands().len(), 1);
 }

@@ -57,7 +57,14 @@ mod widen;
 pub use self::artefacts::ArtefactSinkNode;
 pub use self::build::{Built, build};
 pub use self::chroma::settle_mask_planes;
-pub use self::demands::{NodeDemand, ProviderPlacement, ServedLayer, satisfy_demands, satisfy_demands_for};
+pub use self::demands::{
+    NodeDemand,
+    ProviderPlacement,
+    ServedLayer,
+    demands_waiting_on_fill,
+    satisfy_demands,
+    satisfy_demands_for,
+};
 pub use self::diagnostic::{Diagnostic, DiagnosticCode, Diagnostics, Note, Severity};
 pub use self::fill::fill_references;
 pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, NodeRole, Reference, Sharing};
@@ -89,6 +96,7 @@ pub use self::template::{
     LiteralKind,
     Piece,
     Scope,
+    StageRead,
     Template,
     TemplateError,
     TemplateExpr,

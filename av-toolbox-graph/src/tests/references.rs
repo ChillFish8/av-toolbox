@@ -9,6 +9,7 @@ use crate::{
     DiagnosticCode,
     Diagnostics,
     OptimisationPass,
+    Span,
     Spanned,
     StageSpec,
     build,
@@ -284,4 +285,65 @@ fn references_to_merged_stages_fold_into_one() {
         .map(|reference| reference.source)
         .collect();
     assert_eq!(sources, vec![node_named(&graph, "input")]);
+}
+
+/// Two blurs reading `referenced` through one call variable written at `variable`.
+fn read_through_one_variable(referenced: &str, variable: Span) -> Vec<StageSpec> {
+    let mut first = deferred_blur("first", "score", referenced);
+    first.deferred[0].span = Span::new(40, 50);
+    testing::through_variable(&mut first.deferred[0], variable);
+
+    let mut second = deferred_blur("second", "score", referenced);
+    second.deferred[0].span = Span::new(60, 70);
+    testing::through_variable(&mut second.deferred[0], variable);
+
+    vec![
+        source("score"),
+        first,
+        second,
+        sink("first_out", "first"),
+        sink("second_out", "second"),
+    ]
+}
+
+#[test]
+fn an_unknown_stage_in_a_call_variable_is_reported_once_at_the_variable() {
+    let variable = Span::new(5, 9);
+    let specs = read_through_one_variable("scroe", variable);
+
+    let diagnostics = build(&testing::registry(), &specs).expect_err("should fail");
+    let unknown: Vec<_> = diagnostics
+        .iter()
+        .filter(|entry| entry.code() == DiagnosticCode::UnknownStageReference)
+        .collect();
+
+    let [only] = unknown.as_slice() else {
+        panic!("one diagnostic per bad variable, found {unknown:?}");
+    };
+    let used: Vec<Span> = only
+        .notes()
+        .iter()
+        .filter(|note| note.message == "used here")
+        .map(|note| note.span)
+        .collect();
+
+    assert_eq!(only.span(), variable);
+    assert_eq!(used, vec![Span::new(40, 50), Span::new(60, 70)]);
+}
+
+#[test]
+fn an_unknown_reference_path_names_the_arg() {
+    let specs = vec![
+        source("score"),
+        deferred_blur("clip_sized", "score", "missing"),
+        sink("out", "clip_sized"),
+    ];
+
+    let diagnostics = build(&testing::registry(), &specs).expect_err("should fail");
+    let unknown = diagnostics
+        .iter()
+        .find(|entry| entry.code() == DiagnosticCode::UnknownStageReference)
+        .expect("should report an unknown reference");
+
+    assert_eq!(unknown.path(), "filter.clip_sized.args.sigma");
 }

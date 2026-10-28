@@ -11,7 +11,7 @@ use std::ops::Range;
 use serde_json::Value;
 
 pub use self::eval::{EvalError, Scope};
-pub use self::expr::{BinaryOp, Expr, Function, Literal, LiteralKind, UnaryOp, VariableRules};
+pub use self::expr::{BinaryOp, Expr, Function, Literal, LiteralKind, StageRead, UnaryOp, VariableRules};
 pub use self::fields::field_of;
 use self::parse::parse_pieces;
 use crate::Span;
@@ -37,13 +37,15 @@ pub struct TemplateExpr {
 
 /// Why a template could not be parsed or filled.
 ///
-/// `checked` holds the span of a variable's rules when a filled value broke them.
+/// `variable` holds the span of the call variable a failure came from. `checked` holds the span
+/// of that variable's rules when a filled value broke them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateError {
     pub message: String,
     /// Byte range inside the template text.
     pub range: Range<usize>,
     pub checked: Option<Span>,
+    pub variable: Option<Span>,
 }
 
 impl Template {
@@ -66,15 +68,22 @@ impl Template {
 
     /// Every stage a `Field` names, in the order written.
     pub fn stages(&self) -> Vec<&str> {
-        let mut stages = Vec::new();
+        let reads = self.stage_reads();
+
+        reads.into_iter().map(|read| read.stage).collect()
+    }
+
+    /// Every stage a `Field` names with the call variable it was written in, in the order written.
+    pub fn stage_reads(&self) -> Vec<StageRead<'_>> {
+        let mut reads = Vec::new();
 
         for piece in &self.pieces {
             if let Piece::Expr(found) = piece {
-                found.expr.collect_stages(&mut stages);
+                found.expr.collect_stage_reads(None, &mut reads);
             }
         }
 
-        stages
+        reads
     }
 
     /// Fills the template. A template that is one expression and nothing else keeps its type.
@@ -103,9 +112,17 @@ impl Template {
 
 fn evaluate(found: &TemplateExpr, scope: &dyn Scope) -> Result<Literal, TemplateError> {
     let evaluated = found.expr.evaluate(scope);
-    evaluated.map_err(|error| TemplateError {
+    match evaluated {
+        Ok(value) => Ok(value),
+        Err(error) => Err(located(error, &found.range)),
+    }
+}
+
+fn located(error: EvalError, range: &Range<usize>) -> TemplateError {
+    TemplateError {
         message: error.message,
-        range: found.range.clone(),
+        range: range.clone(),
         checked: error.checked,
-    })
+        variable: error.variable,
+    }
 }

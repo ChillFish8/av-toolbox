@@ -313,3 +313,41 @@ fn a_hyphenated_stage_name_suggests_an_underscore() {
         .collect();
     assert_eq!(notes, ["did you mean `my_clip`?"]);
 }
+
+#[test]
+fn a_stage_name_starting_with_a_digit_asks_for_a_rename() {
+    let text = "[source.4k]\ntype = \"a/b\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    let message = diagnostics[0].message();
+    assert!(message.contains("starts with a digit"), "{message}");
+    assert!(message.contains("rename it"), "{message}");
+}
+
+#[test]
+fn a_stage_name_that_is_a_template_keyword_asks_for_a_rename() {
+    let text = "[filter.then]\ntype = \"a/b\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    let message = diagnostics[0].message();
+    assert!(message.contains("template keyword"), "{message}");
+    assert!(message.contains("rename it"), "{message}");
+}
+
+#[test]
+fn a_call_name_that_is_a_template_keyword_asks_for_a_rename() {
+    let text = "[call.not]\npath = \"part.toml\"\n";
+
+    let diagnostics = reported(text);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message().contains("template keyword")),
+        "{diagnostics:?}"
+    );
+}

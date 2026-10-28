@@ -4,6 +4,9 @@ use ::toml::Spanned as TomlSpanned;
 use ::toml::de::{DeArray, DeTable, DeValue};
 use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, FileId, InputRef, Span, Spanned, Template};
 
+/// The words a template reads as keywords rather than as a stage name.
+const TEMPLATE_KEYWORDS: [&str; 8] = ["if", "then", "else", "and", "or", "not", "true", "false"];
+
 /// One table being read, remembering whether anything in it was wrong.
 pub(super) struct TableReader<'a> {
     /// The table's own path, such as `filter.denoise`.
@@ -186,7 +189,28 @@ pub(super) fn entry<'t, 'i>(table: &'t DeTable<'i>, key: &str) -> Option<&'t Tom
 
 /// Whether `name` may name a stage, call, input or output.
 pub(super) fn is_stage_name(name: &str) -> bool {
-    let allowed = |character: char| character.is_ascii_alphanumeric() || character == '_';
+    stage_name_problem(name).is_none()
+}
 
-    !name.is_empty() && name.chars().all(allowed)
+/// Why `name` cannot name a stage, call, input or output, or `None` when it can.
+///
+/// A name must be one a template can read, so it may not start with a digit or be a keyword.
+pub(super) fn stage_name_problem(name: &str) -> Option<&'static str> {
+    let allowed = |character: char| character.is_ascii_alphanumeric() || character == '_';
+    if name.is_empty() || !name.chars().all(allowed) {
+        return Some("may only use letters, digits and _");
+    }
+
+    let starts_with_digit = name.starts_with(|character: char| character.is_ascii_digit());
+    if starts_with_digit {
+        return Some(
+            "starts with a digit, which a template cannot read, so rename it to start with a letter or _",
+        );
+    }
+
+    if TEMPLATE_KEYWORDS.contains(&name) {
+        return Some("is a template keyword, which a template cannot read as a stage, so rename it");
+    }
+
+    None
 }

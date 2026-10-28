@@ -123,6 +123,7 @@ impl Lexer<'_> {
             message,
             range,
             checked: None,
+            variable: None,
         }
     }
 

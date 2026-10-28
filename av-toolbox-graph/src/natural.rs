@@ -4,6 +4,7 @@ use av_toolbox_core::{PipelineRegistry, StageError};
 use av_toolbox_gpu::{Capabilities, StreamFormat};
 
 use crate::diagnostic::stage_path;
+use crate::fill::note_templates;
 use crate::graph::{CompiledGraph, Node, NodeId};
 use crate::solve::{signature_slots, slot_inputs};
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
@@ -153,11 +154,14 @@ fn unknowable(node: &Node) -> Option<Diagnostic> {
     None
 }
 
+/// A build failure at `node`, noting each template that filled it.
 fn build_failed(node: &Node, error: &StageError) -> Diagnostic {
-    Diagnostic::error(
+    let diagnostic = Diagnostic::error(
         DiagnosticCode::StageBuildFailed,
         stage_path(node.kind(), node.name()),
         node.span(),
         error.to_string(),
-    )
+    );
+
+    note_templates(node, diagnostic)
 }

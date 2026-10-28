@@ -12,6 +12,7 @@ use av_toolbox_graph::{
     Span,
     StageSpec,
     default_passes,
+    demands_waiting_on_fill,
     fill_references,
     inject_output_depth,
     insert_widens,
@@ -109,12 +110,13 @@ impl<'r> Pipeline<'r> {
             mut warnings,
         } = self;
 
+        let waiting = demands_waiting_on_fill(&graph);
         run_probes(&mut graph, registry)?;
 
         let capabilities = backend.capabilities();
         let filled = fill_references(&mut graph, registry, capabilities)?;
         if !filled.is_empty() {
-            prepare_filled(&mut graph, registry, &filled)?;
+            prepare_filled(&mut graph, registry, &filled, &waiting)?;
         }
 
         inject_output_depth(&mut graph, registry, capabilities)?;
@@ -184,15 +186,23 @@ impl CompiledPipeline<'_, '_> {
     }
 }
 
-/// Places the demands of the `filled` nodes, runs the probes of those nodes and the providers
-/// placed for them, then drops the stages that were only read by references.
+/// Places the demands of the `filled` and `waiting` nodes, runs the probes of the filled nodes and
+/// the providers placed for them, then drops the stages that were only read by references.
 fn prepare_filled(
     graph: &mut CompiledGraph,
     registry: &PipelineRegistry,
     filled: &[NodeId],
+    waiting: &[NodeId],
 ) -> Result<(), PipelineError> {
+    let demanders: Vec<NodeId> = graph
+        .order()
+        .iter()
+        .copied()
+        .filter(|id| filled.contains(id) || waiting.contains(id))
+        .collect();
+
     let first_inserted = graph.len();
-    satisfy_demands_for(graph, registry, filled)?;
+    satisfy_demands_for(graph, registry, &demanders)?;
 
     let probing = filled_or_inserted(graph, filled, first_inserted);
     record_probes_for(graph, registry, &probing)?;
@@ -204,12 +214,15 @@ fn prepare_filled(
 }
 
 /// Every node in `filled`, or added at or after `first_inserted`, in dependency order.
+///
+/// A node already probed while filling is left out, so its probes do not run twice.
 fn filled_or_inserted(graph: &CompiledGraph, filled: &[NodeId], first_inserted: usize) -> Vec<NodeId> {
     graph
         .order()
         .iter()
         .copied()
         .filter(|id| filled.contains(id) || id.index() >= first_inserted)
+        .filter(|id| graph.node(*id).probed().is_none())
         .collect()
 }
 

@@ -252,6 +252,23 @@ impl Diagnostics {
         self.entries.extend(other.entries);
     }
 
+    /// Adds `diagnostic`, folding its notes into an earlier one with the same code, span and message.
+    pub(crate) fn push_merged(&mut self, diagnostic: Diagnostic) {
+        let earlier = self.entries.iter_mut().find(|kept| {
+            kept.code == diagnostic.code && kept.span == diagnostic.span && kept.message == diagnostic.message
+        });
+        let Some(kept) = earlier else {
+            self.entries.push(diagnostic);
+            return;
+        };
+
+        for note in diagnostic.notes {
+            if !kept.notes.contains(&note) {
+                kept.notes.push(note);
+            }
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

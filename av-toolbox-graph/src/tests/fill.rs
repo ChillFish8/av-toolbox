@@ -288,3 +288,106 @@ fn a_reference_to_a_merged_stage_fills_from_the_kept_stage() {
 
     assert_eq!(width_of(&graph, "scaled"), json!(64));
 }
+
+/// Fills a resize whose width template `text` came through a call variable written at `variable`.
+fn fill_through_variable(text: &str, variable: Span) -> Diagnostics {
+    let mut scaled = resize("scaled", "input", text);
+    scaled.deferred[0].span = Span::new(10, 30);
+    testing::through_variable(&mut scaled.deferred[0], variable);
+
+    let specs = vec![sized("input", 64, 48), scaled, sink("out", "scaled")];
+
+    fill_failure(&specs)
+}
+
+fn assert_at_the_variable(diagnostics: &Diagnostics, variable: Span) {
+    let invalid = diagnostics
+        .iter()
+        .find(|entry| entry.code() == DiagnosticCode::InvalidExpression)
+        .expect("an invalid expression");
+    let used: Vec<Span> = invalid
+        .notes()
+        .iter()
+        .filter(|note| note.message == "used here")
+        .map(|note| note.span)
+        .collect();
+
+    assert_eq!(invalid.span(), variable);
+    assert_eq!(used, vec![Span::new(10, 30)]);
+}
+
+#[test]
+fn an_unknown_field_in_a_call_variable_points_at_the_variable() {
+    let variable = Span::new(5, 9);
+
+    let diagnostics = fill_through_variable("{{ input.widht }}", variable);
+
+    assert_at_the_variable(&diagnostics, variable);
+}
+
+#[test]
+fn a_division_by_zero_in_a_call_variable_points_at_the_variable() {
+    let variable = Span::new(5, 9);
+
+    let diagnostics = fill_through_variable("{{ input.width % 0 }}", variable);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|entry| entry.message().contains("divides by zero")),
+        "{diagnostics:?}"
+    );
+    assert_at_the_variable(&diagnostics, variable);
+}
+
+#[test]
+fn a_call_variable_failing_in_two_stages_is_reported_once() {
+    let variable = Span::new(5, 9);
+    let mut first = resize("first", "input", "{{ input.widht }}");
+    testing::through_variable(&mut first.deferred[0], variable);
+    let mut second = resize("second", "input", "{{ input.widht }}");
+    testing::through_variable(&mut second.deferred[0], variable);
+
+    let specs = vec![
+        sized("input", 64, 48),
+        first,
+        second,
+        sink("first_out", "first"),
+        sink("second_out", "second"),
+    ];
+
+    let diagnostics = fill_failure(&specs);
+
+    assert_eq!(diagnostics.iter().count(), 1);
+}
+
+#[test]
+fn a_filled_stage_failing_to_produce_notes_its_template() {
+    let mut broken = unproducing("broken", "input");
+    broken.args = Spanned::unknown(json!({ "note": "{{ input.width }}" }));
+    broken.deferred = vec![testing::deferred("/note", "{{ input.width }}")];
+    broken.deferred[0].span = Span::new(12, 20);
+
+    let specs = vec![
+        sized("input", 64, 48),
+        broken,
+        resize("reading", "input", "{{ broken.width }}"),
+        sink("out", "reading"),
+        sink("other", "broken"),
+    ];
+
+    let diagnostics = fill_failure(&specs);
+    let failed = diagnostics
+        .iter()
+        .find(|entry| entry.code() == DiagnosticCode::StageBuildFailed)
+        .expect("a build failure");
+
+    assert!(
+        failed
+            .notes()
+            .iter()
+            .any(|note| note.message == "filled from this template" && note.span == Span::new(12, 20)),
+        "{:?}",
+        failed.notes(),
+    );
+}

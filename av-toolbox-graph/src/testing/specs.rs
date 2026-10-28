@@ -1,7 +1,19 @@
 use av_toolbox_core::StageKind;
 use serde_json::json;
 
-use crate::{ArgSpans, DeferredArg, Expr, InputRef, Piece, Span, Spanned, StageSpec, Template};
+use crate::{
+    ArgSpans,
+    DeferredArg,
+    Expr,
+    InputRef,
+    LiteralKind,
+    Piece,
+    Span,
+    Spanned,
+    StageSpec,
+    Template,
+    VariableRules,
+};
 
 /// Builds a spec with no inputs, empty arguments and unknown spans.
 ///
@@ -49,6 +61,28 @@ pub(crate) fn deferred(pointer: &str, text: &str) -> DeferredArg {
         pointer: pointer.to_string(),
         template,
         span: Span::unknown(),
+    }
+}
+
+/// Wraps every expression in `deferred` as if a call passed it in a float variable written at `span`.
+pub(crate) fn through_variable(deferred: &mut DeferredArg, span: Span) {
+    for piece in deferred.template.pieces_mut() {
+        let Piece::Expr(found) = piece else {
+            continue;
+        };
+
+        let inner = found.expr.clone();
+        found.expr = Expr::Checked {
+            inner: Box::new(inner),
+            rules: VariableRules {
+                name: String::from("passed"),
+                expected: LiteralKind::Float,
+                min: None,
+                max: None,
+                choices: None,
+                span,
+            },
+        };
     }
 }
 

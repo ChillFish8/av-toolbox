@@ -5,7 +5,7 @@ use ::toml::de::{DeTable, DeValue};
 use av_toolbox_graph::{Diagnostics, FileId, Span, Spanned, Template};
 
 use super::args::convert_value;
-use super::reader::{TableReader, entry, is_stage_name};
+use super::reader::{TableReader, entry, stage_name_problem};
 use super::{RawCall, RawCallVariable, RawInput, RawOutput};
 
 const CALL_KEYS: [&str; 3] = ["path", "inputs", "variables"];
@@ -31,8 +31,8 @@ fn open<'a, 'v, 'i>(
         failed: false,
     };
 
-    if !is_stage_name(written_name) {
-        let message = format!("the name {written_name:?} may only use letters, digits and _");
+    if let Some(problem) = stage_name_problem(written_name) {
+        let message = format!("the name {written_name:?} {problem}");
         reader.invalid_name(header, written_name, message);
     }
 

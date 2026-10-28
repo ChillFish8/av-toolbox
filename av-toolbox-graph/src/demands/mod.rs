@@ -18,6 +18,7 @@ use self::insert::insert_instances;
 use self::place::{place_demand, provider_demands};
 pub(crate) use self::trace::bound_edge;
 use crate::graph::{CompiledGraph, EdgeId, Node, NodeId, NodeRole};
+use crate::natural::lineage;
 use crate::{Diagnostic, DiagnosticCode, Diagnostics};
 
 /// Where the graph placed one provider, and the layers it serves there.
@@ -121,9 +122,39 @@ struct Placements {
 
 /// Inserts a provider for every group of demands that place themselves behind the same node, and
 /// gives each demanding node its layer.
+///
+/// The demands of nodes behind a deferred node with several inputs are left for after filling.
 pub fn satisfy_demands(graph: &mut CompiledGraph, registry: &PipelineRegistry) -> Result<(), Diagnostics> {
-    let nodes = graph.filled_order();
+    let waiting = demands_waiting_on_fill(graph);
+    let nodes: Vec<NodeId> = graph
+        .filled_order()
+        .into_iter()
+        .filter(|id| !waiting.contains(id))
+        .collect();
+
     satisfy_demands_for(graph, registry, &nodes)
+}
+
+/// Every node not deferred whose demands must wait until the deferred nodes are filled, in dependency order.
+///
+/// A demand traced through a node with several inputs follows that node's chunk authority, which
+/// is only known once its stage is prepared. A deferred node is not prepared until it is filled.
+pub fn demands_waiting_on_fill(graph: &CompiledGraph) -> Vec<NodeId> {
+    graph
+        .filled_order()
+        .into_iter()
+        .filter(|id| behind_a_deferred_join(graph, *id))
+        .collect()
+}
+
+fn behind_a_deferred_join(graph: &CompiledGraph, id: NodeId) -> bool {
+    let upstream: Vec<NodeId> = graph.node(id).inputs().iter().map(|edge| edge.source()).collect();
+    let ancestors = lineage(graph, &upstream);
+
+    ancestors.iter().any(|ancestor| {
+        let node = graph.node(*ancestor);
+        node.is_deferred() && node.inputs().len() > 1
+    })
 }
 
 /// Inserts a provider for every group of demands the stages in `nodes` make, and gives each

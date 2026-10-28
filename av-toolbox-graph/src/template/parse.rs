@@ -25,6 +25,7 @@ pub(super) fn parse_pieces(text: &str) -> Result<Vec<Piece>, TemplateError> {
                 message: "a template opened with {{ is never closed with }}".to_string(),
                 range: open..text.len(),
                 checked: None,
+                variable: None,
             });
         };
 
@@ -74,6 +75,7 @@ fn parse_expression(text: &str, offset: usize, template: Range<usize>) -> Result
             message: "a template must hold an expression, such as {{ clip_input }}".to_string(),
             range: template,
             checked: None,
+            variable: None,
         });
     }
 
@@ -148,6 +150,7 @@ impl Parser {
             message,
             range,
             checked: None,
+            variable: None,
         }
     }
 
@@ -357,7 +360,9 @@ impl Parser {
         let end = self.tokens[self.index - 1].range.end;
         let count = arguments.len();
         let arity = check_arity(function, count);
-        arity.map_err(|message| self.error_at(message, start..end))?;
+        if let Err(message) = arity {
+            return Err(self.error_at(message, start..end));
+        }
 
         Ok(Expr::Call { function, arguments })
     }

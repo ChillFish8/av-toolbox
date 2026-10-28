@@ -4,8 +4,9 @@ use av_toolbox_core::{BindInputsError, InputArgument, InputSignature, StageHandl
 
 use super::resolve::{Resolution, ResolvedStage};
 use crate::diagnostic::{args_path, input_path, stage_path};
+use crate::fill::USED_HERE;
 use crate::graph::{Edge, Node, NodeId, NodeParts, Reference};
-use crate::{DeferredArg, Diagnostic, DiagnosticCode, Diagnostics, StageSpec, suggest_name};
+use crate::{DeferredArg, Diagnostic, DiagnosticCode, Diagnostics, StageRead, StageSpec, suggest_name};
 
 /// Binds every resolved stage against its signature and turns it into a node.
 pub(crate) fn bind(
@@ -127,82 +128,97 @@ fn describe(spec: &StageSpec, error: &BindInputsError, position: Option<usize>) 
 }
 
 /// Rejects any stage whose deferred args read a stage that is not defined or produces no output.
+///
+/// A bad read written in a call variable is reported once at the variable, with a note at each
+/// arg that uses it.
 fn check_references(
     specs: &[StageSpec],
     resolution: &Resolution<'_>,
     accepted: &mut [bool],
     diagnostics: &mut Diagnostics,
 ) {
+    let mut reported = Diagnostics::new();
+
     for (index, stage) in resolution.stages.iter().enumerate() {
         let Some(stage) = stage else {
             continue;
         };
 
         for deferred in &stage.spec.deferred {
-            let names = unique_stages(deferred);
-            for name in names {
-                let reported = reference_diagnostic(stage.spec, deferred, name, specs, &resolution.by_name);
-                let Some(diagnostic) = reported else {
+            let reads = unique_reads(deferred);
+            for read in reads {
+                let found = reference_diagnostic(stage.spec, deferred, read, specs, &resolution.by_name);
+                let Some(diagnostic) = found else {
                     continue;
                 };
 
-                diagnostics.push(diagnostic);
+                reported.push_merged(diagnostic);
                 accepted[index] = false;
             }
         }
     }
+
+    diagnostics.extend(reported);
 }
 
-/// Every stage `deferred` reads, listed once each in the order written.
-fn unique_stages(deferred: &DeferredArg) -> Vec<&str> {
-    let mut names: Vec<&str> = Vec::new();
+/// Every stage `deferred` reads, listed once per call variable in the order written.
+fn unique_reads(deferred: &DeferredArg) -> Vec<StageRead<'_>> {
+    let mut reads: Vec<StageRead<'_>> = Vec::new();
 
-    for name in deferred.template.stages() {
-        if !names.contains(&name) {
-            names.push(name);
+    for read in deferred.template.stage_reads() {
+        if !reads.contains(&read) {
+            reads.push(read);
         }
     }
 
-    names
+    reads
 }
 
-/// Explains why `deferred` cannot read the stage called `name`, or `None` when it can.
+/// Explains why `deferred` cannot read `read`, or `None` when it can.
+///
+/// A read written in a call variable is reported at that variable, with a note at `deferred`.
 fn reference_diagnostic(
     spec: &StageSpec,
     deferred: &DeferredArg,
-    name: &str,
+    read: StageRead<'_>,
     specs: &[StageSpec],
     by_name: &HashMap<String, usize>,
 ) -> Option<Diagnostic> {
-    let path = args_path(spec.kind, &spec.name.value);
+    let name = read.stage;
+    let args = args_path(spec.kind, &spec.name.value);
+    let field = deferred.pointer.replace('/', ".");
+    let path = format!("{args}{field}");
+    let span = read.variable.unwrap_or(deferred.span);
     let target = by_name.get(name).copied();
 
-    let Some(position) = target else {
-        let message = format!("no stage named {name} is defined");
-        let mut diagnostic = Diagnostic::error(
-            DiagnosticCode::UnknownStageReference,
-            path,
-            deferred.span,
-            message,
-        );
+    let diagnostic = match target {
+        None => {
+            let message = format!("no stage named {name} is defined");
+            let mut diagnostic =
+                Diagnostic::error(DiagnosticCode::UnknownStageReference, path, span, message);
 
-        let known_names = by_name.keys().map(String::as_str);
-        if let Some(closest) = suggest_name(name, known_names) {
-            let note = format!("did you mean `{closest}`?");
-            diagnostic = diagnostic.with_note(note, deferred.span);
-        }
+            let known_names = by_name.keys().map(String::as_str);
+            if let Some(closest) = suggest_name(name, known_names) {
+                let note = format!("did you mean `{closest}`?");
+                diagnostic = diagnostic.with_note(note, span);
+            }
 
-        return Some(diagnostic);
+            diagnostic
+        },
+        Some(position) if specs[position].kind == StageKind::Sink => {
+            let message = format!("{name} is a sink, which produces no output");
+            Diagnostic::error(DiagnosticCode::SinkHasNoOutput, path, span, message)
+        },
+        Some(_) => return None,
     };
 
-    if specs[position].kind != StageKind::Sink {
-        return None;
+    if read.variable.is_none() {
+        return Some(diagnostic);
     }
 
-    let message = format!("{name} is a sink, which produces no output");
-    let diagnostic = Diagnostic::error(DiagnosticCode::SinkHasNoOutput, path, deferred.span, message);
+    let noted = diagnostic.with_note(USED_HERE, deferred.span);
 
-    Some(diagnostic)
+    Some(noted)
 }
 
 /// Drops any stage that reads a stage which was itself rejected, until nothing changes.
