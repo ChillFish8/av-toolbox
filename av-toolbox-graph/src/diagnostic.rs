@@ -71,6 +71,8 @@ pub enum DiagnosticCode {
     ProbeFailed,
     /// A stage probes a source that cannot seek.
     UnseekableSource,
+    /// A template in a stage's args could not be filled.
+    InvalidExpression,
 }
 
 impl DiagnosticCode {
@@ -116,6 +118,7 @@ impl DiagnosticCode {
             Self::UnknownProbe => "unknown-probe",
             Self::ProbeFailed => "probe-failed",
             Self::UnseekableSource => "unseekable-source",
+            Self::InvalidExpression => "invalid-expression",
         }
     }
 }
@@ -405,6 +408,11 @@ mod tests {
             "conflicting-mask-planes"
         );
         assert_eq!(DiagnosticCode::HostMaskPlanes.as_str(), "host-mask-planes");
+    }
+
+    #[test]
+    fn the_expression_code_renders_as_kebab_case() {
+        assert_eq!(DiagnosticCode::InvalidExpression.as_str(), "invalid-expression");
     }
 
     #[test]

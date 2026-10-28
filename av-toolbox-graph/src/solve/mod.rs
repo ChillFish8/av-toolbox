@@ -654,23 +654,12 @@ impl Solver<'_> {
 
     /// The formats this node's producers settled on, one entry per signature slot.
     ///
-    /// A slot nobody bound is a hole, so everything after it keeps its own index. A producer that
-    /// never settled gives `None` for the node as a whole, because it cannot be decided at all.
+    /// A producer that never settled gives `None` for the node as a whole, because it cannot be
+    /// decided at all.
     fn inputs_of(&self, id: NodeId) -> Option<Vec<Option<StreamFormat>>> {
         let slots = &self.slots[id.index()];
-        let mut inputs = Vec::with_capacity(slots.len());
 
-        for (slot, filled) in slots.iter().enumerate() {
-            if filled.is_none() {
-                inputs.push(None);
-                continue;
-            }
-
-            let format = self.received(id, slot)?;
-            inputs.push(Some(format));
-        }
-
-        Some(inputs)
+        slot_inputs(slots, |edge| self.received_on(id, edge))
     }
 
     /// The format `consumer` gets in `slot`, which is the widened one where the edge was widened.
@@ -679,6 +668,12 @@ impl Solver<'_> {
     fn received(&self, consumer: NodeId, slot: usize) -> Option<StreamFormat> {
         let edge = self.slots[consumer.index()][slot]?;
 
+        self.received_on(consumer, edge)
+    }
+
+    /// The format `consumer` gets on the input at `edge`, which is `None` while its producer is
+    /// unsettled.
+    fn received_on(&self, consumer: NodeId, edge: usize) -> Option<StreamFormat> {
         let widened = self
             .widens
             .iter()
@@ -879,13 +874,13 @@ struct Refusal {
 ///
 /// An optional parameter nobody bound leaves its slot empty, and the variadic tail follows the
 /// named parameters in the order the definition wrote it.
-type SignatureSlots = Vec<Option<usize>>;
+pub(crate) type SignatureSlots = Vec<Option<usize>>;
 
 /// Lines a node's inputs up with the slots of its stage's signature.
 ///
 /// A stage the registry does not know has no signature to line up against, so its inputs keep the
 /// order they were written in.
-fn signature_slots(registry: &PipelineRegistry, node: &Node) -> SignatureSlots {
+pub(crate) fn signature_slots(registry: &PipelineRegistry, node: &Node) -> SignatureSlots {
     let Some(signature) = signature_of(registry, node) else {
         return (0..node.inputs().len()).map(Some).collect();
     };
@@ -912,6 +907,29 @@ fn signature_slots(registry: &PipelineRegistry, node: &Node) -> SignatureSlots {
     }
 
     slots
+}
+
+/// Lays a node's input formats out by signature slot, asking `format_on` for each bound edge's.
+///
+/// A slot nobody bound is a hole, so everything after it keeps its own index. An edge with no
+/// format gives `None` for the node as a whole.
+pub(crate) fn slot_inputs(
+    slots: &SignatureSlots,
+    mut format_on: impl FnMut(usize) -> Option<StreamFormat>,
+) -> Option<Vec<Option<StreamFormat>>> {
+    let mut inputs = Vec::with_capacity(slots.len());
+
+    for filled in slots {
+        let Some(edge) = filled else {
+            inputs.push(None);
+            continue;
+        };
+
+        let format = format_on(*edge)?;
+        inputs.push(Some(format));
+    }
+
+    Some(inputs)
 }
 
 pub(crate) fn signature_of(registry: &PipelineRegistry, node: &Node) -> Option<&'static InputSignature> {

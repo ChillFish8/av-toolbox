@@ -118,7 +118,7 @@ impl CompiledGraph {
     /// Prepares `node` and settles it with what its probes found.
     ///
     /// A failure at either step is pushed onto `diagnostics` and leaves no stage.
-    fn prepared_node(
+    pub(crate) fn prepared_node(
         &self,
         registry: &PipelineRegistry,
         node: &Node,

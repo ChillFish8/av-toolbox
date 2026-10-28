@@ -34,8 +34,10 @@ mod build;
 mod chroma;
 mod demands;
 mod diagnostic;
+mod fill;
 mod graph;
 mod instantiate;
+mod natural;
 mod optimise;
 mod output_depth;
 mod plan;
@@ -57,6 +59,7 @@ pub use self::build::{Built, build};
 pub use self::chroma::settle_mask_planes;
 pub use self::demands::{NodeDemand, ProviderPlacement, ServedLayer, satisfy_demands};
 pub use self::diagnostic::{Diagnostic, DiagnosticCode, Diagnostics, Note, Severity};
+pub use self::fill::fill_references;
 pub use self::graph::{CompiledGraph, Edge, EdgeId, Node, NodeId, NodeRole, Reference, Sharing};
 pub use self::instantiate::StageBox;
 pub use self::optimise::{
@@ -91,5 +94,6 @@ pub use self::template::{
     TemplateExpr,
     UnaryOp,
     VariableRules,
+    field_of,
 };
 pub use self::widen::insert_widens;

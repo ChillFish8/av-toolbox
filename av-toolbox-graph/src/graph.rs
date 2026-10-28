@@ -18,6 +18,7 @@ use crate::demands::{NodeDemand, ProviderPlacement};
 use crate::diagnostic::stage_path;
 use crate::plan::ExecutionPlan;
 use crate::probes::NodeProbe;
+use crate::template::{Expr, Piece};
 use crate::{ArgSpans, ArtefactSinkNode, DeferredArg, Span};
 
 /// A node's position in the graph.
@@ -484,6 +485,7 @@ impl CompiledGraph {
     /// stale afterwards. A stored plan is keyed by those same stale ids, so it does not survive
     /// the call either. Every artefact sink's selections are moved with their nodes.
     pub(crate) fn retain_nodes(&mut self, replacements: &HashMap<NodeId, NodeId>, dropped: &HashSet<NodeId>) {
+        let renames = merged_names(&self.nodes, replacements);
         let mut moved: HashMap<NodeId, NodeId> = HashMap::new();
         let mut kept: Vec<Node> = Vec::with_capacity(self.nodes.len());
 
@@ -510,6 +512,7 @@ impl CompiledGraph {
             }
 
             remap_references(&mut node.references, replacements, &moved);
+            rename_fields(&mut node.deferred, &renames);
         }
 
         for sink in &mut self.artefact_sinks {
@@ -667,7 +670,6 @@ impl CompiledGraph {
     }
 
     /// Sets the filled args and clears the node's deferred args and references.
-    #[cfg_attr(not(test), expect(dead_code, reason = "only tests fill args so far"))]
     pub(crate) fn fill_args(&mut self, id: NodeId, args: Value) {
         let node = &mut self.nodes[id.index()];
 
@@ -724,6 +726,57 @@ fn follow_replacements(replacements: &HashMap<NodeId, NodeId>, node: NodeId) -> 
     }
 
     current
+}
+
+/// The name of each replaced node, mapped to the name of the node that survived it.
+fn merged_names(nodes: &[Node], replacements: &HashMap<NodeId, NodeId>) -> HashMap<String, String> {
+    let mut renames = HashMap::new();
+
+    for replaced in replacements.keys() {
+        let survivor = follow_replacements(replacements, *replaced);
+        if survivor == *replaced {
+            continue;
+        }
+
+        let replaced_name = nodes[replaced.index()].name.clone();
+        let survivor_name = nodes[survivor.index()].name.clone();
+        renames.insert(replaced_name, survivor_name);
+    }
+
+    renames
+}
+
+/// Points every stage field in `deferred` that names a replaced node at its survivor instead.
+fn rename_fields(deferred: &mut [DeferredArg], renames: &HashMap<String, String>) {
+    if renames.is_empty() {
+        return;
+    }
+
+    let mut rename = |expr: &mut Expr| rename_field(expr, renames);
+    for arg in deferred {
+        for piece in arg.template.pieces_mut() {
+            let Piece::Expr(found) = piece else {
+                continue;
+            };
+
+            found
+                .expr
+                .rewrite(&mut rename)
+                .expect("renaming a field never fails");
+        }
+    }
+}
+
+fn rename_field(expr: &mut Expr, renames: &HashMap<String, String>) -> Result<(), String> {
+    let Expr::Field { stage, .. } = expr else {
+        return Ok(());
+    };
+
+    if let Some(survivor) = renames.get(stage.as_str()) {
+        *stage = survivor.clone();
+    }
+
+    Ok(())
 }
 
 /// Points each reference at the reindexed survivor of its source, keeping one per source.

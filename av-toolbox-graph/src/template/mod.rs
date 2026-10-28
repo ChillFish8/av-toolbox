@@ -1,5 +1,6 @@
 mod eval;
 mod expr;
+mod fields;
 mod lexer;
 mod parse;
 #[cfg(test)]
@@ -11,6 +12,7 @@ use serde_json::Value;
 
 pub use self::eval::{EvalError, Scope};
 pub use self::expr::{BinaryOp, Expr, Function, Literal, LiteralKind, UnaryOp, VariableRules};
+pub use self::fields::field_of;
 use self::parse::parse_pieces;
 use crate::Span;
 

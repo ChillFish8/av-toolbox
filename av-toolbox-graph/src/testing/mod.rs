@@ -11,6 +11,7 @@ mod probing;
 mod providers;
 mod rated;
 mod shared;
+mod sized;
 mod specs;
 
 use av_toolbox_core::testing::{FixtureCuts, HostStamping, Stamping};
@@ -70,6 +71,7 @@ use self::probing::{Pair, Probing, Seekable};
 use self::providers::{Breaking, Demanding, DemandingPair, Marking, Relaying, TagReading, Tagging};
 pub(crate) use self::providers::{BreaksRequest, FixtureBreaks, FixtureMarks, MarksRequest};
 use self::rated::{Rated, Retime};
+use self::sized::{Resize, SizedSource, Unproducing};
 pub(crate) use self::specs::{deferred, named, positional, spec};
 
 /// One chunk at a time, chunked by the fixture demand kind.
@@ -165,6 +167,13 @@ pub(crate) fn registry_without_probe_kinds() -> PipelineRegistry {
     registry.register_source::<Sixteen>().expect("should register");
     registry.register_source::<Grey>().expect("should register");
     registry.register_sink::<Y4m>().expect("should register");
+    registry
+        .register_source::<SizedSource>()
+        .expect("should register");
+    registry.register_filter::<Resize>().expect("should register");
+    registry
+        .register_filter::<Unproducing>()
+        .expect("should register");
 
     registry
 }
@@ -181,7 +190,7 @@ mod tests {
         let registry = registry();
         let identifiers: Vec<&str> = registry.stages().map(|stage| stage.full_identifier()).collect();
 
-        assert_eq!(identifiers.len(), 59);
+        assert_eq!(identifiers.len(), 62);
         assert!(identifiers.contains(&"test/float-mask"));
         assert!(identifiers.contains(&"test/host-stamping"));
         assert!(identifiers.contains(&"test/counted"));
