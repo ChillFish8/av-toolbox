@@ -27,11 +27,13 @@ use av_toolbox_gpu::{
     FrameError,
     FrameFormat,
     FrameLayout,
+    FrameMeta,
     Offered,
     OutputFormats,
     Plane,
     ResolvedFormats,
     Runtime,
+    SampleFormat,
     StreamFormat,
     StreamTemplate,
     Subsampling,
@@ -40,7 +42,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::checks::accepts_integer_or_f32_frames;
-use crate::resize::{KernelChoice, samples_for};
+use crate::codes::CodeValues;
+use crate::resize::{KernelChoice, samples_between};
+use crate::scratch::{Scratch, device_plane};
 use crate::sizing::Sizing;
 
 const STAGE: &str = "resample/chroma";
@@ -231,9 +235,26 @@ fn location_of(args: &ChromaArgs, input: &FrameFormat) -> ChromaLocation {
         .unwrap_or(input.colour.chroma_location)
 }
 
+/// Whether resampling from `source` to `target` at `location` keeps every chroma sample where it is.
+///
+/// Only the siting label changes then, so nothing is computed.
+fn same_samples(
+    input: &FrameFormat,
+    source: Subsampling,
+    target: Subsampling,
+    location: ChromaLocation,
+) -> bool {
+    let axes = chroma_axes(input, source, target, location);
+    let identity_axis = (1.0, 0.0);
+
+    source == target && axes.across == identity_axis && axes.down == identity_axis
+}
+
 /// Checks the arguments against the input and gives the output format.
+///
+/// The output is F32, except when the chroma samples stay where they are, which keeps the input's sample.
 fn resampled(input: &FrameFormat, args: &ChromaArgs) -> Result<FrameFormat, StageError> {
-    let FrameLayout::Yuv { .. } = input.layout else {
+    let FrameLayout::Yuv { subsampling: source } = input.layout else {
         return Err(not_yuv(input.layout));
     };
 
@@ -255,8 +276,12 @@ fn resampled(input: &FrameFormat, args: &ChromaArgs) -> Result<FrameFormat, Stag
         ..input.colour
     };
 
+    let kept = same_samples(input, source, target, location);
+    let sample = if kept { input.sample } else { SampleFormat::F32 };
+
     Ok(FrameFormat {
         layout: FrameLayout::Yuv { subsampling: target },
+        sample,
         colour,
         ..*input
     })
@@ -344,16 +369,21 @@ impl FilterDefinition for Chroma {
             _ => return Err(not_yuv(output.layout)),
         };
 
-        let axes = chroma_axes(&input, source, target, output.colour.chroma_location);
-        let identity_axis = (1.0, 0.0);
-        let same_samples = source == target && axes.across == identity_axis && axes.down == identity_axis;
+        let location = output.colour.chroma_location;
+        let axes = chroma_axes(&input, source, target, location);
+        let same_samples = same_samples(&input, source, target, location);
 
         let client = context.client().clone();
         let across_taps = taps(axes.width, axes.across.0, axes.across.1, &kernel);
         let down_taps = taps(axes.height, axes.down.0, axes.down.1, &kernel);
         let across = upload(&client, &across_taps);
         let down = upload(&client, &down_taps);
-        let samples = samples_for(output.sample);
+        let samples = samples_between(&input, output.sample, true);
+        let luma_codes = if input.sample == output.sample {
+            None
+        } else {
+            Some(CodeValues::new(&input, output.sample))
+        };
 
         let resampler = ChromaResampler {
             client,
@@ -363,6 +393,7 @@ impl FilterDefinition for Chroma {
             across,
             down,
             samples,
+            luma_codes,
             same_samples,
         };
 
@@ -370,7 +401,9 @@ impl FilterDefinition for Chroma {
     }
 }
 
-/// Resamples a YUV clip's chroma planes to a new subsampling and siting, sharing the luma plane.
+/// Resamples a YUV clip's chroma planes to a new subsampling and siting.
+///
+/// The luma plane is shared, or converted when the output's sample differs from the input's.
 struct ChromaResampler<R: Runtime> {
     client: ComputeClient<R>,
     output: FrameFormat,
@@ -379,11 +412,49 @@ struct ChromaResampler<R: Runtime> {
     across: Weights,
     down: Weights,
     samples: Samples,
+    /// How the luma plane converts to the output's sample, `None` when it is shared.
+    luma_codes: Option<CodeValues>,
     /// Whether the chroma planes need no resampling, only relabelling when the siting changed.
     same_samples: bool,
 }
 
 impl<R: Runtime> ChromaResampler<R> {
+    /// Stores `luma` as a new plane of the output's sample.
+    fn convert_luma(
+        &self,
+        context: &FrameContext,
+        luma: &Plane,
+        codes: CodeValues,
+        meta: &FrameMeta,
+    ) -> Result<Plane, StageError> {
+        let (width, height) = luma.dimensions();
+        let luma_format = FrameFormat {
+            width,
+            height,
+            layout: FrameLayout::Grey,
+            ..self.output
+        };
+        let luma_frame = context.alloc_frame(&luma_format, meta.clone());
+        let Some(output) = luma_frame.plane(Channel::Y) else {
+            return Err(missing_channel());
+        };
+
+        let values = Scratch::new::<f32>(context, width, height);
+        let values_plane = values.plane();
+        let sizing = Sizing(context);
+
+        // Safety: the luma plane is read with its own sample format as the element type.
+        let source_plane = unsafe { device_plane(luma) };
+
+        // Safety: the output plane is written with the output's sample format as the element type.
+        let target_plane = unsafe { device_plane(output) };
+
+        codes.widen(&self.client, &sizing, source_plane, values_plane, Channel::Y);
+        codes.store(&self.client, &sizing, values_plane, target_plane, Channel::Y);
+
+        Ok(output.clone())
+    }
+
     fn resize(&self, context: &FrameContext, input: &Plane, output: &Plane) {
         let (in_width, in_height) = input.dimensions();
         let (out_width, out_height) = output.dimensions();
@@ -473,6 +544,11 @@ impl<R: Runtime> Filter for ChromaResampler<R> {
         };
         let output_u = output_u.clone();
         let output_v = output_v.clone();
+
+        let luma = match self.luma_codes {
+            Some(codes) => self.convert_luma(context, &luma, codes, &meta)?,
+            None => luma,
+        };
 
         self.resize(context, &input_u, &output_u);
         self.resize(context, &input_v, &output_v);

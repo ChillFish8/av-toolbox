@@ -263,8 +263,8 @@ fn matrix_kernel<I: CubePrimitive, O: CubePrimitive>(
 /// Converts `planes.inputs`, held as `conversion.input_samples`, into `planes.outputs`, held as
 /// `conversion.output_samples`, through `values`.
 ///
-/// Integer outputs are rounded to nearest and clamped to their depth. Float outputs are written as they come, so
-/// values outside the gamut survive.
+/// Integer outputs are rounded to nearest and clamped to their depth. Float outputs are written as they
+/// come, so values outside the gamut survive.
 pub fn convert<R: Runtime>(
     client: &ComputeClient<R>,
     dispatch: &impl Dispatch,
@@ -330,8 +330,9 @@ fn launch<I: CubePrimitive, O: CubePrimitive, R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
-    // Safety: every plane is the same size, checked by `convert`. Each input holds `width * height` samples of
-    // `I` and each output as many of `O`, which `DevicePlane::new` requires. The affine buffer holds its 12 values.
+    // Safety: every plane is the same size, checked by `convert`. Each input holds `width * height`
+    // samples of `I` and each output as many of `O`, which `DevicePlane::new` requires. The affine
+    // buffer holds its 12 values.
     unsafe {
         matrix_kernel::launch_unchecked::<I, O, R>(
             client, cubes, unit, first, second, third, affine, first_out, second_out, third_out, largest,

@@ -643,7 +643,8 @@ impl<R: Runtime> AvdFilter<R> {
         Ok(target)
     }
 
-    /// Builds the F32 output of the oldest held frame from every engine's planes and the held frame's other planes.
+    /// Builds the F32 output of the oldest held frame from every engine's planes and the held frame's
+    /// other planes.
     fn emit_one(&mut self, context: &FrameContext, held: Frame) -> Result<Frame, StageError> {
         let meta = held.meta().clone();
         let channels = self.format.channels();

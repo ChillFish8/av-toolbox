@@ -347,24 +347,30 @@ fn downsample(full: Signal, format: &FrameFormat, subsampling: Subsampling) -> S
     signal(width, height, values)
 }
 
-/// Quantises a signal into a plane of `samples` samples, repeating a single value to fill it.
+/// Encodes a signal into a plane of `samples` samples, repeating a single value to fill it.
+///
+/// F32 planes hold the values as they are. Integer planes quantise them.
 fn encode(signal: &Signal, samples: usize, role: Role, limited: bool, sample: SampleFormat) -> Vec<u8> {
-    let bits = bits_of(sample);
-    let is_float = sample == SampleFormat::F32;
     let is_single = signal.values.len() == 1;
-    let mut bytes = Vec::with_capacity(samples * sample.bytes());
-
-    for index in 0..samples {
-        let value = if is_single {
+    let values = (0..samples).map(|index| {
+        if is_single {
             signal.values[0]
         } else {
             signal.values[index]
-        };
-        if is_float {
+        }
+    });
+    let mut bytes = Vec::with_capacity(samples * sample.bytes());
+
+    if sample == SampleFormat::F32 {
+        for value in values {
             bytes.extend_from_slice(&value.to_le_bytes());
-            continue;
         }
 
+        return bytes;
+    }
+
+    let bits = bits_of(sample);
+    for value in values {
         let quantised = quantise(value, role, limited, bits);
         push_sample(&mut bytes, quantised, sample);
     }

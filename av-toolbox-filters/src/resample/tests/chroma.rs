@@ -3,6 +3,7 @@ use av_toolbox_gpu::{
     Capabilities,
     ChromaLocation,
     ColourInfo,
+    Depth,
     FormatSet,
     FrameFormat,
     FrameLayout,
@@ -53,7 +54,11 @@ fn produced(
     let arguments: ChromaArgs = serde_json::from_value(value).expect("parses");
     let chosen = [Some(StreamFormat::Frames(input))];
     let outputs = Chroma::produces(&capabilities, &arguments, &chosen)?;
-    let format = outputs.template.with_sample(input.sample);
+    let sample = outputs.samples.first().expect("a produced sample");
+
+    assert_eq!(outputs.samples, FormatSet::of([sample]));
+
+    let format = outputs.template.with_sample(sample);
 
     Ok(*format.as_frames().expect("frames"))
 }
@@ -117,6 +122,43 @@ fn the_output_takes_the_new_subsampling_and_siting() {
     );
     assert_eq!(output.colour.chroma_location, ChromaLocation::Center);
     assert_eq!((output.width, output.height), (16, 8));
+}
+
+#[test]
+fn a_resample_emits_floats_for_every_input() {
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+    let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = FrameFormat {
+            sample,
+            ..yuv(16, 8, Subsampling::Yuv420, ChromaLocation::Left)
+        };
+        let value = json!({ "subsampling": "4:4:4" });
+
+        let output = produced(input, value).expect("converts");
+
+        assert_eq!(output.sample, SampleFormat::F32, "{sample}");
+    }
+}
+
+#[test]
+fn a_relabel_keeps_its_sample() {
+    let ten_bit = SampleFormat::U16 { depth: Depth::TEN };
+    let samples = [SampleFormat::U8, ten_bit, SampleFormat::F32];
+
+    for sample in samples {
+        let input = FrameFormat {
+            sample,
+            ..yuv(16, 8, Subsampling::Yuv444, ChromaLocation::Left)
+        };
+        let value = json!({ "subsampling": "4:4:4", "location": "center" });
+
+        let output = produced(input, value).expect("converts");
+
+        assert_eq!(output.sample, sample, "{sample}");
+        assert_eq!(output.colour.chroma_location, ChromaLocation::Center);
+    }
 }
 
 #[test]

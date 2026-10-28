@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use av_toolbox_core::PipelineRegistry;
+use av_toolbox_core::{PipelineRegistry, StageKind};
 use av_toolbox_gpu::{Backend, SampleFormat, test_device};
 use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline, Supplied};
 use av_toolbox_runtime::Settings;
@@ -92,10 +92,11 @@ fn compiled<'r, 'b>(
     pipeline.compile(backend).expect("should compile")
 }
 
-/// Checks no `resample/depth` narrows a clip between the stages.
+/// Checks nothing narrows a clip between the stages.
 ///
-/// The graph may widen the 8-bit source into F32 for a stage. The only conversion to integers allowed is the
-/// one the graph puts before the sink, and it must read F32.
+/// The graph may widen the 8-bit source into F32 for a stage. Every stage after the first to emit F32 must
+/// emit F32 too. The only conversion to integers allowed is the one the graph puts before the sink, and it
+/// must read F32.
 fn assert_nothing_narrows_between_stages(compiled: &CompiledPipeline<'_, '_>) {
     let graph = compiled.graph();
     let sink_side = json!({ "depth": 10, "at_least": true });
@@ -119,6 +120,8 @@ fn assert_nothing_narrows_between_stages(compiled: &CompiledPipeline<'_, '_>) {
         );
     }
 
+    assert_every_stage_stays_float(compiled, &sink_side);
+
     assert_eq!(narrowing.len(), 1, "only the sink-side depth narrows");
 
     let injected = narrowing[0];
@@ -127,6 +130,45 @@ fn assert_nothing_narrows_between_stages(compiled: &CompiledPipeline<'_, '_>) {
     let formats = compiled.formats().get(injected.id());
     let injected_input = formats.inputs()[0].expect("the depth has an input");
     assert_eq!(injected_input.sample(), SampleFormat::F32);
+}
+
+/// Checks every frame-carrying node after the first to emit F32 also emits F32, up to the sink-side depth.
+///
+/// Sources, masks and sinks are left out.
+fn assert_every_stage_stays_float(compiled: &CompiledPipeline<'_, '_>, sink_side: &serde_json::Value) {
+    let graph = compiled.graph();
+    let mut floating = false;
+
+    for id in graph.order() {
+        let node = graph.node(*id);
+        let kind = node.kind();
+        if matches!(kind, StageKind::Source | StageKind::Mask | StageKind::Sink) {
+            continue;
+        }
+
+        let is_sink_side = node.identifier() == "resample/depth" && node.args() == sink_side;
+        if is_sink_side {
+            break;
+        }
+
+        let formats = compiled.formats().get(*id);
+        let Some(output) = formats.output() else {
+            continue;
+        };
+
+        let Some(frames) = output.as_frames() else {
+            continue;
+        };
+
+        let is_float = frames.sample == SampleFormat::F32;
+        if floating {
+            let name = node.name();
+            let sample = frames.sample;
+            assert!(is_float, "{name} emits {sample} after a stage emitted F32");
+        }
+
+        floating |= is_float;
+    }
 }
 
 /// Runs a chain on `clip` and checks it writes `frames` frames at 10 bits.
@@ -314,6 +356,45 @@ args.path = "{output}"
     )
 }
 
+fn chroma_into_matrix_text(input: &str, output: &str) -> String {
+    format!(
+        r#"
+[source.input]
+type = "y4m/pipe"
+args.path = "{input}"
+
+[filter.full_chroma]
+type = "resample/chroma"
+inputs = ["input"]
+args.subsampling = "4:4:4"
+
+[filter.rgb]
+type = "resample/matrix"
+inputs = ["full_chroma"]
+args.to = "rgb"
+args.matrix = "bt709"
+args.range = "limited"
+
+[filter.yuv]
+type = "resample/matrix"
+inputs = ["rgb"]
+args.to = "yuv"
+args.matrix = "bt709"
+args.range = "limited"
+
+[filter.half_chroma]
+type = "resample/chroma"
+inputs = ["yuv"]
+args.subsampling = "4:2:0"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["half_chroma"]
+args.path = "{output}"
+"#
+    )
+}
+
 #[test]
 fn dehalo_into_deband() {
     assert_runs_to_ten_bit(dehalo_into_deband_text, ONE_FRAME, 1);
@@ -337,4 +418,9 @@ fn denoise_dehalo_and_deband_masked() {
 #[test]
 fn resize_into_solid_like() {
     assert_runs_to_ten_bit(resize_into_solid_like_text, ONE_FRAME, 1);
+}
+
+#[test]
+fn chroma_into_matrix() {
+    assert_runs_to_ten_bit(chroma_into_matrix_text, ONE_FRAME, 1);
 }

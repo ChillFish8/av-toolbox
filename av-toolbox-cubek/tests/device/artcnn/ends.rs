@@ -637,7 +637,8 @@ fn padded_difference(peak: f32, rounded: bool) -> PaddedDifference {
     let core_samples = (core.samples() * 4) as usize;
     let share = differing as f64 / core_samples as f64 * 100.0;
     println!(
-        "padded last layer at peak {peak}, rounded {rounded}: {differing} of {core_samples} samples differ ({share:.4} %), \
+        "padded last layer at peak {peak}, rounded {rounded}: \
+         {differing} of {core_samples} samples differ ({share:.4} %), \
          largest {largest} codes, {unclamped} unclamped"
     );
 

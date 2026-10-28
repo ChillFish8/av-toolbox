@@ -262,9 +262,10 @@ pub(crate) struct Supersampler {
 impl Supersampler {
     /// Finds and reads `model` at `precision`, then warms it up on a `width` by `height` plane.
     ///
-    /// Its output is rounded to whole codes when `rounded` is set. The fused convolution path is taken when the device offers it, falling back to the unfused
-    /// convolution and then to im2col when it cannot run there. Its f16 body convolutions choose their
-    /// kernel by autotune, which benchmarks during the warm-up, unless [KERNEL_ENV] pins one.
+    /// Its output is rounded to whole codes when `rounded` is set. The fused convolution path is taken
+    /// when the device offers it, falling back to the unfused convolution and then to im2col when it
+    /// cannot run there. Its f16 body convolutions choose their kernel by autotune, which benchmarks
+    /// during the warm-up, unless [KERNEL_ENV] pins one.
     pub(crate) fn load<R: Runtime>(
         stage: &'static str,
         context: &BuildContext<R>,
@@ -369,8 +370,9 @@ impl Supersampler {
 
     /// Doubles `input` into `output`, both f32 code values up to `peak`.
     ///
-    /// The output is rounded to whole codes when the supersampler was loaded to round. `input` must be the size
-    /// given to [Supersampler::load](crate::artcnn::Supersampler::load), since the tile is chosen there.
+    /// The output is rounded to whole codes when the supersampler was loaded to round. `input` must be
+    /// the size given to [Supersampler::load](crate::artcnn::Supersampler::load), since the tile is
+    /// chosen there.
     pub(crate) fn run<R: Runtime>(
         &self,
         client: &ComputeClient<R>,

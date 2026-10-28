@@ -14,7 +14,6 @@ use av_toolbox_cubek::testing::{
     reference_depth,
     reference_float_depth,
     reference_matrix,
-    reference_resize,
     reference_resize_float,
 };
 use av_toolbox_gpu::{
@@ -433,6 +432,7 @@ fn every_kernel_matches_the_reference_between_subsamplings() {
             );
             let output = FrameFormat {
                 layout: FrameLayout::Yuv { subsampling: to },
+                sample: SampleFormat::F32,
                 ..input
             };
             let target = json!(to.to_string());
@@ -440,6 +440,7 @@ fn every_kernel_matches_the_reference_between_subsamplings() {
 
             let planes = patterned_planes(&input);
             let resampled = run_once("resample/chroma", input, output, args, &planes);
+            let found = planes_as_codes(&output, &resampled, 8);
 
             let (in_width, in_height) = input.channel_dimensions(Channel::U).expect("carried");
             let (out_width, out_height) = output.channel_dimensions(Channel::U).expect("carried");
@@ -454,21 +455,24 @@ fn every_kernel_matches_the_reference_between_subsamplings() {
             let across = taps(out_width, scale_x, offset_x, &kernel);
             let down = taps(out_height, scale_y, offset_y, &kernel);
 
-            assert_eq!(resampled[0], planes[0], "{name}: luma must be untouched");
+            let luma: Vec<f32> = planes[0].iter().map(|code| f32::from(*code)).collect();
+            assert_codes_within(&found[0], &luma, 0.01, "luma must keep its codes");
+
             for index in [1, 2] {
-                let expected = reference_resize(&planes[index], in_width, in_height, &across, &down);
-                assert_within_one(&resampled[index], &expected, name);
+                let codes: Vec<f32> = planes[index].iter().map(|code| f32::from(*code)).collect();
+                let expected = reference_resize_float(&codes, in_width, in_height, &across, &down);
+                assert_codes_within(&found[index], &expected, 0.01, name);
             }
         }
     }
 }
 
 #[test]
-fn the_luma_plane_is_shared_not_copied() {
+fn an_f32_clips_luma_plane_is_shared_not_copied() {
     let layout = FrameLayout::Yuv {
         subsampling: Subsampling::Yuv420,
     };
-    let input = frame(32, 16, layout, SampleFormat::U8, ChromaLocation::Left);
+    let input = frame(32, 16, layout, SampleFormat::F32, ChromaLocation::Left);
     let output = FrameFormat {
         layout: FrameLayout::Yuv {
             subsampling: Subsampling::Yuv444,
@@ -480,6 +484,46 @@ fn the_luma_plane_is_shared_not_copied() {
     let shared = luma_is_shared("resample/chroma", input, output, args);
 
     assert!(shared);
+}
+
+#[test]
+fn an_eight_bit_chroma_upsample_keeps_its_fractions() {
+    let input = frame(
+        32,
+        16,
+        FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv420,
+        },
+        SampleFormat::U8,
+        ChromaLocation::Left,
+    );
+    let output = FrameFormat {
+        layout: FrameLayout::Yuv {
+            subsampling: Subsampling::Yuv444,
+        },
+        sample: SampleFormat::F32,
+        ..input
+    };
+    let args = json!({ "subsampling": "4:4:4", "kernel": "bilinear" });
+
+    let planes = patterned_planes(&input);
+    let resampled = run_once("resample/chroma", input, output, args, &planes);
+    let found = planes_as_codes(&output, &resampled, 8);
+
+    let (in_width, in_height) = input.channel_dimensions(Channel::U).expect("carried");
+    let (out_width, out_height) = output.channel_dimensions(Channel::U).expect("carried");
+    let (siting_x, siting_y) = ChromaLocation::Left.offsets(2, 2);
+    let across = taps(out_width, 0.5, (0.0 - siting_x) / 2.0, &Kernel::Bilinear);
+    let down = taps(out_height, 0.5, (0.0 - siting_y) / 2.0, &Kernel::Bilinear);
+
+    for index in [1, 2] {
+        let codes: Vec<f32> = planes[index].iter().map(|code| f32::from(*code)).collect();
+        let expected = reference_resize_float(&codes, in_width, in_height, &across, &down);
+        let fractional = found[index].iter().any(|code| (code - code.round()).abs() > 0.05);
+
+        assert_codes_within(&found[index], &expected, 0.01, "chroma");
+        assert!(fractional, "chroma was rounded to whole 8-bit codes");
+    }
 }
 
 #[test]
@@ -546,7 +590,8 @@ fn patterned_values(samples: usize, peak: f64, integer: bool) -> [Vec<f64>; 3] {
     })
 }
 
-/// Runs `resample/matrix` on `values`, stored as `samples`, into the F32 `output`, and reads its planes back as bytes.
+/// Runs `resample/matrix` on `values`, stored as `samples`, into the F32 `output`, and reads its planes
+/// back as bytes.
 fn run_matrix(
     input: FrameFormat,
     output: FrameFormat,
@@ -562,7 +607,8 @@ fn run_matrix(
     run_once("resample/matrix", input, output, args, &planes)
 }
 
-/// The same as [run_matrix], reading the output back as `bits` deep codes in the range `output` is labelled with.
+/// The same as [run_matrix], reading the output back as `bits` deep codes in the range `output` is
+/// labelled with.
 fn run_matrix_into_codes(
     input: FrameFormat,
     output: FrameFormat,
@@ -787,7 +833,6 @@ fn an_f32_clip_resamples_its_chroma_unrounded() {
     let layout = FrameLayout::Yuv {
         subsampling: Subsampling::Yuv444,
     };
-    let wide_output = FrameFormat { layout, ..wide };
     let float_output = FrameFormat { layout, ..float };
     let args = json!({ "subsampling": "4:4:4", "kernel": "bilinear" });
     let values: Vec<Vec<u16>> = wide
@@ -806,16 +851,16 @@ fn an_f32_clip_resamples_its_chroma_unrounded() {
     let integer = run_once(
         "resample/chroma",
         wide,
-        wide_output,
+        float_output,
         args.clone(),
         &integer_planes,
     );
     let floats = run_once("resample/chroma", float, float_output, args, &float_input_planes);
 
-    let twin = planes_as_codes(&wide_output, &integer, 16);
+    let twin = planes_as_codes(&float_output, &integer, 16);
     let found = planes_as_codes(&float_output, &floats, 16);
     let (in_width, in_height) = wide.channel_dimensions(Channel::U).expect("carried");
-    let (out_width, out_height) = wide_output.channel_dimensions(Channel::U).expect("carried");
+    let (out_width, out_height) = float_output.channel_dimensions(Channel::U).expect("carried");
     let (siting_x, siting_y) = ChromaLocation::Left.offsets(2, 2);
     let across = taps(out_width, 0.5, (0.0 - siting_x) / 2.0, &Kernel::Bilinear);
     let down = taps(out_height, 0.5, (0.0 - siting_y) / 2.0, &Kernel::Bilinear);

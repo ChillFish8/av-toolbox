@@ -721,10 +721,8 @@ impl<R: Runtime> Deblocker<R> {
             return Ok(source.clone());
         }
 
-        let centre = centre_of(self.format.sample, channel);
-
         // Safety: `staging` was made from the clip's sample format, which every source plane holds.
-        let values = unsafe { stage_in(&self.client, context, self.staging, source, centre) };
+        let values = unsafe { stage_in(&self.client, context, self.staging, source, 0.0) };
         let target = self.fresh_plane(context, source, meta)?;
 
         // Safety: `fresh_plane` allocates F32 planes.
