@@ -635,11 +635,59 @@ fn none_passed_to_a_required_call_variable_is_refused() {
     let diagnostics = failed(&entries, "/work/main.toml", &Supplied::new());
 
     assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidVariable]);
-    assert!(diagnostics[0].message().contains("cannot be none"));
+    let message = diagnostics[0].message();
+    assert!(
+        message.contains("x is not optional, so it cannot be none"),
+        "{message}"
+    );
     let notes: Vec<&str> = diagnostics[0]
         .notes()
         .iter()
         .map(|note| note.message.as_str())
         .collect();
     assert!(notes.contains(&"declared here"), "{notes:?}");
+}
+
+const ADDING_PART: &str = r#"
+[variable.x]
+type = "integer"
+optional = true
+
+[source.src]
+type = "y4m/pipe"
+args.n = "{{ x + 1 }}"
+
+[output.done]
+inputs = ["src"]
+"#;
+
+fn adding_call(value: &str) -> String {
+    let line = format!("variables.x = {value}");
+    NONE_CALLER.replace("variables.x = \"{{ y }}\"", &line)
+}
+
+#[test]
+fn an_invalid_optional_call_variable_is_reported_once() {
+    let main = adding_call("\"abc\"");
+    let entries = [
+        ("/work/main.toml", main.as_str()),
+        ("/work/parts/p.toml", ADDING_PART),
+    ];
+
+    let diagnostics = failed(&entries, "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidVariable]);
+}
+
+#[test]
+fn a_failed_optional_call_variable_is_reported_once() {
+    let main = adding_call("\"{{ unknown }}\"");
+    let entries = [
+        ("/work/main.toml", main.as_str()),
+        ("/work/parts/p.toml", ADDING_PART),
+    ];
+
+    let diagnostics = failed(&entries, "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::UnknownVariable]);
 }

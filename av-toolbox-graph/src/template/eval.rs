@@ -181,6 +181,7 @@ fn overflow(op: &str) -> EvalError {
 fn mismatch(op: BinaryOp, left: &Literal, right: &Literal) -> EvalError {
     let symbol = op.symbol();
     let context = format!("`{symbol}`");
+
     for value in [left, right] {
         if matches!(value, Literal::None { .. }) {
             return none_misused(value, &context);
@@ -443,15 +444,17 @@ fn round(function: Function, value: &Literal) -> Result<Literal, EvalError> {
 
 /// Checks `value` against a variable's type, bounds and choices.
 ///
-/// An integer is accepted where a float is expected, and becomes a float.
+/// An integer is accepted where a float is expected, and becomes a float. A `none` given to an
+/// optional variable takes on that variable's name.
 fn check_rules(rules: &VariableRules, value: Literal) -> Result<Literal, String> {
     let name = &rules.name;
     if matches!(value, Literal::None { .. }) {
         if rules.optional {
-            return Ok(value);
+            let variable = Some(name.clone());
+            return Ok(Literal::None { variable });
         }
 
-        return Err(format!("variable `{name}` is required but has no value"));
+        return Err(format!("variable `{name}` is not optional, so it cannot be none"));
     }
 
     let value = match (rules.expected, value) {

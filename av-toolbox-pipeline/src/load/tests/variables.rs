@@ -419,6 +419,24 @@ fn a_set_optional_variable_is_used() {
 }
 
 #[test]
+fn an_invalid_optional_flag_is_reported_once() {
+    let text = r#"
+[variable.count]
+type = "integer"
+optional = true
+
+[source.src]
+type = "y4m/pipe"
+args.n = "{{ count + 1 }}"
+"#;
+    let supplied = with_flag("count", "abc");
+
+    let diagnostics = failed(&[("/work/main.toml", text)], "/work/main.toml", &supplied);
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidVariable]);
+}
+
+#[test]
 fn choices_are_not_checked_when_unset() {
     let text = optional_pipeline("choices = [\"a\"]", "args.flag = \"{{ x is none }}\"");
 
@@ -603,7 +621,7 @@ fn read_with_a_stage_reference_is_refused() {
             "{template}"
         );
         assert!(
-            diagnostics[0].message().contains("stage reference"),
+            diagnostics[0].message().contains("`read`"),
             "{template}: {}",
             diagnostics[0].message()
         );

@@ -95,10 +95,12 @@ impl Template {
     }
 
     /// Fills the template. A template that is one expression and nothing else keeps its type.
+    ///
+    /// A lone `none` fills to null. A lone float that is not finite is refused.
     pub fn fill(&self, scope: &dyn Scope) -> Result<Value, TemplateError> {
         if let [Piece::Expr(only)] = self.pieces.as_slice() {
             let value = evaluate(only, scope)?;
-            return Ok(value.to_json());
+            return lone_json(only, &value);
         }
 
         let mut filled = String::new();
@@ -127,6 +129,25 @@ fn evaluate(found: &TemplateExpr, scope: &dyn Scope) -> Result<Literal, Template
     match evaluated {
         Ok(value) => Ok(value),
         Err(error) => Err(located(error, &found.range)),
+    }
+}
+
+fn lone_json(found: &TemplateExpr, value: &Literal) -> Result<Value, TemplateError> {
+    match value {
+        Literal::None { .. } => Ok(Value::Null),
+        Literal::Float(number) if !number.is_finite() => Err(non_finite(found, *number)),
+        other => Ok(other.to_json()),
+    }
+}
+
+fn non_finite(found: &TemplateExpr, number: f64) -> TemplateError {
+    let message = format!("the expression gave {number}, which is not a finite number");
+
+    TemplateError {
+        message,
+        range: found.range.clone(),
+        checked: None,
+        variable: None,
     }
 }
 

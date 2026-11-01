@@ -14,6 +14,7 @@ impl Scope for TestScope {
     fn variable(&self, name: &str) -> Option<Literal> {
         match name {
             "depth" => Some(Literal::Integer(8)),
+            "nan" => Some(Literal::Float(f64::NAN)),
             "unset" => Some(Literal::None {
                 variable: Some("unset".into()),
             }),
@@ -340,6 +341,13 @@ fn if_can_return_none() {
 }
 
 #[test]
+fn a_lone_non_finite_float_is_refused() {
+    let message = fill_error("{{ nan }}");
+
+    assert!(message.contains("not a finite number"), "{message}");
+}
+
+#[test]
 fn none_in_a_longer_string_is_refused() {
     let message = fill_error("a-{{ unset }}");
 
@@ -365,15 +373,21 @@ fn checked_none(optional: bool) -> Result<Literal, crate::template::EvalError> {
 #[test]
 fn a_checked_none_passes_an_optional_variable() {
     let evaluated = checked_none(true).expect("an optional variable may be none");
+    let expected = Literal::None {
+        variable: Some("width".to_string()),
+    };
 
-    assert_eq!(evaluated, Literal::None { variable: None });
+    assert_eq!(evaluated, expected);
 }
 
 #[test]
 fn a_checked_none_fails_a_required_variable() {
     let error = checked_none(false).expect_err("a required variable may not be none");
 
-    assert!(error.message.contains("width"), "{}", error.message);
+    assert_eq!(
+        error.message,
+        "variable `width` is not optional, so it cannot be none"
+    );
 }
 
 #[test]

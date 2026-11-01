@@ -26,7 +26,8 @@ const REFERENCE_OUTSIDE_ARGS_MESSAGE: &str = "stage references can only be used 
 const NONE_OUTSIDE_ARGS_MESSAGE: &str = "`none` can only be used to leave out an arg";
 const NESTED_NONE_MESSAGE: &str =
     "`none` can only leave out a top-level arg, not a value inside an array or table";
-const READ_WITH_REFERENCE_MESSAGE: &str = "`read` can't be used with a stage reference";
+const READ_WITH_REFERENCE_MESSAGE: &str =
+    "`read` can't be used in a template that reads another stage, including through a call variable";
 
 /// What filling templates needs, and the path problems are reported under.
 pub(super) struct Filling<'a> {
