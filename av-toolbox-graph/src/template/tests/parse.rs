@@ -162,3 +162,45 @@ fn a_non_ascii_character_is_an_error() {
         error.message
     );
 }
+
+#[test]
+fn none_parses_as_a_literal() {
+    let expr = only_expr("{{ none }}");
+
+    assert_eq!(expr, Expr::Literal(Literal::None { variable: None }));
+}
+
+#[test]
+fn is_none_and_is_not_none_parse() {
+    let operand = Box::new(Expr::Path(vec!["x".to_string()]));
+
+    let is_none = only_expr("{{ x is none }}");
+    let expected = Expr::IsNone {
+        operand: operand.clone(),
+        negated: false,
+    };
+    assert_eq!(is_none, expected);
+
+    let is_not_none = only_expr("{{ x is not none }}");
+    let expected = Expr::IsNone {
+        operand,
+        negated: true,
+    };
+    assert_eq!(is_not_none, expected);
+}
+
+#[test]
+fn comparing_with_the_none_keyword_suggests_is() {
+    for text in ["{{ x == none }}", "{{ none != x }}", "{{ x < none }}"] {
+        let error = Template::parse(text).expect_err("comparing with none is refused");
+
+        assert!(error.message.contains("is none"), "{text}: {}", error.message);
+    }
+}
+
+#[test]
+fn is_only_tests_for_none() {
+    let error = Template::parse("{{ x is 3 }}").expect_err("is needs none");
+
+    assert!(error.message.contains("is none"), "{}", error.message);
+}

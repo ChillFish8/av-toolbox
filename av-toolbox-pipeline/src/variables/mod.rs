@@ -161,6 +161,7 @@ impl Declaration {
             min,
             max,
             choices,
+            optional: false,
             span,
         }
     }

@@ -216,12 +216,22 @@ impl Parser {
     fn comparison(&mut self) -> Result<Expr, TemplateError> {
         let left = self.additive()?;
 
+        if self.eat(&TokenKind::Is) {
+            return self.is_none(left);
+        }
+
         let Some(op) = self.peek_kind().and_then(comparison_op) else {
             return Ok(left);
         };
 
+        let operator_range = self.tokens[self.index].range.clone();
         self.index += 1;
         let right = self.additive()?;
+
+        if is_none_keyword(&left) || is_none_keyword(&right) {
+            let message = "`none` cannot be compared, use `is none` or `is not none` instead".to_string();
+            return Err(self.error_at(message, operator_range));
+        }
 
         if let Some(token) = self.peek()
             && comparison_op(&token.kind).is_some()
@@ -231,6 +241,26 @@ impl Parser {
         }
 
         Ok(binary(op, left, right))
+    }
+
+    /// Reads the `none` or `not none` after an `is`.
+    fn is_none(&mut self, operand: Expr) -> Result<Expr, TemplateError> {
+        let negated = self.eat(&TokenKind::Not);
+
+        let Some(token) = self.next() else {
+            let message = "expected `none` after `is`, but the template ends".to_string();
+            return Err(self.error_at_end(message));
+        };
+
+        if token.kind != TokenKind::None {
+            let message = "`is` can only test for none, write `is none` or `is not none`".to_string();
+            return Err(self.error_at(message, token.range));
+        }
+
+        Ok(Expr::IsNone {
+            operand: Box::new(operand),
+            negated,
+        })
     }
 
     fn additive(&mut self) -> Result<Expr, TemplateError> {
@@ -290,6 +320,7 @@ impl Parser {
             TokenKind::String(text) => Literal::String(text),
             TokenKind::True => Literal::Bool(true),
             TokenKind::False => Literal::Bool(false),
+            TokenKind::None => Literal::None { variable: None },
             TokenKind::OpenParen => {
                 let inner = self.expression()?;
                 self.expect(&TokenKind::CloseParen)?;
@@ -368,6 +399,11 @@ impl Parser {
     }
 }
 
+/// Whether the expression is the `none` keyword as written.
+fn is_none_keyword(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(Literal::None { variable: None }))
+}
+
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
         op,
@@ -430,6 +466,8 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Not => "not",
         TokenKind::True => "true",
         TokenKind::False => "false",
+        TokenKind::None => "none",
+        TokenKind::Is => "is",
     };
 
     format!("`{symbol}`")

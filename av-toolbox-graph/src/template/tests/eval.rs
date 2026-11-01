@@ -9,6 +9,9 @@ impl Scope for TestScope {
     fn variable(&self, name: &str) -> Option<Literal> {
         match name {
             "depth" => Some(Literal::Integer(8)),
+            "unset" => Some(Literal::None {
+                variable: Some("unset".into()),
+            }),
             _ => None,
         }
     }
@@ -145,6 +148,7 @@ fn a_checked_value_outside_its_bounds_names_the_variable() {
         min: None,
         max: Some(16.0),
         choices: None,
+        optional: false,
         span: Span::new(3, 9),
     };
     let checked = Expr::Checked {
@@ -166,6 +170,7 @@ fn a_checked_integer_is_accepted_as_a_float() {
         min: Some(0.0),
         max: None,
         choices: None,
+        optional: false,
         span: Span::new(0, 1),
     };
     let checked = Expr::Checked {
@@ -186,6 +191,7 @@ fn a_checked_value_outside_its_choices_is_an_error() {
         min: None,
         max: None,
         choices: Some(vec![Literal::String("fast".to_string())]),
+        optional: false,
         span: Span::new(0, 1),
     };
     let checked = Expr::Checked {
@@ -206,6 +212,7 @@ fn any_integer(span: Span) -> VariableRules {
         min: None,
         max: None,
         choices: None,
+        optional: false,
         span,
     }
 }
@@ -261,4 +268,82 @@ fn logic_short_circuits() {
     assert_eq!(fill("{{ false and unknown }}"), json!(false));
     assert_eq!(fill("{{ not (depth == 8) or true }}"), json!(true));
     assert_eq!(fill("{{ depth == 8 or unknown }}"), json!(true));
+}
+
+#[test]
+fn is_none_is_true_for_an_unset_variable() {
+    assert_eq!(fill("{{ unset is none }}"), json!(true));
+    assert_eq!(fill("{{ depth is none }}"), json!(false));
+}
+
+#[test]
+fn is_not_none_is_true_for_a_set_variable() {
+    assert_eq!(fill("{{ depth is not none }}"), json!(true));
+    assert_eq!(fill("{{ unset is not none }}"), json!(false));
+}
+
+#[test]
+fn equal_with_none_is_false() {
+    assert_eq!(fill("{{ unset == 1 }}"), json!(false));
+    assert_eq!(fill("{{ unset == unset }}"), json!(false));
+    assert_eq!(fill("{{ unset != unset }}"), json!(true));
+}
+
+#[test]
+fn none_in_arithmetic_names_the_variable() {
+    let message = fill_error("{{ unset + 1 }}");
+
+    assert!(message.contains("unset"), "{message}");
+}
+
+#[test]
+fn none_is_refused_everywhere_else() {
+    fill_error("{{ unset < 1 }}");
+    fill_error("{{ -unset }}");
+    fill_error("{{ not unset }}");
+    fill_error("{{ unset and true }}");
+    fill_error("{{ if unset then 1 else 2 }}");
+    fill_error("{{ min(unset, 1) }}");
+}
+
+#[test]
+fn if_can_return_none() {
+    assert_eq!(fill("{{ if false then 1 else none }}"), Value::Null);
+}
+
+#[test]
+fn none_in_a_longer_string_is_refused() {
+    let message = fill_error("a-{{ unset }}");
+
+    assert!(message.contains("unset"), "{message}");
+}
+
+fn optional_rules(optional: bool) -> VariableRules {
+    VariableRules {
+        optional,
+        ..any_integer(Span::new(0, 1))
+    }
+}
+
+fn checked_none(optional: bool) -> Result<Literal, crate::template::EvalError> {
+    let checked = Expr::Checked {
+        inner: Box::new(Expr::Literal(Literal::None { variable: None })),
+        rules: optional_rules(optional),
+    };
+
+    checked.evaluate(&TestScope)
+}
+
+#[test]
+fn a_checked_none_passes_an_optional_variable() {
+    let evaluated = checked_none(true).expect("an optional variable may be none");
+
+    assert_eq!(evaluated, Literal::None { variable: None });
+}
+
+#[test]
+fn a_checked_none_fails_a_required_variable() {
+    let error = checked_none(false).expect_err("a required variable may not be none");
+
+    assert!(error.message.contains("width"), "{}", error.message);
 }

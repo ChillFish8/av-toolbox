@@ -31,6 +31,8 @@ pub(super) enum TokenKind {
     Not,
     True,
     False,
+    None,
+    Is,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -199,6 +201,8 @@ impl Lexer<'_> {
             "not" => TokenKind::Not,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "none" => TokenKind::None,
+            "is" => TokenKind::Is,
             name => TokenKind::Name(name.to_string()),
         }
     }

@@ -48,6 +48,11 @@ impl Expr {
                 unary(*op, value)
             },
             Self::Binary { op, left, right } => binary(*op, left, right, scope),
+            Self::IsNone { operand, negated } => {
+                let value = operand.evaluate(scope)?;
+                let is_none = matches!(value, Literal::None { .. });
+                Ok(Literal::Bool(is_none != *negated))
+            },
             Self::If {
                 condition,
                 then,
@@ -124,12 +129,25 @@ fn described(kind: LiteralKind) -> String {
 fn expect_bool(value: Literal, context: &str) -> Result<bool, EvalError> {
     match value {
         Literal::Bool(flag) => Ok(flag),
+        none @ Literal::None { .. } => Err(none_misused(&none, context)),
         other => {
             let found = described(other.kind());
             let message = format!("{context} must be a bool, found {found}");
             Err(failure(message))
         },
     }
+}
+
+/// The failure for a `none` used where a value is needed, naming its variable when it has one.
+fn none_misused(value: &Literal, context: &str) -> EvalError {
+    let message = match value {
+        Literal::None { variable: Some(name) } => {
+            format!("variable `{name}` is none, so it cannot be used in {context}")
+        },
+        _ => format!("none cannot be used in {context}"),
+    };
+
+    failure(message)
 }
 
 fn as_float(value: &Literal) -> Option<f64> {
@@ -157,6 +175,13 @@ fn overflow(op: &str) -> EvalError {
 
 fn mismatch(op: BinaryOp, left: &Literal, right: &Literal) -> EvalError {
     let symbol = op.symbol();
+    let context = format!("`{symbol}`");
+    for value in [left, right] {
+        if matches!(value, Literal::None { .. }) {
+            return none_misused(value, &context);
+        }
+    }
+
     let left_kind = described(left.kind());
     let right_kind = described(right.kind());
 
@@ -171,6 +196,7 @@ fn unary(op: UnaryOp, value: Literal) -> Result<Literal, EvalError> {
             negated.map(Literal::Integer).ok_or_else(|| overflow("-"))
         },
         (UnaryOp::Negate, Literal::Float(number)) => Ok(Literal::Float(-number)),
+        (UnaryOp::Negate, none @ Literal::None { .. }) => Err(none_misused(&none, "a negation")),
         (UnaryOp::Negate, other) => {
             let found = described(other.kind());
             let message = format!("cannot negate {found}");
@@ -205,7 +231,12 @@ fn binary(op: BinaryOp, left: &Expr, right: &Expr, scope: &dyn Scope) -> Result<
 
     let right_value = right.evaluate(scope)?;
 
+    let left_is_none = matches!(left_value, Literal::None { .. });
+    let right_is_none = matches!(right_value, Literal::None { .. });
+    let has_none = left_is_none || right_is_none;
     match op {
+        BinaryOp::Equal if has_none => Ok(Literal::Bool(false)),
+        BinaryOp::NotEqual if has_none => Ok(Literal::Bool(true)),
         BinaryOp::Equal => equal(op, &left_value, &right_value).map(Literal::Bool),
         BinaryOp::NotEqual => {
             let same = equal(op, &left_value, &right_value)?;
@@ -298,6 +329,11 @@ fn call(function: Function, values: Vec<Literal>) -> Result<Literal, EvalError> 
     let name = function.name();
 
     for value in &values {
+        if matches!(value, Literal::None { .. }) {
+            let context = format!("`{name}`");
+            return Err(none_misused(value, &context));
+        }
+
         if as_float(value).is_none() {
             let found = described(value.kind());
             let message = format!("{name} takes numbers, found {found}");
@@ -380,6 +416,14 @@ fn round(function: Function, value: &Literal) -> Result<Literal, EvalError> {
 /// An integer is accepted where a float is expected, and becomes a float.
 fn check_rules(rules: &VariableRules, value: Literal) -> Result<Literal, String> {
     let name = &rules.name;
+    if matches!(value, Literal::None { .. }) {
+        if rules.optional {
+            return Ok(value);
+        }
+
+        return Err(format!("variable `{name}` is required but has no value"));
+    }
+
     let value = match (rules.expected, value) {
         (LiteralKind::Float, Literal::Integer(number)) => Literal::Float(number as f64),
         (expected, value) if value.kind() == expected => value,

@@ -80,6 +80,7 @@ pub(crate) fn through_variable(deferred: &mut DeferredArg, span: Span) {
                 min: None,
                 max: None,
                 choices: None,
+                optional: false,
                 span,
             },
         };

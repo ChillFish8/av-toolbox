@@ -99,6 +99,10 @@ impl Template {
                 Piece::Text(plain) => filled.push_str(plain),
                 Piece::Expr(found) => {
                     let value = evaluate(found, scope)?;
+                    if let Literal::None { variable } = &value {
+                        return Err(none_in_text(found, variable.as_deref()));
+                    }
+
                     let rendered = value.to_text();
 
                     filled.push_str(&rendered);
@@ -115,6 +119,21 @@ fn evaluate(found: &TemplateExpr, scope: &dyn Scope) -> Result<Literal, Template
     match evaluated {
         Ok(value) => Ok(value),
         Err(error) => Err(located(error, &found.range)),
+    }
+}
+
+fn none_in_text(found: &TemplateExpr, variable: Option<&str>) -> TemplateError {
+    let source = match variable {
+        Some(name) => format!("variable `{name}`"),
+        None => "the expression".to_string(),
+    };
+    let message = format!("{source} is none, which cannot be part of a longer string");
+
+    TemplateError {
+        message,
+        range: found.range.clone(),
+        checked: None,
+        variable: None,
     }
 }
 

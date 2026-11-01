@@ -231,6 +231,7 @@ fn a_late_variable_outside_its_bounds_points_at_the_call() {
                 min: None,
                 max: Some(16.0),
                 choices: None,
+                optional: false,
                 span: rules_span,
             },
         };

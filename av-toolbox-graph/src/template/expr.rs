@@ -11,6 +11,10 @@ pub enum Literal {
     Float(f64),
     String(String),
     Bool(bool),
+    /// The absence of a value. `variable` names the optional variable it came from, if any.
+    None {
+        variable: Option<String>,
+    },
 }
 
 impl Literal {
@@ -20,6 +24,7 @@ impl Literal {
             Self::Float(_) => LiteralKind::Float,
             Self::String(_) => LiteralKind::String,
             Self::Bool(_) => LiteralKind::Bool,
+            Self::None { .. } => LiteralKind::None,
         }
     }
 
@@ -33,6 +38,7 @@ impl Literal {
             },
             Self::String(text) => Value::String(text.clone()),
             Self::Bool(flag) => Value::Bool(*flag),
+            Self::None { .. } => Value::Null,
         }
     }
 
@@ -43,6 +49,7 @@ impl Literal {
             Self::Float(number) => number.to_string(),
             Self::String(text) => text.clone(),
             Self::Bool(flag) => flag.to_string(),
+            Self::None { .. } => "none".to_string(),
         }
     }
 }
@@ -54,6 +61,7 @@ pub enum LiteralKind {
     Float,
     String,
     Bool,
+    None,
 }
 
 impl LiteralKind {
@@ -63,6 +71,7 @@ impl LiteralKind {
             Self::Float => "float",
             Self::String => "string",
             Self::Bool => "bool",
+            Self::None => "none",
         }
     }
 }
@@ -93,6 +102,11 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    /// `operand is none`, or `operand is not none` when `negated`.
+    IsNone {
+        operand: Box<Expr>,
+        negated: bool,
+    },
     If {
         condition: Box<Expr>,
         then: Box<Expr>,
@@ -113,7 +127,7 @@ impl Expr {
     pub fn rewrite(&mut self, visit: &mut dyn FnMut(&mut Expr) -> Result<(), String>) -> Result<(), String> {
         match self {
             Self::Literal(_) | Self::Path(_) | Self::Variable(_) | Self::Field { .. } => {},
-            Self::Unary { operand, .. } => operand.rewrite(visit)?,
+            Self::Unary { operand, .. } | Self::IsNone { operand, .. } => operand.rewrite(visit)?,
             Self::Binary { left, right, .. } => {
                 left.rewrite(visit)?;
                 right.rewrite(visit)?;
@@ -145,7 +159,9 @@ impl Expr {
         match self {
             Self::Literal(_) | Self::Path(_) | Self::Variable(_) => {},
             Self::Field { stage, .. } => reads.push(StageRead { stage, variable }),
-            Self::Unary { operand, .. } => operand.collect_stage_reads(variable, reads),
+            Self::Unary { operand, .. } | Self::IsNone { operand, .. } => {
+                operand.collect_stage_reads(variable, reads);
+            },
             Self::Binary { left, right, .. } => {
                 left.collect_stage_reads(variable, reads);
                 right.collect_stage_reads(variable, reads);
@@ -264,5 +280,7 @@ pub struct VariableRules {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub choices: Option<Vec<Literal>>,
+    /// Whether the variable may be `none`.
+    pub optional: bool,
     pub span: Span,
 }
