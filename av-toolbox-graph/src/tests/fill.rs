@@ -392,3 +392,39 @@ fn a_filled_stage_failing_to_produce_notes_its_template() {
         failed.notes(),
     );
 }
+
+const NONE_WHEN_NARROW: &str = "{{ if input.width > 1000 then 1 else none }}";
+
+#[test]
+fn a_late_none_leaves_a_top_level_arg_out() {
+    let specs = vec![
+        sized("input", 64, 48),
+        resize("scaled", "input", NONE_WHEN_NARROW),
+        sink("out", "scaled"),
+    ];
+
+    let graph = filled(&specs);
+    let scaled = node_named(&graph, "scaled");
+    let args = graph.node(scaled).args();
+
+    assert!(args.as_object().expect("object args").get("width").is_none());
+}
+
+#[test]
+fn a_late_none_nested_in_args_is_refused() {
+    let mut scaled = resize("scaled", "input", NONE_WHEN_NARROW);
+    scaled.args = Spanned::unknown(json!({ "sizes": [NONE_WHEN_NARROW] }));
+    scaled.deferred = vec![testing::deferred("/sizes/0", NONE_WHEN_NARROW)];
+    scaled.deferred[0].span = Span::new(10, 30);
+
+    let specs = vec![sized("input", 64, 48), scaled, sink("out", "scaled")];
+
+    let diagnostics = fill_failure(&specs);
+    let invalid = diagnostics
+        .iter()
+        .find(|entry| entry.code() == DiagnosticCode::InvalidExpression)
+        .expect("an invalid expression");
+
+    assert!(invalid.message().contains("none"), "{}", invalid.message());
+    assert_eq!(invalid.span(), Span::new(10, 30));
+}

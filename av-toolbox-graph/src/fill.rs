@@ -12,6 +12,8 @@ use crate::spec::holds;
 use crate::template::{Literal, Scope, TemplateError, field_of};
 use crate::{DeferredArg, Diagnostic, DiagnosticCode, Diagnostics};
 
+const NESTED_NONE_MESSAGE: &str =
+    "`none` can only leave out a top-level arg, not a value inside an array or table";
 const FILLED_FROM: &str = "filled from this template";
 /// The note at an arg that used a failing call variable.
 pub(crate) const USED_HERE: &str = "used here";
@@ -158,7 +160,11 @@ fn filled_args(node: &Node, formats: HashMap<&str, StreamFormat>) -> Result<Valu
     for deferred in node.deferred() {
         let filled = deferred.template.fill(&scope);
         match filled {
-            Ok(value) => write_at(&mut args, &deferred.pointer, value),
+            Ok(value) => {
+                if let Err(diagnostic) = write_at(&mut args, node, deferred, value) {
+                    failures.push(diagnostic);
+                }
+            },
             Err(error) => {
                 let diagnostic = fill_failed(node, deferred, error);
                 failures.push(diagnostic);
@@ -219,12 +225,50 @@ fn note_reference(errors: Diagnostics, node: &Node, reference: &Reference) -> Di
     Diagnostics::from(noted)
 }
 
-fn write_at(args: &mut Value, pointer: &str, value: Value) {
+/// Writes a filled `value` at the deferred arg, or removes a top-level arg that filled to `none`.
+fn write_at(args: &mut Value, node: &Node, deferred: &DeferredArg, value: Value) -> Result<(), Diagnostic> {
+    if value.is_null() {
+        return leave_out(args, node, deferred);
+    }
+
     let slot = args
-        .pointer_mut(pointer)
+        .pointer_mut(&deferred.pointer)
         .expect("a deferred arg points at a value in its own args");
 
     *slot = value;
+
+    Ok(())
+}
+
+fn leave_out(args: &mut Value, node: &Node, deferred: &DeferredArg) -> Result<(), Diagnostic> {
+    let key = deferred
+        .pointer
+        .strip_prefix('/')
+        .filter(|key| !key.contains('/'));
+    let Some(key) = key else {
+        return Err(nested_none(node, deferred));
+    };
+
+    let key = key.replace("~1", "/").replace("~0", "~");
+    let entries = args
+        .as_object_mut()
+        .expect("a deferred arg points at a value in its own args");
+    entries.remove(&key);
+
+    Ok(())
+}
+
+fn nested_none(node: &Node, deferred: &DeferredArg) -> Diagnostic {
+    let field = deferred.pointer.replace('/', ".");
+    let args = args_path(node.kind(), node.name());
+    let path = format!("{args}{field}");
+
+    Diagnostic::error(
+        DiagnosticCode::InvalidExpression,
+        path,
+        deferred.span,
+        NESTED_NONE_MESSAGE,
+    )
 }
 
 /// Places a template failure at the deferred arg, or at the call's variable when it came from one.

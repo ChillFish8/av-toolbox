@@ -223,3 +223,30 @@ fn a_chunk_stage_after_a_join_with_a_reference_compiles() {
 
     assert_eq!(deinterlaced.demands().len(), 1);
 }
+
+#[test]
+fn a_late_none_leaves_the_arg_out_so_the_stage_takes_its_default() {
+    let text = format!(
+        r#"{CLIP}
+[filter.deep]
+type = "resample/depth"
+inputs = ["clip"]
+args.depth = 8
+args.at_least = "{{{{ if clip.width > 100000 then true else none }}}}"
+
+[sink.output]
+type = "y4m/pipe"
+inputs = ["deep"]
+args.path = "/dev/null"
+"#
+    );
+    let registry = av_toolbox_pipeline::registry().expect("the built-in stages register");
+    let backend = Backend::open_default(test_device()).expect("should open a device");
+    let pipeline = compiled(&text, &registry, &backend);
+
+    let deep = node_named(&pipeline, "deep").expect("the depth node");
+    let args = deep.args().as_object().expect("object args");
+
+    assert!(!args.contains_key("at_least"));
+    assert_eq!(args["depth"], json!(8));
+}
