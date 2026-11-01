@@ -558,3 +558,88 @@ fn a_called_files_variables_are_not_listed() {
 
     assert!(loaded.variables.is_empty());
 }
+
+const OPTIONAL_PART: &str = r#"
+[variable.x]
+type = "integer"
+optional = true
+
+[source.src]
+type = "y4m/pipe"
+args.unset = "{{ x is none }}"
+
+[output.done]
+inputs = ["src"]
+"#;
+
+const REQUIRED_PART: &str = r#"
+[variable.x]
+type = "integer"
+
+[source.src]
+type = "y4m/pipe"
+args.value = "{{ x }}"
+
+[output.done]
+inputs = ["src"]
+"#;
+
+const NONE_CALLER: &str = r#"
+[variable.y]
+type = "integer"
+optional = true
+
+[call.part]
+path = "parts/p.toml"
+variables.x = "{{ y }}"
+
+[sink.out]
+type = "y4m/stdout"
+inputs = ["part"]
+"#;
+
+#[test]
+fn none_passed_to_an_optional_call_variable_is_unset() {
+    let entries = [
+        ("/work/main.toml", NONE_CALLER),
+        ("/work/parts/p.toml", OPTIONAL_PART),
+    ];
+
+    let loaded = loaded(&entries, "/work/main.toml", &Supplied::new());
+    let source = stage(&loaded.specs, "part.src");
+
+    assert_eq!(source.args.value["unset"], serde_json::json!(true));
+}
+
+#[test]
+fn leaving_out_an_optional_call_variable_is_unset() {
+    let main = NONE_CALLER.replace("variables.x = \"{{ y }}\"\n", "");
+    let entries = [
+        ("/work/main.toml", main.as_str()),
+        ("/work/parts/p.toml", OPTIONAL_PART),
+    ];
+
+    let loaded = loaded(&entries, "/work/main.toml", &Supplied::new());
+    let source = stage(&loaded.specs, "part.src");
+
+    assert_eq!(source.args.value["unset"], serde_json::json!(true));
+}
+
+#[test]
+fn none_passed_to_a_required_call_variable_is_refused() {
+    let entries = [
+        ("/work/main.toml", NONE_CALLER),
+        ("/work/parts/p.toml", REQUIRED_PART),
+    ];
+
+    let diagnostics = failed(&entries, "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidVariable]);
+    assert!(diagnostics[0].message().contains("cannot be none"));
+    let notes: Vec<&str> = diagnostics[0]
+        .notes()
+        .iter()
+        .map(|note| note.message.as_str())
+        .collect();
+    assert!(notes.contains(&"declared here"), "{notes:?}");
+}

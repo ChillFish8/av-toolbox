@@ -4,6 +4,7 @@ use av_toolbox_graph::{DiagnosticCode, Span};
 use serde_json::json;
 
 use super::{codes, failed, loaded, stage};
+use crate::load;
 use crate::variables::{Supplied, VariableType, VariableValue};
 
 const PIPELINE: &str = r#"
@@ -465,4 +466,176 @@ fn a_variable_named_none_fails_the_load_at_its_header() {
         let span = diagnostics[0].span();
         assert_eq!((span.start, span.end), (start, end), "{keyword}");
     }
+}
+
+const DISPLAY_PIPELINE: &str = r#"
+[variable.display_config]
+type = "path"
+optional = true
+
+[source.src]
+type = "y4m/pipe"
+args.display = "cvvdp"
+args.display_config = "{{ if display_config is not none then read(display_config) else none }}"
+"#;
+
+const DISPLAY_JSON: &str = "{\"name\": \"custom\"}";
+
+#[test]
+fn an_unset_display_config_leaves_the_arg_out() {
+    let entries = [("/work/main.toml", DISPLAY_PIPELINE)];
+
+    let loaded = loaded(&entries, "/work/main.toml", &Supplied::new());
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value, json!({ "display": "cvvdp" }));
+}
+
+#[test]
+fn a_set_path_is_read_into_the_arg() {
+    let entries = [
+        ("/work/main.toml", DISPLAY_PIPELINE),
+        ("/work/display.json", DISPLAY_JSON),
+    ];
+    let supplied = with_flag("display_config", "/work/display.json");
+
+    let loaded = loaded(&entries, "/work/main.toml", &supplied);
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value["display_config"], json!(DISPLAY_JSON));
+}
+
+#[test]
+fn read_resolves_against_the_template_file() {
+    let main = r#"
+[call.inner]
+path = "sub/inner.toml"
+
+[sink.out]
+type = "y4m/stdout"
+inputs = ["inner"]
+"#;
+    let inner = r#"
+[source.src]
+type = "y4m/pipe"
+args.config = '{{ read("d.json") }}'
+
+[output.done]
+inputs = ["src"]
+"#;
+    let entries = [
+        ("/work/main.toml", main),
+        ("/work/sub/inner.toml", inner),
+        ("/work/sub/d.json", DISPLAY_JSON),
+    ];
+
+    let loaded = loaded(&entries, "/work/main.toml", &Supplied::new());
+    let source = stage(&loaded.specs, "inner.src");
+
+    assert_eq!(source.args.value["config"], json!(DISPLAY_JSON));
+}
+
+#[test]
+fn read_of_a_missing_file_is_reported() {
+    let supplied = with_flag("display_config", "/work/missing.json");
+
+    let diagnostics = failed(
+        &[("/work/main.toml", DISPLAY_PIPELINE)],
+        "/work/main.toml",
+        &supplied,
+    );
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(diagnostics[0].message().contains("cannot read"));
+}
+
+#[test]
+fn read_of_a_non_utf8_file_is_reported() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let main_path = directory.path().join("main.toml");
+    let pipeline = r#"
+[source.src]
+type = "y4m/pipe"
+args.config = '{{ read("bad.json") }}'
+"#;
+    std::fs::write(&main_path, pipeline).expect("the pipeline is written");
+
+    let bad_path = directory.path().join("bad.json");
+    std::fs::write(&bad_path, [0xff, 0xfe]).expect("the bad file is written");
+
+    let result = load::load(&main_path, &load::DiskFiles, &Supplied::new());
+    let Err(failure) = result else {
+        panic!("the pipeline should fail to load");
+    };
+    let diagnostics = failure.diagnostics.into_inner();
+    let template_start = pipeline.find("'{{").expect("the template");
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(diagnostics[0].message().contains("cannot read"));
+    assert_eq!(diagnostics[0].span().start, template_start);
+}
+
+const STAGE_READING: &str = r#"
+[source.src]
+type = "y4m/pipe"
+
+[filter.next]
+type = "test/next"
+inputs = ["src"]
+args.value = 'TEMPLATE'
+"#;
+
+#[test]
+fn read_with_a_stage_reference_is_refused() {
+    let templates = [
+        "{{ read(src.width) }}",
+        "{{ if src.width > 1 then read(\"a\") else none }}",
+    ];
+
+    for template in templates {
+        let text = STAGE_READING.replace("TEMPLATE", template);
+
+        let diagnostics = failed(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+
+        assert_eq!(
+            codes(&diagnostics),
+            [DiagnosticCode::InvalidDefinition],
+            "{template}"
+        );
+        assert!(
+            diagnostics[0].message().contains("stage reference"),
+            "{template}: {}",
+            diagnostics[0].message()
+        );
+    }
+}
+
+#[test]
+fn none_nested_in_an_array_is_refused() {
+    let text = optional_pipeline("", "args.sizes = [\"{{ x }}\"]");
+
+    let diagnostics = failed(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(diagnostics[0].message().contains("top-level arg"));
+}
+
+#[test]
+fn none_nested_in_an_object_is_refused() {
+    let text = optional_pipeline("", "args.options = { name = \"{{ x }}\" }");
+
+    let diagnostics = failed(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(diagnostics[0].message().contains("top-level arg"));
+}
+
+#[test]
+fn none_in_workers_is_refused() {
+    let text = optional_pipeline("", "workers = \"{{ x }}\"");
+
+    let diagnostics = failed(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(diagnostics[0].message().contains("`none`"));
 }

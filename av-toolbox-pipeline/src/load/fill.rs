@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::path::Path;
 
 use av_toolbox_graph::{
     ArgSpans,
@@ -6,6 +7,7 @@ use av_toolbox_graph::{
     Diagnostic,
     DiagnosticCode,
     Expr,
+    Function,
     Literal,
     Piece,
     Scope,
@@ -17,10 +19,14 @@ use av_toolbox_graph::{
 use serde_json::{Map, Value};
 
 use super::expand::Loader;
-use super::files::SourceMap;
+use super::files::{Files, SourceMap};
 use crate::variables::{Bound, Values};
 
 const REFERENCE_OUTSIDE_ARGS_MESSAGE: &str = "stage references can only be used in args";
+const NONE_OUTSIDE_ARGS_MESSAGE: &str = "`none` can only be used to leave out an arg";
+const NESTED_NONE_MESSAGE: &str =
+    "`none` can only leave out a top-level arg, not a value inside an array or table";
+const READ_WITH_REFERENCE_MESSAGE: &str = "`read` can't be used with a stage reference";
 
 /// What filling templates needs, and the path problems are reported under.
 pub(super) struct Filling<'a> {
@@ -30,6 +36,8 @@ pub(super) struct Filling<'a> {
     /// Put in front of every stage name a template reads, such as `outer.inner.`.
     pub(super) prefix: &'a str,
     pub(super) path: &'a str,
+    /// The directory of the file the templates are written in, which `read` resolves against.
+    pub(super) directory: &'a Path,
 }
 
 /// A string once its templates are filled as far as loading can.
@@ -50,9 +58,14 @@ pub(super) enum FillFailure {
 }
 
 /// The scope of a template whose variables are already inlined and which reads no stage.
-struct InlinedScope;
+///
+/// `read` resolves a relative path against `directory` and reads it through `files`.
+pub(super) struct LoadScope<'a> {
+    files: &'a dyn Files,
+    directory: &'a Path,
+}
 
-impl Scope for InlinedScope {
+impl Scope for LoadScope<'_> {
     fn variable(&self, _name: &str) -> Option<Literal> {
         None
     }
@@ -61,13 +74,64 @@ impl Scope for InlinedScope {
         let message = format!("{stage}.{field} cannot be read while loading");
         Err(message)
     }
+
+    fn read_file(&self, path: &str) -> Result<String, String> {
+        let full_path = self.directory.join(path);
+        let read = self.files.read(&full_path);
+
+        match read {
+            Ok(text) => Ok(text),
+            Err(error) => {
+                let message = format!("cannot read {path}: {error}");
+                Err(message)
+            },
+        }
+    }
 }
 
 impl Loader<'_> {
+    /// Fills every template in a stage's `args`, or `None` after reporting each that cannot be.
+    ///
+    /// A top-level arg whose template fills to `none` is left out. Elsewhere `none` is refused.
+    pub(super) fn fill_args(
+        &mut self,
+        args: &Value,
+        arg_spans: &ArgSpans,
+        fallback: Span,
+        filling: &Filling<'_>,
+        deferred: &mut Vec<DeferredArg>,
+    ) -> Option<Value> {
+        let Value::Object(entries) = args else {
+            return self.fill_value(args, "", arg_spans, fallback, filling, deferred);
+        };
+
+        let mut filled = Map::new();
+        let mut failed = false;
+
+        for (key, item) in entries {
+            let pointer = entry_pointer("", key);
+            let converted = match item {
+                Value::String(text) => self.fill_text(text, &pointer, arg_spans, fallback, filling, deferred),
+                other => self.fill_value(other, &pointer, arg_spans, fallback, filling, deferred),
+            };
+
+            match converted {
+                Some(Value::Null) => {},
+                Some(converted) => {
+                    filled.insert(key.clone(), converted);
+                },
+                None => failed = true,
+            }
+        }
+
+        (!failed).then_some(Value::Object(filled))
+    }
+
     /// Fills every template under `value`, or `None` after reporting each that cannot be.
     ///
     /// A template reading other stages keeps its text and is pushed onto `deferred` instead.
     /// A template is reported at its span in `arg_spans`, or at `fallback` when it has none.
+    /// A template filling to `none` is refused.
     pub(super) fn fill_value(
         &mut self,
         value: &Value,
@@ -79,21 +143,14 @@ impl Loader<'_> {
     ) -> Option<Value> {
         match value {
             Value::String(text) => {
-                let span = arg_spans.narrowest(pointer).unwrap_or(fallback);
-                let filled = self.fill_string(text, span, filling)?;
-
-                match filled {
-                    Filled::Ready(ready) => Some(ready),
-                    Filled::Deferred(template) => {
-                        deferred.push(DeferredArg {
-                            pointer: pointer.to_string(),
-                            template,
-                            span,
-                        });
-
-                        Some(value.clone())
-                    },
+                let filled = self.fill_text(text, pointer, arg_spans, fallback, filling, deferred)?;
+                if !filled.is_null() {
+                    return Some(filled);
                 }
+
+                let span = arg_spans.narrowest(pointer).unwrap_or(fallback);
+                self.report_invalid(filling.path, span, NESTED_NONE_MESSAGE);
+                None
             },
             Value::Array(items) => {
                 let mut filled = Vec::with_capacity(items.len());
@@ -115,8 +172,7 @@ impl Loader<'_> {
                 let mut failed = false;
 
                 for (key, item) in entries {
-                    let escaped = key.replace('~', "~0").replace('/', "~1");
-                    let nested = format!("{pointer}/{escaped}");
+                    let nested = entry_pointer(pointer, key);
                     let converted = self.fill_value(item, &nested, arg_spans, fallback, filling, deferred);
                     match converted {
                         Some(converted) => {
@@ -132,24 +188,56 @@ impl Loader<'_> {
         }
     }
 
-    /// Fills `text`'s templates, refusing one that reads other stages, or `None` after reporting.
+    /// Fills the string `text` found at `pointer`, which may give `none` as [Value::Null].
+    fn fill_text(
+        &mut self,
+        text: &str,
+        pointer: &str,
+        arg_spans: &ArgSpans,
+        fallback: Span,
+        filling: &Filling<'_>,
+        deferred: &mut Vec<DeferredArg>,
+    ) -> Option<Value> {
+        let span = arg_spans.narrowest(pointer).unwrap_or(fallback);
+        let filled = self.fill_string(text, span, filling)?;
+
+        match filled {
+            Filled::Ready(ready) => Some(ready),
+            Filled::Deferred(template) => {
+                deferred.push(DeferredArg {
+                    pointer: pointer.to_string(),
+                    template,
+                    span,
+                });
+
+                let kept = Value::String(text.to_string());
+                Some(kept)
+            },
+        }
+    }
+
+    /// Fills `text`'s templates, refusing one that reads other stages or gives `none`.
+    ///
+    /// Gives `None` after reporting the problem.
     pub(super) fn fill_now(&mut self, text: &str, span: Span, filling: &Filling<'_>) -> Option<Value> {
         let filled = self.fill_string(text, span, filling)?;
 
         match filled {
+            Filled::Ready(Value::Null) => {
+                self.report_invalid(filling.path, span, NONE_OUTSIDE_ARGS_MESSAGE);
+                None
+            },
             Filled::Ready(value) => Some(value),
             Filled::Deferred(_) => {
-                let diagnostic = Diagnostic::error(
-                    DiagnosticCode::InvalidDefinition,
-                    filling.path,
-                    span,
-                    REFERENCE_OUTSIDE_ARGS_MESSAGE,
-                );
-
-                self.diagnostics.push(diagnostic);
+                self.report_invalid(filling.path, span, REFERENCE_OUTSIDE_ARGS_MESSAGE);
                 None
             },
         }
+    }
+
+    fn report_invalid(&mut self, path: &str, span: Span, message: &str) {
+        let diagnostic = Diagnostic::error(DiagnosticCode::InvalidDefinition, path, span, message);
+        self.diagnostics.push(diagnostic);
     }
 
     /// Fills `text`'s templates, or `None` after reporting the problem.
@@ -157,7 +245,11 @@ impl Loader<'_> {
     /// A template naming a variable that was declared but could not be resolved is left
     /// unreported here, since resolving it already reported the problem.
     pub(super) fn fill_string(&mut self, text: &str, span: Span, filling: &Filling<'_>) -> Option<Filled> {
-        let filled = fill_template(text, filling.values, filling.prefix);
+        let scope = LoadScope {
+            files: self.files,
+            directory: filling.directory,
+        };
+        let filled = fill_template(text, filling.values, filling.prefix, &scope);
 
         match filled {
             Ok(filled) => Some(filled),
@@ -193,19 +285,32 @@ impl Loader<'_> {
 
 /// What `text` becomes once its variables from `values` are filled in.
 ///
-/// Stage names the template reads get `prefix` in front.
-pub(super) fn fill_template(text: &str, values: &Values, prefix: &str) -> Result<Filled, FillFailure> {
+/// Stage names the template reads get `prefix` in front. A template reading stages cannot also
+/// call `read`, since `read` only works while loading.
+pub(super) fn fill_template(
+    text: &str,
+    values: &Values,
+    prefix: &str,
+    scope: &LoadScope<'_>,
+) -> Result<Filled, FillFailure> {
     let parsed = Template::parse(text);
     let mut template = parsed.map_err(invalid_template)?;
 
     resolve_paths(&mut template, values, prefix)?;
 
     let reads_stages = !template.stages().is_empty();
+    if reads_stages && template.calls(Function::Read) {
+        return Err(FillFailure::Invalid {
+            message: READ_WITH_REFERENCE_MESSAGE.to_string(),
+            range: 0..text.len(),
+        });
+    }
+
     if reads_stages {
         return Ok(Filled::Deferred(template));
     }
 
-    let filled = template.fill(&InlinedScope);
+    let filled = template.fill(scope);
     let value = filled.map_err(invalid_template)?;
 
     Ok(Filled::Ready(value))
@@ -295,6 +400,12 @@ fn inline_variable(name: &str, values: &Values, unknown: &mut Option<String>) ->
             Expr::Variable(name.to_string())
         },
     }
+}
+
+/// The JSON pointer of `key` inside the object at `pointer`.
+fn entry_pointer(pointer: &str, key: &str) -> String {
+    let escaped = key.replace('~', "~0").replace('/', "~1");
+    format!("{pointer}/{escaped}")
 }
 
 fn invalid_template(error: TemplateError) -> FillFailure {

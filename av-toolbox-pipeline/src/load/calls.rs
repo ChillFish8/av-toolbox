@@ -58,6 +58,7 @@ impl Loader<'_> {
             declared,
             prefix: &instance.prefix,
             path: &call_path,
+            directory: &instance.directory,
         };
         let filled = self.fill_now(&call.path.value, call.path.span, &path_filling)?;
         let Value::String(written) = filled else {
@@ -187,6 +188,7 @@ impl Loader<'_> {
             declared,
             prefix: &instance.prefix,
             path: &path,
+            directory: &instance.directory,
         };
 
         for variable in &call.variables {

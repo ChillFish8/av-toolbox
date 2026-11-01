@@ -142,10 +142,14 @@ fn supplied_value(
             let entry = values.iter().find(|entry| entry.name == *name)?;
             let passed = entry.value.as_ref()?;
             let value = match passed {
+                Passed::Value(Value::Null) if declaration.optional => return Some(Bound::Unset),
                 Passed::Value(value) => value,
                 Passed::Reference(expr) => return deferred_value(declaration, entry, expr, diagnostics),
             };
-            let read = from_json(variable_type, value, &entry.directory);
+            let read = match value {
+                Value::Null => Err(not_optional(name)),
+                _ => from_json(variable_type, value, &entry.directory),
+            };
             let origin = String::from("the call");
             (read, origin, entry.value_span)
         },
@@ -191,6 +195,10 @@ fn deferred_value(
     let inner = Box::new(expr.clone());
 
     Some(Bound::Deferred(Expr::Checked { inner, rules }))
+}
+
+fn not_optional(name: &str) -> String {
+    format!("{name} is not optional, so it cannot be none")
 }
 
 /// Whether a value was given from outside the file, valid or not.

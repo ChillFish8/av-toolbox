@@ -263,16 +263,10 @@ impl<'a> Loader<'a> {
             declared,
             prefix: &instance.prefix,
             path: &path,
+            directory: &instance.directory,
         };
         let mut deferred = Vec::new();
-        let filled_args = self.fill_value(
-            &args.value,
-            "",
-            &arg_spans,
-            args.span,
-            &args_filling,
-            &mut deferred,
-        );
+        let filled_args = self.fill_args(&args.value, &arg_spans, args.span, &args_filling, &mut deferred);
         let workers = self.workers(workers, &args_filling);
 
         let (Some(filled_args), Ok(workers)) = (filled_args, workers) else {

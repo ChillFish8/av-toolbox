@@ -335,3 +335,26 @@ fn a_stage_read_only_through_a_reference_is_kept() {
     assert_eq!(deferred.template.stages(), ["scaled.probe"]);
     assert!(specs.iter().any(|spec| spec.name.value == "scaled.probe"));
 }
+
+#[test]
+fn a_deferred_call_variable_may_be_none_when_optional() {
+    let part = PART
+        .replace("default = 64\nmin = 16\n", "optional = true\n")
+        .replace("{{ clip.width }}", "{{ width }}");
+    let main = CALLER.replace(
+        "inputs = [\"src\"]\n",
+        "inputs = [\"src\"]\nvariables.width = \"{{ if src.width > 1 then none else 3 }}\"\n",
+    );
+
+    let specs = with_part(&main, &part);
+    let scale = stage(&specs, "scaled.scale");
+    let deferred = only_deferred(scale);
+    let [Piece::Expr(only)] = deferred.template.pieces() else {
+        panic!("the template should be one expression");
+    };
+    let Expr::Checked { rules, .. } = &only.expr else {
+        panic!("the expression should be checked, it is {:?}", only.expr);
+    };
+
+    assert!(rules.optional);
+}
