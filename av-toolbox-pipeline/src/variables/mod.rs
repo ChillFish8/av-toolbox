@@ -21,6 +21,8 @@ pub(crate) enum Bound {
     Ready(VariableValue),
     /// An expression reading other stages, already checked against the variable's rules.
     Deferred(Expr),
+    /// An optional variable nobody gave a value.
+    Unset,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -129,7 +131,8 @@ impl VariableValue {
 pub struct ResolvedVariable {
     pub name: String,
     pub variable_type: VariableType,
-    pub value: VariableValue,
+    /// The resolved value, or `None` for an optional variable nobody set.
+    pub value: Option<VariableValue>,
 }
 
 /// A `[variable.<name>]` table as it was written.
@@ -143,6 +146,7 @@ pub struct Declaration {
     pub min: Option<Spanned<Value>>,
     pub max: Option<Spanned<Value>>,
     pub choices: Option<Spanned<Vec<Value>>>,
+    pub optional: bool,
 }
 
 impl Declaration {
@@ -161,7 +165,7 @@ impl Declaration {
             min,
             max,
             choices,
-            optional: false,
+            optional: self.optional,
             span,
         }
     }

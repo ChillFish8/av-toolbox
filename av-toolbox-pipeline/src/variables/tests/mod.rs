@@ -18,6 +18,7 @@ fn declaration(variable_type: VariableType) -> Declaration {
         min: None,
         max: None,
         choices: None,
+        optional: false,
     }
 }
 

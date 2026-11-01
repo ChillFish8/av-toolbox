@@ -351,3 +351,19 @@ fn a_call_name_that_is_a_template_keyword_asks_for_a_rename() {
         "{diagnostics:?}"
     );
 }
+
+#[test]
+fn a_stage_named_is_is_refused() {
+    let diagnostics = reported("[filter.is]\ntype = \"a/b\"\n");
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(diagnostics[0].message().contains("template keyword"));
+}
+
+#[test]
+fn a_stage_named_none_is_refused() {
+    let diagnostics = reported("[filter.none]\ntype = \"a/b\"\n");
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::InvalidDefinition]);
+    assert!(diagnostics[0].message().contains("template keyword"));
+}

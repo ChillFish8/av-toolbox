@@ -248,7 +248,7 @@ inputs = ["parts"]
         let hash = export.hash.as_deref().expect("a hash");
 
         assert!(export.valid, "{:?}", export.diagnostics);
-        assert_eq!(export.format_version, 1);
+        assert_eq!(export.format_version, 2);
         assert_eq!(variables["width"].variable_type, "integer");
         assert_eq!(variables["width"].value, json!(1280));
         assert_eq!(keys(&export), ["source.input", "filter.resize", "sink.output"]);

@@ -293,10 +293,10 @@ fn the_root_variables_are_listed_in_declaration_order() {
 
     assert_eq!(names, ["sigma", "dir"]);
     assert_eq!(loaded.variables[0].variable_type, VariableType::Float);
-    assert_eq!(loaded.variables[0].value, VariableValue::Float(1.5));
+    assert_eq!(loaded.variables[0].value, Some(VariableValue::Float(1.5)));
     assert_eq!(
         loaded.variables[1].value,
-        VariableValue::Path("/work/out".to_string())
+        Some(VariableValue::Path("/work/out".to_string()))
     );
 }
 
@@ -388,4 +388,81 @@ fn an_empty_template_is_refused() {
             .message()
             .contains("a template must hold an expression")
     );
+}
+
+fn optional_pipeline(extra: &str, arg: &str) -> String {
+    format!(
+        "[variable.x]\ntype = \"string\"\noptional = true\n{extra}\n\n[source.src]\ntype = \"y4m/pipe\"\n{arg}\n"
+    )
+}
+
+#[test]
+fn an_unset_optional_variable_fills_to_none() {
+    let text = optional_pipeline("", "args.flag = \"{{ x is none }}\"");
+
+    let loaded = loaded(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value["flag"], json!(true));
+}
+
+#[test]
+fn a_set_optional_variable_is_used() {
+    let text = optional_pipeline("", "args.value = \"{{ x }}\"");
+    let supplied = with_flag("x", "hello");
+
+    let loaded = loaded(&[("/work/main.toml", &text)], "/work/main.toml", &supplied);
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value["value"], json!("hello"));
+}
+
+#[test]
+fn choices_are_not_checked_when_unset() {
+    let text = optional_pipeline("choices = [\"a\"]", "args.flag = \"{{ x is none }}\"");
+
+    let loaded = loaded(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+    let source = stage(&loaded.specs, "src");
+
+    assert_eq!(source.args.value["flag"], json!(true));
+}
+
+#[test]
+fn a_required_variable_without_a_default_is_still_missing() {
+    let text =
+        "[variable.x]\ntype = \"string\"\n\n[source.src]\ntype = \"y4m/pipe\"\nargs.value = \"{{ x }}\"\n";
+
+    let diagnostics = failed(&[("/work/main.toml", text)], "/work/main.toml", &Supplied::new());
+
+    assert_eq!(codes(&diagnostics), [DiagnosticCode::MissingVariable]);
+}
+
+#[test]
+fn an_unset_root_variable_resolves_to_no_value() {
+    let text = optional_pipeline("", "args.flag = \"{{ x is none }}\"");
+
+    let loaded = loaded(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+
+    assert_eq!(loaded.variables[0].name, "x");
+    assert_eq!(loaded.variables[0].value, None);
+}
+
+#[test]
+fn a_variable_named_none_fails_the_load_at_its_header() {
+    for keyword in ["none", "is"] {
+        let text = format!("[variable.{keyword}]\ntype = \"string\"\noptional = true\n");
+        let start = text.find(&format!("[variable.{keyword}]")).expect("header");
+        let end = start + format!("[variable.{keyword}]").len();
+
+        let diagnostics = failed(&[("/work/main.toml", &text)], "/work/main.toml", &Supplied::new());
+
+        assert_eq!(
+            codes(&diagnostics),
+            [DiagnosticCode::InvalidDefinition],
+            "{keyword}"
+        );
+        assert!(diagnostics[0].message().contains("template keyword"));
+        let span = diagnostics[0].span();
+        assert_eq!((span.start, span.end), (start, end), "{keyword}");
+    }
 }

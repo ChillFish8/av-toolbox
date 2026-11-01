@@ -5,7 +5,9 @@ use ::toml::de::{DeArray, DeTable, DeValue};
 use av_toolbox_graph::{Diagnostic, DiagnosticCode, Diagnostics, FileId, InputRef, Span, Spanned, Template};
 
 /// The words a template reads as keywords rather than as a stage name.
-const TEMPLATE_KEYWORDS: [&str; 8] = ["if", "then", "else", "and", "or", "not", "true", "false"];
+pub(super) const TEMPLATE_KEYWORDS: [&str; 10] = [
+    "if", "then", "else", "and", "or", "not", "true", "false", "none", "is",
+];
 
 /// One table being read, remembering whether anything in it was wrong.
 pub(super) struct TableReader<'a> {

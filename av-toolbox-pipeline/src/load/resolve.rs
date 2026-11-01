@@ -66,6 +66,12 @@ pub(super) fn resolve_variables(
         };
 
         let Some(value) = chosen else {
+            if declaration.optional {
+                let name = declaration.name.value.clone();
+                values.insert(name, Bound::Unset);
+                continue;
+            }
+
             let has_default = declaration.default.is_some();
             let was_given = is_given(declaration, given);
             if !has_default && !was_given {

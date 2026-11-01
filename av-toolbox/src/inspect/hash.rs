@@ -113,7 +113,7 @@ mod tests {
     fn a_known_stage_list_hashes_to_a_fixed_value() {
         let stages = [stage("blur", json!({ "sigma": 1.5 }), Some(2))];
 
-        let expected = "sha256:14bc2cb66658a8c3e725eccb8a6ecb76408106391a3066b3b29f894839a1e209";
+        let expected = "sha256:0780820f96b727e03c5b71730c3a0c64e3d8841f232619087dcb67f5b4527944";
         assert_eq!(pipeline_hash(&stages), expected);
     }
 

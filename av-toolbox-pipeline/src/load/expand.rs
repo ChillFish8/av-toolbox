@@ -352,14 +352,16 @@ fn resolved_variables(declarations: &[Declaration], values: &Values) -> Vec<Reso
 
     for declaration in declarations {
         let name = &declaration.name.value;
-        let Some(Bound::Ready(value)) = values.get(name) else {
-            continue;
+        let value = match values.get(name) {
+            Some(Bound::Ready(value)) => Some(value.clone()),
+            Some(Bound::Unset) => None,
+            _ => continue,
         };
 
         let variable = ResolvedVariable {
             name: name.clone(),
             variable_type: declaration.variable_type,
-            value: value.clone(),
+            value,
         };
         resolved.push(variable);
     }

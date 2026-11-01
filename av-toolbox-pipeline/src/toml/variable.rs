@@ -6,10 +6,18 @@ use av_toolbox_graph::{Diagnostics, FileId, Span, Spanned, Template};
 use serde_json::Value;
 
 use super::args::convert_value;
-use super::reader::{TableReader, entry};
+use super::reader::{TEMPLATE_KEYWORDS, TableReader, entry};
 use crate::variables::{Declaration, VariableType, is_variable_name};
 
-const KEYS: [&str; 6] = ["type", "description", "default", "min", "max", "choices"];
+const KEYS: [&str; 7] = [
+    "type",
+    "description",
+    "default",
+    "min",
+    "max",
+    "choices",
+    "optional",
+];
 
 /// Reads one `[variable.name]` table, reporting everything wrong with it.
 pub(super) fn read_variable(
@@ -33,6 +41,11 @@ pub(super) fn read_variable(
         let message =
             format!("the variable name {written_name:?} may only use lower case letters, digits and _");
         reader.error("", header, message);
+    } else if TEMPLATE_KEYWORDS.contains(&written_name.as_ref()) {
+        let message = format!(
+            "the variable name {written_name:?} is a template keyword, which a template cannot read as a variable, so rename it"
+        );
+        reader.error("", header, message);
     }
 
     let inner = value.get_ref();
@@ -45,7 +58,7 @@ pub(super) fn read_variable(
         table,
         &KEYS,
         "variable setting",
-        "a variable takes type, description, default, min, max and choices",
+        "a variable takes type, description, default, min, max, choices and optional",
     );
 
     let variable_type = variable_type(&mut reader, table);
@@ -54,6 +67,7 @@ pub(super) fn read_variable(
     let min = written_value(&mut reader, table, "min");
     let max = written_value(&mut reader, table, "max");
     let choices = written_value(&mut reader, table, "choices");
+    let optional = read_optional(&mut reader, table, default.as_ref());
 
     let variable_type = variable_type?;
     check_bound(&mut reader, variable_type, "min", min.as_ref());
@@ -73,7 +87,30 @@ pub(super) fn read_variable(
         min: min.map(|written| written.value),
         max: max.map(|written| written.value),
         choices,
+        optional,
     })
+}
+
+/// Reads `optional`, which cannot be combined with a `default`.
+fn read_optional(reader: &mut TableReader<'_>, table: &DeTable<'_>, default: Option<&Written>) -> bool {
+    let Some(value) = entry(table, "optional") else {
+        return false;
+    };
+
+    let range = value.span();
+    let span = reader.span(range);
+    let Some(optional) = value.get_ref().as_bool() else {
+        reader.error("optional", span, "optional must be a bool");
+        return false;
+    };
+
+    if optional && default.is_some() {
+        let message =
+            "optional cannot be combined with default, an optional variable has no value until one is given";
+        reader.error("optional", span, message);
+    }
+
+    optional
 }
 
 /// A value under a variable's key, with where the key itself was written.

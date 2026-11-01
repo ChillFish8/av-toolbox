@@ -9,7 +9,7 @@ use crate::profile::file::stage_key;
 use crate::report::PipelineFiles;
 
 /// The version of the export's shape and of the hash input.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+pub(crate) const FORMAT_VERSION: u32 = 2;
 
 /// Everything `inspect` prints about a pipeline.
 #[derive(Debug, Serialize)]
@@ -80,7 +80,10 @@ pub(crate) fn variables(resolved: &[ResolvedVariable]) -> BTreeMap<String, Expor
     let mut exported = BTreeMap::new();
 
     for variable in resolved {
-        let value = variable.value.to_json();
+        let value = match &variable.value {
+            Some(value) => value.to_json(),
+            None => Value::Null,
+        };
         let entry = ExportedVariable {
             variable_type: variable.variable_type.as_str(),
             value,
@@ -262,12 +265,12 @@ mod tests {
             ResolvedVariable {
                 name: "width".to_string(),
                 variable_type: VariableType::Integer,
-                value: VariableValue::Integer(1280),
+                value: Some(VariableValue::Integer(1280)),
             },
             ResolvedVariable {
                 name: "input".to_string(),
                 variable_type: VariableType::Path,
-                value: VariableValue::Path("/clips/in.mkv".to_string()),
+                value: Some(VariableValue::Path("/clips/in.mkv".to_string())),
             },
         ];
 
@@ -279,6 +282,20 @@ mod tests {
             "width": { "type": "integer", "value": 1280 },
         });
         assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn an_unset_variable_exports_null() {
+        let resolved = [ResolvedVariable {
+            name: "mask".to_string(),
+            variable_type: VariableType::Path,
+            value: None,
+        }];
+
+        let exported = variables(&resolved);
+        let value = serde_json::to_value(&exported).expect("plain JSON");
+
+        assert_eq!(value, json!({ "mask": { "type": "path", "value": null } }));
     }
 
     const ROOT_TEXT: &str = "[filter.blur]\ntype = \"test/blur\"\n";

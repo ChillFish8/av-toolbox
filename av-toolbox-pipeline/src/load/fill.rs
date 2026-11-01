@@ -283,6 +283,10 @@ fn inline_variable(name: &str, values: &Values, unknown: &mut Option<String>) ->
             Expr::Literal(literal)
         },
         Some(Bound::Deferred(expr)) => expr.clone(),
+        Some(Bound::Unset) => {
+            let variable = Some(name.to_string());
+            Expr::Literal(Literal::None { variable })
+        },
         None => {
             if unknown.is_none() {
                 *unknown = Some(name.to_string());

@@ -150,3 +150,49 @@ fn a_template_in_choices_is_refused_on_its_choice() {
     );
     assert_eq!(diagnostics[0].span(), locate(text, "\"{{ b\""));
 }
+
+#[test]
+fn optional_with_a_default_is_refused() {
+    let text = "[variable.a]\ntype = \"string\"\noptional = true\ndefault = \"x\"\n";
+
+    let diagnostics = reported(text);
+
+    assert_eq!(diagnostics[0].code(), DiagnosticCode::InvalidDefinition);
+    let message = diagnostics[0].message();
+    assert!(message.contains("optional"), "{message}");
+    assert!(message.contains("default"), "{message}");
+}
+
+#[test]
+fn optional_must_be_a_bool() {
+    let diagnostics = reported("[variable.a]\ntype = \"string\"\noptional = \"yes\"\n");
+
+    assert_eq!(diagnostics[0].code(), DiagnosticCode::InvalidDefinition);
+    assert!(diagnostics[0].message().contains("optional must be a bool"));
+}
+
+#[test]
+fn optional_is_read() {
+    let file = parsed("[variable.a]\ntype = \"string\"\noptional = true\n");
+
+    assert!(file.variables[0].optional);
+}
+
+#[test]
+fn a_variable_named_after_a_template_keyword_is_refused_on_its_header() {
+    for keyword in ["none", "is"] {
+        let text = format!("[variable.{keyword}]\ntype = \"string\"\n");
+
+        let diagnostics = reported(&text);
+
+        assert_eq!(diagnostics.len(), 1, "{keyword}: {diagnostics:?}");
+        assert_eq!(diagnostics[0].code(), DiagnosticCode::InvalidDefinition);
+        assert_eq!(
+            diagnostics[0].span(),
+            locate(&text, &format!("[variable.{keyword}]"))
+        );
+        let message = diagnostics[0].message();
+        assert!(message.contains("template keyword"), "{message}");
+        assert!(message.contains(keyword), "{message}");
+    }
+}
