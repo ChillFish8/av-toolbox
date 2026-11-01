@@ -64,7 +64,7 @@ args.path = "{{ input }}"
 ```
 
 The type is one of `string`, `path`, `integer`, `float` or `bool`. A variable may also set `min` and `max` for
-numbers, or `choices` for strings and integers. A variable with no `default` must be given.
+numbers, or `choices` for strings and integers. A variable with no `default` must be given, unless it is `optional`.
 
 ```bash
 av-toolbox execute examples/scenes.toml --var input=clip.mkv
@@ -73,6 +73,24 @@ AVTB_VAR_INPUT=clip.mkv av-toolbox execute examples/scenes.toml
 
 `--var` wins over `AVTB_VAR_<NAME>`, which wins over the default. A path is relative to the file it is written in,
 or to the working directory when given on the command line.
+
+A variable with `optional = true` may be left unset, and cannot also have a `default`. An unset one is `none`.
+Test for it with `is none` or `is not none`, because `none` cannot be written inside a comparison.
+Comparing an unset variable with `==` is always `false`.
+A top-level arg whose template gives `none` is left out, so the stage uses its default.
+`read(path)` gives the contents of a file. A literal path is relative to the file it is written in.
+It only works in templates filled when the pipeline loads.
+
+```toml
+[variable.model]
+type = "path"
+optional = true
+
+[filter.score]
+type = "vship/cvvdp"
+inputs = ["reference", "distorted"]
+args.display_config = "{{ if model is not none then read(model) else none }}"
+```
 
 ## Splitting pipelines
 

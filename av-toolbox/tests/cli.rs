@@ -122,6 +122,46 @@ fn explain_writes_plan_html_in_the_working_directory_by_default() {
     assert!(stdout.contains("wrote plan.html"), "{stdout}");
 }
 
+#[cfg(feature = "vship")]
+fn explain_display_example(directory: &Path) -> Output {
+    let example = example("cvvdp-heatmap-display.toml");
+
+    Command::new(env!("CARGO_BIN_EXE_av-toolbox"))
+        .current_dir(directory)
+        .args(["--color", "never", "explain"])
+        .arg(&example)
+        .args(["--structure-only", "--var", "display=my_display"])
+        .args(["--var", "display_config=my-display.json"])
+        .output()
+        .expect("the binary runs")
+}
+
+#[cfg(feature = "vship")]
+#[test]
+fn explain_reads_a_custom_display_config() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let config = r#"{ "my_display": { "resolution": [1280, 720] } }"#;
+    let config_path = directory.path().join("my-display.json");
+    std::fs::write(config_path, config).expect("written");
+
+    let output = explain_display_example(directory.path());
+    let stderr = text(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+}
+
+#[cfg(feature = "vship")]
+#[test]
+fn explain_reports_a_missing_display_config() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+
+    let output = explain_display_example(directory.path());
+    let stderr = text(&output.stderr);
+
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("cannot read"), "{stderr}");
+}
+
 #[test]
 fn a_path_without_html_is_a_usage_error() {
     let example = example("passthrough.toml");

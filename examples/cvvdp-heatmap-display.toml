@@ -3,6 +3,7 @@
 #
 # CVVDP scales both clips to fit the display before scoring, so its map comes out at the display's size. The map is
 # scaled back to the distorted clip's size before it is painted.
+# The display model can be swapped for a JSON file in Vship's format.
 # Needs the `vship` feature.
 
 [variable.reference]
@@ -17,16 +18,15 @@ default = "distorted.mkv"
 
 [variable.display]
 type = "string"
-description = "The display CVVDP models viewing on"
+description = """\
+The display CVVDP models viewing on. One of standard_4k, standard_fhd, standard_hdr_pq, standard_hdr_hlg, \
+standard_hdr_dark or standard_hdr_linear_zoom, or the name a custom display model defines"""
 default = "standard_4k"
-choices = [
-    "standard_4k",
-    "standard_fhd",
-    "standard_hdr_pq",
-    "standard_hdr_hlg",
-    "standard_hdr_dark",
-    "standard_hdr_linear_zoom",
-]
+
+[variable.display_config]
+type = "path"
+description = "A JSON display model in Vship's format, used for the display named by `display`"
+optional = true
 
 [variable.style]
 type = "string"
@@ -46,6 +46,7 @@ args.path = "{{ distorted }}"
 type = "vship/cvvdp"
 inputs = ["reference", "distorted"]
 args.display = "{{ display }}"
+args.display_config = "{{ if display_config is not none then read(display_config) else none }}"
 args.resize_to_display = true
 args.output = "map"
 
