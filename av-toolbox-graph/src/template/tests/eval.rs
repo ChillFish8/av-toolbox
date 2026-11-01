@@ -1,9 +1,14 @@
+use std::cell::RefCell;
+
 use serde_json::{Value, json};
 
 use crate::Span;
-use crate::template::{Expr, Literal, LiteralKind, Piece, Scope, Template, VariableRules};
+use crate::template::{Expr, Function, Literal, LiteralKind, Piece, Scope, Template, VariableRules};
 
-struct TestScope;
+#[derive(Default)]
+struct TestScope {
+    reads: RefCell<Vec<String>>,
+}
 
 impl Scope for TestScope {
     fn variable(&self, name: &str) -> Option<Literal> {
@@ -20,6 +25,15 @@ impl Scope for TestScope {
         match (stage, field) {
             ("input", "width") => Ok(Literal::Integer(64)),
             _ => Err(format!("no field {stage}.{field}")),
+        }
+    }
+
+    fn read_file(&self, path: &str) -> Result<String, String> {
+        self.reads.borrow_mut().push(path.to_string());
+
+        match path {
+            "display.json" => Ok("{\"a\":1}".to_string()),
+            _ => Err(format!("no file {path}")),
         }
     }
 }
@@ -61,12 +75,14 @@ fn parse_resolved(text: &str) -> Template {
 
 fn fill(text: &str) -> Value {
     let template = parse_resolved(text);
-    template.fill(&TestScope).expect("the template fills")
+    template.fill(&TestScope::default()).expect("the template fills")
 }
 
 fn fill_error(text: &str) -> String {
     let template = parse_resolved(text);
-    let error = template.fill(&TestScope).expect_err("the template fails to fill");
+    let error = template
+        .fill(&TestScope::default())
+        .expect_err("the template fails to fill");
 
     error.message
 }
@@ -135,7 +151,7 @@ fn adding_text_to_a_number_is_an_error() {
 #[test]
 fn an_unrewritten_path_is_an_error() {
     let path = Expr::Path(vec!["input".to_string(), "width".to_string()]);
-    let evaluated = path.evaluate(&TestScope);
+    let evaluated = path.evaluate(&TestScope::default());
 
     assert!(evaluated.is_err());
 }
@@ -156,7 +172,9 @@ fn a_checked_value_outside_its_bounds_names_the_variable() {
         rules,
     };
 
-    let error = checked.evaluate(&TestScope).expect_err("20 is above the maximum");
+    let error = checked
+        .evaluate(&TestScope::default())
+        .expect_err("20 is above the maximum");
 
     assert!(error.message.contains("depth"), "{}", error.message);
     assert_eq!(error.checked, Some(Span::new(3, 9)));
@@ -178,7 +196,9 @@ fn a_checked_integer_is_accepted_as_a_float() {
         rules,
     };
 
-    let evaluated = checked.evaluate(&TestScope).expect("an integer is a valid float");
+    let evaluated = checked
+        .evaluate(&TestScope::default())
+        .expect("an integer is a valid float");
 
     assert_eq!(evaluated, Literal::Float(2.0));
 }
@@ -199,7 +219,9 @@ fn a_checked_value_outside_its_choices_is_an_error() {
         rules,
     };
 
-    let error = checked.evaluate(&TestScope).expect_err("slow is not a choice");
+    let error = checked
+        .evaluate(&TestScope::default())
+        .expect_err("slow is not a choice");
 
     assert!(error.message.contains("fast"), "{}", error.message);
 }
@@ -228,7 +250,9 @@ fn a_failure_inside_a_checked_value_belongs_to_its_variable() {
         rules: any_integer(Span::new(3, 9)),
     };
 
-    let error = checked.evaluate(&TestScope).expect_err("widht is no field");
+    let error = checked
+        .evaluate(&TestScope::default())
+        .expect_err("widht is no field");
 
     assert_eq!(error.variable, Some(Span::new(3, 9)));
     assert_eq!(error.checked, None);
@@ -249,7 +273,9 @@ fn a_failure_belongs_to_the_innermost_variable() {
         rules: any_integer(Span::new(20, 30)),
     };
 
-    let error = outer.evaluate(&TestScope).expect_err("widht is no field");
+    let error = outer
+        .evaluate(&TestScope::default())
+        .expect_err("widht is no field");
 
     assert_eq!(error.variable, Some(Span::new(3, 9)));
 }
@@ -257,7 +283,9 @@ fn a_failure_belongs_to_the_innermost_variable() {
 #[test]
 fn a_failed_fill_points_at_its_template() {
     let template = parse_resolved("ab{{ unknown }}");
-    let error = template.fill(&TestScope).expect_err("the variable is unknown");
+    let error = template
+        .fill(&TestScope::default())
+        .expect_err("the variable is unknown");
 
     assert_eq!(error.range, 2..15);
     assert_eq!(error.checked, None);
@@ -331,7 +359,7 @@ fn checked_none(optional: bool) -> Result<Literal, crate::template::EvalError> {
         rules: optional_rules(optional),
     };
 
-    checked.evaluate(&TestScope)
+    checked.evaluate(&TestScope::default())
 }
 
 #[test]
@@ -346,4 +374,48 @@ fn a_checked_none_fails_a_required_variable() {
     let error = checked_none(false).expect_err("a required variable may not be none");
 
     assert!(error.message.contains("width"), "{}", error.message);
+}
+
+#[test]
+fn read_returns_the_file_contents() {
+    assert_eq!(fill(r#"{{ read("display.json") }}"#), json!("{\"a\":1}"));
+}
+
+#[test]
+fn read_reports_the_scope_error() {
+    let message = fill_error(r#"{{ read("missing.json") }}"#);
+
+    assert!(message.contains("no file missing.json"), "{message}");
+}
+
+#[test]
+fn read_takes_a_string() {
+    fill_error("{{ read(3) }}");
+}
+
+#[test]
+fn read_of_none_names_the_variable() {
+    let message = fill_error("{{ read(unset) }}");
+
+    assert!(message.contains("unset"), "{message}");
+}
+
+#[test]
+fn read_in_an_untaken_branch_is_never_called() {
+    let template = parse_resolved("{{ if unset is not none then read(unset) else none }}");
+    let scope = TestScope::default();
+
+    let filled = template.fill(&scope).expect("the template fills");
+
+    assert_eq!(filled, Value::Null);
+    assert!(scope.reads.borrow().is_empty());
+}
+
+#[test]
+fn calls_finds_read() {
+    let reading = Template::parse(r#"{{ read("a") }}"#).expect("the template parses");
+    let comparing = Template::parse("{{ min(1, 2) }}").expect("the template parses");
+
+    assert!(reading.calls(Function::Read));
+    assert!(!comparing.calls(Function::Read));
 }

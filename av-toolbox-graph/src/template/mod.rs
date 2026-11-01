@@ -86,6 +86,14 @@ impl Template {
         reads
     }
 
+    /// Whether any expression in the template calls `function`.
+    pub fn calls(&self, function: Function) -> bool {
+        self.pieces.iter().any(|piece| match piece {
+            Piece::Expr(found) => found.expr.calls(function),
+            Piece::Text(_) => false,
+        })
+    }
+
     /// Fills the template. A template that is one expression and nothing else keeps its type.
     pub fn fill(&self, scope: &dyn Scope) -> Result<Value, TemplateError> {
         if let [Piece::Expr(only)] = self.pieces.as_slice() {

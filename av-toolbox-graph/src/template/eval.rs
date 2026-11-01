@@ -12,6 +12,11 @@ pub trait Scope {
 
     /// The field of a stage's output, or a message saying why it cannot be read.
     fn field(&self, stage: &str, field: &str) -> Result<Literal, String>;
+
+    /// The text of the file at `path`, or a message saying why it cannot be read.
+    fn read_file(&self, _path: &str) -> Result<String, String> {
+        Err("`read` cannot be used here".to_string())
+    }
 }
 
 /// Why an expression could not be evaluated.
@@ -70,7 +75,7 @@ impl Expr {
                     .iter()
                     .map(|argument| argument.evaluate(scope))
                     .collect::<Result<Vec<_>, _>>()?;
-                call(*function, values)
+                call(*function, values, scope)
             },
             Self::Checked { inner, rules } => {
                 let evaluated = inner.evaluate(scope);
@@ -325,10 +330,18 @@ fn arithmetic(op: BinaryOp, left: &Literal, right: &Literal) -> Result<Literal, 
     finite(result, symbol)
 }
 
-fn call(function: Function, values: Vec<Literal>) -> Result<Literal, EvalError> {
+fn call(function: Function, values: Vec<Literal>, scope: &dyn Scope) -> Result<Literal, EvalError> {
+    if function == Function::Read {
+        return read(&values[0], scope);
+    }
+
+    numeric_call(function, &values)
+}
+
+fn numeric_call(function: Function, values: &[Literal]) -> Result<Literal, EvalError> {
     let name = function.name();
 
-    for value in &values {
+    for value in values {
         if matches!(value, Literal::None { .. }) {
             let context = format!("`{name}`");
             return Err(none_misused(value, &context));
@@ -342,8 +355,9 @@ fn call(function: Function, values: Vec<Literal>) -> Result<Literal, EvalError> 
     }
 
     match function {
-        Function::Min | Function::Max => extreme(function, &values),
+        Function::Min | Function::Max => extreme(function, values),
         Function::Round | Function::Floor | Function::Ceil => round(function, &values[0]),
+        Function::Read => unreachable!("read is handled before the numeric functions"),
         Function::Abs => match &values[0] {
             Literal::Integer(number) => {
                 let absolute = number.checked_abs();
@@ -355,6 +369,22 @@ fn call(function: Function, values: Vec<Literal>) -> Result<Literal, EvalError> 
             },
         },
     }
+}
+
+fn read(path: &Literal, scope: &dyn Scope) -> Result<Literal, EvalError> {
+    let Literal::String(text) = path else {
+        if matches!(path, Literal::None { .. }) {
+            return Err(none_misused(path, "`read`"));
+        }
+
+        let found = described(path.kind());
+        let message = format!("read takes a string, found {found}");
+        return Err(failure(message));
+    };
+
+    let contents = scope.read_file(text).map_err(failure)?;
+
+    Ok(Literal::String(contents))
 }
 
 /// The smallest or largest of `values`, an integer when every value is one.

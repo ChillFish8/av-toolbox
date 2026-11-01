@@ -152,6 +152,25 @@ impl Expr {
         visit(self)
     }
 
+    /// Whether this expression or any below it calls `function`.
+    pub(crate) fn calls(&self, function: Function) -> bool {
+        match self {
+            Self::Literal(_) | Self::Path(_) | Self::Variable(_) | Self::Field { .. } => false,
+            Self::Unary { operand, .. } | Self::IsNone { operand, .. } => operand.calls(function),
+            Self::Binary { left, right, .. } => left.calls(function) || right.calls(function),
+            Self::If {
+                condition,
+                then,
+                otherwise,
+            } => condition.calls(function) || then.calls(function) || otherwise.calls(function),
+            Self::Call {
+                function: called,
+                arguments,
+            } => *called == function || arguments.iter().any(|argument| argument.calls(function)),
+            Self::Checked { inner, .. } => inner.calls(function),
+        }
+    }
+
     /// Pushes a [StageRead] for every [Expr::Field] below this one, in the order written.
     ///
     /// `variable` is the span of the innermost call variable around this expression, if any.
@@ -244,16 +263,18 @@ pub enum Function {
     Floor,
     Ceil,
     Abs,
+    Read,
 }
 
 impl Function {
-    pub const ALL: [Function; 6] = [
+    pub const ALL: [Function; 7] = [
         Self::Min,
         Self::Max,
         Self::Round,
         Self::Floor,
         Self::Ceil,
         Self::Abs,
+        Self::Read,
     ];
 
     pub fn named(name: &str) -> Option<Self> {
@@ -268,6 +289,7 @@ impl Function {
             Self::Floor => "floor",
             Self::Ceil => "ceil",
             Self::Abs => "abs",
+            Self::Read => "read",
         }
     }
 }
