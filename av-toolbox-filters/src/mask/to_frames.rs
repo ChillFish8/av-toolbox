@@ -26,7 +26,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -77,7 +76,7 @@ impl StageDefinition for ToFrames {
 
 /// Writes each mask sample as its share of 255.
 #[cube(launch_unchecked)]
-fn share_of_peak(mask: &Array<u8>, output: &mut Array<f32>) {
+fn share_of_peak(mask: &[u8], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -181,8 +180,8 @@ impl FilterDefinition for ToFrames {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -197,14 +196,14 @@ impl FilterDefinition for ToFrames {
 }
 
 /// Converts the full plane of every mask into a frame.
-struct MaskToFrames<R: Runtime> {
-    client: ComputeClient<R>,
+struct MaskToFrames {
+    client: Client,
     output: FrameFormat,
 }
 
-impl<R: Runtime> StageInstance for MaskToFrames<R> {}
+impl StageInstance for MaskToFrames {}
 
-impl<R: Runtime> Filter for MaskToFrames<R> {
+impl Filter for MaskToFrames {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let mask = inputs.take_mask(INPUT).ok_or_else(missing_mask)?;
         let mask_plane = mask.plane();
@@ -216,13 +215,13 @@ impl<R: Runtime> Filter for MaskToFrames<R> {
         let samples = output_plane.samples();
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
-        let read = mask_plane.array::<u8, R>();
-        let write = output_plane.array::<f32, R>();
+        let read = mask_plane.array::<u8>();
+        let write = output_plane.array::<f32>();
 
         // Safety: both bindings name exactly as many elements as their plane holds, and the kernel
         // writes nothing past the output's length.
         unsafe {
-            share_of_peak::launch_unchecked::<R>(&self.client, cubes, shape, read, write);
+            share_of_peak::launch_unchecked(&self.client, cubes, shape, read, write);
         }
 
         Ok(vec![output])

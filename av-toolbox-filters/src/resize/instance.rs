@@ -3,16 +3,7 @@ use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::resize::{Kernel, ResizePlanes, Samples, Weights, apply, taps, upload};
 use av_toolbox_cubek::values::FloatCodes;
-use av_toolbox_gpu::{
-    Channel,
-    ComputeClient,
-    Frame,
-    FrameContext,
-    FrameFormat,
-    Plane,
-    Runtime,
-    SampleFormat,
-};
+use av_toolbox_gpu::{Channel, Client, Frame, FrameContext, FrameFormat, Plane, SampleFormat};
 
 use super::geometry::{Geometry, PlaneShape};
 use crate::bits::bits_of;
@@ -26,7 +17,7 @@ pub(crate) struct Tables {
 }
 
 impl Tables {
-    pub(crate) fn new<R: Runtime>(client: &ComputeClient<R>, shape: &PlaneShape, kernel: &Kernel) -> Self {
+    pub(crate) fn new(client: &Client, shape: &PlaneShape, kernel: &Kernel) -> Self {
         let across_taps = taps(shape.width, shape.across.scale, shape.across.offset, kernel);
         let down_taps = taps(shape.height, shape.down.scale, shape.down.offset, kernel);
         let across = upload(client, &across_taps);
@@ -68,8 +59,8 @@ pub(crate) fn samples_between(input: &FrameFormat, output: SampleFormat, chroma:
 }
 
 /// Resizes `input` into `output` through `tables`, whatever their sizes.
-pub(crate) fn resize_plane<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn resize_plane(
+    client: &Client,
     context: &FrameContext,
     input: &Plane,
     output: &Plane,
@@ -119,8 +110,8 @@ fn missing_channel(stage: &str) -> StageError {
     StageError::msg(message)
 }
 
-pub(super) struct Resizer<R: Runtime> {
-    client: ComputeClient<R>,
+pub(super) struct Resizer {
+    client: Client,
     stage: String,
     output: FrameFormat,
     luma_samples: Samples,
@@ -131,10 +122,10 @@ pub(super) struct Resizer<R: Runtime> {
     identity: bool,
 }
 
-impl<R: Runtime> Resizer<R> {
+impl Resizer {
     /// Builds and uploads every plane's weight tables once.
     pub(super) fn new(
-        client: ComputeClient<R>,
+        client: Client,
         stage: String,
         input: &FrameFormat,
         output: FrameFormat,
@@ -175,9 +166,9 @@ impl<R: Runtime> Resizer<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Resizer<R> {}
+impl StageInstance for Resizer {}
 
-impl<R: Runtime> Filter for Resizer<R> {
+impl Filter for Resizer {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input(&self.stage));

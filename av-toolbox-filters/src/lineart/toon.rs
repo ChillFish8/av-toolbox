@@ -22,7 +22,7 @@ use av_toolbox_cubek::warp::{BlurKind, WarpParams};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -30,7 +30,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -213,8 +212,8 @@ impl FilterDefinition for Toon {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -244,13 +243,13 @@ impl FilterDefinition for Toon {
 }
 
 /// Runs `lineart/toon` on every selected plane of a frame.
-struct Toner<R: Runtime> {
-    client: ComputeClient<R>,
+struct Toner {
+    client: Client,
     planewise: Planewise,
     settings: ToonSettings,
 }
 
-impl<R: Runtime> PlaneFilter for Toner<R> {
+impl PlaneFilter for Toner {
     fn filter(
         &self,
         context: &FrameContext,
@@ -298,9 +297,9 @@ impl<R: Runtime> PlaneFilter for Toner<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Toner<R> {}
+impl StageInstance for Toner {}
 
-impl<R: Runtime> Filter for Toner<R> {
+impl Filter for Toner {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

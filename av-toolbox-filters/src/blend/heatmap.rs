@@ -18,8 +18,8 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
+    Client,
     ColourRange,
-    ComputeClient,
     DeviceSide,
     FormatSet,
     Frame,
@@ -31,7 +31,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -349,8 +348,8 @@ impl FilterDefinition for Heatmap {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -373,8 +372,8 @@ impl FilterDefinition for Heatmap {
 }
 
 /// Paints every map frame over its clip frame.
-struct HeatmapPainter<R: Runtime> {
-    client: ComputeClient<R>,
+struct HeatmapPainter {
+    client: Client,
     clip: FrameFormat,
     heatmap: heatmap::Heatmap,
     smooths: bool,
@@ -409,9 +408,9 @@ unsafe fn device_planes(planes: [&Plane; 3]) -> [DevicePlane<'_>; 3] {
     planes.map(|plane| unsafe { device_plane(plane) })
 }
 
-impl<R: Runtime> StageInstance for HeatmapPainter<R> {}
+impl StageInstance for HeatmapPainter {}
 
-impl<R: Runtime> Filter for HeatmapPainter<R> {
+impl Filter for HeatmapPainter {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let clip = inputs.take_frame(CLIP).ok_or_else(missing_clip)?;
         let map = inputs.take_frame(MAP).ok_or_else(missing_map)?;

@@ -10,12 +10,6 @@ type = "path"
 description = "The clip to read"
 default = "input.y4m"
 
-[variable.preset]
-type = "string"
-description = "How much quality to trade for speed"
-default = "base"
-choices = ["veryfast", "fast", "base", "slow", "veryslow"]
-
 [variable.output]
 type = "path"
 description = "Where to write the y4m stream"
@@ -33,7 +27,6 @@ args.path = "{{ input }}"
 [filter.denoise]
 type = "av-denoise/nl4d"
 inputs = ["input"]
-args.preset = "{{ preset }}"
 
 [sink.output]
 type = "y4m/pipe"

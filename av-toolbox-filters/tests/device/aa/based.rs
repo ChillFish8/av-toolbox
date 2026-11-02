@@ -24,7 +24,7 @@ use av_toolbox_cubek::testing::{
 };
 use av_toolbox_filters::testing::{BasedPlanes, EdgePlanes, based_stages};
 use av_toolbox_gpu::{BuildContext, BuildTask, Depth, SampleFormat};
-use cubecl::prelude::{CubeElement, Runtime};
+use cubecl::prelude::CubeElement;
 use cubecl::server::Handle;
 use serde_json::json;
 
@@ -216,7 +216,7 @@ fn plane(handle: &Handle, width: u32, height: u32) -> DevicePlane<'_> {
     unsafe { DevicePlane::new(handle, width, height) }
 }
 
-fn read_f32<R: Runtime>(build: &BuildContext<R>, handle: &Handle) -> Vec<f32> {
+fn read_f32(build: &BuildContext, handle: &Handle) -> Vec<f32> {
     let owned = handle.clone();
     let bytes = build
         .client()
@@ -229,7 +229,7 @@ fn read_f32<R: Runtime>(build: &BuildContext<R>, handle: &Handle) -> Vec<f32> {
 impl BuildTask for ChainRun {
     type Output = DeviceStages;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let width = self.width;
         let height = self.height;

@@ -4,9 +4,11 @@ mod planes;
 mod runner;
 #[cfg(test)]
 mod tests;
+mod tuning;
 
 use std::marker::PhantomData;
 
+use av_denoise_core::EngineSpec;
 use av_toolbox_core::{
     ArtefactData,
     ArtefactDecl,
@@ -31,15 +33,15 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
 };
 use av_toolbox_providers::{SceneRequest, Scenes};
 
+use self::args::engine_spec;
 pub(crate) use self::args::{AvdArgs, Nl4dArgs, NlmeansArgs, NlmeansHqArgs};
-use self::planes::{checked_layout, engine_specs};
+use self::planes::{checked_layout, plane_groups, stage_geometry};
 use self::runner::AvdFilter;
 use crate::masked::checked_input;
 
@@ -49,14 +51,25 @@ fn not_frames(stage: &str) -> StageError {
     StageError::msg(message)
 }
 
-/// Refuses `input` when `args` cannot run on it, short of building the engines.
-fn checked_stage<A: AvdArgs>(args: &A, input: &FrameFormat) -> Result<(), StageError> {
-    let specs = engine_specs(A::STAGE, args.planes(), args.fused(), input)?;
-    for spec in specs {
-        args.options(spec.channels)?;
-    }
+fn invalid_spec(stage: &str, error: av_denoise_core::Error) -> StageError {
+    let message = format!("{stage} cannot denoise these frames: {error}");
 
-    Ok(())
+    StageError::msg(message)
+}
+
+/// Refuses `input` when `args` cannot run on it, short of building the engine.
+fn checked_stage<A: AvdArgs>(args: &A, input: &FrameFormat) -> Result<(), StageError> {
+    let spec = stage_spec(args, input)?;
+
+    spec.validate().map_err(|error| invalid_spec(A::STAGE, error))
+}
+
+/// The engine `args` denoises `input` with.
+fn stage_spec<A: AvdArgs>(args: &A, input: &FrameFormat) -> Result<EngineSpec, StageError> {
+    let groups = plane_groups(A::STAGE, args.planes(), input)?;
+    let geometry = stage_geometry(input, groups);
+
+    engine_spec(args, groups, geometry)
 }
 
 /// Denoises frames with one of av-denoise's engines, chosen by the arguments type.
@@ -99,8 +112,12 @@ impl<A: AvdArgs> StageDefinition for Denoise<A> {
         Some(2)
     }
 
-    fn held_frames(args: &Self::Args, _formats: &ResolvedFormats) -> usize {
-        args.held_frames()
+    // A format the stage refuses never builds, so it holds nothing.
+    fn held_frames(args: &Self::Args, formats: &ResolvedFormats) -> usize {
+        let input = checked_input(A::STAGE, formats.inputs());
+        let spec = input.and_then(|input| stage_spec(args, &input));
+
+        spec.map_or(0, |spec| spec.max_held_frames())
     }
 
     fn inputs() -> &'static InputSignature {
@@ -145,8 +162,8 @@ impl<A: AvdArgs> FilterDefinition for Denoise<A> {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

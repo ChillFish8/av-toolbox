@@ -22,7 +22,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -404,8 +403,8 @@ impl FilterDefinition for Eedi2 {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -441,12 +440,12 @@ impl FilterDefinition for Eedi2 {
 }
 
 /// One EEDI2 field pass at the thresholds of one plane and orientation.
-pub(crate) struct Eedi2Pass<'a, R: Runtime> {
-    pub(crate) client: &'a ComputeClient<R>,
+pub(crate) struct Eedi2Pass<'a> {
+    pub(crate) client: &'a Client,
     pub(crate) settings: Eedi2Settings,
 }
 
-impl<R: Runtime> FieldPass for Eedi2Pass<'_, R> {
+impl FieldPass for Eedi2Pass<'_> {
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32) {
         let sizes = eedi2_scratch(input.width(), input.height());
         let edges = context.scratch(sizes.edges);
@@ -478,17 +477,17 @@ impl<R: Runtime> FieldPass for Eedi2Pass<'_, R> {
 }
 
 /// Runs `aa/eedi2` on every selected plane of a frame.
-struct Antialiaser<R: Runtime> {
-    client: ComputeClient<R>,
+struct Antialiaser {
+    client: Client,
     planewise: Planewise,
     direction: Direction,
     arguments: Eedi2Arguments,
     bits: u32,
 }
 
-impl<R: Runtime> Antialiaser<R> {
+impl Antialiaser {
     /// A field pass over rows whose samples each span `2^ssw` samples of the full plane.
-    fn pass(&self, ssw: u32) -> Eedi2Pass<'_, R> {
+    fn pass(&self, ssw: u32) -> Eedi2Pass<'_> {
         let settings = Eedi2Settings::new(&self.arguments, self.bits, ssw);
 
         Eedi2Pass {
@@ -498,7 +497,7 @@ impl<R: Runtime> Antialiaser<R> {
     }
 }
 
-impl<R: Runtime> PlaneFilter for Antialiaser<R> {
+impl PlaneFilter for Antialiaser {
     fn filter(
         &self,
         context: &FrameContext,
@@ -525,9 +524,9 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Antialiaser<R> {}
+impl StageInstance for Antialiaser {}
 
-impl<R: Runtime> Filter for Antialiaser<R> {
+impl Filter for Antialiaser {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

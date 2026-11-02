@@ -4,14 +4,13 @@ use av_toolbox_cubek::aa::{Eedi2Settings, Eedi3DeviceClips, Eedi3Settings, sangn
 use av_toolbox_cubek::deinterlace::{BwdifField, BwdifPlanes, bwdif_field};
 use av_toolbox_gpu::{
     Channel,
-    ComputeClient,
+    Client,
     Frame,
     FrameContext,
     FrameFormat,
     FrameLayout,
     FrameMeta,
     Plane,
-    Runtime,
     SampleFormat,
 };
 
@@ -50,8 +49,8 @@ pub(crate) fn channel_plane<'a>(
 }
 
 /// Widens `source` into a new f32 scratch plane of code values.
-pub(crate) fn widened_plane<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn widened_plane(
+    client: &Client,
     context: &FrameContext,
     source: &Plane,
     codes: CodeValues,
@@ -109,15 +108,15 @@ fn run_fields(
 }
 
 /// Rebuilds the planes of interlaced frames the way bwdif does.
-pub(crate) struct FieldRebuilder<R: Runtime> {
+pub(crate) struct FieldRebuilder {
     stage: &'static str,
-    client: ComputeClient<R>,
+    client: Client,
     input: FrameFormat,
     predictor: Predictor,
     codes: CodeValues,
 }
 
-impl<R: Runtime> FieldRebuilder<R> {
+impl FieldRebuilder {
     /// A rebuilder for frames of `input` storing its results as `output`, whose errors are reported
     /// under `stage`.
     ///
@@ -125,7 +124,7 @@ impl<R: Runtime> FieldRebuilder<R> {
     /// for them.
     pub(crate) fn new(
         stage: &'static str,
-        client: ComputeClient<R>,
+        client: Client,
         input: FrameFormat,
         output: SampleFormat,
         predictor: Predictor,
@@ -145,7 +144,7 @@ impl<R: Runtime> FieldRebuilder<R> {
         }
     }
 
-    pub(crate) fn client(&self) -> &ComputeClient<R> {
+    pub(crate) fn client(&self) -> &Client {
         &self.client
     }
 

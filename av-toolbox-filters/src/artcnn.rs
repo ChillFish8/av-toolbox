@@ -17,7 +17,7 @@ use av_toolbox_cubek::artcnn::{
     tile_side,
     warm_up,
 };
-use av_toolbox_gpu::{BuildContext, ComputeClient, FrameContext, PlaneBuffer, Runtime};
+use av_toolbox_gpu::{BuildContext, Client, FrameContext, PlaneBuffer};
 use av_toolbox_models::{Located, MissingModel, Store};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -107,9 +107,9 @@ pub(crate) fn locate(stage: &str, store: &Store, name: ModelName) -> Result<Loca
 }
 
 /// Reads, parses and uploads `name`'s weights in `precision`'s type.
-fn load_network<R: Runtime>(
+fn load_network(
     stage: &str,
-    client: &ComputeClient<R>,
+    client: &Client,
     store: &Store,
     name: ModelName,
     precision: Precision,
@@ -228,8 +228,8 @@ struct Warmed {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the warm-up"
 )]
-fn warm_up_on<R: Runtime>(
-    client: &ComputeClient<R>,
+fn warm_up_on(
+    client: &Client,
     context: &FrameContext,
     network: &Network,
     path: BodyPath,
@@ -266,9 +266,9 @@ impl Supersampler {
     /// when the device offers it, falling back to the unfused convolution and then to im2col when it
     /// cannot run there. Its f16 body convolutions choose their kernel by autotune, which benchmarks
     /// during the warm-up, unless [KERNEL_ENV] pins one.
-    pub(crate) fn load<R: Runtime>(
+    pub(crate) fn load(
         stage: &'static str,
-        context: &BuildContext<R>,
+        context: &BuildContext,
         model: ModelName,
         precision: PrecisionName,
         width: u32,
@@ -287,9 +287,9 @@ impl Supersampler {
         clippy::too_many_arguments,
         reason = "each argument is a distinct input of the load"
     )]
-    pub(crate) fn load_with<R: Runtime>(
+    pub(crate) fn load_with(
         stage: &'static str,
-        context: &BuildContext<R>,
+        context: &BuildContext,
         model: ModelName,
         precision: PrecisionName,
         width: u32,
@@ -373,9 +373,9 @@ impl Supersampler {
     /// The output is rounded to whole codes when the supersampler was loaded to round. `input` must be
     /// the size given to [Supersampler::load](crate::artcnn::Supersampler::load), since the tile is
     /// chosen there.
-    pub(crate) fn run<R: Runtime>(
+    pub(crate) fn run(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         context: &FrameContext,
         input: DevicePlane<'_>,
         peak: f32,

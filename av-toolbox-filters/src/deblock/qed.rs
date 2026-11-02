@@ -32,7 +32,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -45,7 +45,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -373,8 +372,8 @@ impl FilterDefinition for Qed {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -411,8 +410,8 @@ struct PlaneWork<'a> {
 
 /// Runs both passes of every selected plane in one deblock, then the low-pass into each QED plane's interior,
 /// with the layout and the change table uploaded at build.
-struct QedDeblocker<R: Runtime> {
-    client: ComputeClient<R>,
+struct QedDeblocker {
+    client: Client,
     format: FrameFormat,
     deblocking: QedDeblocking,
     layout: DeblockLayout,
@@ -421,7 +420,7 @@ struct QedDeblocker<R: Runtime> {
     lowpass: Vec<(u32, u32)>,
 }
 
-impl<R: Runtime> QedDeblocker<R> {
+impl QedDeblocker {
     /// A fresh plane of `source`'s size in the clip's sample format.
     fn fresh_plane(
         &self,
@@ -542,9 +541,9 @@ impl<R: Runtime> QedDeblocker<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for QedDeblocker<R> {}
+impl StageInstance for QedDeblocker {}
 
-impl<R: Runtime> Filter for QedDeblocker<R> {
+impl Filter for QedDeblocker {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_frame());

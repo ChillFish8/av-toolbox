@@ -558,7 +558,6 @@ mod device_tests {
         HostPool,
         HostStreamItem,
         ResolvedFormats,
-        Runtime,
         test_device,
     };
     use cubecl::prelude::CubeElement;
@@ -576,7 +575,7 @@ mod device_tests {
     impl BuildTask for Loaded {
         type Output = (BodyPath, u32);
 
-        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        fn run(self, build: &BuildContext) -> Self::Output {
             let supersampler = load_r8f64(build, self.width, self.height);
 
             (supersampler.path(), supersampler.tile())
@@ -589,7 +588,7 @@ mod device_tests {
     impl BuildTask for LoadedPath {
         type Output = (BodyPath, BodyPath);
 
-        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        fn run(self, build: &BuildContext) -> Self::Output {
             let offered = body_path(build.capabilities(), Precision::F16);
             let supersampler = load_r8f64(build, 1920, 1080);
 
@@ -597,7 +596,7 @@ mod device_tests {
         }
     }
 
-    fn load_r8f64<R: Runtime>(build: &BuildContext<R>, width: u32, height: u32) -> Supersampler {
+    fn load_r8f64(build: &BuildContext, width: u32, height: u32) -> Supersampler {
         let loaded = Supersampler::load(
             STAGE,
             build,
@@ -683,7 +682,7 @@ mod device_tests {
     impl BuildTask for LoadedKernels {
         type Output = KernelsLoaded;
 
-        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        fn run(self, build: &BuildContext) -> Self::Output {
             let offered = body_path(build.capabilities(), Precision::F16);
             let properties = build.client().properties();
             let fixed = fixed_candidate(properties, 64);
@@ -840,7 +839,7 @@ mod device_tests {
     impl BuildTask for LoadedFrame {
         type Output = FrameRun;
 
-        fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+        fn run(self, build: &BuildContext) -> Self::Output {
             let client = build.client();
             let offered = body_path(build.capabilities(), Precision::F16);
             let loaded = Supersampler::load(
@@ -944,7 +943,7 @@ mod device_tests {
     impl BuildTask for UpscaledFrame {
         type Output = Vec<Vec<u8>>;
 
-        fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+        fn run(mut self, build: &BuildContext) -> Self::Output {
             let mut context = build.frame_context();
             let host = HostPool::new();
             let meta = FrameMeta::at(0);

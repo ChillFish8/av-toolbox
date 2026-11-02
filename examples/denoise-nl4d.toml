@@ -9,12 +9,6 @@ type = "path"
 description = "The clip to read"
 default = "input.y4m"
 
-[variable.preset]
-type = "string"
-description = "How much quality to trade for speed"
-default = "base"
-choices = ["veryfast", "fast", "base", "slow", "veryslow"]
-
 [variable.sigma_scale]
 type = "float"
 description = "A multiplier on the measured noise, above 1 to denoise harder"
@@ -32,7 +26,6 @@ args.path = "{{ input }}"
 [filter.denoise]
 type = "av-denoise/nl4d"
 inputs = ["input"]
-args.preset = "{{ preset }}"
 args.sigma_scale = "{{ sigma_scale }}"
 
 [sink.output]

@@ -35,7 +35,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -155,11 +154,11 @@ fn chain_settings(args: &QtgmcArgs) -> ChainSettings {
 }
 
 /// The deinterlacer `args` describe for `input`, with its tables built.
-fn deinterlacer<R: Runtime>(
-    context: &BuildContext<R>,
+fn deinterlacer(
+    context: &BuildContext,
     args: &QtgmcArgs,
     input: FrameFormat,
-) -> Result<Deinterlacer<R>, StageError> {
+) -> Result<Deinterlacer, StageError> {
     let predictor = checked_stage(args, &input)?;
     let order = stage_order(args, &input)?;
     let progressive = output_format(&input, args.resolved_rate())?;
@@ -285,8 +284,8 @@ impl FilterDefinition for Qtgmc {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -300,8 +299,8 @@ impl FilterDefinition for Qtgmc {
 }
 
 /// Runs `deinterlace/qtgmc` over a chunk, emitting each field once every step its output reads has run.
-struct Deinterlacer<R: Runtime> {
-    chain: Chain<R>,
+struct Deinterlacer {
+    chain: Chain,
     cache: FieldCache,
     /// The parity of each field of a frame, in the order they are shown.
     parities: [Parity; 2],
@@ -314,7 +313,7 @@ struct Deinterlacer<R: Runtime> {
     log: Option<QtgmcMotionLog>,
 }
 
-impl<R: Runtime> Deinterlacer<R> {
+impl Deinterlacer {
     /// Runs every step that has become ready, in the chain's order, and takes the outputs now due.
     fn advance(&mut self, context: &FrameContext) -> Result<Vec<Frame>, StageError> {
         for field in self.cache.held() {
@@ -407,7 +406,7 @@ impl<R: Runtime> Deinterlacer<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Deinterlacer<R> {
+impl StageInstance for Deinterlacer {
     fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         self.cache.restart();
 
@@ -415,7 +414,7 @@ impl<R: Runtime> StageInstance for Deinterlacer<R> {
     }
 }
 
-impl<R: Runtime> Filter for Deinterlacer<R> {
+impl Filter for Deinterlacer {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(next) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

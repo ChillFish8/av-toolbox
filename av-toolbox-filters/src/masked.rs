@@ -5,13 +5,12 @@ use av_toolbox_cubek::lineart::{MergePlanes, clamped_merge, merge};
 use av_toolbox_cubek::values::widen;
 use av_toolbox_gpu::{
     Channel,
-    ComputeClient,
+    Client,
     FormatSet,
     FrameContext,
     FrameFormat,
     Mask,
     MaskFormat,
-    Runtime,
     SampleFormat,
     StreamFormat,
 };
@@ -193,8 +192,8 @@ fn missing_mask_plane(stage: &str, channel: Channel) -> StageError {
 ///
 /// The mask's full plane serves a full size plane and its chroma plane a subsampled one. A mask plane
 /// that is not `plane_size` is refused.
-pub(crate) fn mask_weights<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn mask_weights(
+    client: &Client,
     context: &FrameContext,
     stage: &str,
     format: &FrameFormat,
@@ -239,8 +238,8 @@ pub(crate) fn mask_weights<R: Runtime>(
 ///
 /// The merge reads `input` after the inner filter runs, so the inner filter must leave `input`
 /// unchanged.
-pub(crate) struct MaskedFilter<'a, R: Runtime, F> {
-    pub(crate) client: &'a ComputeClient<R>,
+pub(crate) struct MaskedFilter<'a, F> {
+    pub(crate) client: &'a Client,
     pub(crate) stage: &'static str,
     /// The format of the frame being filtered.
     pub(crate) format: &'a FrameFormat,
@@ -251,7 +250,7 @@ pub(crate) struct MaskedFilter<'a, R: Runtime, F> {
     pub(crate) inner: &'a F,
 }
 
-impl<R: Runtime, F: PlaneFilter> PlaneFilter for MaskedFilter<'_, R, F> {
+impl<F: PlaneFilter> PlaneFilter for MaskedFilter<'_, F> {
     fn filter(
         &self,
         context: &FrameContext,

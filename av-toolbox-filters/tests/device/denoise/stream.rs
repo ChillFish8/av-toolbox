@@ -112,6 +112,28 @@ fn unselected_planes_are_the_input_as_f32() {
     }
 }
 
+/// The stream runner checks every emitted frame's format, so a frame of the wrong size fails there.
+#[test]
+fn odd_sized_420_frames_round_trip() {
+    let format = yuv420(33, 17, SampleFormat::U8);
+    let clip = noisy_clip(&format, 3);
+
+    let outputs = run("av-denoise/nlmeans", json!({}), format, vec![clip.clone()]);
+
+    assert_eq!(outputs.len(), clip.len());
+    for output in &outputs {
+        let sizes: Vec<usize> = output.planes.iter().map(Vec::len).collect();
+        let expected: Vec<usize> = format
+            .channels()
+            .iter()
+            .map(|channel| format.channel_samples(*channel).expect("a listed channel") * size_of::<f32>())
+            .collect();
+
+        assert_eq!(sizes, expected);
+        assert_eq!(expected[1], 17 * 9 * size_of::<f32>());
+    }
+}
+
 /// How far a flat plane may drift, about 0.02 of an 8-bit code. NL4D's transforms move it by about 4e-5.
 const FLAT_TOLERANCE: f32 = 1e-4;
 

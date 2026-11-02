@@ -1,8 +1,9 @@
 use std::fmt::Display;
 
 use av_denoise_core::{
-    ChannelMode,
     DenoisingMode,
+    EngineSpec,
+    Geometry,
     HqParams,
     MotionCompensationMode,
     MotionSearch,
@@ -12,9 +13,6 @@ use av_denoise_core::{
     NlmeansHqOptions,
     NlmeansOptions,
     PrefilterMode,
-    PsyParams,
-    nl4d_spatial_radius_for,
-    nl4d_temporal_radius_for,
     nlmeans_search_radius_for,
     nlmeans_temporal_radius_for,
     parse_prefilter,
@@ -25,6 +23,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use super::grain::{ARTEFACTS, GRAIN_TABLE, merge_grain_table};
+use super::planes::{PlaneGroup, PlaneGroups};
 use crate::planes::ChannelName;
 
 /// How much quality a stage trades for speed, the way av-denoise's `--preset` does.
@@ -51,11 +50,27 @@ impl Preset {
     }
 }
 
-/// The settings one av-denoise engine is built with.
+/// The settings one plane group is denoised with.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub(crate) enum EngineOptions {
     Nlmeans(NlmeansAlgorithm),
     Nl4d(Nl4dOptions),
+}
+
+impl EngineOptions {
+    fn nlmeans(self) -> Option<NlmeansAlgorithm> {
+        match self {
+            Self::Nlmeans(algorithm) => Some(algorithm),
+            Self::Nl4d(_) => None,
+        }
+    }
+
+    fn nl4d(self) -> Option<Nl4dOptions> {
+        match self {
+            Self::Nlmeans(_) => None,
+            Self::Nl4d(options) => Some(options),
+        }
+    }
 }
 
 /// What every av-denoise stage's arguments answer.
@@ -66,13 +81,8 @@ pub(crate) trait AvdArgs: DeserializeOwned + JsonSchema + Send + Sync + 'static 
 
     fn planes(&self) -> Option<&[ChannelName]>;
 
-    fn fused(&self) -> bool;
-
-    /// The most frames the engines hold before emitting one.
-    fn held_frames(&self) -> usize;
-
-    /// The settings of the engine that denoises `channels`, with that plane's overrides folded in.
-    fn options(&self, channels: ChannelMode) -> Result<EngineOptions, StageError>;
+    /// The settings `group` is denoised with, with that group's overrides folded in.
+    fn options(&self, group: PlaneGroup) -> Result<EngineOptions, StageError>;
 
     /// The artefacts this stage can hand over at the end of a stream.
     fn artefacts() -> &'static [ArtefactDecl] {
@@ -85,20 +95,74 @@ pub(crate) trait AvdArgs: DeserializeOwned + JsonSchema + Send + Sync + 'static 
     }
 }
 
+fn nothing_denoised(stage: &str) -> StageError {
+    let message = format!("{stage} was given no planes to denoise");
+
+    StageError::msg(message)
+}
+
+/// The options of `group`, or `None` when it is not denoised.
+fn group_options<A: AvdArgs>(
+    args: &A,
+    selected: bool,
+    group: PlaneGroup,
+) -> Result<Option<EngineOptions>, StageError> {
+    if !selected {
+        return Ok(None);
+    }
+
+    let options = args.options(group)?;
+
+    Ok(Some(options))
+}
+
+/// The engine that denoises the `groups` of a `geometry` frame with `args`.
+///
+/// A group left out passes through the engine unchanged.
+pub(crate) fn engine_spec<A: AvdArgs>(
+    args: &A,
+    groups: PlaneGroups,
+    geometry: Geometry,
+) -> Result<EngineSpec, StageError> {
+    let luma = group_options(args, groups.luma, PlaneGroup::Luma)?;
+    let chroma = group_options(args, groups.chroma, PlaneGroup::Chroma)?;
+
+    let Some(first) = luma.or(chroma) else {
+        return Err(nothing_denoised(A::STAGE));
+    };
+
+    let spec = match first {
+        EngineOptions::Nlmeans(_) => EngineSpec::Nlmeans {
+            luma: luma.and_then(EngineOptions::nlmeans),
+            chroma: chroma.and_then(EngineOptions::nlmeans),
+            geometry,
+        },
+        EngineOptions::Nl4d(_) => EngineSpec::Nl4d {
+            luma: luma.and_then(EngineOptions::nl4d),
+            chroma: chroma.and_then(EngineOptions::nl4d),
+            geometry,
+        },
+    };
+
+    Ok(spec)
+}
+
 fn bad_prefilter(stage: &str, error: impl Display) -> StageError {
     let message = format!("{stage} could not read its prefilter: {error}");
 
     StageError::msg(message)
 }
 
-/// Picks the override of the plane `channels` covers, falling back to `shared`.
-///
-/// A fused engine covers every plane, so it only reads `shared`.
-fn per_plane<T>(channels: ChannelMode, luma: Option<T>, chroma: Option<T>, shared: Option<T>) -> Option<T> {
-    let plane = match channels {
-        ChannelMode::Luma => luma,
-        ChannelMode::Chroma => chroma,
-        ChannelMode::Yuv => None,
+/// Picks the override of `group`, falling back to `shared`.
+pub(super) fn per_plane<T>(
+    group: PlaneGroup,
+    luma: Option<T>,
+    chroma: Option<T>,
+    shared: Option<T>,
+) -> Option<T> {
+    let plane = match group {
+        PlaneGroup::Luma => luma,
+        PlaneGroup::Chroma => chroma,
     };
 
     plane.or(shared)
@@ -126,7 +190,7 @@ impl NlmSettings {
             .unwrap_or_else(|| nlmeans_temporal_radius_for(preset))
     }
 
-    fn options(&self, stage: &str, channels: ChannelMode) -> Result<NlmeansOptions, StageError> {
+    fn options(&self, stage: &str, group: PlaneGroup) -> Result<NlmeansOptions, StageError> {
         let preset = self.preset.core();
         let radius = self.temporal_radius();
         let mode = match radius {
@@ -137,7 +201,7 @@ impl NlmSettings {
         let search_radius = self
             .search_radius
             .unwrap_or_else(|| nlmeans_search_radius_for(preset));
-        let strength = per_plane(channels, self.luma_strength, self.chroma_strength, self.strength);
+        let strength = per_plane(group, self.luma_strength, self.chroma_strength, self.strength);
         let tuning = NlmTuning {
             search_radius: Some(search_radius),
             patch_radius: self.patch_radius,
@@ -174,9 +238,6 @@ pub(crate) struct NlmeansArgs {
     /// The planes denoised, every plane when not given. U and V are denoised together.
     #[serde(default)]
     pub(crate) planes: Option<Vec<ChannelName>>,
-    /// Denoises all three planes in one engine, which needs 4:4:4 input with every plane selected.
-    #[serde(default)]
-    pub(crate) fused: bool,
     /// Frames on each side of the one denoised, 0 for spatial only. The preset's when not given.
     #[serde(default)]
     pub(crate) temporal_radius: Option<u32>,
@@ -229,16 +290,8 @@ impl AvdArgs for NlmeansArgs {
         self.planes.as_deref()
     }
 
-    fn fused(&self) -> bool {
-        self.fused
-    }
-
-    fn held_frames(&self) -> usize {
-        self.settings().temporal_radius() as usize
-    }
-
-    fn options(&self, channels: ChannelMode) -> Result<EngineOptions, StageError> {
-        let options = self.settings().options(Self::STAGE, channels)?;
+    fn options(&self, group: PlaneGroup) -> Result<EngineOptions, StageError> {
+        let options = self.settings().options(Self::STAGE, group)?;
         let algorithm = NlmeansAlgorithm::Fast(options);
 
         Ok(EngineOptions::Nlmeans(algorithm))
@@ -255,9 +308,6 @@ pub(crate) struct NlmeansHqArgs {
     /// The planes denoised, every plane when not given. U and V are denoised together.
     #[serde(default)]
     pub(crate) planes: Option<Vec<ChannelName>>,
-    /// Denoises all three planes in one engine, which needs 4:4:4 input with every plane selected.
-    #[serde(default)]
-    pub(crate) fused: bool,
     /// Frames on each side of the one denoised, 0 for spatial only. The preset's when not given.
     #[serde(default)]
     pub(crate) temporal_radius: Option<u32>,
@@ -316,16 +366,8 @@ impl AvdArgs for NlmeansHqArgs {
         self.planes.as_deref()
     }
 
-    fn fused(&self) -> bool {
-        self.fused
-    }
-
-    fn held_frames(&self) -> usize {
-        self.settings().temporal_radius() as usize
-    }
-
-    fn options(&self, channels: ChannelMode) -> Result<EngineOptions, StageError> {
-        let nlm = self.settings().options(Self::STAGE, channels)?;
+    fn options(&self, group: PlaneGroup) -> Result<EngineOptions, StageError> {
+        let nlm = self.settings().options(Self::STAGE, group)?;
         let defaults = HqParams::default();
         let hq = HqParams {
             sigma_override: self.sigma,
@@ -343,16 +385,10 @@ impl AvdArgs for NlmeansHqArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Nl4dArgs {
-    /// The speed and quality preset, `base` when not given.
-    #[serde(default)]
-    pub(crate) preset: Preset,
     /// The planes denoised, every plane when not given. U and V are denoised together.
     #[serde(default)]
     pub(crate) planes: Option<Vec<ChannelName>>,
-    /// Denoises all three planes in one engine, which needs 4:4:4 input with every plane selected.
-    #[serde(default)]
-    pub(crate) fused: bool,
-    /// Frames on each side of the one denoised, at least 1. The preset's when not given.
+    /// Frames on each side of the one denoised, at least 1. av-denoise's default when not given.
     #[serde(default)]
     pub(crate) temporal_radius: Option<u32>,
     /// A fixed noise level between 0 and 1, measured from each frame when not given.
@@ -375,7 +411,7 @@ pub(crate) struct Nl4dArgs {
     /// A multiplier on the resolved `lambda_ht`, 1 when not given.
     #[serde(default)]
     pub(crate) lambda_ht_scale: Option<f32>,
-    /// The half-width of the search for similar patches in the centre frame. The preset's when not given.
+    /// The half-width of the search for similar patches in the centre frame, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) spatial_radius: Option<u32>,
     /// The half-width of the search around each neighbour's predicted position.
@@ -384,26 +420,6 @@ pub(crate) struct Nl4dArgs {
     /// Scales the luma threshold by how noisy each brightness level is, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) noise_map: Option<bool>,
-    /// Filters each area by what it looks like. The `psy_*` arguments tune it and need it on.
-    #[serde(default)]
-    pub(crate) enable_psy: bool,
-    /// How much harder flat, grainy areas are filtered, av-denoise's default when not given.
-    #[serde(default)]
-    pub(crate) psy_flat_boost: Option<f32>,
-    /// The same as `psy_flat_boost` for the chroma planes, av-denoise's default when not given.
-    #[serde(default)]
-    pub(crate) psy_chroma_flat_boost: Option<f32>,
-    /// How much more gently textured dark areas are filtered, av-denoise's default when not given.
-    #[serde(default)]
-    pub(crate) psy_shadow_soften: Option<f32>,
-    /// How strongly grain may line up before a flat area counts as texture, av-denoise's default when not given.
-    #[serde(default)]
-    pub(crate) psy_flat_texture_cut: Option<f32>,
-    /// How far around a strong line, in pixels, `psy_shadow_soften` and `psy_flat_texture_cut` stop applying.
-    ///
-    /// av-denoise's default when not given.
-    #[serde(default)]
-    pub(crate) psy_line_ring: Option<u32>,
     /// Judges each coefficient together with its frequency neighbours, av-denoise's default when not given.
     #[serde(default)]
     pub(crate) pooled_threshold: Option<bool>,
@@ -411,50 +427,10 @@ pub(crate) struct Nl4dArgs {
 
 impl Nl4dArgs {
     fn temporal_radius(&self) -> u32 {
-        let preset = self.preset.core();
+        let defaults = Nl4dOptions::default();
 
-        self.temporal_radius
-            .unwrap_or_else(|| nl4d_temporal_radius_for(preset))
+        self.temporal_radius.unwrap_or(defaults.temporal_radius)
     }
-
-    /// The psy tuning asked for, or `None` without `enable_psy`.
-    ///
-    /// A `psy_*` argument without `enable_psy` is refused, so a setting is never silently ignored.
-    fn psy(&self) -> Result<Option<PsyParams>, StageError> {
-        let knobs = [
-            ("psy_flat_boost", self.psy_flat_boost.is_some()),
-            ("psy_chroma_flat_boost", self.psy_chroma_flat_boost.is_some()),
-            ("psy_shadow_soften", self.psy_shadow_soften.is_some()),
-            ("psy_flat_texture_cut", self.psy_flat_texture_cut.is_some()),
-            ("psy_line_ring", self.psy_line_ring.is_some()),
-        ];
-
-        if !self.enable_psy {
-            let given = knobs.iter().find(|(_, given)| *given);
-            if let Some((name, _)) = given {
-                return Err(psy_needs_enabling(name));
-            }
-
-            return Ok(None);
-        }
-
-        let defaults = PsyParams::default();
-        let psy = PsyParams {
-            flat_boost: self.psy_flat_boost.unwrap_or(defaults.flat_boost),
-            chroma_flat_boost: self.psy_chroma_flat_boost.unwrap_or(defaults.chroma_flat_boost),
-            shadow_soften: self.psy_shadow_soften.unwrap_or(defaults.shadow_soften),
-            flat_texture_cut: self.psy_flat_texture_cut.unwrap_or(defaults.flat_texture_cut),
-            line_ring: self.psy_line_ring.unwrap_or(defaults.line_ring),
-        };
-
-        Ok(Some(psy))
-    }
-}
-
-fn psy_needs_enabling(name: &str) -> StageError {
-    let message = format!("{} was given {name} without enable_psy", Nl4dArgs::STAGE);
-
-    StageError::msg(message)
 }
 
 impl AvdArgs for Nl4dArgs {
@@ -481,37 +457,18 @@ impl AvdArgs for Nl4dArgs {
         self.planes.as_deref()
     }
 
-    fn fused(&self) -> bool {
-        self.fused
-    }
-
-    fn held_frames(&self) -> usize {
-        2 * self.temporal_radius() as usize
-    }
-
-    fn options(&self, channels: ChannelMode) -> Result<EngineOptions, StageError> {
-        let preset = self.preset.core();
+    fn options(&self, group: PlaneGroup) -> Result<EngineOptions, StageError> {
         let defaults = Nl4dOptions::default();
-        let lambda_ht = per_plane(
-            channels,
-            self.luma_lambda_ht,
-            self.chroma_lambda_ht,
-            self.lambda_ht,
-        );
-        let spatial_radius = self
-            .spatial_radius
-            .unwrap_or_else(|| nl4d_spatial_radius_for(preset));
-        let psy = self.psy()?;
+        let lambda_ht = per_plane(group, self.luma_lambda_ht, self.chroma_lambda_ht, self.lambda_ht);
 
         let options = Nl4dOptions {
             sigma: self.sigma,
             sigma_scale: self.sigma_scale.unwrap_or(defaults.sigma_scale),
             lambda_ht,
             lambda_ht_scale: self.lambda_ht_scale.unwrap_or(defaults.lambda_ht_scale),
-            spatial_radius,
+            spatial_radius: self.spatial_radius.unwrap_or(defaults.spatial_radius),
             refine: self.refine.unwrap_or(defaults.refine),
             noise_map: self.noise_map.unwrap_or(defaults.noise_map),
-            psy,
             pooled_threshold: self.pooled_threshold.unwrap_or(defaults.pooled_threshold),
             temporal_radius: self.temporal_radius(),
             ..defaults

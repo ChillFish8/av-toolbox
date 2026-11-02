@@ -19,7 +19,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -259,8 +258,8 @@ impl FilterDefinition for Awarpsharp {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -293,15 +292,15 @@ fn float_codes(input: &FrameFormat) -> Option<CodeValues> {
 }
 
 /// Warps every selected plane of a frame, sharing the rest.
-struct Warper<R: Runtime> {
-    client: ComputeClient<R>,
+struct Warper {
+    client: Client,
     output: FrameFormat,
     settings: WarpSettings,
     /// How F32 planes map onto the 16-bit codes the warp runs on.
     codes: Option<CodeValues>,
 }
 
-impl<R: Runtime> Warper<R> {
+impl Warper {
     /// Warps `source` into a fresh plane of the same size and hands that plane back.
     fn warp(
         &self,
@@ -393,9 +392,9 @@ impl<R: Runtime> Warper<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Warper<R> {}
+impl StageInstance for Warper {}
 
-impl<R: Runtime> Filter for Warper<R> {
+impl Filter for Warper {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

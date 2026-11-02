@@ -9,7 +9,7 @@ use av_toolbox_cubek::values::{
     widen,
 };
 use av_toolbox_cubek::{DevicePlane, Dispatch};
-use av_toolbox_gpu::{Channel, ColourRange, ComputeClient, FrameFormat, Runtime, SampleFormat};
+use av_toolbox_gpu::{Channel, Client, ColourRange, FrameFormat, SampleFormat};
 
 use crate::bits::bits_of;
 
@@ -104,9 +104,9 @@ impl CodeValues {
     }
 
     /// Widens `source` into f32 code values held in `values`.
-    pub(crate) fn widen<R: Runtime>(
+    pub(crate) fn widen(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         source: DevicePlane<'_>,
         values: DevicePlane<'_>,
@@ -128,9 +128,9 @@ impl CodeValues {
     /// Stores f32 code values from `values` into `target`.
     ///
     /// Integers are rounded and clamped. F32 samples are neither.
-    pub(crate) fn store<R: Runtime>(
+    pub(crate) fn store(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         values: DevicePlane<'_>,
         target: DevicePlane<'_>,
@@ -152,9 +152,9 @@ impl CodeValues {
     /// # Panics
     ///
     /// Panics unless integer samples are stored as F32. Planes kept in their own sample are shared instead.
-    pub(crate) fn convert<R: Runtime>(
+    pub(crate) fn convert(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         source: DevicePlane<'_>,
         target: DevicePlane<'_>,

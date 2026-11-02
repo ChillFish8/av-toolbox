@@ -115,7 +115,7 @@ fn an_opaque_piece_is_refused_naming_the_artefact() {
 
 #[test]
 fn a_scene_starts_at_the_first_frame_seen() {
-    let mut log = GrainLog::new(0, (25, 1));
+    let mut log = GrainLog::new((25, 1));
 
     log.restart();
     log.saw(12);
@@ -134,7 +134,7 @@ fn a_scene_starts_at_the_first_frame_seen() {
 
 #[test]
 fn a_stream_with_no_chunks_keeps_no_scene() {
-    let mut log = GrainLog::new(0, (25, 1));
+    let mut log = GrainLog::new((25, 1));
 
     log.restart();
     log.saw(0);
@@ -149,7 +149,7 @@ fn a_stream_with_no_chunks_keeps_no_scene() {
 
 #[test]
 fn taking_a_piece_empties_the_log() {
-    let mut log = GrainLog::new(0, (25, 1));
+    let mut log = GrainLog::new((25, 1));
 
     log.restart();
     log.saw(0);
@@ -165,7 +165,7 @@ fn taking_a_piece_empties_the_log() {
 
 #[test]
 fn a_restart_starts_a_new_scene_at_its_own_first_frame() {
-    let mut log = GrainLog::new(0, (25, 1));
+    let mut log = GrainLog::new((25, 1));
 
     log.restart();
     log.saw(0);

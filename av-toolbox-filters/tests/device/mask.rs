@@ -30,7 +30,6 @@ use av_toolbox_gpu::{
     StreamTemplate,
     Subsampling,
 };
-use cubecl::prelude::Runtime;
 
 use crate::support::backend;
 
@@ -91,7 +90,7 @@ struct ConvertOnce {
 impl BuildTask for ConvertOnce {
     type Output = Converted;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 

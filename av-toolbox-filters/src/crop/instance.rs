@@ -1,14 +1,5 @@
 use av_toolbox_core::{Filter, Inputs, StageError, StageInstance};
-use av_toolbox_gpu::{
-    Channel,
-    ComputeClient,
-    Frame,
-    FrameContext,
-    FrameFormat,
-    FrameLayout,
-    Plane,
-    SampleFormat,
-};
+use av_toolbox_gpu::{Channel, Client, Frame, FrameContext, FrameFormat, FrameLayout, Plane, SampleFormat};
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
 // by name.
 use cubecl::prelude::*;
@@ -17,8 +8,8 @@ use super::{Edges, cropped};
 
 #[cube(launch_unchecked)]
 fn crop_kernel<E: Int>(
-    input: &Array<E>,
-    output: &mut Array<E>,
+    input: &[E],
+    output: &mut [E],
     input_width: u32,
     output_width: u32,
     left: u32,
@@ -63,17 +54,17 @@ fn missing_channel(stage: &str) -> StageError {
 }
 
 /// Copies one window out of every plane of a frame.
-pub(crate) struct Cropper<R: Runtime> {
-    client: ComputeClient<R>,
+pub(crate) struct Cropper {
+    client: Client,
     stage: &'static str,
     input: FrameFormat,
     output: FrameFormat,
     edges: Edges,
 }
 
-impl<R: Runtime> Cropper<R> {
+impl Cropper {
     pub(crate) fn new(
-        client: ComputeClient<R>,
+        client: Client,
         stage: &'static str,
         input: FrameFormat,
         edges: Edges,
@@ -101,9 +92,9 @@ impl<R: Runtime> Cropper<R> {
         unsafe {
             match self.input.sample {
                 SampleFormat::U8 => {
-                    let input = input.array::<u8, R>();
-                    let output = output.array::<u8, R>();
-                    crop_kernel::launch_unchecked::<u8, R>(
+                    let input = input.array::<u8>();
+                    let output = output.array::<u8>();
+                    crop_kernel::launch_unchecked::<u8>(
                         &self.client,
                         cubes,
                         shape,
@@ -116,9 +107,9 @@ impl<R: Runtime> Cropper<R> {
                     );
                 },
                 SampleFormat::U16 { .. } => {
-                    let input = input.array::<u16, R>();
-                    let output = output.array::<u16, R>();
-                    crop_kernel::launch_unchecked::<u16, R>(
+                    let input = input.array::<u16>();
+                    let output = output.array::<u16>();
+                    crop_kernel::launch_unchecked::<u16>(
                         &self.client,
                         cubes,
                         shape,
@@ -131,9 +122,9 @@ impl<R: Runtime> Cropper<R> {
                     );
                 },
                 SampleFormat::F32 => {
-                    let input = input.array::<u32, R>();
-                    let output = output.array::<u32, R>();
-                    crop_kernel::launch_unchecked::<u32, R>(
+                    let input = input.array::<u32>();
+                    let output = output.array::<u32>();
+                    crop_kernel::launch_unchecked::<u32>(
                         &self.client,
                         cubes,
                         shape,
@@ -150,9 +141,9 @@ impl<R: Runtime> Cropper<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Cropper<R> {}
+impl StageInstance for Cropper {}
 
-impl<R: Runtime> Filter for Cropper<R> {
+impl Filter for Cropper {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input(self.stage));

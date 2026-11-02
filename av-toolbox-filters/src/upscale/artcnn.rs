@@ -19,7 +19,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -30,7 +30,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -157,7 +156,7 @@ pub(crate) fn doubled(input: &FrameFormat) -> FrameFormat {
 /// The tables that double a YUV input's chroma, keeping its siting. Grey has none.
 ///
 /// 4:4:4 chroma is sited like luma, so it takes the luma plane's shape.
-fn chroma_tables<R: Runtime>(client: &ComputeClient<R>, input: &FrameFormat) -> Option<Tables> {
+fn chroma_tables(client: &Client, input: &FrameFormat) -> Option<Tables> {
     let FrameLayout::Yuv { .. } = input.layout else {
         return None;
     };
@@ -244,8 +243,8 @@ impl FilterDefinition for Artcnn {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -285,8 +284,8 @@ impl FilterDefinition for Artcnn {
 }
 
 /// Runs `upscale/artcnn` on every frame, with the network and tables chosen at build.
-struct Upscaler<R: Runtime> {
-    client: ComputeClient<R>,
+struct Upscaler {
+    client: Client,
     supersampler: Supersampler,
     output: FrameFormat,
     chroma: Option<Tables>,
@@ -294,7 +293,7 @@ struct Upscaler<R: Runtime> {
     chroma_samples: Samples,
 }
 
-impl<R: Runtime> Upscaler<R> {
+impl Upscaler {
     /// Widens `input` to code values, runs the network over them, and stores the doubled result into `output`
     /// unrounded.
     fn upscale_luma(&self, context: &FrameContext, input: &Plane, output: &Plane) -> Result<(), StageError> {
@@ -331,9 +330,9 @@ impl<R: Runtime> Upscaler<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Upscaler<R> {}
+impl StageInstance for Upscaler {}
 
-impl<R: Runtime> Filter for Upscaler<R> {
+impl Filter for Upscaler {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_frame());

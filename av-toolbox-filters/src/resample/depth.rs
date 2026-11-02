@@ -27,7 +27,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     Depth as BitDepth,
     DeviceSide,
     FormatSet,
@@ -38,7 +38,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -277,8 +276,8 @@ impl FilterDefinition for Depth {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -293,8 +292,8 @@ impl FilterDefinition for Depth {
 }
 
 /// A filter converting every frame of `input` to `target`, handing frames already there straight back.
-pub(super) fn converter<R: Runtime>(
-    context: &BuildContext<R>,
+pub(super) fn converter(
+    context: &BuildContext,
     stage: &'static str,
     input: FrameFormat,
     target: SampleFormat,
@@ -398,8 +397,8 @@ fn plan_conversion(input: FrameFormat, output: SampleFormat) -> ConversionPlan {
 }
 
 /// Converts every plane of a frame from one bit depth to another.
-struct Converter<R: Runtime> {
-    client: ComputeClient<R>,
+struct Converter {
+    client: Client,
     stage: &'static str,
     output: FrameFormat,
     conversion: Conversion,
@@ -408,7 +407,7 @@ struct Converter<R: Runtime> {
     identity: bool,
 }
 
-impl<R: Runtime> Converter<R> {
+impl Converter {
     fn convert_plane(
         &self,
         context: &FrameContext,
@@ -444,9 +443,9 @@ impl<R: Runtime> Converter<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Converter<R> {}
+impl StageInstance for Converter {}
 
-impl<R: Runtime> Filter for Converter<R> {
+impl Filter for Converter {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input(self.stage));

@@ -3,7 +3,7 @@ use av_toolbox_cubek::dehalo::PADDING;
 use av_toolbox_cubek::padding::{crop, pad};
 use av_toolbox_cubek::values::{narrow, widen};
 use av_toolbox_cubek::warp::{WarpParams, WarpPlanes, warp_sharp};
-use av_toolbox_gpu::{ComputeClient, FrameContext, Runtime};
+use av_toolbox_gpu::{Client, FrameContext};
 
 use crate::scratch::{self, Scratch};
 use crate::sizing::Sizing;
@@ -13,8 +13,8 @@ use crate::sizing::Sizing;
 ///
 /// `input` is rounded to whole samples before the warp and widened back to code values after, the
 /// way aWarpSharp2's own mask and warp work in integer samples.
-pub(crate) fn padded_warp<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn padded_warp(
+    client: &Client,
     context: &FrameContext,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,

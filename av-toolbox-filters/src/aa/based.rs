@@ -40,7 +40,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -51,7 +51,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -399,8 +398,8 @@ impl FilterDefinition for Based {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -466,7 +465,7 @@ struct Halving {
 }
 
 impl Halving {
-    fn new<R: Runtime>(client: &ComputeClient<R>, width: u32, height: u32) -> Self {
+    fn new(client: &Client, width: u32, height: u32) -> Self {
         let across_taps = centred_taps(2 * width, width, &Kernel::Box);
         let down_taps = centred_taps(2 * height, height, &Kernel::Box);
         let across = upload(client, &across_taps);
@@ -484,8 +483,8 @@ struct TurnedClips {
 
 impl TurnedClips {
     /// Transposes `supersampled`, keeping `mclip`, the clip already transposed.
-    fn new<R: Runtime>(
-        client: &ComputeClient<R>,
+    fn new(
+        client: &Client,
         context: &FrameContext,
         supersampled: DevicePlane<'_>,
         mclip: Option<Scratch>,
@@ -516,8 +515,8 @@ impl TurnedClips {
 }
 
 /// Everything `aa/based` settles at build, which runs its chain on a luma plane of one size.
-pub(crate) struct BasedChain<R: Runtime> {
-    client: ComputeClient<R>,
+pub(crate) struct BasedChain {
+    client: Client,
     supersampler: Supersampler,
     settings: Eedi3Settings,
     direction: Direction,
@@ -530,10 +529,10 @@ pub(crate) struct BasedChain<R: Runtime> {
     peak: f32,
 }
 
-impl<R: Runtime> BasedChain<R> {
+impl BasedChain {
     /// Loads ArtCNN and settles every setting for a `width` by `height` luma plane of `bits` per sample.
     fn new(
-        context: &BuildContext<R>,
+        context: &BuildContext,
         args: &BasedArgs,
         arguments: &Eedi3Arguments,
         bits: u32,
@@ -817,14 +816,14 @@ struct FramePlanes {
 }
 
 /// Runs the chain on the luma plane handed to it, merging through the frame's mask when one is bound.
-struct BasedFilter<'a, R: Runtime> {
-    chain: &'a BasedChain<R>,
+struct BasedFilter<'a> {
+    chain: &'a BasedChain,
     format: &'a FrameFormat,
     mask: Option<&'a Mask>,
     edge_mask: bool,
 }
 
-impl<R: Runtime> BasedFilter<'_, R> {
+impl BasedFilter<'_> {
     /// Takes the planes the chain writes for a `width` by `height` luma plane, widening a bound mask.
     fn frame_planes(
         &self,
@@ -866,7 +865,7 @@ impl<R: Runtime> BasedFilter<'_, R> {
     }
 }
 
-impl<R: Runtime> PlaneFilter for BasedFilter<'_, R> {
+impl PlaneFilter for BasedFilter<'_> {
     fn filter(
         &self,
         context: &FrameContext,
@@ -897,17 +896,17 @@ impl<R: Runtime> PlaneFilter for BasedFilter<'_, R> {
 }
 
 /// Runs `aa/based` on every frame's luma, handing the other planes through.
-struct Antialiaser<R: Runtime> {
-    chain: BasedChain<R>,
+struct Antialiaser {
+    chain: BasedChain,
     planewise: Planewise,
     edge_mask: bool,
     /// Whether a mask is bound, so every frame must arrive with one.
     masked: bool,
 }
 
-impl<R: Runtime> StageInstance for Antialiaser<R> {}
+impl StageInstance for Antialiaser {}
 
-impl<R: Runtime> Filter for Antialiaser<R> {
+impl Filter for Antialiaser {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));
@@ -934,8 +933,8 @@ impl<R: Runtime> Filter for Antialiaser<R> {
 /// `planes.edges` must be given exactly when `edge_mask` is set. ArtCNN is loaded and warmed up before
 /// the run.
 #[cfg(feature = "test-support")]
-pub fn based_stages<'de, R: Runtime, D: Deserializer<'de>>(
-    context: &BuildContext<R>,
+pub fn based_stages<'de, D: Deserializer<'de>>(
+    context: &BuildContext,
     args: D,
     bits: u32,
     planes: BasedPlanes<'_>,

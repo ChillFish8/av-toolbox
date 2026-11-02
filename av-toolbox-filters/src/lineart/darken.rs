@@ -14,7 +14,7 @@ use av_toolbox_cubek::lineart::{DarkenPlanes, DarkenSettings, darken};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -22,7 +22,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -181,8 +180,8 @@ impl FilterDefinition for Darken {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -212,13 +211,13 @@ impl FilterDefinition for Darken {
 }
 
 /// Runs `lineart/darken` on every selected plane of a frame.
-struct Darkener<R: Runtime> {
-    client: ComputeClient<R>,
+struct Darkener {
+    client: Client,
     planewise: Planewise,
     settings: DarkenSettings,
 }
 
-impl<R: Runtime> PlaneFilter for Darkener<R> {
+impl PlaneFilter for Darkener {
     fn filter(
         &self,
         context: &FrameContext,
@@ -250,9 +249,9 @@ impl<R: Runtime> PlaneFilter for Darkener<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Darkener<R> {}
+impl StageInstance for Darkener {}
 
-impl<R: Runtime> Filter for Darkener<R> {
+impl Filter for Darkener {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

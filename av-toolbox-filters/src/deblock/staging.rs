@@ -1,7 +1,7 @@
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::values::{offset, widen};
-use av_toolbox_gpu::{Channel, ComputeClient, FrameContext, FrameFormat, Plane, Runtime, SampleFormat};
+use av_toolbox_gpu::{Channel, Client, FrameContext, FrameFormat, Plane, SampleFormat};
 
 use crate::bits::bits_of;
 use crate::codes::CodeValues;
@@ -63,8 +63,8 @@ pub(super) fn centre_of(sample: SampleFormat, channel: Channel) -> f32 {
 /// # Safety
 ///
 /// `source` must hold samples of the format `staging` was made from.
-pub(super) unsafe fn stage_in<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) unsafe fn stage_in(
+    client: &Client,
     context: &FrameContext,
     staging: Staging,
     source: &Plane,
@@ -94,8 +94,8 @@ pub(super) unsafe fn stage_in<R: Runtime>(
 /// # Safety
 ///
 /// `target` must hold F32 samples.
-pub(super) unsafe fn stage_out<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) unsafe fn stage_out(
+    client: &Client,
     context: &FrameContext,
     staging: Staging,
     values: DevicePlane<'_>,

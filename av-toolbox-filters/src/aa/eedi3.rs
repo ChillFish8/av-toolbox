@@ -25,7 +25,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -35,7 +35,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     PlaneBuffer,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -422,8 +421,8 @@ impl FilterDefinition for Eedi3 {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -458,13 +457,13 @@ impl FilterDefinition for Eedi3 {
 }
 
 /// One EEDI3 field pass, reading `clips` beside its input.
-pub(crate) struct Eedi3FieldPass<'a, R: Runtime> {
-    pub(crate) client: &'a ComputeClient<R>,
+pub(crate) struct Eedi3FieldPass<'a> {
+    pub(crate) client: &'a Client,
     pub(crate) settings: Eedi3Settings,
     pub(crate) clips: Eedi3DeviceClips<'a>,
 }
 
-impl<R: Runtime> FieldPass for Eedi3FieldPass<'_, R> {
+impl FieldPass for Eedi3FieldPass<'_> {
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32) {
         let mdis = self.settings.mdis();
         let buffers = FieldScratch::new(context, input.width(), input.height(), mdis);
@@ -548,14 +547,14 @@ impl FieldScratch {
 }
 
 /// Runs `aa/eedi3` on every selected plane of a frame.
-struct Antialiaser<R: Runtime> {
-    client: ComputeClient<R>,
+struct Antialiaser {
+    client: Client,
     planewise: Planewise,
     direction: Direction,
     settings: Eedi3Settings,
 }
 
-impl<R: Runtime> PlaneFilter for Antialiaser<R> {
+impl PlaneFilter for Antialiaser {
     fn filter(
         &self,
         context: &FrameContext,
@@ -575,9 +574,9 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Antialiaser<R> {}
+impl StageInstance for Antialiaser {}
 
-impl<R: Runtime> Filter for Antialiaser<R> {
+impl Filter for Antialiaser {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

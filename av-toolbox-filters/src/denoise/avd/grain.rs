@@ -225,8 +225,6 @@ pub(crate) fn merge_grain_table(pieces: Vec<ArtefactPiece>) -> Result<ArtefactDa
 
 /// The grain one NL4D instance measured since it last handed a piece over.
 pub(crate) struct GrainLog {
-    /// The engine measuring grain, which is the one covering luma.
-    engine: usize,
     /// Frames per second as `(numerator, denominator)`.
     frame_rate: (u64, u64),
     /// The index of the stream's first frame, once it has one.
@@ -235,17 +233,12 @@ pub(crate) struct GrainLog {
 }
 
 impl GrainLog {
-    pub(crate) fn new(engine: usize, frame_rate: (u64, u64)) -> Self {
+    pub(crate) fn new(frame_rate: (u64, u64)) -> Self {
         Self {
-            engine,
             frame_rate,
             first_frame: None,
             scenes: Vec::new(),
         }
-    }
-
-    pub(crate) fn engine(&self) -> usize {
-        self.engine
     }
 
     /// Forgets the last stream's first frame, ready for the next stream.

@@ -26,7 +26,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -37,7 +37,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -242,8 +241,8 @@ impl FilterDefinition for Pp7 {
         Ok(OutputFormats { template, samples })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -268,8 +267,8 @@ impl FilterDefinition for Pp7 {
 }
 
 /// Deblocks the selected planes of every frame, one launch per plane, with the thresholds uploaded at build.
-struct Pp7Deblocker<R: Runtime> {
-    client: ComputeClient<R>,
+struct Pp7Deblocker {
+    client: Client,
     format: FrameFormat,
     deblocking: Pp7Deblocking,
     table: ThresholdTable,
@@ -277,7 +276,7 @@ struct Pp7Deblocker<R: Runtime> {
     aligned: Vec<(u32, u32)>,
 }
 
-impl<R: Runtime> Pp7Deblocker<R> {
+impl Pp7Deblocker {
     /// Deblocks `source`, the plane at `index` in channel order, into the same-sized `target`.
     fn deblock_plane(&self, index: usize, source: &Plane, target: &Plane) {
         // Safety: the source is a plane of the clip's format, whose sample type is the element `pp7_plane`
@@ -301,9 +300,9 @@ impl<R: Runtime> Pp7Deblocker<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Pp7Deblocker<R> {}
+impl StageInstance for Pp7Deblocker {}
 
-impl<R: Runtime> Filter for Pp7Deblocker<R> {
+impl Filter for Pp7Deblocker {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_frame());

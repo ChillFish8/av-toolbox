@@ -21,7 +21,6 @@ use av_toolbox_gpu::{
     StreamItem,
     Subsampling,
 };
-use cubecl::prelude::Runtime;
 
 use crate::support::{backend, built_multi_filter, frame, ten_bit};
 
@@ -64,7 +63,7 @@ fn loaded(context: &FrameContext, format: &FrameFormat, planes: &[Vec<u8>], meta
     context.load_host(&item).expect("the item should load")
 }
 
-fn read_planes<R: Runtime>(build: &BuildContext<R>, painted: &Frame, format: &FrameFormat) -> Vec<Vec<u8>> {
+fn read_planes(build: &BuildContext, painted: &Frame, format: &FrameFormat) -> Vec<Vec<u8>> {
     format
         .channels()
         .iter()
@@ -83,7 +82,7 @@ fn read_planes<R: Runtime>(build: &BuildContext<R>, painted: &Frame, format: &Fr
 impl BuildTask for PaintOnce {
     type Output = Painted;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
 
         let clip_meta = FrameMeta::at(0);

@@ -10,7 +10,7 @@ use av_toolbox_cubek::motion::{
     scene_change_flags,
     search,
 };
-use av_toolbox_gpu::{Frame, FrameContext, FrameMeta, Runtime};
+use av_toolbox_gpu::{Frame, FrameContext, FrameMeta};
 
 use super::cache::{FieldCache, FieldState, Place, Progress};
 use super::chain::{Chain, held, lost_slot, no_prediction, state_of};
@@ -48,7 +48,7 @@ pub(super) fn kept_parity(first: Parity, reversed: bool, index: u64) -> Parity {
     }
 }
 
-impl<R: Runtime> Chain<R> {
+impl Chain {
     /// The entry of one progressive `frame`, shown with `meta`.
     ///
     /// Its `edi` is the frame. Its bob is the frame's luma for progressive input, and a vertical 1-2-1 blur

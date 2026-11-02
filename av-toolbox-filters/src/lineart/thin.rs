@@ -18,7 +18,7 @@ use av_toolbox_cubek::warp::{BlurKind, WarpParams};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -26,7 +26,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -210,8 +209,8 @@ impl FilterDefinition for Thin {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -243,8 +242,8 @@ impl FilterDefinition for Thin {
 }
 
 /// Runs `lineart/thin` on every selected plane of a frame.
-struct Thinner<R: Runtime> {
-    client: ComputeClient<R>,
+struct Thinner {
+    client: Client,
     planewise: Planewise,
     settings: ThinSettings,
     steps: Vec<Step>,
@@ -252,14 +251,14 @@ struct Thinner<R: Runtime> {
 
 /// Warps one plane. With `built_in_mask` set, the warped plane is merged over the input by a mask of
 /// the plane's lines.
-struct ThinPass<'a, R: Runtime> {
-    client: &'a ComputeClient<R>,
+struct ThinPass<'a> {
+    client: &'a Client,
     settings: &'a ThinSettings,
     steps: &'a [Step],
     built_in_mask: bool,
 }
 
-impl<R: Runtime> PlaneFilter for ThinPass<'_, R> {
+impl PlaneFilter for ThinPass<'_> {
     fn filter(
         &self,
         context: &FrameContext,
@@ -316,9 +315,9 @@ impl<R: Runtime> PlaneFilter for ThinPass<'_, R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Thinner<R> {}
+impl StageInstance for Thinner {}
 
-impl<R: Runtime> Filter for Thinner<R> {
+impl Filter for Thinner {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

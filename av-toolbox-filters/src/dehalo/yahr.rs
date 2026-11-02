@@ -27,7 +27,7 @@ use av_toolbox_cubek::rgvs::{RepairMode, RepairPlanes, repair};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -36,7 +36,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -111,8 +110,8 @@ pub(crate) fn yahr_params(args: &YahrArgs, sample: SampleFormat) -> Result<YahrP
 }
 
 /// Runs MinBlur radius 2 then a binomial smooth on `input`, into a fresh scratch plane.
-fn min_blur_then_smooth<R: Runtime>(
-    client: &ComputeClient<R>,
+fn min_blur_then_smooth(
+    client: &Client,
     context: &FrameContext,
     min_blur_chain: &BinomialChain,
     input: DevicePlane<'_>,
@@ -147,8 +146,8 @@ fn min_blur_then_smooth<R: Runtime>(
 }
 
 /// Runs havsfunc's YAHR on one f32 plane, limiting its detail to the detail of its warped self.
-fn yahr<R: Runtime>(
-    client: &ComputeClient<R>,
+fn yahr(
+    client: &Client,
     context: &FrameContext,
     min_blur_chain: &BinomialChain,
     input: DevicePlane<'_>,
@@ -294,8 +293,8 @@ impl FilterDefinition for Yahr {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -327,14 +326,14 @@ impl FilterDefinition for Yahr {
 }
 
 /// Runs `dehalo/yahr` on every selected plane of a frame.
-struct Cleaner<R: Runtime> {
-    client: ComputeClient<R>,
+struct Cleaner {
+    client: Client,
     planewise: Planewise,
     params: YahrParams,
     min_blur_chain: BinomialChain,
 }
 
-impl<R: Runtime> PlaneFilter for Cleaner<R> {
+impl PlaneFilter for Cleaner {
     fn filter(
         &self,
         context: &FrameContext,
@@ -355,9 +354,9 @@ impl<R: Runtime> PlaneFilter for Cleaner<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Cleaner<R> {}
+impl StageInstance for Cleaner {}
 
-impl<R: Runtime> Filter for Cleaner<R> {
+impl Filter for Cleaner {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

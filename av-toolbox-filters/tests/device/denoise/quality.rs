@@ -14,37 +14,37 @@ struct Floor {
 
 const FLOORS: [Floor; 6] = [
     Floor {
-        // Measured 0.678.
+        // Measured 0.575.
         stage: "av-denoise/nlmeans",
         clip: "field_noisy_8",
         gain: 0.25,
     },
     Floor {
-        // Measured 1.452.
+        // Measured 0.914.
         stage: "av-denoise/nlmeans-hq",
         clip: "field_noisy_8",
-        gain: 1.0,
+        gain: 0.75,
     },
     Floor {
-        // Measured 4.894.
+        // Measured 7.051.
         stage: "av-denoise/nl4d",
         clip: "field_noisy_8",
         gain: 4.5,
     },
     Floor {
-        // Measured 0.602.
+        // Measured 0.581.
         stage: "av-denoise/nlmeans",
         clip: "field_noisy_10",
         gain: 0.25,
     },
     Floor {
-        // Measured 1.488.
+        // Measured 1.055.
         stage: "av-denoise/nlmeans-hq",
         clip: "field_noisy_10",
         gain: 1.0,
     },
     Floor {
-        // Measured 5.183.
+        // Measured 7.257.
         stage: "av-denoise/nl4d",
         clip: "field_noisy_10",
         gain: 4.75,

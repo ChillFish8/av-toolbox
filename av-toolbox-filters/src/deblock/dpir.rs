@@ -30,7 +30,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -44,7 +44,6 @@ use av_toolbox_gpu::{
     Plane,
     PlaneBuffer,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -372,11 +371,7 @@ pub(super) fn level_summary(layers: &[LayerRun]) -> String {
 }
 
 /// Reads, parses and uploads `variant`'s weights.
-fn load_network<R: Runtime>(
-    client: &ComputeClient<R>,
-    variant: Variant,
-    precision: Precision,
-) -> Result<Network, StageError> {
+fn load_network(client: &Client, variant: Variant, precision: Precision) -> Result<Network, StageError> {
     let store = Store::from_environment();
     let located = locate(&store, variant)?;
     let file = variant.file_name();
@@ -458,8 +453,8 @@ impl MapBuffers {
 }
 
 /// Warms the network up at every size on `path`, giving every run's layers in turn.
-fn warm_every_size<R: Runtime>(
-    client: &ComputeClient<R>,
+fn warm_every_size(
+    client: &Client,
     context: &FrameContext,
     network: &Network,
     path: BodyPath,
@@ -554,8 +549,8 @@ impl FilterDefinition for Dpir {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -607,8 +602,8 @@ impl FilterDefinition for Dpir {
 }
 
 /// Runs `deblock/dpir` on every frame, with the network uploaded and warmed up at build.
-struct Deblocker<R: Runtime> {
-    client: ComputeClient<R>,
+struct Deblocker {
+    client: Client,
     network: Network,
     path: BodyPath,
     runs: Runs,
@@ -618,7 +613,7 @@ struct Deblocker<R: Runtime> {
     cap: usize,
 }
 
-impl<R: Runtime> Deblocker<R> {
+impl Deblocker {
     /// A fresh F32 plane of `source`'s size.
     fn fresh_plane(
         &self,
@@ -736,9 +731,9 @@ impl<R: Runtime> Deblocker<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Deblocker<R> {}
+impl StageInstance for Deblocker {}
 
-impl<R: Runtime> Filter for Deblocker<R> {
+impl Filter for Deblocker {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_frame());

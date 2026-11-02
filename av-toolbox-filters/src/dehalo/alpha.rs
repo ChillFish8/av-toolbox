@@ -32,7 +32,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -41,7 +41,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -146,7 +145,7 @@ struct ResizeTables {
 }
 
 impl ResizeTables {
-    fn new<R: Runtime>(client: &ComputeClient<R>, from: (u32, u32), to: (u32, u32), kernel: &Kernel) -> Self {
+    fn new(client: &Client, from: (u32, u32), to: (u32, u32), kernel: &Kernel) -> Self {
         let across_taps = centred_taps(from.0, to.0, kernel);
         let down_taps = centred_taps(from.1, to.1, kernel);
         let across = upload(client, &across_taps);
@@ -174,12 +173,7 @@ pub(super) struct AlphaTables {
 
 impl AlphaTables {
     /// Builds the resize tables for one plane of `width` by `height`, sized according to `sizes`.
-    pub(super) fn new<R: Runtime>(
-        client: &ComputeClient<R>,
-        width: u32,
-        height: u32,
-        sizes: &AlphaSizes,
-    ) -> Self {
+    pub(super) fn new(client: &Client, width: u32, height: u32, sizes: &AlphaSizes) -> Self {
         let full = (width, height);
         let down = ResizeTables::new(client, full, sizes.small, &MITCHELL);
         let up = ResizeTables::new(client, sizes.small, full, &SOFT_CUBIC);
@@ -201,8 +195,8 @@ impl AlphaTables {
 }
 
 /// Resizes `input` into `output` through `tables`, with a fresh scratch plane between the passes.
-fn resize_into<R: Runtime>(
-    client: &ComputeClient<R>,
+fn resize_into(
+    client: &Client,
     context: &FrameContext,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -221,8 +215,8 @@ fn resize_into<R: Runtime>(
 }
 
 /// Writes one plane's 3x3 maximum or minimum into `output`.
-fn extreme_into<R: Runtime>(
-    client: &ComputeClient<R>,
+fn extreme_into(
+    client: &Client,
     context: &FrameContext,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -235,8 +229,8 @@ fn extreme_into<R: Runtime>(
 }
 
 /// Runs `dehalo/alpha` on one f32 plane.
-pub(super) fn dehalo_alpha<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn dehalo_alpha(
+    client: &Client,
     context: &FrameContext,
     tables: &AlphaTables,
     input: DevicePlane<'_>,
@@ -304,8 +298,8 @@ pub(super) fn dehalo_alpha<R: Runtime>(
 }
 
 /// Clamps the upscaled clip between the upscaled local extremes of `lets`, then scales it back.
-fn supersampled_clamp<R: Runtime>(
-    client: &ComputeClient<R>,
+fn supersampled_clamp(
+    client: &Client,
     context: &FrameContext,
     tables: &Supersampled,
     input: DevicePlane<'_>,
@@ -511,8 +505,8 @@ impl FilterDefinition for Alpha {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -558,8 +552,8 @@ impl FilterDefinition for Alpha {
 }
 
 /// Runs `dehalo/alpha` on every selected plane of a frame.
-struct Dehaloer<R: Runtime> {
-    client: ComputeClient<R>,
+struct Dehaloer {
+    client: Client,
     planewise: Planewise,
     params: AlphaParams,
     /// One set of tables per plane, for the selected planes only.
@@ -572,7 +566,7 @@ fn missing_tables(plane_index: usize) -> StageError {
     StageError::msg(message)
 }
 
-impl<R: Runtime> PlaneFilter for Dehaloer<R> {
+impl PlaneFilter for Dehaloer {
     fn filter(
         &self,
         context: &FrameContext,
@@ -590,9 +584,9 @@ impl<R: Runtime> PlaneFilter for Dehaloer<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Dehaloer<R> {}
+impl StageInstance for Dehaloer {}
 
-impl<R: Runtime> Filter for Dehaloer<R> {
+impl Filter for Dehaloer {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

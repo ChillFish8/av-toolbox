@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use av_toolbox_cubek::motion::{BlockGrid, FieldBuffers, SceneFlags};
-use av_toolbox_gpu::{ComputeClient, Frame, FrameMeta, Runtime};
+use av_toolbox_gpu::{Client, Frame, FrameMeta};
 
 use crate::scratch::Scratch;
 
@@ -316,9 +316,9 @@ impl FieldCache {
     }
 
     /// `count` motion buffers on `grid`, reusing spare ones first.
-    pub(super) fn take_buffers<R: Runtime>(
+    pub(super) fn take_buffers(
         &mut self,
-        client: &ComputeClient<R>,
+        client: &Client,
         grid: &BlockGrid,
         count: usize,
     ) -> Vec<FieldBuffers> {
@@ -333,7 +333,7 @@ impl FieldCache {
     }
 
     /// Flags for `count` fields, reusing a spare set of that size when there is one.
-    pub(super) fn take_flags<R: Runtime>(&mut self, client: &ComputeClient<R>, count: usize) -> SceneFlags {
+    pub(super) fn take_flags(&mut self, client: &Client, count: usize) -> SceneFlags {
         let found = self
             .spare_flags
             .iter()

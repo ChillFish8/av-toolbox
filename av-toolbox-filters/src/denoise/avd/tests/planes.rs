@@ -1,7 +1,22 @@
-use av_denoise_core::ChannelMode;
-use av_toolbox_gpu::{ColourInfo, Depth, FrameFormat, FrameLayout, SampleFormat, Subsampling};
+use av_denoise_core::{ChromaLayout, ChromaSiting};
+use av_toolbox_gpu::{
+    ChromaLocation,
+    ColourInfo,
+    Depth,
+    FrameFormat,
+    FrameLayout,
+    SampleFormat,
+    Subsampling,
+};
 
-use crate::denoise::avd::planes::{engine_sample, engine_specs, needs_padding};
+use crate::denoise::avd::planes::{
+    PlaneGroups,
+    engine_geometry,
+    engine_sample,
+    needs_padding,
+    plane_groups,
+    stage_geometry,
+};
 use crate::planes::ChannelName;
 
 const STAGE: &str = "av-denoise/nlmeans";
@@ -25,109 +40,165 @@ fn yuv(subsampling: Subsampling) -> FrameFormat {
 }
 
 #[test]
-fn every_plane_of_yuv_gets_a_luma_and_a_chroma_engine() {
+fn every_plane_of_yuv_selects_both_groups() {
     let input = yuv(Subsampling::Yuv420);
 
-    let specs = engine_specs(STAGE, None, false, &input).expect("should map");
+    let groups = plane_groups(STAGE, None, &input).expect("should map");
 
-    assert_eq!(specs.len(), 2);
-    assert_eq!(specs[0].channels, ChannelMode::Luma);
-    assert_eq!(specs[0].planes, vec![0]);
-    assert_eq!((specs[0].width, specs[0].height), (64, 32));
-    assert_eq!(specs[1].channels, ChannelMode::Chroma);
-    assert_eq!(specs[1].planes, vec![1, 2]);
-    assert_eq!((specs[1].width, specs[1].height), (32, 16));
+    assert!(groups.luma);
+    assert!(groups.chroma);
 }
 
 #[test]
-fn luma_alone_gets_one_engine() {
+fn luma_alone_selects_the_luma_group() {
     let input = yuv(Subsampling::Yuv422);
     let planes = [ChannelName::Y];
 
-    let specs = engine_specs(STAGE, Some(&planes), false, &input).expect("should map");
+    let groups = plane_groups(STAGE, Some(&planes), &input).expect("should map");
 
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].channels, ChannelMode::Luma);
+    assert!(groups.luma);
+    assert!(!groups.chroma);
 }
 
 #[test]
-fn chroma_alone_gets_one_engine_at_chroma_size() {
+fn chroma_alone_selects_the_chroma_group() {
     let input = yuv(Subsampling::Yuv422);
     let planes = [ChannelName::U, ChannelName::V];
 
-    let specs = engine_specs(STAGE, Some(&planes), false, &input).expect("should map");
+    let groups = plane_groups(STAGE, Some(&planes), &input).expect("should map");
 
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].channels, ChannelMode::Chroma);
-    assert_eq!((specs[0].width, specs[0].height), (32, 32));
+    assert!(!groups.luma);
+    assert!(groups.chroma);
 }
 
 #[test]
-fn u_without_v_is_refused() {
+fn half_chroma_is_refused() {
     let input = yuv(Subsampling::Yuv420);
     let planes = [ChannelName::Y, ChannelName::U];
 
-    let error = engine_specs(STAGE, Some(&planes), false, &input).expect_err("should refuse");
+    let error = plane_groups(STAGE, Some(&planes), &input).expect_err("should refuse");
 
     assert!(error.to_string().contains(STAGE), "{error}");
 }
 
 #[test]
-fn fused_444_gets_one_yuv_engine() {
-    let input = yuv(Subsampling::Yuv444);
-
-    let specs = engine_specs(STAGE, None, true, &input).expect("should map");
-
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].channels, ChannelMode::Yuv);
-    assert_eq!(specs[0].planes, vec![0, 1, 2]);
-}
-
-#[test]
-fn fused_420_is_refused() {
-    let input = yuv(Subsampling::Yuv420);
-
-    let refused = engine_specs(STAGE, None, true, &input);
-
-    assert!(refused.is_err());
-}
-
-#[test]
-fn fused_without_every_plane_is_refused() {
-    let input = yuv(Subsampling::Yuv444);
-    let planes = [ChannelName::Y];
-
-    let refused = engine_specs(STAGE, Some(&planes), true, &input);
-
-    assert!(refused.is_err());
-}
-
-#[test]
-fn a_grey_clip_gets_one_luma_engine() {
+fn grey_has_no_chroma_group() {
     let input = format(FrameLayout::Grey, SampleFormat::U8);
 
-    let specs = engine_specs(STAGE, None, false, &input).expect("should map");
+    let groups = plane_groups(STAGE, None, &input).expect("should map");
 
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0].channels, ChannelMode::Luma);
-}
-
-#[test]
-fn fused_on_grey_is_refused() {
-    let input = format(FrameLayout::Grey, SampleFormat::U8);
-
-    let refused = engine_specs(STAGE, None, true, &input);
-
-    assert!(refused.is_err());
+    assert!(groups.luma);
+    assert!(!groups.chroma);
 }
 
 #[test]
 fn rgb_is_refused() {
     let input = format(FrameLayout::Rgb, SampleFormat::U8);
 
-    let refused = engine_specs(STAGE, None, false, &input);
+    let refused = plane_groups(STAGE, None, &input);
 
     assert!(refused.is_err());
+}
+
+#[test]
+fn engine_geometry_maps_each_layout() {
+    let layouts = [
+        (FrameLayout::Grey, ChromaLayout::Gray),
+        (
+            FrameLayout::Yuv {
+                subsampling: Subsampling::Yuv420,
+            },
+            ChromaLayout::Yuv420,
+        ),
+        (
+            FrameLayout::Yuv {
+                subsampling: Subsampling::Yuv422,
+            },
+            ChromaLayout::Yuv422,
+        ),
+        (
+            FrameLayout::Yuv {
+                subsampling: Subsampling::Yuv444,
+            },
+            ChromaLayout::Yuv444,
+        ),
+    ];
+
+    for (layout, chroma) in layouts {
+        let input = format(layout, SampleFormat::U8);
+
+        let geometry = engine_geometry(&input);
+
+        assert_eq!(geometry.chroma, chroma, "{layout}");
+        assert_eq!((geometry.width, geometry.height), (64, 32), "{layout}");
+        assert_eq!(geometry.input, av_denoise_core::SampleFormat::U8, "{layout}");
+        assert_eq!(geometry.output, av_denoise_core::SampleFormat::F32, "{layout}");
+    }
+
+    let mut odd = yuv(Subsampling::Yuv420);
+    odd.width = 33;
+    odd.height = 17;
+
+    let geometry = engine_geometry(&odd);
+
+    assert_eq!((geometry.width, geometry.height), (33, 17));
+    assert_eq!(geometry.plane_dims(1), (17, 9));
+}
+
+#[test]
+fn only_a_partial_integer_selection_reads_normalised_floats() {
+    let both = PlaneGroups {
+        luma: true,
+        chroma: true,
+    };
+    let luma_only = PlaneGroups {
+        luma: true,
+        chroma: false,
+    };
+    let chroma_only = PlaneGroups {
+        luma: false,
+        chroma: true,
+    };
+    let integer = yuv(Subsampling::Yuv420);
+    let float = format(integer.layout, SampleFormat::F32);
+    let grey = format(FrameLayout::Grey, SampleFormat::U8);
+
+    let normalised = av_denoise_core::SampleFormat::F32;
+    assert_eq!(stage_geometry(&integer, luma_only).input, normalised);
+    assert_eq!(stage_geometry(&integer, chroma_only).input, normalised);
+    assert_eq!(
+        stage_geometry(&integer, both).input,
+        av_denoise_core::SampleFormat::U8
+    );
+    assert_eq!(
+        stage_geometry(&float, luma_only).input,
+        av_denoise_core::SampleFormat::F32
+    );
+    assert_eq!(
+        stage_geometry(&grey, luma_only).input,
+        av_denoise_core::SampleFormat::U8
+    );
+}
+
+#[test]
+fn chroma_siting_follows_the_chroma_location() {
+    let locations = [
+        (ChromaLocation::Left, ChromaSiting::Left),
+        (ChromaLocation::Center, ChromaSiting::Center),
+        (ChromaLocation::TopLeft, ChromaSiting::TopLeft),
+        (ChromaLocation::Top, ChromaSiting::Unknown),
+        (ChromaLocation::BottomLeft, ChromaSiting::Unknown),
+        (ChromaLocation::Bottom, ChromaSiting::Unknown),
+    ];
+
+    for (location, siting) in locations {
+        let mut input = yuv(Subsampling::Yuv420);
+        input.colour.chroma_location = location;
+
+        let geometry = engine_geometry(&input);
+
+        assert_eq!(geometry.chroma_siting, siting, "{location:?}");
+    }
 }
 
 #[test]

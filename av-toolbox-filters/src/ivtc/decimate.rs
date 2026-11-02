@@ -26,7 +26,7 @@ use av_toolbox_cubek::ivtc::{
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -38,7 +38,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -338,8 +337,8 @@ impl FilterDefinition for Decimate {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -393,8 +392,8 @@ struct StreamStart {
 }
 
 /// Runs `ivtc/decimate` over a stream, emitting each cycle once all of its frames are in.
-struct Decimator<R: Runtime> {
-    client: ComputeClient<R>,
+struct Decimator {
+    client: Client,
     input: FrameFormat,
     output: FrameFormat,
     codes: CodeValues,
@@ -413,7 +412,7 @@ struct Decimator<R: Runtime> {
     start: Option<StreamStart>,
 }
 
-impl<R: Runtime> Decimator<R> {
+impl Decimator {
     /// Every counted plane of `frame`, widened to f32.
     fn widened_planes(&self, context: &FrameContext, frame: &Frame) -> Result<Vec<Scratch>, StageError> {
         let counted = &self.input.channels()[..self.halves.len()];
@@ -530,7 +529,7 @@ impl<R: Runtime> Decimator<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Decimator<R> {
+impl StageInstance for Decimator {
     fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         self.previous = None;
         self.frames.clear();
@@ -543,7 +542,7 @@ impl<R: Runtime> StageInstance for Decimator<R> {
     }
 }
 
-impl<R: Runtime> Filter for Decimator<R> {
+impl Filter for Decimator {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(frame) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

@@ -14,7 +14,7 @@ use av_toolbox_cubek::aa::{SangnomPlanes, sangnom_aaf, sangnom_field, sangnom_ma
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -23,7 +23,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -165,8 +164,8 @@ impl FilterDefinition for Sangnom {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -202,13 +201,13 @@ impl FilterDefinition for Sangnom {
 }
 
 /// One SangNom field pass at one plane's bit depth.
-pub(crate) struct SangnomPass<'a, R: Runtime> {
-    pub(crate) client: &'a ComputeClient<R>,
+pub(crate) struct SangnomPass<'a> {
+    pub(crate) client: &'a Client,
     pub(crate) aaf: f32,
     pub(crate) max: f32,
 }
 
-impl<R: Runtime> FieldPass for SangnomPass<'_, R> {
+impl FieldPass for SangnomPass<'_> {
     fn run(&self, context: &FrameContext, input: DevicePlane<'_>, output: DevicePlane<'_>, offset: u32) {
         let bytes = sangnom_scratch(input.width(), input.height());
         let smoothed = context.scratch(bytes);
@@ -223,15 +222,15 @@ impl<R: Runtime> FieldPass for SangnomPass<'_, R> {
 }
 
 /// Runs `aa/sangnom` on every selected plane of a frame.
-struct Antialiaser<R: Runtime> {
-    client: ComputeClient<R>,
+struct Antialiaser {
+    client: Client,
     planewise: Planewise,
     direction: Direction,
     aaf: f32,
     max: f32,
 }
 
-impl<R: Runtime> PlaneFilter for Antialiaser<R> {
+impl PlaneFilter for Antialiaser {
     fn filter(
         &self,
         context: &FrameContext,
@@ -251,9 +250,9 @@ impl<R: Runtime> PlaneFilter for Antialiaser<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Antialiaser<R> {}
+impl StageInstance for Antialiaser {}
 
-impl<R: Runtime> Filter for Antialiaser<R> {
+impl Filter for Antialiaser {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

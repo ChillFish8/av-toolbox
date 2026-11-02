@@ -36,7 +36,6 @@ use av_toolbox_gpu::{
     SampleFormat,
     Subsampling,
 };
-use cubecl::prelude::Runtime;
 
 pub(super) use self::progressive::{mode_args, progressive_format};
 use crate::stream::{Input, Output, run_chunk};
@@ -273,7 +272,7 @@ struct LoggedStream {
 impl BuildTask for LoggedStream {
     type Output = Vec<ChunkRun>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let built = qtgmc_with_motion_log(build, self.args, self.input);
         let (mut filter, log) = built.expect("the stage should build");
         let mut context = build.frame_context();

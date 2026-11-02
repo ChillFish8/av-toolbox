@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use av_toolbox_core::{Filter, StageError};
-use av_toolbox_gpu::{BuildContext, ComputeClient, FrameFormat, Runtime};
+use av_toolbox_gpu::{BuildContext, Client, FrameFormat};
 use cubecl::prelude::CubeElement;
 use cubecl::server::{Handle, ServerError};
 use serde::{Deserialize, Deserializer};
@@ -74,9 +74,9 @@ impl QtgmcMotionLog {
     }
 
     /// Reads the repair mask flag of `field` back and records it, when its repair built a mask.
-    pub(super) fn record_repair<R: Runtime>(
+    pub(super) fn record_repair(
         &self,
-        chain: &Chain<R>,
+        chain: &Chain,
         cache: &FieldCache,
         field: usize,
     ) -> Result<(), StageError> {
@@ -85,7 +85,7 @@ impl QtgmcMotionLog {
         };
 
         let client = chain.rebuilder.client();
-        let read_flags = read::<R, u32>(client, flags.plane().handle())?;
+        let read_flags = read::<u32>(client, flags.plane().handle())?;
 
         let flagged = read_flags.first().is_some_and(|flag| *flag != 0);
         let mut repairs = self.repairs.lock().unwrap_or_else(|error| error.into_inner());
@@ -95,12 +95,7 @@ impl QtgmcMotionLog {
     }
 
     /// Reads the motion of `field` back and records each of its searches.
-    pub(super) fn record<R: Runtime>(
-        &self,
-        chain: &Chain<R>,
-        cache: &FieldCache,
-        field: usize,
-    ) -> Result<(), StageError> {
+    pub(super) fn record(&self, chain: &Chain, cache: &FieldCache, field: usize) -> Result<(), StageError> {
         let Some(motion) = cache.field(field).and_then(|state| state.motion.as_ref()) else {
             return Err(missing_motion(field));
         };
@@ -108,15 +103,15 @@ impl QtgmcMotionLog {
         let pel = chain.settings.motion.pel;
 
         let flags = match &motion.flags {
-            Some(flags) => read::<R, u32>(client, flags.plane().handle())?,
+            Some(flags) => read::<u32>(client, flags.plane().handle())?,
             None => Vec::new(),
         };
 
         let mut found = Vec::with_capacity(motion.neighbours.len());
         for (neighbour, flag) in motion.neighbours.iter().zip(&flags) {
             let planes = neighbour.buffers.field(pel, false).planes;
-            let vectors = read::<R, i32>(client, planes.vectors.handle())?;
-            let sads = read::<R, f32>(client, planes.sads.handle())?;
+            let vectors = read::<i32>(client, planes.vectors.handle())?;
+            let sads = read::<f32>(client, planes.sads.handle())?;
 
             found.push(QtgmcMotion {
                 field,
@@ -134,18 +129,15 @@ impl QtgmcMotionLog {
     }
 }
 
-fn read<R: Runtime, E: CubeElement>(
-    client: &ComputeClient<R>,
-    handle: &Handle,
-) -> Result<Vec<E>, StageError> {
+fn read<E: CubeElement>(client: &Client, handle: &Handle) -> Result<Vec<E>, StageError> {
     let bytes = client.read_one(handle.clone()).map_err(unreadable_motion)?;
 
     Ok(E::from_bytes(&bytes).to_vec())
 }
 
 /// Builds `deinterlace/qtgmc` with `args` for frames of `input`, recording every motion search it runs.
-pub fn qtgmc_with_motion_log<'de, R: Runtime, D: Deserializer<'de>>(
-    context: &BuildContext<R>,
+pub fn qtgmc_with_motion_log<'de, D: Deserializer<'de>>(
+    context: &BuildContext,
     args: D,
     input: FrameFormat,
 ) -> Result<(Box<dyn Filter>, QtgmcMotionLog), StageError> {

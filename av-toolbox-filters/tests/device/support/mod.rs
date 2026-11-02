@@ -40,7 +40,6 @@ use av_toolbox_gpu::{
     Subsampling,
     test_device,
 };
-use cubecl::prelude::Runtime;
 
 pub(crate) use self::float::{
     Parity,
@@ -143,7 +142,7 @@ struct FilterOnce {
 impl BuildTask for FilterOnce {
     type Output = Vec<Vec<u8>>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 
@@ -232,7 +231,7 @@ struct IdentityCheck {
 impl BuildTask for IdentityCheck {
     type Output = bool;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 
@@ -327,7 +326,7 @@ struct LumaSharedCheck {
 impl BuildTask for LumaSharedCheck {
     type Output = bool;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 
@@ -392,7 +391,7 @@ struct AllPlanesSharedCheck {
 impl BuildTask for AllPlanesSharedCheck {
     type Output = bool;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 
@@ -536,7 +535,7 @@ struct MultiFilterOnce {
 impl BuildTask for MultiFilterOnce {
     type Output = Vec<Vec<u8>>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 
@@ -729,7 +728,7 @@ struct MaskedOnce {
 impl BuildTask for MaskedOnce {
     type Output = Vec<Vec<u8>>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 
@@ -845,7 +844,7 @@ struct SharedPlanes {
 impl BuildTask for SharedPlanes {
     type Output = Vec<bool>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 

@@ -42,7 +42,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -51,7 +51,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -196,8 +195,8 @@ pub(crate) fn fine_params(args: &FineArgs, sample: SampleFormat) -> Result<FineP
 }
 
 /// Runs a chain of maximum or minimum passes from `input` into `output`, through two scratch planes.
-fn expand_into<R: Runtime>(
-    client: &ComputeClient<R>,
+fn expand_into(
+    client: &Client,
     context: &FrameContext,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -235,8 +234,8 @@ fn expand_into<R: Runtime>(
 }
 
 /// Runs `dehalo/fine` on one f32 plane.
-fn fine_dehalo<R: Runtime>(
-    client: &ComputeClient<R>,
+fn fine_dehalo(
+    client: &Client,
     context: &FrameContext,
     tables: &AlphaTables,
     shrink_blur: &Separable,
@@ -534,8 +533,8 @@ impl FilterDefinition for Fine {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -583,8 +582,8 @@ impl FilterDefinition for Fine {
 }
 
 /// Runs `dehalo/fine` on every selected plane of a frame.
-struct FineDehaloer<R: Runtime> {
-    client: ComputeClient<R>,
+struct FineDehaloer {
+    client: Client,
     planewise: Planewise,
     params: FineParams,
     /// One set of tables per plane, for the selected planes only.
@@ -598,7 +597,7 @@ fn missing_tables(plane_index: usize) -> StageError {
     StageError::msg(message)
 }
 
-impl<R: Runtime> PlaneFilter for FineDehaloer<R> {
+impl PlaneFilter for FineDehaloer {
     fn filter(
         &self,
         context: &FrameContext,
@@ -624,9 +623,9 @@ impl<R: Runtime> PlaneFilter for FineDehaloer<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for FineDehaloer<R> {}
+impl StageInstance for FineDehaloer {}
 
-impl<R: Runtime> Filter for FineDehaloer<R> {
+impl Filter for FineDehaloer {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

@@ -33,7 +33,6 @@ use av_toolbox_gpu::{
     Subsampling,
     test_device,
 };
-use cubecl::prelude::Runtime;
 
 /// The one frame a filter emitted for one input.
 fn only_frame(mut frames: Vec<Frame>) -> Frame {
@@ -124,7 +123,7 @@ struct BlendOnce {
 impl BuildTask for BlendOnce {
     type Output = Vec<Vec<u8>>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let host = HostPool::new();
 

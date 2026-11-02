@@ -26,7 +26,7 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -38,7 +38,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -249,8 +248,8 @@ impl FilterDefinition for H264 {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -276,14 +275,14 @@ impl FilterDefinition for H264 {
 
 /// Deblocks the selected planes of every frame, with one wavefront launch covering all of them and the
 /// layout uploaded at build.
-struct Deblocker<R: Runtime> {
-    client: ComputeClient<R>,
+struct Deblocker {
+    client: Client,
     format: FrameFormat,
     deblocking: Deblocking,
     layout: DeblockLayout,
 }
 
-impl<R: Runtime> Deblocker<R> {
+impl Deblocker {
     /// A fresh plane of `source`'s size in the clip's sample format.
     fn fresh_plane(
         &self,
@@ -335,9 +334,9 @@ impl<R: Runtime> Deblocker<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Deblocker<R> {}
+impl StageInstance for Deblocker {}
 
-impl<R: Runtime> Filter for Deblocker<R> {
+impl Filter for Deblocker {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_frame());

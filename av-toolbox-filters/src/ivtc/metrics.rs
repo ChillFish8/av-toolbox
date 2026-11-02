@@ -21,7 +21,7 @@ use av_toolbox_cubek::ivtc::{
     segments,
     weave,
 };
-use av_toolbox_gpu::{ComputeClient, FrameContext, FrameFormat, FrameLayout, Runtime};
+use av_toolbox_gpu::{Client, FrameContext, FrameFormat, FrameLayout};
 use cubecl::prelude::CubeElement;
 use cubecl::server::ServerError;
 
@@ -91,27 +91,22 @@ pub(crate) struct Gathered {
 }
 
 /// Measures every frame of a stream the way VFM does before it decides.
-pub(crate) struct MetricGatherer<R: Runtime> {
-    client: ComputeClient<R>,
+pub(crate) struct MetricGatherer {
+    client: Client,
     input: FrameFormat,
     settings: MetricSettings,
     shift: u32,
     peak: u64,
 }
 
-impl<R: Runtime> MetricGatherer<R> {
+impl MetricGatherer {
     /// VFM's field, 1 when the matching field is the top field.
     pub(crate) fn field(&self) -> u32 {
         self.settings.field
     }
 
     /// A gatherer for frames of `input` at `bits` bits.
-    pub(crate) fn new(
-        client: ComputeClient<R>,
-        input: FrameFormat,
-        settings: MetricSettings,
-        bits: u32,
-    ) -> Self {
+    pub(crate) fn new(client: Client, input: FrameFormat, settings: MetricSettings, bits: u32) -> Self {
         let peak = (1u64 << bits) - 1;
 
         Self {

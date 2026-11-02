@@ -14,7 +14,7 @@ use av_toolbox_cubek::lineart::{VinverseParams, VinversePlanes, vinverse};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -22,7 +22,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -165,8 +164,8 @@ impl FilterDefinition for Vinverse {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -196,13 +195,13 @@ impl FilterDefinition for Vinverse {
 }
 
 /// Runs `lineart/vinverse` on every selected plane of a frame.
-struct Cleaner<R: Runtime> {
-    client: ComputeClient<R>,
+struct Cleaner {
+    client: Client,
     planewise: Planewise,
     params: VinverseParams,
 }
 
-impl<R: Runtime> PlaneFilter for Cleaner<R> {
+impl PlaneFilter for Cleaner {
     fn filter(
         &self,
         context: &FrameContext,
@@ -228,9 +227,9 @@ impl<R: Runtime> PlaneFilter for Cleaner<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Cleaner<R> {}
+impl StageInstance for Cleaner {}
 
-impl<R: Runtime> Filter for Cleaner<R> {
+impl Filter for Cleaner {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

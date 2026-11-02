@@ -29,7 +29,7 @@ use av_toolbox_cubek::rgvs::{
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -38,7 +38,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -129,8 +128,8 @@ pub(crate) fn edge_clean_params(
 
 /// Runs havsfunc's EdgeCleaner particle-cleaning pass into `output`, merging `input` back in
 /// wherever small bright particles are found in `result`.
-fn smode_clean<R: Runtime>(
-    client: &ComputeClient<R>,
+fn smode_clean(
+    client: &Client,
     context: &FrameContext,
     input: DevicePlane<'_>,
     result: DevicePlane<'_>,
@@ -236,8 +235,8 @@ fn smode_clean<R: Runtime>(
 
 /// Runs havsfunc's EdgeCleaner on one f32 plane, warp-sharpening then repairing away from strong
 /// edges.
-fn edge_clean<R: Runtime>(
-    client: &ComputeClient<R>,
+fn edge_clean(
+    client: &Client,
     context: &FrameContext,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -442,8 +441,8 @@ impl FilterDefinition for EdgeClean {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -473,13 +472,13 @@ impl FilterDefinition for EdgeClean {
 }
 
 /// Runs `dehalo/edge_clean` on every selected plane of a frame.
-struct Cleaner<R: Runtime> {
-    client: ComputeClient<R>,
+struct Cleaner {
+    client: Client,
     planewise: Planewise,
     params: EdgeCleanParams,
 }
 
-impl<R: Runtime> PlaneFilter for Cleaner<R> {
+impl PlaneFilter for Cleaner {
     fn filter(
         &self,
         context: &FrameContext,
@@ -493,9 +492,9 @@ impl<R: Runtime> PlaneFilter for Cleaner<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Cleaner<R> {}
+impl StageInstance for Cleaner {}
 
-impl<R: Runtime> Filter for Cleaner<R> {
+impl Filter for Cleaner {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

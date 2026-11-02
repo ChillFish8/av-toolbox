@@ -3,7 +3,7 @@ use std::fmt;
 use av_toolbox_core::StageError;
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_cubek::aa::{merge_fields, transpose};
-use av_toolbox_gpu::{Channel, ComputeClient, FrameContext, FrameFormat, Runtime};
+use av_toolbox_gpu::{Channel, Client, FrameContext, FrameFormat};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -114,8 +114,8 @@ pub(crate) trait FieldPass {
 ///
 /// A vertical run averages the `vertical` pass keeping the even rows with the one keeping the odd rows.
 /// A horizontal run does the same with the `horizontal` pass on the transposed plane.
-pub(crate) fn run_direction<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn run_direction(
+    client: &Client,
     context: &FrameContext,
     vertical: &impl FieldPass,
     horizontal: &impl FieldPass,
@@ -137,8 +137,8 @@ pub(crate) fn run_direction<R: Runtime>(
 }
 
 /// Averages the field pass keeping the even rows with the one keeping the odd rows.
-fn run_vertical<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_vertical(
+    client: &Client,
     context: &FrameContext,
     pass: &impl FieldPass,
     input: DevicePlane<'_>,
@@ -158,8 +158,8 @@ fn run_vertical<R: Runtime>(
 }
 
 /// Anti-aliases the transposed plane vertically and transposes the result back.
-fn run_horizontal<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_horizontal(
+    client: &Client,
     context: &FrameContext,
     pass: &impl FieldPass,
     input: DevicePlane<'_>,

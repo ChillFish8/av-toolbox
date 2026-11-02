@@ -9,7 +9,6 @@ use av_toolbox_gpu::{
     FrameRate,
     SampleFormat,
 };
-use cubecl::prelude::Runtime;
 use serde_json::json;
 
 use super::{float_of, noisy_clip, yuv420};
@@ -31,7 +30,7 @@ struct GrainStream {
 impl BuildTask for GrainStream {
     type Output = Vec<Vec<Artefact>>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let mut taken = Vec::new();
 

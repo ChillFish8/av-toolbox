@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -295,8 +294,8 @@ impl FilterDefinition for Bwdif {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -379,8 +378,8 @@ pub(crate) fn output_metas(meta: &FrameMeta, half_frame: Option<Duration>, doubl
 }
 
 /// Runs `deinterlace/bwdif` over a chunk, emitting each frame's outputs once the frame after it arrives.
-struct Deinterlacer<R: Runtime> {
-    rebuilder: FieldRebuilder<R>,
+struct Deinterlacer {
+    rebuilder: FieldRebuilder,
     input: FrameFormat,
     output: FrameFormat,
     /// Whether each plane, in channel order, is deinterlaced.
@@ -392,7 +391,7 @@ struct Deinterlacer<R: Runtime> {
     current: Option<Frame>,
 }
 
-impl<R: Runtime> Deinterlacer<R> {
+impl Deinterlacer {
     /// The plane of `channel` in `frame`, shared when it is already stored as the output's sample, and
     /// converted when not.
     fn kept_plane(
@@ -444,7 +443,7 @@ impl<R: Runtime> Deinterlacer<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Deinterlacer<R> {
+impl StageInstance for Deinterlacer {
     fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         self.previous = None;
         self.current = None;
@@ -453,7 +452,7 @@ impl<R: Runtime> StageInstance for Deinterlacer<R> {
     }
 }
 
-impl<R: Runtime> Filter for Deinterlacer<R> {
+impl Filter for Deinterlacer {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(next) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

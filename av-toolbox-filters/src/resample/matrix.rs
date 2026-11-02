@@ -26,9 +26,9 @@ use av_toolbox_cubek::matrix::{
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
+    Client,
     ColourInfo,
     ColourRange,
-    ComputeClient,
     DeviceSide,
     FormatSet,
     Frame,
@@ -40,7 +40,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -376,8 +375,8 @@ impl FilterDefinition for Matrix {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -402,8 +401,8 @@ impl FilterDefinition for Matrix {
 }
 
 /// Converts every frame of a clip through one affine map.
-struct MatrixConverter<R: Runtime> {
-    client: ComputeClient<R>,
+struct MatrixConverter {
+    client: Client,
     input: FrameFormat,
     output: FrameFormat,
     conversion: MatrixConversion,
@@ -440,9 +439,9 @@ unsafe fn device_planes<'a>(planes: [&'a Plane; 3]) -> [DevicePlane<'a>; 3] {
     planes.map(|plane| unsafe { device_plane(plane) })
 }
 
-impl<R: Runtime> StageInstance for MatrixConverter<R> {}
+impl StageInstance for MatrixConverter {}
 
-impl<R: Runtime> Filter for MatrixConverter<R> {
+impl Filter for MatrixConverter {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

@@ -2,7 +2,7 @@ use av_toolbox_core::StageError;
 use av_toolbox_cubek::DevicePlane;
 use av_toolbox_gpu::{
     Channel,
-    ComputeClient,
+    Client,
     Frame,
     FrameContext,
     FrameError,
@@ -10,7 +10,6 @@ use av_toolbox_gpu::{
     FrameLayout,
     FrameMeta,
     Plane,
-    Runtime,
 };
 
 use crate::codes::CodeValues;
@@ -54,9 +53,9 @@ impl Planewise {
     /// Runs `filter` on every selected plane of `frame`.
     ///
     /// The rest are shared when they are already stored as the output's sample, and converted when not.
-    pub(crate) fn run<R: Runtime, F: PlaneFilter>(
+    pub(crate) fn run<F: PlaneFilter>(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         context: &FrameContext,
         frame: Frame,
         filter: &F,
@@ -94,9 +93,9 @@ impl Planewise {
     }
 
     /// Stores `source` as the output's sample, through `filter` when there is one.
-    fn output_plane<R: Runtime>(
+    fn output_plane(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         context: &FrameContext,
         source: &Plane,
         plane_index: usize,

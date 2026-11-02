@@ -30,7 +30,7 @@ use av_toolbox_gpu::{
     Subsampling,
 };
 use av_toolbox_models::Store;
-use cubecl::prelude::{CubeElement, Runtime};
+use cubecl::prelude::CubeElement;
 use serde_json::json;
 
 use crate::support::{
@@ -90,7 +90,7 @@ struct Direct {
 impl BuildTask for Direct {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

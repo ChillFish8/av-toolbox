@@ -6,7 +6,7 @@ use cubecl::prelude::*;
 
 /// Blends one sample as `base + (overlay - base) * m / 255`, rounded to the nearest sample value.
 #[cube(launch_unchecked)]
-fn blend_plane<E: Int>(base: &Array<E>, overlay: &Array<E>, mask: &Array<u8>, output: &mut Array<E>) {
+fn blend_plane<E: Int>(base: &[E], overlay: &[E], mask: &[u8], output: &mut [E]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -21,7 +21,7 @@ fn blend_plane<E: Int>(base: &Array<E>, overlay: &Array<E>, mask: &Array<u8>, ou
 
 /// Blends one float sample as `base + (overlay - base) * m / 255`, without rounding.
 #[cube(launch_unchecked)]
-fn blend_float_plane(base: &Array<f32>, overlay: &Array<f32>, mask: &Array<u8>, output: &mut Array<f32>) {
+fn blend_float_plane(base: &[f32], overlay: &[f32], mask: &[u8], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -35,7 +35,7 @@ fn blend_float_plane(base: &Array<f32>, overlay: &Array<f32>, mask: &Array<u8>, 
 
 /// Copies one plane unchanged, for the planes `blend/masked` was not asked to blend.
 #[cube(launch_unchecked)]
-fn copy_plane<E: Numeric>(base: &Array<E>, output: &mut Array<E>) {
+fn copy_plane<E: Numeric>(base: &[E], output: &mut [E]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -63,14 +63,14 @@ fn missing_chroma() -> StageError {
     StageError::msg("blend/masked was handed a mask without the chroma plane this frame needs")
 }
 
-pub(super) struct MaskedBlend<R: Runtime> {
-    client: ComputeClient<R>,
+pub(super) struct MaskedBlend {
+    client: Client,
     format: FrameFormat,
     planes: Vec<u8>,
 }
 
-impl<R: Runtime> MaskedBlend<R> {
-    pub(super) fn new(client: ComputeClient<R>, format: FrameFormat, planes: Vec<u8>) -> Self {
+impl MaskedBlend {
+    pub(super) fn new(client: Client, format: FrameFormat, planes: Vec<u8>) -> Self {
         Self {
             client,
             format,
@@ -82,17 +82,17 @@ impl<R: Runtime> MaskedBlend<R> {
         let samples = planes.output.samples();
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
-        let mask = planes.mask.array::<u8, R>();
+        let mask = planes.mask.array::<u8>();
 
         // Safety: every binding names exactly as many elements as its plane holds, and the kernel
         // writes nothing past the output's length.
         unsafe {
             match self.format.sample {
                 SampleFormat::U8 => {
-                    let base = planes.base.array::<u8, R>();
-                    let overlay = planes.overlay.array::<u8, R>();
-                    let output = planes.output.array::<u8, R>();
-                    blend_plane::launch_unchecked::<u8, R>(
+                    let base = planes.base.array::<u8>();
+                    let overlay = planes.overlay.array::<u8>();
+                    let output = planes.output.array::<u8>();
+                    blend_plane::launch_unchecked::<u8>(
                         &self.client,
                         cubes,
                         shape,
@@ -103,10 +103,10 @@ impl<R: Runtime> MaskedBlend<R> {
                     );
                 },
                 SampleFormat::F32 => {
-                    let base = planes.base.array::<f32, R>();
-                    let overlay = planes.overlay.array::<f32, R>();
-                    let output = planes.output.array::<f32, R>();
-                    blend_float_plane::launch_unchecked::<R>(
+                    let base = planes.base.array::<f32>();
+                    let overlay = planes.overlay.array::<f32>();
+                    let output = planes.output.array::<f32>();
+                    blend_float_plane::launch_unchecked(
                         &self.client,
                         cubes,
                         shape,
@@ -117,10 +117,10 @@ impl<R: Runtime> MaskedBlend<R> {
                     );
                 },
                 _ => {
-                    let base = planes.base.array::<u16, R>();
-                    let overlay = planes.overlay.array::<u16, R>();
-                    let output = planes.output.array::<u16, R>();
-                    blend_plane::launch_unchecked::<u16, R>(
+                    let base = planes.base.array::<u16>();
+                    let overlay = planes.overlay.array::<u16>();
+                    let output = planes.output.array::<u16>();
+                    blend_plane::launch_unchecked::<u16>(
                         &self.client,
                         cubes,
                         shape,
@@ -144,19 +144,19 @@ impl<R: Runtime> MaskedBlend<R> {
         unsafe {
             match self.format.sample {
                 SampleFormat::U8 => {
-                    let base = base.array::<u8, R>();
-                    let output = output.array::<u8, R>();
-                    copy_plane::launch_unchecked::<u8, R>(&self.client, cubes, shape, base, output);
+                    let base = base.array::<u8>();
+                    let output = output.array::<u8>();
+                    copy_plane::launch_unchecked::<u8>(&self.client, cubes, shape, base, output);
                 },
                 SampleFormat::F32 => {
-                    let base = base.array::<f32, R>();
-                    let output = output.array::<f32, R>();
-                    copy_plane::launch_unchecked::<f32, R>(&self.client, cubes, shape, base, output);
+                    let base = base.array::<f32>();
+                    let output = output.array::<f32>();
+                    copy_plane::launch_unchecked::<f32>(&self.client, cubes, shape, base, output);
                 },
                 _ => {
-                    let base = base.array::<u16, R>();
-                    let output = output.array::<u16, R>();
-                    copy_plane::launch_unchecked::<u16, R>(&self.client, cubes, shape, base, output);
+                    let base = base.array::<u16>();
+                    let output = output.array::<u16>();
+                    copy_plane::launch_unchecked::<u16>(&self.client, cubes, shape, base, output);
                 },
             }
         }
@@ -171,9 +171,9 @@ struct PlaneSet<'a> {
     output: &'a Plane,
 }
 
-impl<R: Runtime> StageInstance for MaskedBlend<R> {}
+impl StageInstance for MaskedBlend {}
 
-impl<R: Runtime> Filter for MaskedBlend<R> {
+impl Filter for MaskedBlend {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let base = inputs.take_frame(0).ok_or_else(missing_base)?;
         let overlay = inputs.take_frame(1).ok_or_else(missing_overlay)?;

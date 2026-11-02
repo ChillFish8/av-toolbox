@@ -35,7 +35,7 @@ use av_toolbox_cubek::motion::{
     scene_change_flags,
     search,
 };
-use av_toolbox_gpu::{Frame, FrameContext, FrameError, FrameFormat, FrameMeta, Plane, Runtime};
+use av_toolbox_gpu::{Frame, FrameContext, FrameError, FrameFormat, FrameMeta, Plane};
 
 use super::cache::{FieldCache, FieldState, Motion, Neighbour, Place, Progress, Reach};
 use crate::deinterlace::qtgmc::{Input, STAGE};
@@ -140,8 +140,8 @@ pub(super) struct PlaneShape {
 }
 
 /// What every step of the chain reads, built once per format.
-pub(super) struct Chain<R: Runtime> {
-    pub(super) rebuilder: FieldRebuilder<R>,
+pub(super) struct Chain {
+    pub(super) rebuilder: FieldRebuilder,
     pub(super) predictor: Predictor,
     pub(super) tables: QtgmcTables,
     /// The SAD mask's tables, for repair input alone.
@@ -157,7 +157,7 @@ pub(super) struct Chain<R: Runtime> {
     pub(super) bits: u32,
 }
 
-impl<R: Runtime> Chain<R> {
+impl Chain {
     pub(super) fn scratch(&self, context: &FrameContext, plane: usize) -> Scratch {
         let shape = self.shapes[plane];
 

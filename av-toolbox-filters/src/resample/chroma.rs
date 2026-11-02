@@ -18,8 +18,8 @@ use av_toolbox_gpu::{
     Capabilities,
     Channel,
     ChromaLocation,
+    Client,
     ColourInfo,
-    ComputeClient,
     DeviceSide,
     FormatSet,
     Frame,
@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -349,8 +348,8 @@ impl FilterDefinition for Chroma {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -404,8 +403,8 @@ impl FilterDefinition for Chroma {
 /// Resamples a YUV clip's chroma planes to a new subsampling and siting.
 ///
 /// The luma plane is shared, or converted when the output's sample differs from the input's.
-struct ChromaResampler<R: Runtime> {
-    client: ComputeClient<R>,
+struct ChromaResampler {
+    client: Client,
     output: FrameFormat,
     target: Subsampling,
     axes: ChromaAxes,
@@ -418,7 +417,7 @@ struct ChromaResampler<R: Runtime> {
     same_samples: bool,
 }
 
-impl<R: Runtime> ChromaResampler<R> {
+impl ChromaResampler {
     /// Stores `luma` as a new plane of the output's sample.
     fn convert_luma(
         &self,
@@ -489,9 +488,9 @@ impl<R: Runtime> ChromaResampler<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for ChromaResampler<R> {}
+impl StageInstance for ChromaResampler {}
 
-impl<R: Runtime> Filter for ChromaResampler<R> {
+impl Filter for ChromaResampler {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

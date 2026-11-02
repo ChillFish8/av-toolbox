@@ -10,7 +10,6 @@ use av_toolbox_gpu::{
     HostStreamItem,
     StreamItem,
 };
-use cubecl::prelude::Runtime;
 
 /// One frame handed to the filter, its metadata and every plane's bytes.
 #[derive(Clone)]
@@ -35,7 +34,7 @@ pub(crate) struct Stream {
     pub(crate) chunks: Vec<Vec<Input>>,
 }
 
-fn read_back<R: Runtime>(build: &BuildContext<R>, format: &FrameFormat, emitted: Frame) -> Output {
+fn read_back(build: &BuildContext, format: &FrameFormat, emitted: Frame) -> Output {
     assert_eq!(emitted.format(), format);
 
     let mut planes = Vec::new();
@@ -56,8 +55,8 @@ fn read_back<R: Runtime>(build: &BuildContext<R>, format: &FrameFormat, emitted:
 }
 
 /// Runs one chunk through `filter`, starting and ending the stream around it.
-pub(crate) fn run_chunk<R: Runtime>(
-    build: &BuildContext<R>,
+pub(crate) fn run_chunk(
+    build: &BuildContext,
     context: &mut FrameContext,
     filter: &mut dyn Filter,
     formats: (&FrameFormat, &FrameFormat),
@@ -102,7 +101,7 @@ pub(crate) fn run_chunk<R: Runtime>(
 impl BuildTask for Stream {
     type Output = Vec<Output>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let mut outputs = Vec::new();
         for chunk in self.chunks {

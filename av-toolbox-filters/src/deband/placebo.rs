@@ -18,8 +18,8 @@ use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
     Channel,
+    Client,
     ColourRange,
-    ComputeClient,
     DeviceSide,
     FormatSet,
     Frame,
@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -303,8 +302,8 @@ impl FilterDefinition for Placebo {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -363,8 +362,8 @@ fn source_of(sample: SampleFormat) -> Source {
 ///
 /// The rest are shared when the input is already F32, and converted when not. A frame with every
 /// plane skipped passes through.
-struct Debander<R: Runtime> {
-    client: ComputeClient<R>,
+struct Debander {
+    client: Client,
     output: FrameFormat,
     planes: Vec<PlaneSettings>,
     codes: CodeValues,
@@ -377,7 +376,7 @@ struct Debander<R: Runtime> {
     shared: bool,
 }
 
-impl<R: Runtime> Debander<R> {
+impl Debander {
     /// Stores `source` as an F32 plane of the same size, debanded unless `settings` skips it.
     fn output_plane(
         &self,
@@ -482,9 +481,9 @@ impl<R: Runtime> Debander<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Debander<R> {}
+impl StageInstance for Debander {}
 
-impl<R: Runtime> Filter for Debander<R> {
+impl Filter for Debander {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());

@@ -32,7 +32,6 @@ use av_toolbox_gpu::{
     OutputFormats,
     Plane,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -427,8 +426,8 @@ impl FilterDefinition for Match {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -502,11 +501,11 @@ impl FilterDefinition for Match {
 }
 
 /// Runs `ivtc/match` over a chunk, emitting each frame once the frame after it arrives.
-struct Matcher<R: Runtime> {
-    rebuilder: FieldRebuilder<R>,
+struct Matcher {
+    rebuilder: FieldRebuilder,
     /// The code values every measured plane widens to, whole codes for F32.
     codes: CodeValues,
-    gatherer: MetricGatherer<R>,
+    gatherer: MetricGatherer,
     decision: Decision,
     /// Whether a combed frame is rebuilt by bwdif rather than emitted as it is.
     falls_back: bool,
@@ -518,7 +517,7 @@ struct Matcher<R: Runtime> {
     current: Option<Frame>,
 }
 
-impl<R: Runtime> Matcher<R> {
+impl Matcher {
     /// Every plane of `frame`, widened to f32 code values.
     fn widened_planes(&self, context: &FrameContext, frame: &Frame) -> Result<Vec<Scratch>, StageError> {
         let client = self.rebuilder.client();
@@ -671,7 +670,7 @@ impl<R: Runtime> Matcher<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Matcher<R> {
+impl StageInstance for Matcher {
     fn start_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {
         self.previous = None;
         self.current = None;
@@ -680,7 +679,7 @@ impl<R: Runtime> StageInstance for Matcher<R> {
     }
 }
 
-impl<R: Runtime> Filter for Matcher<R> {
+impl Filter for Matcher {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(next) = inputs.take_frame(INPUT) else {
             return Err(missing_input(STAGE));

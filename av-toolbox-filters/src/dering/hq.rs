@@ -42,7 +42,7 @@ use av_toolbox_cubek::rgvs::{RepairMode, RepairPlanes, repair};
 use av_toolbox_gpu::{
     BuildContext,
     Capabilities,
-    ComputeClient,
+    Client,
     DeviceSide,
     FormatSet,
     Frame,
@@ -51,7 +51,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -222,8 +221,8 @@ enum Step {
 }
 
 /// Runs `steps` from `input` into `output`, through two ping-pong scratch planes.
-fn ping_pong<R: Runtime>(
-    client: &ComputeClient<R>,
+fn ping_pong(
+    client: &Client,
     context: &FrameContext,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -285,8 +284,8 @@ fn inner_steps(minp: u32) -> Vec<Step> {
 }
 
 /// Contrasharpens `min_blurred` against `input`, as deep as `sharp_chain` reaches, into `output`.
-fn contra_sharpen<R: Runtime>(
-    client: &ComputeClient<R>,
+fn contra_sharpen(
+    client: &Client,
     context: &FrameContext,
     sharp_chain: &BinomialChain,
     input: DevicePlane<'_>,
@@ -351,8 +350,8 @@ fn contra_sharpen<R: Runtime>(
 
 /// The seed-and-keep hysteresis pass that joins the ring mask's edges, `pm_median` seeding
 /// `pm`'s 8-connected components.
-fn ring_edges<R: Runtime>(
-    client: &ComputeClient<R>,
+fn ring_edges(
+    client: &Client,
     context: &FrameContext,
     pm_median: DevicePlane<'_>,
     pm: DevicePlane<'_>,
@@ -383,8 +382,8 @@ fn ring_edges<R: Runtime>(
 }
 
 /// Runs havsfunc's HQDeringmod on one f32 plane.
-fn hq_dering<R: Runtime>(
-    client: &ComputeClient<R>,
+fn hq_dering(
+    client: &Client,
     context: &FrameContext,
     chains: &DeringChains,
     input: DevicePlane<'_>,
@@ -620,8 +619,8 @@ impl FilterDefinition for Hq {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -660,7 +659,7 @@ struct DeringChains {
 }
 
 impl DeringChains {
-    fn new<R: Runtime>(client: &ComputeClient<R>, params: &DeringParams) -> Self {
+    fn new(client: &Client, params: &DeringParams) -> Self {
         let min_blur = BinomialChain::new(client, params.nrmode);
         let sharp = if params.sharp > 0 {
             Some(BinomialChain::new(client, params.sharp))
@@ -673,14 +672,14 @@ impl DeringChains {
 }
 
 /// Runs `dering/hq` on every selected plane of a frame.
-struct Deringer<R: Runtime> {
-    client: ComputeClient<R>,
+struct Deringer {
+    client: Client,
     planewise: Planewise,
     params: DeringParams,
     chains: DeringChains,
 }
 
-impl<R: Runtime> PlaneFilter for Deringer<R> {
+impl PlaneFilter for Deringer {
     fn filter(
         &self,
         context: &FrameContext,
@@ -694,9 +693,9 @@ impl<R: Runtime> PlaneFilter for Deringer<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for Deringer<R> {}
+impl StageInstance for Deringer {}
 
-impl<R: Runtime> Filter for Deringer<R> {
+impl Filter for Deringer {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let Some(input) = inputs.take_frame(0) else {
             return Err(missing_input());
