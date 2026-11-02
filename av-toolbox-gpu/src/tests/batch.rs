@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 
-use cubecl::prelude::Runtime;
-
 use crate::frame::tests::binding::{elements, launch};
 use crate::{
     Attachments,
@@ -308,7 +306,7 @@ struct WriteLumaOfALoadedFrame {
 impl BuildTask for WriteLumaOfALoadedFrame {
     type Output = Vec<HostItem>;
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+    fn run(self, context: &BuildContext) -> Self::Output {
         let frames = context.frame_context();
         let item = LoadItem::new(&self.planes, FrameMeta::at(0));
         let loaded = frames.load_one(&item).expect("the planes match their format");
@@ -318,7 +316,7 @@ impl BuildTask for WriteLumaOfALoadedFrame {
             let luma = frame.plane(Channel::Y).expect("a yuv frame carries luma");
 
             let count = elements(luma.buffer().bytes());
-            let binding = luma.array::<u32, R>();
+            let binding = luma.array::<u32>();
             launch(context, binding, count, 0);
         }
 
@@ -620,7 +618,7 @@ struct PipelinedStamps {
 impl BuildTask for PipelinedStamps {
     type Output = Vec<Vec<HostItem>>;
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+    fn run(self, context: &BuildContext) -> Self::Output {
         let frames = context.frame_context();
         let format = frame_format();
 
@@ -633,7 +631,7 @@ impl BuildTask for PipelinedStamps {
             {
                 let luma = frame.plane(Channel::Y).expect("a yuv frame carries luma");
                 let count = elements(luma.buffer().bytes());
-                let binding = luma.array::<u32, R>();
+                let binding = luma.array::<u32>();
 
                 launch(context, binding, count, stamp(index));
             }

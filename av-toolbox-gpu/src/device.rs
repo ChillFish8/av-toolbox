@@ -1,6 +1,13 @@
 use std::fmt;
 use std::str::FromStr;
 
+#[cfg(feature = "rocm")]
+use cubecl::device::AmdDevice;
+#[cfg(feature = "cuda")]
+use cubecl::device::CudaDevice;
+#[cfg(any(feature = "vulkan", feature = "metal"))]
+use cubecl::device::{WgpuBackend, WgpuDevice, WgpuDeviceKind};
+
 use crate::Accelerator;
 
 /// Where to run the compute.
@@ -106,48 +113,67 @@ impl fmt::Display for Device {
     }
 }
 
-#[cfg(feature = "cuda")]
 impl Device {
-    pub fn to_cuda(self) -> Result<cubecl::cuda::CudaDevice, DeviceError> {
+    /// The CubeCL device this selector names on `accelerator`.
+    ///
+    /// No driver is asked, so whether the device exists is only known once a client opens on it.
+    pub fn to_cubecl(self, accelerator: Accelerator) -> Result<cubecl::Device, DeviceError> {
+        match accelerator {
+            #[cfg(feature = "cuda")]
+            Accelerator::Cuda => {
+                let index = self.gpu_index(accelerator)?;
+                let cuda_device = CudaDevice::new(index);
+                Ok(cubecl::Device::Cuda(cuda_device))
+            },
+            #[cfg(feature = "rocm")]
+            Accelerator::Rocm => {
+                let index = self.gpu_index(accelerator)?;
+                let amd_device = AmdDevice::new(index);
+                Ok(cubecl::Device::Hip(amd_device))
+            },
+            #[cfg(feature = "vulkan")]
+            Accelerator::Vulkan => {
+                let kind = self.wgpu_kind();
+                let vulkan_device = WgpuDevice::new(kind).on(WgpuBackend::Vulkan);
+                Ok(cubecl::Device::Wgpu(vulkan_device))
+            },
+            #[cfg(feature = "metal")]
+            Accelerator::Metal => {
+                let kind = self.wgpu_kind();
+                let metal_device = WgpuDevice::new(kind).on(WgpuBackend::Metal);
+                Ok(cubecl::Device::Wgpu(metal_device))
+            },
+            // docs.rs widens the `Accelerator` variants behind `cfg(docsrs)` so they all appear in
+            // the rendered enum, even when the matching backend feature is off. This arm keeps the
+            // match exhaustive there and is never reached at runtime.
+            #[cfg(docsrs)]
+            _ => unreachable!(),
+        }
+    }
+
+    /// The GPU ordinal on a backend that numbers its devices from zero and has no other kinds.
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    fn gpu_index(self, accelerator: Accelerator) -> Result<usize, DeviceError> {
         match self {
-            Self::Default => Ok(cubecl::cuda::CudaDevice { index: 0 }),
-            Self::Discrete { index } => Ok(cubecl::cuda::CudaDevice { index }),
+            Self::Default => Ok(0),
+            Self::Discrete { index } => Ok(index),
             other => Err(DeviceError::Unsupported {
                 device: other,
-                accelerator: Accelerator::Cuda,
+                accelerator,
                 supported: "default or discrete[:N]",
             }),
         }
     }
-}
 
-#[cfg(feature = "rocm")]
-impl Device {
-    pub fn to_amd(self) -> Result<cubecl::hip::AmdDevice, DeviceError> {
+    #[cfg(any(feature = "vulkan", feature = "metal"))]
+    fn wgpu_kind(self) -> WgpuDeviceKind {
         match self {
-            Self::Default => Ok(cubecl::hip::AmdDevice { index: 0 }),
-            Self::Discrete { index } => Ok(cubecl::hip::AmdDevice { index }),
-            other => Err(DeviceError::Unsupported {
-                device: other,
-                accelerator: Accelerator::Rocm,
-                supported: "default or discrete[:N]",
-            }),
+            Self::Default => WgpuDeviceKind::DefaultDevice,
+            Self::Discrete { index } => WgpuDeviceKind::DiscreteGpu(index),
+            Self::Integrated { index } => WgpuDeviceKind::IntegratedGpu(index),
+            Self::Virtual { index } => WgpuDeviceKind::VirtualGpu(index),
+            Self::Cpu => WgpuDeviceKind::Cpu,
         }
-    }
-}
-
-#[cfg(any(feature = "vulkan", feature = "metal"))]
-impl Device {
-    pub fn to_wgpu(self) -> Result<cubecl::wgpu::WgpuDevice, DeviceError> {
-        use cubecl::wgpu::WgpuDevice;
-
-        Ok(match self {
-            Self::Default => WgpuDevice::DefaultDevice,
-            Self::Discrete { index } => WgpuDevice::DiscreteGpu(index),
-            Self::Integrated { index } => WgpuDevice::IntegratedGpu(index),
-            Self::Virtual { index } => WgpuDevice::VirtualGpu(index),
-            Self::Cpu => WgpuDevice::Cpu,
-        })
     }
 }
 
@@ -238,14 +264,16 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_takes_default_and_discrete_and_refuses_the_rest() {
-        assert_eq!(Device::Default.to_cuda().expect("should map").index, 0);
-        assert_eq!(
-            Device::Discrete { index: 2 }.to_cuda().expect("should map").index,
-            2
-        );
+        let default = Device::Default.to_cubecl(Accelerator::Cuda).expect("should map");
+        let discrete = Device::Discrete { index: 2 }
+            .to_cubecl(Accelerator::Cuda)
+            .expect("should map");
+
+        assert_eq!(default, cubecl::Device::Cuda(CudaDevice::new(0)));
+        assert_eq!(discrete, cubecl::Device::Cuda(CudaDevice::new(2)));
 
         let error = Device::Integrated { index: 0 }
-            .to_cuda()
+            .to_cubecl(Accelerator::Cuda)
             .expect_err("should refuse");
         let message = error.to_string();
         assert!(message.contains("integrated:0"), "{message}");
@@ -255,39 +283,38 @@ mod tests {
     #[cfg(feature = "rocm")]
     #[test]
     fn rocm_takes_default_and_discrete_and_refuses_the_rest() {
-        assert_eq!(Device::Default.to_amd().expect("should map").index, 0);
-        assert_eq!(
-            Device::Discrete { index: 2 }.to_amd().expect("should map").index,
-            2
-        );
+        let default = Device::Default.to_cubecl(Accelerator::Rocm).expect("should map");
+        let discrete = Device::Discrete { index: 2 }
+            .to_cubecl(Accelerator::Rocm)
+            .expect("should map");
 
-        let error = Device::Virtual { index: 1 }.to_amd().expect_err("should refuse");
+        assert_eq!(default, cubecl::Device::Hip(AmdDevice::new(0)));
+        assert_eq!(discrete, cubecl::Device::Hip(AmdDevice::new(2)));
+
+        let error = Device::Virtual { index: 1 }
+            .to_cubecl(Accelerator::Rocm)
+            .expect_err("should refuse");
         let message = error.to_string();
         assert!(message.contains("virtual:1"), "{message}");
         assert!(message.contains("rocm"), "{message}");
     }
 
-    #[cfg(any(feature = "vulkan", feature = "metal"))]
+    #[cfg(feature = "vulkan")]
     #[test]
-    fn every_kind_maps_onto_a_wgpu_device() {
-        use cubecl::wgpu::WgpuDevice;
+    fn every_kind_maps_onto_a_vulkan_device() {
+        let cases = [
+            (Device::Default, WgpuDeviceKind::DefaultDevice),
+            (Device::Discrete { index: 1 }, WgpuDeviceKind::DiscreteGpu(1)),
+            (Device::Integrated { index: 0 }, WgpuDeviceKind::IntegratedGpu(0)),
+            (Device::Virtual { index: 2 }, WgpuDeviceKind::VirtualGpu(2)),
+            (Device::Cpu, WgpuDeviceKind::Cpu),
+        ];
 
-        assert_eq!(
-            Device::Default.to_wgpu().expect("should map"),
-            WgpuDevice::DefaultDevice
-        );
-        assert_eq!(
-            Device::Discrete { index: 1 }.to_wgpu().expect("should map"),
-            WgpuDevice::DiscreteGpu(1),
-        );
-        assert_eq!(
-            Device::Integrated { index: 0 }.to_wgpu().expect("should map"),
-            WgpuDevice::IntegratedGpu(0),
-        );
-        assert_eq!(
-            Device::Virtual { index: 2 }.to_wgpu().expect("should map"),
-            WgpuDevice::VirtualGpu(2),
-        );
-        assert_eq!(Device::Cpu.to_wgpu().expect("should map"), WgpuDevice::Cpu);
+        for (device, kind) in cases {
+            let mapped = device.to_cubecl(Accelerator::Vulkan).expect("should map");
+            let expected = WgpuDevice::new(kind).on(WgpuBackend::Vulkan);
+
+            assert_eq!(mapped, cubecl::Device::Wgpu(expected), "{device}");
+        }
     }
 }

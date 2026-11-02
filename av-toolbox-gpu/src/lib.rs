@@ -30,12 +30,12 @@ mod memory;
 mod meta;
 mod negotiate;
 mod probe;
-#[cfg(any(feature = "vulkan", feature = "metal"))]
 mod resolve;
 mod side;
 mod sniff;
 mod stack;
 mod stream_policy;
+mod tuning;
 mod warmup;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -44,8 +44,7 @@ mod testing;
 mod tests;
 
 pub use cubecl::bytes::Bytes;
-pub use cubecl::client::ComputeClient;
-pub use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, Runtime};
+pub use cubecl::prelude::{BufferArg, Client, CubeCount, CubeDim};
 
 pub use self::accelerator::{Accelerator, default_accelerators};
 pub use self::backend::{Backend, BuildContext, BuildTask, DeviceSync};
@@ -127,4 +126,5 @@ pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_co
 pub use self::stream_policy::StreamPolicy;
 #[cfg(any(test, feature = "test-support"))]
 pub use self::testing::{flush_counting_context, test_device, testing_context};
+pub use self::tuning::Tuning;
 pub use self::warmup::WarmUp;

@@ -1,7 +1,4 @@
-use cubecl::client::ComputeClient;
-use cubecl::prelude::Runtime;
-
-use crate::probe::{RuntimeTask, with_runtime};
+use crate::probe::probe_client;
 use crate::{Accelerator, Device, default_accelerators};
 
 /// Returns the first accelerator in `accelerators` that really starts on `device`.
@@ -16,7 +13,7 @@ pub fn sniff_best_accelerator(accelerators: &[Accelerator], device: Device) -> O
     accelerators
         .iter()
         .copied()
-        .find(|accelerator| with_runtime(*accelerator, device, ProbeOnly).is_some())
+        .find(|accelerator| probe_client(*accelerator, device).is_some())
 }
 
 /// Picks the best backend this build enables that really runs on `device`.
@@ -29,15 +26,6 @@ pub fn auto_select_accelerator(device: Device) -> Option<Accelerator> {
     let accelerators = default_accelerators();
 
     sniff_best_accelerator(&accelerators, device)
-}
-
-/// Opens a client and does nothing with it, so that opening it is the whole test.
-struct ProbeOnly;
-
-impl RuntimeTask for ProbeOnly {
-    type Output = ();
-
-    fn run<R: Runtime>(self, _client: &ComputeClient<R>) -> Self::Output {}
 }
 
 #[cfg(test)]

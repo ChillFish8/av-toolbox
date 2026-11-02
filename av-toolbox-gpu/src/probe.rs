@@ -1,8 +1,7 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
 
-use cubecl::client::ComputeClient;
-use cubecl::prelude::*;
+use cubecl::prelude::Client;
 
 use crate::{Accelerator, Device, DeviceError};
 
@@ -13,59 +12,18 @@ use crate::{Accelerator, Device, DeviceError};
 /// keeps a pair from warning again every time it is probed.
 static PROBED: Mutex<Vec<(Accelerator, Device)>> = Mutex::new(Vec::new());
 
-/// Work to run against whichever CubeCL runtime backs an accelerator.
+/// Opens a client for `accelerator` on `selector`.
 ///
-/// The runtime is a type, and which type it is only becomes known once the accelerator has
-/// been matched. Writing the work as one generic method lets [with_runtime] supply the runtime
-/// it picked, so the match that picks it is written once rather than once per caller.
-pub(crate) trait RuntimeTask {
-    type Output;
-
-    fn run<R: Runtime>(self, client: &ComputeClient<R>) -> Self::Output;
-}
-
-/// Opens a client for `accelerator` on `device` and hands it to `task`.
-///
-/// Returns `None` when the backend cannot express `device`, and when its driver libraries are
+/// Returns `None` when the backend cannot express `selector`, and when its driver libraries are
 /// missing so no client opens at all.
 ///
-/// Each call opens a fresh client and synchronises it under a process-wide lock, which is what
-/// makes it a probe. Code that dispatches per frame wants a client it holds onto instead.
-pub(crate) fn with_runtime<T>(accelerator: Accelerator, selector: Device, task: T) -> Option<T::Output>
-where
-    T: RuntimeTask,
-{
-    match accelerator {
-        #[cfg(feature = "cuda")]
-        Accelerator::Cuda => {
-            let device = supported_device(selector.to_cuda())?;
-            let client = open_client::<cubecl::cuda::CudaRuntime>(accelerator, selector, &device)?;
-            Some(task.run(&client))
-        },
-        #[cfg(feature = "rocm")]
-        Accelerator::Rocm => {
-            let device = supported_device(selector.to_amd())?;
-            let client = open_client::<cubecl::hip::HipRuntime>(accelerator, selector, &device)?;
-            Some(task.run(&client))
-        },
-        #[cfg(feature = "vulkan")]
-        Accelerator::Vulkan => {
-            let device = supported_device(selector.to_wgpu())?;
-            let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &device)?;
-            Some(task.run(&client))
-        },
-        #[cfg(feature = "metal")]
-        Accelerator::Metal => {
-            let device = supported_device(selector.to_wgpu())?;
-            let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &device)?;
-            Some(task.run(&client))
-        },
-        // docs.rs widens the `Accelerator` variants behind `cfg(docsrs)` so they all appear in
-        // the rendered enum, even when the matching backend feature is off. This arm keeps the
-        // match exhaustive there and is never reached at runtime.
-        #[cfg(docsrs)]
-        _ => unreachable!(),
-    }
+/// Each call synchronises the client under a process-wide lock, which is what makes it a probe.
+/// Code that dispatches per frame wants a client it holds onto instead.
+pub(crate) fn probe_client(accelerator: Accelerator, selector: Device) -> Option<Client> {
+    let converted = selector.to_cubecl(accelerator);
+    let device = supported_device(converted)?;
+
+    open_client(accelerator, selector, &device)
 }
 
 /// Unwraps a device conversion, logging why the selector does not fit this backend.
@@ -90,16 +48,17 @@ pub(crate) fn supported_device<T>(converted: Result<T, DeviceError>) -> Option<T
 ///
 /// The client is synchronised before it is handed back. CubeCL kernels are fully asynchronous,
 /// so a successful `sync` is what proves the backend works and no test kernel is needed.
-pub(crate) fn open_client<R: Runtime>(
+pub(crate) fn open_client(
     accelerator: Accelerator,
     selector: Device,
-    device: &R::Device,
-) -> Option<ComputeClient<R>> {
+    device: &cubecl::Device,
+) -> Option<Client> {
     let mut probed = PROBED.lock().unwrap_or_else(|error| error.into_inner());
 
     let opened = quiet_panics(|| {
-        let client = R::client(device);
-        cubecl::future::block_on(client.sync()).map(|()| client)
+        let client = device.client();
+        let synced = client.sync();
+        cubecl::future::block_on(synced).map(|()| client)
     });
 
     match opened {

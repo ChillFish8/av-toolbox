@@ -35,9 +35,9 @@ cc = "1.2"
 codespan-reporting = "0.13"
 console = "0.16"
 ctrlc = "3.5"
-cubek-convolution = "=0.2.0"
-cubek-matmul = "=0.2.0"
-cubek-std = "=0.2.0"
+cubek-convolution = "=0.3.1"
+cubek-matmul = "=0.3.1"
+cubek-std = "=0.3.1"
 etcetera = "0.11"
 ffms2-sys = "0.3"
 half = "2.7"
@@ -58,7 +58,9 @@ v_frame = "0.7"
 y4m = "0.8"
 
 clap = { version = "4.6", features = ["derive", "env"] }
-cubecl = { version = "0.10", features = ["std"] }
+cubecl = { version = "0.11.3", features = ["std"] }
+cubecl-common = { version = "0.11.3", default-features = false }
+cubecl-environment = { version = "0.11.3", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 jsonschema = { version = "0.58", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
@@ -83,4 +85,4 @@ avtbx-bestsource = { path = "thirdparty/bestsource", version = "0.2.0" }
 avtbx-vship = { path = "thirdparty/vship", version = "0.2.0" }
 
 av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
-av-denoise-core = { version = "0.5", default-features = false }
+av-denoise-core = { version = "=0.6.0-alpha4", default-features = false }

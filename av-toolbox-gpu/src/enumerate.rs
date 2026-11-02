@@ -1,9 +1,14 @@
-use cubecl::client::ComputeClient;
-use cubecl::device::DeviceId;
-use cubecl::prelude::Runtime;
-
-use crate::probe::{RuntimeTask, with_runtime};
+use crate::probe::probe_client;
+use crate::resolve::wgpu_selector;
 use crate::{Accelerator, Device};
+
+/// One selector of each kind [Device] can name, used to ask a backend for the devices of that kind.
+const KIND_PROBES: [Device; 4] = [
+    Device::Discrete { index: 0 },
+    Device::Integrated { index: 0 },
+    Device::Virtual { index: 0 },
+    Device::Cpu,
+];
 
 /// What one backend reports about this machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,40 +34,45 @@ pub fn enumerate_devices(accelerators: &[Accelerator]) -> Vec<BackendDevices> {
     accelerators
         .iter()
         .map(|accelerator| {
-            let devices = with_runtime(*accelerator, Device::Default, ListDevices);
+            let available = probe_client(*accelerator, Device::Default).is_some();
+            let devices = if available {
+                listed_devices(*accelerator)
+            } else {
+                Vec::new()
+            };
 
             BackendDevices {
                 accelerator: *accelerator,
-                available: devices.is_some(),
-                devices: devices.unwrap_or_default(),
+                available,
+                devices,
             }
         })
         .collect()
 }
 
-/// Lists every device a client can see that [Device] is able to name.
-struct ListDevices;
+/// Every device `accelerator` lists that [Device] is able to name.
+///
+/// The backend is asked once per kind of device. A kind the backend cannot express is skipped.
+fn listed_devices(accelerator: Accelerator) -> Vec<Device> {
+    let mut listed = Vec::new();
 
-impl RuntimeTask for ListDevices {
-    type Output = Vec<Device>;
+    for probe in KIND_PROBES {
+        let Ok(kind_device) = probe.to_cubecl(accelerator) else {
+            continue;
+        };
 
-    fn run<R: Runtime>(self, client: &ComputeClient<R>) -> Self::Output {
-        // Type ids 0..=3 are the device kinds `Device` can name, and anything else is hardware
-        // this tool cannot select.
-        let ids = (0..=3).flat_map(|type_id| client.enumerate_devices(type_id));
-
-        collect_devices(ids)
+        let ids = cubecl::Device::enumerate(kind_device.to_id());
+        listed.extend(ids.into_iter().map(cubecl::Device::from_id));
     }
+
+    collect_devices(listed)
 }
 
-/// Maps CubeCL device ids onto selectors, keeping the first of any repeat.
-///
-/// Not every backend filters by the type id it is given. CUDA and ROCm report their whole device
-/// list on every pass, so the same device arrives once per type id queried.
-fn collect_devices(ids: impl Iterator<Item = DeviceId>) -> Vec<Device> {
+/// Maps CubeCL devices onto selectors, keeping the first of any repeat.
+fn collect_devices(listed: impl IntoIterator<Item = cubecl::Device>) -> Vec<Device> {
     let mut devices: Vec<Device> = Vec::new();
-    for id in ids {
-        if let Some(device) = to_device(id)
+    for cubecl_device in listed {
+        if let Some(device) = to_device(&cubecl_device)
             && !devices.contains(&device)
         {
             devices.push(device);
@@ -72,54 +82,70 @@ fn collect_devices(ids: impl Iterator<Item = DeviceId>) -> Vec<Device> {
     devices
 }
 
-/// Maps a CubeCL device id onto the selector that names it.
+/// Maps a CubeCL device onto the selector that names it.
 ///
-/// The type ids come from CubeCL's own ordering of device kinds. A backend reporting a kind
-/// this tool cannot select returns `None`.
-fn to_device(id: DeviceId) -> Option<Device> {
-    let index = id.index_id as usize;
-    match id.type_id {
-        0 => Some(Device::Discrete { index }),
-        1 => Some(Device::Integrated { index }),
-        2 => Some(Device::Virtual { index }),
-        3 => Some(Device::Cpu),
+/// A device of a kind this tool cannot select returns `None`.
+fn to_device(cubecl_device: &cubecl::Device) -> Option<Device> {
+    match cubecl_device {
+        cubecl::Device::Cuda(cuda_device) => Some(Device::Discrete {
+            index: cuda_device.index,
+        }),
+        cubecl::Device::Hip(amd_device) => Some(Device::Discrete {
+            index: amd_device.index,
+        }),
+        cubecl::Device::Wgpu(wgpu_device) => wgpu_selector(&wgpu_device.kind),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use cubecl::device::{CudaDevice, WgpuBackend, WgpuDevice, WgpuDeviceKind};
+
     use super::*;
 
+    fn vulkan(kind: WgpuDeviceKind) -> cubecl::Device {
+        let wgpu_device = WgpuDevice::new(kind).on(WgpuBackend::Vulkan);
+        cubecl::Device::Wgpu(wgpu_device)
+    }
+
+    fn cuda(index: usize) -> cubecl::Device {
+        cubecl::Device::Cuda(CudaDevice::new(index))
+    }
+
     #[test]
-    fn a_type_id_maps_onto_the_device_kind_that_names_it() {
+    fn a_wgpu_kind_maps_onto_the_selector_that_names_it() {
         assert_eq!(
-            to_device(DeviceId::new(0, 1)),
+            to_device(&vulkan(WgpuDeviceKind::DiscreteGpu(1))),
             Some(Device::Discrete { index: 1 })
         );
         assert_eq!(
-            to_device(DeviceId::new(1, 0)),
+            to_device(&vulkan(WgpuDeviceKind::IntegratedGpu(0))),
             Some(Device::Integrated { index: 0 })
         );
-        assert_eq!(to_device(DeviceId::new(2, 2)), Some(Device::Virtual { index: 2 }));
-        assert_eq!(to_device(DeviceId::new(3, 0)), Some(Device::Cpu));
+        assert_eq!(
+            to_device(&vulkan(WgpuDeviceKind::VirtualGpu(2))),
+            Some(Device::Virtual { index: 2 })
+        );
+        assert_eq!(to_device(&vulkan(WgpuDeviceKind::Cpu)), Some(Device::Cpu));
     }
 
     #[test]
-    fn an_unknown_type_id_is_skipped() {
-        assert_eq!(to_device(DeviceId::new(4, 0)), None);
+    fn a_cuda_device_maps_onto_a_discrete_selector() {
+        assert_eq!(to_device(&cuda(3)), Some(Device::Discrete { index: 3 }));
     }
 
     #[test]
-    fn a_device_reported_once_per_type_id_is_kept_once() {
-        let repeated = [
-            DeviceId::new(0, 0),
-            DeviceId::new(0, 1),
-            DeviceId::new(0, 0),
-            DeviceId::new(0, 1),
-        ];
+    fn an_unknown_kind_is_skipped() {
+        assert_eq!(to_device(&vulkan(WgpuDeviceKind::Other(0))), None);
+        assert_eq!(to_device(&vulkan(WgpuDeviceKind::DefaultDevice)), None);
+    }
 
-        let devices = collect_devices(repeated.into_iter());
+    #[test]
+    fn a_device_reported_once_per_kind_is_kept_once() {
+        let repeated = [cuda(0), cuda(1), cuda(0), cuda(1)];
+
+        let devices = collect_devices(repeated);
         assert_eq!(
             devices,
             vec![Device::Discrete { index: 0 }, Device::Discrete { index: 1 }]
@@ -128,9 +154,13 @@ mod tests {
 
     #[test]
     fn distinct_kinds_at_the_same_index_are_all_kept() {
-        let mixed = [DeviceId::new(0, 0), DeviceId::new(1, 0), DeviceId::new(2, 0)];
+        let mixed = [
+            vulkan(WgpuDeviceKind::DiscreteGpu(0)),
+            vulkan(WgpuDeviceKind::IntegratedGpu(0)),
+            vulkan(WgpuDeviceKind::VirtualGpu(0)),
+        ];
 
-        let devices = collect_devices(mixed.into_iter());
+        let devices = collect_devices(mixed);
         assert_eq!(
             devices,
             vec![
@@ -142,10 +172,13 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_type_id_is_dropped_rather_than_guessed_at() {
-        let unknown = [DeviceId::new(4, 0), DeviceId::new(0, 0)];
+    fn an_unknown_kind_is_dropped_rather_than_guessed_at() {
+        let unknown = [
+            vulkan(WgpuDeviceKind::Other(0)),
+            vulkan(WgpuDeviceKind::DiscreteGpu(0)),
+        ];
 
-        let devices = collect_devices(unknown.into_iter());
+        let devices = collect_devices(unknown);
         assert_eq!(devices, vec![Device::Discrete { index: 0 }]);
     }
 

@@ -8,6 +8,8 @@ description = "Accelerator selection and device management for av-toolbox."
 
 [dependencies]
 cubecl = { workspace = true }
+cubecl-common = { workspace = true }
+cubecl-environment = { workspace = true }
 etcetera = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

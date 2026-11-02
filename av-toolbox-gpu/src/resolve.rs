@@ -1,13 +1,18 @@
-use cubecl::client::ComputeClient;
-use cubecl::prelude::Runtime;
+use cubecl::device::{WgpuBackend, WgpuDevice, WgpuDeviceKind};
 
 use crate::Device;
 
 /// The variable CubeCL reads to replace wgpu's own pick of the default device.
 const WGPU_OVERRIDE_ENV: &str = "CUBECL_WGPU_DEFAULT_DEVICE";
 
-/// The CubeCL type id that lists every adapter, whatever its kind.
-const EVERY_KIND: u16 = 4;
+/// One adapter of each kind wgpu reports, used to ask for every adapter of that kind.
+const KIND_PROBES: [WgpuDeviceKind; 5] = [
+    WgpuDeviceKind::DiscreteGpu(0),
+    WgpuDeviceKind::IntegratedGpu(0),
+    WgpuDeviceKind::VirtualGpu(0),
+    WgpuDeviceKind::Cpu,
+    WgpuDeviceKind::Other(0),
+];
 
 /// The device `CUBECL_WGPU_DEFAULT_DEVICE` names in place of wgpu's own pick, if it names one.
 pub(crate) fn wgpu_override() -> Option<Device> {
@@ -15,23 +20,49 @@ pub(crate) fn wgpu_override() -> Option<Device> {
     parse_override(&value)
 }
 
-/// The device a wgpu client opened on [Device::Default] runs on.
+/// The device a wgpu client opened on [Device::Default] through `backend` runs on.
 ///
 /// `overridden` is what [wgpu_override] read when the client opened. Without one, wgpu picks its
 /// high performance adapter. A device no selector can name resolves to [Device::Default], as does
 /// an override naming a device the backend does not list, since CubeCL then falls back to an
 /// adapter of unknown kind.
-pub(crate) fn wgpu_default<R: Runtime>(client: &ComputeClient<R>, overridden: Option<Device>) -> Device {
-    let type_ids: Vec<u16> = client
-        .enumerate_devices(EVERY_KIND)
-        .iter()
-        .map(|id| id.type_id)
-        .collect();
+pub(crate) fn wgpu_default(backend: WgpuBackend, overridden: Option<Device>) -> Device {
+    let kinds = listed_kinds(backend);
 
     match overridden {
-        Some(device) => listed_or_default(device, &type_ids),
-        None => high_performance(&type_ids),
+        Some(device) => listed_or_default(device, &kinds),
+        None => high_performance(&kinds),
     }
+}
+
+/// The selector naming a wgpu adapter of `kind`, if a selector can name it.
+pub(crate) fn wgpu_selector(kind: &WgpuDeviceKind) -> Option<Device> {
+    match *kind {
+        WgpuDeviceKind::DiscreteGpu(index) => Some(Device::Discrete { index }),
+        WgpuDeviceKind::IntegratedGpu(index) => Some(Device::Integrated { index }),
+        WgpuDeviceKind::VirtualGpu(index) => Some(Device::Virtual { index }),
+        WgpuDeviceKind::Cpu => Some(Device::Cpu),
+        _ => None,
+    }
+}
+
+/// Every adapter `backend` reaches, grouped by kind and in the order wgpu lists each kind.
+fn listed_kinds(backend: WgpuBackend) -> Vec<WgpuDeviceKind> {
+    let mut kinds = Vec::new();
+
+    for probe in KIND_PROBES {
+        let probe_device = WgpuDevice::new(probe).on(backend);
+        let probe_id = cubecl::Device::Wgpu(probe_device).to_id();
+        let ids = cubecl::Device::enumerate(probe_id);
+
+        for id in ids {
+            if let cubecl::Device::Wgpu(listed) = cubecl::Device::from_id(id) {
+                kinds.push(listed.kind);
+            }
+        }
+    }
+
+    kinds
 }
 
 /// Reads an override in the spelling CubeCL takes, such as `DiscreteGpu(1)`.
@@ -52,95 +83,65 @@ fn parse_override(value: &str) -> Option<Device> {
     }
 }
 
-/// `device` when one of the adapters in `type_ids` answers to it, otherwise [Device::Default].
-fn listed_or_default(device: Device, type_ids: &[u16]) -> Device {
-    let listed = named_devices(type_ids);
+/// `device` when one of the adapters in `kinds` answers to it, otherwise [Device::Default].
+fn listed_or_default(device: Device, kinds: &[WgpuDeviceKind]) -> Device {
+    let listed = kinds.iter().any(|kind| wgpu_selector(kind) == Some(device));
 
-    if listed.contains(&device) {
-        device
-    } else {
-        Device::Default
-    }
+    if listed { device } else { Device::Default }
 }
 
-/// The selector naming each adapter, counting each kind's adapters in the order they are listed.
-fn named_devices(type_ids: &[u16]) -> Vec<Device> {
-    let mut discrete = 0;
-    let mut integrated = 0;
-    let mut virtual_gpus = 0;
-    let mut devices = Vec::new();
-
-    for type_id in type_ids {
-        let device = match type_id {
-            0 => next_index(&mut discrete, |index| Device::Discrete { index }),
-            1 => next_index(&mut integrated, |index| Device::Integrated { index }),
-            2 => next_index(&mut virtual_gpus, |index| Device::Virtual { index }),
-            3 => Device::Cpu,
-            _ => continue,
-        };
-
-        devices.push(device);
-    }
-
-    devices
-}
-
-fn next_index(counter: &mut usize, name: impl FnOnce(usize) -> Device) -> Device {
-    let index = *counter;
-    *counter += 1;
-
-    name(index)
-}
-
-/// The device wgpu picks when asked for high performance, given the kind of every adapter it lists.
+/// The device wgpu picks when asked for high performance, given every adapter it lists.
 ///
 /// wgpu takes the first adapter of the best ranked kind, in the order it lists them, which is
 /// the same order the selectors count in.
-fn high_performance(type_ids: &[u16]) -> Device {
-    let best = type_ids.iter().copied().min_by_key(|type_id| rank(*type_id));
+fn high_performance(kinds: &[WgpuDeviceKind]) -> Device {
+    let best = kinds.iter().min_by_key(|kind| rank(kind));
+    let selector = best.and_then(wgpu_selector);
 
-    match best {
-        Some(0) => Device::Discrete { index: 0 },
-        Some(1) => Device::Integrated { index: 0 },
-        Some(2) => Device::Virtual { index: 0 },
-        Some(3) => Device::Cpu,
-        _ => Device::Default,
-    }
+    selector.unwrap_or(Device::Default)
 }
 
-/// How wgpu ranks a CubeCL type id for high performance, lowest first.
-fn rank(type_id: u16) -> u8 {
-    match type_id {
-        0 => 0,
-        1 => 1,
-        2 => 3,
-        3 => 4,
+/// How wgpu ranks an adapter kind for high performance, lowest first.
+fn rank(kind: &WgpuDeviceKind) -> u8 {
+    match kind {
+        WgpuDeviceKind::DiscreteGpu(_) => 0,
+        WgpuDeviceKind::IntegratedGpu(_) => 1,
+        WgpuDeviceKind::VirtualGpu(_) => 3,
+        WgpuDeviceKind::Cpu => 4,
         _ => 2,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use WgpuDeviceKind::{Cpu, DiscreteGpu, IntegratedGpu, Other, VirtualGpu};
+
     use super::*;
 
     #[test]
     fn a_discrete_gpu_wins_over_every_other_kind() {
-        assert_eq!(high_performance(&[3, 1, 0, 0]), Device::Discrete { index: 0 });
+        let kinds = [Cpu, IntegratedGpu(0), DiscreteGpu(0), DiscreteGpu(1)];
+
+        assert_eq!(high_performance(&kinds), Device::Discrete { index: 0 });
     }
 
     #[test]
     fn an_integrated_gpu_wins_without_a_discrete_one() {
-        assert_eq!(high_performance(&[3, 2, 1]), Device::Integrated { index: 0 });
+        let kinds = [Cpu, VirtualGpu(0), IntegratedGpu(0)];
+
+        assert_eq!(high_performance(&kinds), Device::Integrated { index: 0 });
     }
 
     #[test]
     fn an_adapter_of_unknown_kind_cannot_be_named() {
-        assert_eq!(high_performance(&[3, 2, 4]), Device::Default);
+        let kinds = [Cpu, VirtualGpu(0), Other(0)];
+
+        assert_eq!(high_performance(&kinds), Device::Default);
     }
 
     #[test]
     fn a_software_device_is_the_last_resort() {
-        assert_eq!(high_performance(&[3]), Device::Cpu);
+        assert_eq!(high_performance(&[Cpu]), Device::Cpu);
     }
 
     #[test]
@@ -149,32 +150,34 @@ mod tests {
     }
 
     #[test]
-    fn each_kind_is_counted_on_its_own() {
-        let named = named_devices(&[1, 0, 4, 0, 3]);
-
+    fn every_nameable_kind_keeps_its_index() {
         assert_eq!(
-            named,
-            vec![
-                Device::Integrated { index: 0 },
-                Device::Discrete { index: 0 },
-                Device::Discrete { index: 1 },
-                Device::Cpu,
-            ]
+            wgpu_selector(&DiscreteGpu(1)),
+            Some(Device::Discrete { index: 1 })
         );
+        assert_eq!(
+            wgpu_selector(&IntegratedGpu(0)),
+            Some(Device::Integrated { index: 0 })
+        );
+        assert_eq!(wgpu_selector(&VirtualGpu(2)), Some(Device::Virtual { index: 2 }));
+        assert_eq!(wgpu_selector(&Cpu), Some(Device::Cpu));
+        assert_eq!(wgpu_selector(&Other(0)), None);
     }
 
     #[test]
     fn a_listed_override_is_kept() {
         let device = Device::Discrete { index: 1 };
+        let kinds = [DiscreteGpu(0), IntegratedGpu(0), DiscreteGpu(1)];
 
-        assert_eq!(listed_or_default(device, &[0, 1, 0]), device);
+        assert_eq!(listed_or_default(device, &kinds), device);
     }
 
     #[test]
     fn an_override_the_backend_does_not_list_cannot_be_named() {
         let device = Device::Discrete { index: 0 };
+        let kinds = [IntegratedGpu(0), Other(0)];
 
-        assert_eq!(listed_or_default(device, &[1, 4]), Device::Default);
+        assert_eq!(listed_or_default(device, &kinds), Device::Default);
     }
 
     #[test]

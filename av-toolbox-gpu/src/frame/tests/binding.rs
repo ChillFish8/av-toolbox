@@ -18,7 +18,7 @@ const BASELINE: u32 = 1_000_000;
 /// A wrong offset and a wrong length fail differently. An offset error moves where the run of
 /// indices lands, and a length error leaves a tail holding whatever was in it before.
 #[cube(launch_unchecked)]
-pub(crate) fn write_index(output: &mut Array<u32>, base: u32) {
+pub(crate) fn write_index(output: &mut [u32], base: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -45,7 +45,7 @@ pub(crate) const fn elements(bytes: usize) -> usize {
     bytes / size_of::<u32>()
 }
 
-fn read_back<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u32> {
+fn read_back(client: &Client, handle: &Handle) -> Vec<u32> {
     let bytes = client
         .read_one(handle.clone())
         .expect("the device should hand back what it was asked for");
@@ -54,7 +54,7 @@ fn read_back<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u32>
 }
 
 /// Runs the kernel over `output`, sized from the context so the launch covers every element.
-pub(crate) fn launch<R: Runtime>(context: &BuildContext<R>, output: ArrayArg<R>, count: usize, base: u32) {
+pub(crate) fn launch(context: &BuildContext, output: BufferArg, count: usize, base: u32) {
     let frames = context.frame_context();
     let cubes = frames.cube_count(count);
     let shape = frames.cube_dim();
@@ -62,7 +62,7 @@ pub(crate) fn launch<R: Runtime>(context: &BuildContext<R>, output: ArrayArg<R>,
     // Safety: `output` names no more elements than the buffer behind it holds, and the kernel
     // writes nothing past the length it is given.
     unsafe {
-        write_index::launch_unchecked::<R>(context.client(), cubes, shape, output, base);
+        write_index::launch_unchecked(context.client(), cubes, shape, output, base);
     }
 }
 
@@ -72,13 +72,13 @@ struct WriteLuma;
 impl BuildTask for WriteLuma {
     type Output = Vec<u32>;
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+    fn run(self, context: &BuildContext) -> Self::Output {
         let frames = context.frame_context();
         let frame = frames.alloc_frame(&format(), FrameMeta::at(0));
         let luma = frame.plane(Channel::Y).expect("a yuv frame carries luma");
 
         let count = elements(luma.buffer().bytes());
-        let binding = luma.array::<u32, R>();
+        let binding = luma.array::<u32>();
         launch(context, binding, count, 0);
 
         read_back(context.client(), luma.buffer().handle())
@@ -125,7 +125,7 @@ struct WriteOversizedPlane;
 impl BuildTask for WriteOversizedPlane {
     type Output = (usize, Vec<u32>);
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+    fn run(self, context: &BuildContext) -> Self::Output {
         let frames = context.frame_context();
         let units_per_cube = frames.cube_dim().num_elems() as usize;
         let limit = frames.capabilities().max_cube_count.0 as usize;
@@ -142,7 +142,7 @@ impl BuildTask for WriteOversizedPlane {
              limit of {limit}, so the launch below never spreads and this test pins nothing",
         );
 
-        let binding = plane.array::<u32, R>();
+        let binding = plane.array::<u32>();
         launch(context, binding, count, 0);
 
         let samples = read_back(context.client(), plane.buffer().handle());
@@ -158,7 +158,7 @@ struct WriteMiddleSlot;
 impl BuildTask for WriteMiddleSlot {
     type Output = (RingGeometry, Vec<Vec<u32>>);
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+    fn run(self, context: &BuildContext) -> Self::Output {
         let frames = context.frame_context();
         let ring = frames.ring(RingSpec {
             slots: 3,
@@ -169,12 +169,12 @@ impl BuildTask for WriteMiddleSlot {
         let handle = ring.whole().clone();
 
         // Safety: the length is the ring's own byte count divided by the element size.
-        let whole = unsafe { ArrayArg::from_raw_parts(handle, total) };
+        let whole = unsafe { BufferArg::from_raw_parts(handle, total) };
         launch(context, whole, total, BASELINE);
 
         let middle = ring.slot_plane(1, Channel::Y).expect("the ring carries luma");
         let count = elements(middle.buffer().bytes());
-        let binding = middle.array::<u32, R>();
+        let binding = middle.array::<u32>();
         launch(context, binding, count, 0);
 
         let mut slots = Vec::with_capacity(ring.slots());
@@ -194,7 +194,7 @@ struct WriteAddedChroma;
 impl BuildTask for WriteAddedChroma {
     type Output = (Vec<u32>, Vec<u32>);
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+    fn run(self, context: &BuildContext) -> Self::Output {
         let frames = context.frame_context();
         let format = MaskFormat {
             frame_rate: None,
@@ -213,14 +213,14 @@ impl BuildTask for WriteAddedChroma {
         let mask = frames.alloc_mask(&format, meta);
         let full_bytes = mask.plane().buffer().bytes();
         let full_count = elements(full_bytes);
-        let full_binding = mask.plane().array::<u32, R>();
+        let full_binding = mask.plane().array::<u32>();
         launch(context, full_binding, full_count, BASELINE);
 
         let mask = frames.add_chroma(mask, chroma);
         let chroma_plane = mask.chroma_plane().expect("chroma was added");
         let chroma_bytes = chroma_plane.buffer().bytes();
         let chroma_count = elements(chroma_bytes);
-        let chroma_binding = chroma_plane.array::<u32, R>();
+        let chroma_binding = chroma_plane.array::<u32>();
         launch(context, chroma_binding, chroma_count, 0);
 
         let client = context.client();

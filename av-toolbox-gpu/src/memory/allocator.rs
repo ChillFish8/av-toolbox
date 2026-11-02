@@ -3,8 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use cubecl::bytes::Bytes;
-use cubecl::client::ComputeClient;
-use cubecl::prelude::Runtime;
+use cubecl::prelude::Client;
 use cubecl::server::{Handle, ServerError};
 
 use crate::frame::Channel;
@@ -62,8 +61,8 @@ pub enum RuntimeError {
 
 /// Reserves device memory.
 ///
-/// Only this call needs to know which runtime is in use, so it is the single generic seam the rest
-/// of the memory handling sits above.
+/// This is the single seam the rest of the memory handling sits above, so tests can stand a fake in
+/// for a device.
 pub trait DeviceAllocator: Send + Sync + fmt::Debug {
     /// Reserves `bytes` of uninitialised memory.
     ///
@@ -91,20 +90,20 @@ pub trait DeviceAllocator: Send + Sync + fmt::Debug {
 }
 
 /// A [DeviceAllocator] backed by a CubeCL client.
-pub struct ClientAllocator<R: Runtime> {
-    client: ComputeClient<R>,
+pub struct ClientAllocator {
+    client: Client,
     alignment: usize,
 }
 
-impl<R: Runtime> ClientAllocator<R> {
-    pub fn new(client: ComputeClient<R>) -> Self {
+impl ClientAllocator {
+    pub fn new(client: Client) -> Self {
         let alignment = client.properties().memory.alignment as usize;
 
         Self { client, alignment }
     }
 }
 
-impl<R: Runtime> fmt::Debug for ClientAllocator<R> {
+impl fmt::Debug for ClientAllocator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClientAllocator")
             .field("alignment", &self.alignment)
@@ -112,7 +111,7 @@ impl<R: Runtime> fmt::Debug for ClientAllocator<R> {
     }
 }
 
-impl<R: Runtime> DeviceAllocator for ClientAllocator<R> {
+impl DeviceAllocator for ClientAllocator {
     fn empty(&self, bytes: usize) -> Handle {
         self.client.empty(bytes)
     }
@@ -229,22 +228,12 @@ mod tests {
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn a_real_client_reports_a_power_of_two_alignment() {
-        use crate::probe::{RuntimeTask, with_runtime};
+        use crate::probe::probe_client;
         use crate::test_device;
         use crate::testing::TEST_ACCELERATOR;
 
-        struct ReadAlignment;
-
-        impl RuntimeTask for ReadAlignment {
-            type Output = usize;
-
-            fn run<R: Runtime>(self, client: &ComputeClient<R>) -> Self::Output {
-                ClientAllocator::new(client.clone()).alignment()
-            }
-        }
-
-        let alignment =
-            with_runtime(TEST_ACCELERATOR, test_device(), ReadAlignment).expect("the backend should open");
+        let client = probe_client(TEST_ACCELERATOR, test_device()).expect("the backend should open");
+        let alignment = ClientAllocator::new(client).alignment();
 
         assert!(alignment.is_power_of_two(), "{alignment}");
     }

@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
-use cubecl::client::ComputeClient;
-use cubecl::prelude::Runtime;
-use cubecl::stream_id::StreamId;
+use cubecl::prelude::Client;
+use cubecl_environment::stream::StreamId;
 
 use crate::memory::{BufferPool, ClientAllocator};
 use crate::probe::{open_client, supported_device};
-#[cfg(any(feature = "vulkan", feature = "metal"))]
-use crate::resolve;
-use crate::{Accelerator, Capabilities, Device, FrameContext, RuntimeError, StreamPolicy};
+use crate::{Accelerator, Capabilities, Device, FrameContext, RuntimeError, StreamPolicy, Tuning, resolve};
 
 /// The one stream every client of a [StreamPolicy::SharedStream] backend queues on.
 const SHARED_STREAM: StreamId = StreamId { value: 0 };
@@ -17,18 +14,20 @@ const SHARED_STREAM: StreamId = StreamId { value: 0 };
 ///
 /// It carries the client the stage will launch kernels on, what that device can do, and the pool its
 /// frames come from.
-pub struct BuildContext<R: Runtime> {
-    client: ComputeClient<R>,
+pub struct BuildContext {
+    client: Client,
+    cubecl_device: cubecl::Device,
     capabilities: Capabilities,
     pool: BufferPool,
     device: Device,
+    tuning: Tuning,
 }
 
-impl<R: Runtime> BuildContext<R> {
-    fn new(accelerator: Accelerator, device: Device, client: ComputeClient<R>) -> Self {
+impl BuildContext {
+    fn new(accelerator: Accelerator, device: Device, cubecl_device: cubecl::Device, client: Client) -> Self {
         let policy = StreamPolicy::for_accelerator(accelerator);
 
-        Self::with_policy(accelerator, device, client, policy)
+        Self::with_policy(accelerator, device, cubecl_device, client, policy)
     }
 
     /// A context whose clients keep work across threads in order by `policy`.
@@ -38,7 +37,8 @@ impl<R: Runtime> BuildContext<R> {
     pub(crate) fn with_policy(
         accelerator: Accelerator,
         device: Device,
-        mut client: ComputeClient<R>,
+        cubecl_device: cubecl::Device,
+        mut client: Client,
         policy: StreamPolicy,
     ) -> Self {
         if policy == StreamPolicy::SharedStream {
@@ -50,22 +50,34 @@ impl<R: Runtime> BuildContext<R> {
             }
         }
 
-        Self::assemble(accelerator, device, client, policy)
+        Self::assemble(accelerator, device, cubecl_device, client, policy)
     }
 
     /// A context that leaves each thread on its own stream and never flushes, so work handed
     /// between threads can run out of order.
     #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
-    pub(crate) fn unordered(accelerator: Accelerator, device: Device, client: ComputeClient<R>) -> Self {
+    pub(crate) fn unordered(
+        accelerator: Accelerator,
+        device: Device,
+        cubecl_device: cubecl::Device,
+        client: Client,
+    ) -> Self {
         // The pool reports `SharedStream` only so it never flushes. The client is deliberately
         // left unpinned, so each thread keeps its own stream.
-        Self::assemble(accelerator, device, client, StreamPolicy::SharedStream)
+        Self::assemble(
+            accelerator,
+            device,
+            cubecl_device,
+            client,
+            StreamPolicy::SharedStream,
+        )
     }
 
     fn assemble(
         accelerator: Accelerator,
         device: Device,
-        client: ComputeClient<R>,
+        cubecl_device: cubecl::Device,
+        client: Client,
         policy: StreamPolicy,
     ) -> Self {
         let capabilities = Capabilities::from_properties(accelerator, client.properties());
@@ -76,14 +88,21 @@ impl<R: Runtime> BuildContext<R> {
 
         Self {
             client,
+            cubecl_device,
             capabilities,
             pool,
             device,
+            tuning: Tuning::default(),
         }
     }
 
-    pub fn client(&self) -> &ComputeClient<R> {
+    pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// The CubeCL device the client was opened on.
+    pub fn cubecl_device(&self) -> &cubecl::Device {
+        &self.cubecl_device
     }
 
     pub const fn capabilities(&self) -> &Capabilities {
@@ -99,6 +118,11 @@ impl<R: Runtime> BuildContext<R> {
         self.device
     }
 
+    /// How stages built against this context pick between their kernels' candidate versions.
+    pub const fn tuning(&self) -> Tuning {
+        self.tuning
+    }
+
     pub fn stream_policy(&self) -> StreamPolicy {
         self.pool.stream_policy()
     }
@@ -109,14 +133,11 @@ impl<R: Runtime> BuildContext<R> {
     }
 }
 
-/// Work to run against whichever runtime a backend opened.
-///
-/// The runtime is only known once the backend has been matched, so the work is written once as a
-/// generic method and [Backend::build] supplies the context it made.
+/// Work to run against the context a backend opened.
 pub trait BuildTask {
     type Output;
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output;
+    fn run(self, context: &BuildContext) -> Self::Output;
 }
 
 /// Blocks until the work the calling thread queued on the device has finished.
@@ -125,39 +146,21 @@ pub type DeviceSync = Arc<dyn Fn() -> Result<(), RuntimeError> + Send + Sync>;
 /// An opened accelerator, ready to build stages against.
 pub struct Backend {
     accelerator: Accelerator,
-    inner: Opened,
+    context: BuildContext,
 }
 
-enum Opened {
-    #[cfg(feature = "cuda")]
-    Cuda(BuildContext<cubecl::cuda::CudaRuntime>),
-    #[cfg(feature = "rocm")]
-    Rocm(BuildContext<cubecl::hip::HipRuntime>),
-    #[cfg(any(feature = "vulkan", feature = "metal"))]
-    Wgpu(BuildContext<cubecl::wgpu::WgpuRuntime>),
-}
-
-/// CUDA and ROCm number their devices from zero, so the default is the first one.
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-fn first_discrete_if_default(selector: Device) -> Device {
-    if selector == Device::Default {
-        Device::Discrete { index: 0 }
-    } else {
-        selector
+/// The selector naming the device a client opened on `selected` runs on.
+///
+/// CUDA and ROCm number their devices from zero, so their default is the first one. A wgpu
+/// default is asked of the adapters the backend lists.
+fn resolved_selector(selector: Device, selected: &cubecl::Device, overridden: Option<Device>) -> Device {
+    if selector != Device::Default {
+        return selector;
     }
-}
 
-/// Resolves `selector` to the device the client opened, asking it for its devices when `selector` is the default.
-#[cfg(any(feature = "vulkan", feature = "metal"))]
-fn wgpu_device(
-    selector: Device,
-    client: &ComputeClient<cubecl::wgpu::WgpuRuntime>,
-    overridden: Option<Device>,
-) -> Device {
-    if selector == Device::Default {
-        resolve::wgpu_default(client, overridden)
-    } else {
-        selector
+    match selected {
+        cubecl::Device::Wgpu(wgpu_device) => resolve::wgpu_default(wgpu_device.backend, overridden),
+        _ => Device::Discrete { index: 0 },
     }
 }
 
@@ -168,58 +171,19 @@ impl Backend {
     /// its kernels on it.
     pub fn open(accelerator: Accelerator, device: Device) -> Option<Self> {
         // CubeCL reads the override as the client opens, and only for the default device.
-        #[cfg(any(feature = "vulkan", feature = "metal"))]
         let wgpu_override = if device == Device::Default {
             resolve::wgpu_override()
         } else {
             None
         };
 
-        let inner = match accelerator {
-            #[cfg(feature = "cuda")]
-            Accelerator::Cuda => {
-                let selector = device;
-                let supported = supported_device(device.to_cuda())?;
-                let client = open_client::<cubecl::cuda::CudaRuntime>(accelerator, selector, &supported)?;
-                let resolved = first_discrete_if_default(selector);
+        let converted = device.to_cubecl(accelerator);
+        let selected = supported_device(converted)?;
+        let client = open_client(accelerator, device, &selected)?;
+        let resolved = resolved_selector(device, &selected, wgpu_override);
+        let context = BuildContext::new(accelerator, resolved, selected, client);
 
-                Opened::Cuda(BuildContext::new(accelerator, resolved, client))
-            },
-            #[cfg(feature = "rocm")]
-            Accelerator::Rocm => {
-                let selector = device;
-                let supported = supported_device(device.to_amd())?;
-                let client = open_client::<cubecl::hip::HipRuntime>(accelerator, selector, &supported)?;
-                let resolved = first_discrete_if_default(selector);
-
-                Opened::Rocm(BuildContext::new(accelerator, resolved, client))
-            },
-            #[cfg(feature = "vulkan")]
-            Accelerator::Vulkan => {
-                let selector = device;
-                let supported = supported_device(device.to_wgpu())?;
-                let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &supported)?;
-                let resolved = wgpu_device(selector, &client, wgpu_override);
-
-                Opened::Wgpu(BuildContext::new(accelerator, resolved, client))
-            },
-            #[cfg(feature = "metal")]
-            Accelerator::Metal => {
-                let selector = device;
-                let supported = supported_device(device.to_wgpu())?;
-                let client = open_client::<cubecl::wgpu::WgpuRuntime>(accelerator, selector, &supported)?;
-                let resolved = wgpu_device(selector, &client, wgpu_override);
-
-                Opened::Wgpu(BuildContext::new(accelerator, resolved, client))
-            },
-            // docs.rs widens the `Accelerator` variants behind `cfg(docsrs)` so they all appear in
-            // the rendered enum, even when the matching backend feature is off. This arm keeps the
-            // match exhaustive there and is never reached at runtime.
-            #[cfg(docsrs)]
-            _ => unreachable!(),
-        };
-
-        Some(Self { accelerator, inner })
+        Some(Self { accelerator, context })
     }
 
     /// Opens the first accelerator this build enables that starts on `device`.
@@ -232,93 +196,58 @@ impl Backend {
             .find_map(|accelerator| Self::open(accelerator, device))
     }
 
+    /// Has stages built against this backend pick their kernels by `tuning`.
+    pub fn with_tuning(mut self, tuning: Tuning) -> Self {
+        self.context.tuning = tuning;
+        self
+    }
+
     pub const fn accelerator(&self) -> Accelerator {
         self.accelerator
+    }
+
+    /// The context every stage built against this backend shares.
+    pub const fn context(&self) -> &BuildContext {
+        &self.context
     }
 
     /// The device this backend runs on, with [Device::Default] resolved to the one the backend picked.
     ///
     /// It stays [Device::Default] only when no selector can name the device picked.
-    pub fn device(&self) -> Device {
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            Opened::Cuda(context) => context.device(),
-            #[cfg(feature = "rocm")]
-            Opened::Rocm(context) => context.device(),
-            #[cfg(any(feature = "vulkan", feature = "metal"))]
-            Opened::Wgpu(context) => context.device(),
-        }
+    pub const fn device(&self) -> Device {
+        self.context.device()
     }
 
     /// What this backend's device can do.
-    pub fn capabilities(&self) -> &Capabilities {
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            Opened::Cuda(context) => context.capabilities(),
-            #[cfg(feature = "rocm")]
-            Opened::Rocm(context) => context.capabilities(),
-            #[cfg(any(feature = "vulkan", feature = "metal"))]
-            Opened::Wgpu(context) => context.capabilities(),
-        }
+    pub const fn capabilities(&self) -> &Capabilities {
+        self.context.capabilities()
     }
 
     pub fn stream_policy(&self) -> StreamPolicy {
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            Opened::Cuda(context) => context.stream_policy(),
-            #[cfg(feature = "rocm")]
-            Opened::Rocm(context) => context.stream_policy(),
-            #[cfg(any(feature = "vulkan", feature = "metal"))]
-            Opened::Wgpu(context) => context.stream_policy(),
-        }
+        self.context.stream_policy()
     }
 
     /// The context stages built against this backend do their work through.
     pub fn frame_context(&self) -> FrameContext {
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            Opened::Cuda(context) => context.frame_context(),
-            #[cfg(feature = "rocm")]
-            Opened::Rocm(context) => context.frame_context(),
-            #[cfg(any(feature = "vulkan", feature = "metal"))]
-            Opened::Wgpu(context) => context.frame_context(),
-        }
+        self.context.frame_context()
     }
 
     /// A hook blocking until the work the calling thread queued on this device has finished.
     pub fn device_sync(&self) -> DeviceSync {
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            Opened::Cuda(context) => sync_hook(context.client()),
-            #[cfg(feature = "rocm")]
-            Opened::Rocm(context) => sync_hook(context.client()),
-            #[cfg(any(feature = "vulkan", feature = "metal"))]
-            Opened::Wgpu(context) => sync_hook(context.client()),
-        }
+        let client = self.context.client().clone();
+
+        Arc::new(move || {
+            let pending = client.sync();
+            let synced = cubecl::future::block_on(pending);
+
+            synced.map_err(RuntimeError::Sync)
+        })
     }
 
     /// Runs `task` against this backend's context.
     pub fn build<T: BuildTask>(&self, task: T) -> T::Output {
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            Opened::Cuda(context) => task.run(context),
-            #[cfg(feature = "rocm")]
-            Opened::Rocm(context) => task.run(context),
-            #[cfg(any(feature = "vulkan", feature = "metal"))]
-            Opened::Wgpu(context) => task.run(context),
-        }
+        task.run(&self.context)
     }
-}
-
-fn sync_hook<R: Runtime>(client: &ComputeClient<R>) -> DeviceSync {
-    let client = client.clone();
-
-    Arc::new(move || {
-        let pending = client.sync();
-        let synced = cubecl::future::block_on(pending);
-
-        synced.map_err(RuntimeError::Sync)
-    })
 }
 
 #[cfg(test)]
@@ -354,7 +283,7 @@ mod tests {
         impl BuildTask for ReportAlignment {
             type Output = usize;
 
-            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+            fn run(self, context: &BuildContext) -> Self::Output {
                 assert_eq!(
                     context.pool().alignment(),
                     context.capabilities().alignment as usize
@@ -398,7 +327,7 @@ mod tests {
         impl BuildTask for ReportDevice {
             type Output = Device;
 
-            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+            fn run(self, context: &BuildContext) -> Self::Output {
                 context.device()
             }
         }
@@ -414,6 +343,16 @@ mod tests {
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
+    fn a_backend_hands_its_tuning_to_the_context() {
+        let backend = Backend::open(TEST_ACCELERATOR, test_device()).expect("should open");
+        assert_eq!(backend.context().tuning(), Tuning::Cached);
+
+        let tuned = backend.with_tuning(Tuning::Off);
+        assert_eq!(tuned.context().tuning(), Tuning::Off);
+    }
+
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    #[test]
     fn one_backend_hands_out_one_pool() {
         let backend = Backend::open(TEST_ACCELERATOR, test_device()).expect("should open");
 
@@ -422,7 +361,7 @@ mod tests {
         impl BuildTask for ReserveTwice {
             type Output = usize;
 
-            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+            fn run(self, context: &BuildContext) -> Self::Output {
                 drop(context.pool().reserve(1024));
                 let reused = context.pool().reserve(1024);
 

@@ -4,7 +4,7 @@ use std::thread;
 use cubecl::prelude::*;
 
 use crate::frame::tests::binding::{elements, launch};
-use crate::probe::{RuntimeTask, with_runtime};
+use crate::probe::open_client;
 use crate::testing::TEST_ACCELERATOR;
 use crate::{Backend, BuildContext, FrameMeta, Mask, MaskFormat, SampleFormat, StreamPolicy, test_device};
 
@@ -19,7 +19,7 @@ const SECOND_WRITE: u32 = 1_000_000;
 
 /// Copies `input` into `output`, element by element, as far as `output` reaches.
 #[cube(launch_unchecked)]
-fn copy_values(input: &Array<u32>, output: &mut Array<u32>) {
+fn copy_values(input: &[u32], output: &mut [u32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -49,16 +49,16 @@ fn copy_format() -> MaskFormat {
 }
 
 /// Writes `base` plus each element's index across `mask`'s plane.
-fn write_mask<R: Runtime>(context: &BuildContext<R>, mask: &Mask, base: u32) {
+fn write_mask(context: &BuildContext, mask: &Mask, base: u32) {
     let plane = mask.plane();
     let bytes = plane.buffer().bytes();
     let count = elements(bytes);
-    let binding = plane.array::<u32, R>();
+    let binding = plane.array::<u32>();
 
     launch(context, binding, count, base);
 }
 
-fn read_mask<R: Runtime>(context: &BuildContext<R>, mask: &Mask) -> Vec<u32> {
+fn read_mask(context: &BuildContext, mask: &Mask) -> Vec<u32> {
     let handle = mask.plane().buffer().handle().clone();
     let bytes = context
         .client()
@@ -69,7 +69,7 @@ fn read_mask<R: Runtime>(context: &BuildContext<R>, mask: &Mask) -> Vec<u32> {
 }
 
 /// Writes a mask, confirms the write landed, and releases it back to the pool.
-fn write_and_release<R: Runtime>(context: &BuildContext<R>) {
+fn write_and_release(context: &BuildContext) {
     let frames = context.frame_context();
     let format = mask_format();
     let meta = FrameMeta::at(0);
@@ -81,7 +81,7 @@ fn write_and_release<R: Runtime>(context: &BuildContext<R>) {
 }
 
 /// Takes a mask back out of the pool, writes it again, and hands it on.
-fn rewrite_recycled<R: Runtime>(context: &BuildContext<R>) -> Mask {
+fn rewrite_recycled(context: &BuildContext) -> Mask {
     let frames = context.frame_context();
     let format = mask_format();
     let meta = FrameMeta::at(1);
@@ -94,7 +94,7 @@ fn rewrite_recycled<R: Runtime>(context: &BuildContext<R>) -> Mask {
 }
 
 /// Writes a fresh mask and submits the write.
-fn write_fresh<R: Runtime>(context: &BuildContext<R>) -> Mask {
+fn write_fresh(context: &BuildContext) -> Mask {
     let frames = context.frame_context();
     let format = mask_format();
     let meta = FrameMeta::at(0);
@@ -107,7 +107,7 @@ fn write_fresh<R: Runtime>(context: &BuildContext<R>) -> Mask {
 }
 
 /// Copies the start of `source` into a fresh mask of [copy_format].
-fn copy_mask<R: Runtime>(context: &BuildContext<R>, source: &Mask) -> Mask {
+fn copy_mask(context: &BuildContext, source: &Mask) -> Mask {
     let frames = context.frame_context();
     let format = copy_format();
     let meta = FrameMeta::at(0);
@@ -117,13 +117,13 @@ fn copy_mask<R: Runtime>(context: &BuildContext<R>, source: &Mask) -> Mask {
     let count = elements(bytes);
     let cubes = frames.cube_count(count);
     let shape = frames.cube_dim();
-    let input = source.plane().array::<u32, R>();
-    let output = copy.plane().array::<u32, R>();
+    let input = source.plane().array::<u32>();
+    let output = copy.plane().array::<u32>();
 
     // Safety: `output` is the smaller of the two buffers, and the kernel reads and writes nothing
     // past its length.
     unsafe {
-        copy_values::launch_unchecked::<R>(context.client(), cubes, shape, input, output);
+        copy_values::launch_unchecked(context.client(), cubes, shape, input, output);
     }
 
     copy
@@ -133,8 +133,8 @@ fn copy_mask<R: Runtime>(context: &BuildContext<R>, source: &Mask) -> Mask {
 /// `shared` was written again.
 ///
 /// With `flushes` set, this thread's queued copy is flushed before `shared` is let go.
-fn read_then_release<R: Runtime>(
-    context: &BuildContext<R>,
+fn read_then_release(
+    context: &BuildContext,
     shared: Mask,
     flushes: bool,
     released: mpsc::Sender<()>,
@@ -161,7 +161,7 @@ fn read_then_release<R: Runtime>(
 ///
 /// The reader lets go of a clone that is not the last, so the pool only learns the buffer is free
 /// when the holding thread drops its own clone.
-fn reader_copies_the_first_write<R: Runtime>(context: &BuildContext<R>, reader_flushes: bool) -> bool {
+fn reader_copies_the_first_write(context: &BuildContext, reader_flushes: bool) -> bool {
     thread::scope(|scope| {
         let written = scope
             .spawn(|| write_fresh(context))
@@ -203,7 +203,7 @@ fn reader_copies_the_first_write<R: Runtime>(context: &BuildContext<R>, reader_f
 ///
 /// The first thread writes and releases the buffer, the second takes it from the pool and writes
 /// it again, and the third reads it.
-fn reader_sees_the_second_write<R: Runtime>(context: &BuildContext<R>) -> bool {
+fn reader_sees_the_second_write(context: &BuildContext) -> bool {
     thread::scope(|scope| {
         scope
             .spawn(|| write_and_release(context))
@@ -250,41 +250,31 @@ enum Hazard {
     ReadThenReuse { reader_flushes: bool },
 }
 
-/// Counts how many of [HAND_OFFS] hand-offs through `hazard` read stale data under `ordering`.
-struct CountStaleReads {
-    ordering: WorkOrder,
-    hazard: Hazard,
-}
-
-impl RuntimeTask for CountStaleReads {
-    type Output = usize;
-
-    fn run<R: Runtime>(self, client: &ComputeClient<R>) -> Self::Output {
-        let client = client.clone();
-        let context = match self.ordering {
-            WorkOrder::Unordered => BuildContext::unordered(TEST_ACCELERATOR, test_device(), client),
-            WorkOrder::Policy(policy) => {
-                BuildContext::with_policy(TEST_ACCELERATOR, test_device(), client, policy)
-            },
-        };
-
-        (0..HAND_OFFS)
-            .filter(|_| !reads_fresh_data(&context, self.hazard))
-            .count()
-    }
-}
-
-fn reads_fresh_data<R: Runtime>(context: &BuildContext<R>, hazard: Hazard) -> bool {
+fn reads_fresh_data(context: &BuildContext, hazard: Hazard) -> bool {
     match hazard {
         Hazard::WriteThenRead => reader_sees_the_second_write(context),
         Hazard::ReadThenReuse { reader_flushes } => reader_copies_the_first_write(context, reader_flushes),
     }
 }
 
+/// Counts how many of [HAND_OFFS] hand-offs through `hazard` read stale data under `ordering`.
 fn stale_reads(ordering: WorkOrder, hazard: Hazard) -> usize {
-    let task = CountStaleReads { ordering, hazard };
+    let selector = test_device();
+    let converted = selector.to_cubecl(TEST_ACCELERATOR);
+    let cubecl_device = converted.expect("the test device names a device on the test backend");
+    let opened = open_client(TEST_ACCELERATOR, selector, &cubecl_device);
+    let client = opened.expect("the backend should open");
 
-    with_runtime(TEST_ACCELERATOR, test_device(), task).expect("the backend should open")
+    let context = match ordering {
+        WorkOrder::Unordered => BuildContext::unordered(TEST_ACCELERATOR, selector, cubecl_device, client),
+        WorkOrder::Policy(policy) => {
+            BuildContext::with_policy(TEST_ACCELERATOR, selector, cubecl_device, client, policy)
+        },
+    };
+
+    (0..HAND_OFFS)
+        .filter(|_| !reads_fresh_data(&context, hazard))
+        .count()
 }
 
 #[test]

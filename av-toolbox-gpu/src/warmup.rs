@@ -24,7 +24,7 @@ static CLAIMED: LazyLock<Mutex<HashSet<u128>>> = LazyLock::new(|| Mutex::new(Has
 /// CubeCL keeps its compiled kernels under a directory named for its own version, so a dependency
 /// bump leaves them cold. A stamp from an older generation must not be read as covering a newer
 /// one, so bump this whenever the CubeCL dependency changes.
-const STAMP_GENERATION: &str = "cubecl-0.10";
+const STAMP_GENERATION: &str = "cubecl-0.11";
 
 /// A claim on compiling one kernel set, held while this process compiles it.
 pub struct WarmUp {

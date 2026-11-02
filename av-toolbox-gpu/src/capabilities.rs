@@ -1,11 +1,9 @@
-use cubecl::client::ComputeClient;
 use cubecl::features::{AtomicUsage, TypeUsage};
-use cubecl::ir::{DeviceProperties, ElemType, FloatKind, IntKind, StorageType, Type, UIntKind};
-use cubecl::prelude::Runtime;
+use cubecl::ir::{DeviceProperties, ElemType, FloatKind, IntKind, Type, UIntKind};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-use crate::probe::{RuntimeTask, with_runtime};
+use crate::probe::probe_client;
 use crate::{Accelerator, Device};
 
 /// An element type a plane can be stored or computed in.
@@ -106,7 +104,7 @@ impl Usage {
         let mut atomic_add = Vec::new();
 
         for element in ElementType::iter() {
-            let usage = properties.type_usage(StorageType::Scalar(element.elem()));
+            let usage = properties.type_usage(element.elem());
             if usage.contains(TypeUsage::Buffer) {
                 storable.push(element);
             }
@@ -114,7 +112,7 @@ impl Usage {
                 computable.push(element);
             }
 
-            let atomic = properties.atomic_type_usage(Type::scalar(element.elem()));
+            let atomic = properties.atomic_type_usage(Type::new(element.elem()));
             if atomic.contains(AtomicUsage::Add) {
                 atomic_add.push(element);
             }
@@ -146,9 +144,9 @@ impl Usage {
     }
 }
 
-/// The element type a scalar storage type holds, if it is one this table names.
-fn element_of(storage: StorageType) -> Option<ElementType> {
-    ElementType::iter().find(|element| StorageType::Scalar(element.elem()) == storage)
+/// The element type `elem` is, if it is one this table names.
+fn element_of(elem: ElemType) -> Option<ElementType> {
+    ElementType::iter().find(|element| element.elem() == elem)
 }
 
 impl Capabilities {
@@ -294,32 +292,22 @@ impl CapabilitiesBuilder {
 ///
 /// Returns `None` when the backend cannot express the device, and when it does not start at all.
 pub fn capabilities_for(accelerator: Accelerator, device: Device) -> Option<Capabilities> {
-    with_runtime(accelerator, device, ReadCapabilities { accelerator })
-}
+    let client = probe_client(accelerator, device)?;
+    let capabilities = Capabilities::from_properties(accelerator, client.properties());
 
-/// Reads the capability table off an open client.
-struct ReadCapabilities {
-    accelerator: Accelerator,
-}
-
-impl RuntimeTask for ReadCapabilities {
-    type Output = Capabilities;
-
-    fn run<R: Runtime>(self, client: &ComputeClient<R>) -> Self::Output {
-        Capabilities::from_properties(self.accelerator, client.properties())
-    }
+    Some(capabilities)
 }
 
 #[cfg(test)]
 mod tests {
     use cubecl::features::{AtomicUsage, Features, MmaConfig, TypeUsage};
     use cubecl::ir::{
+        DeviceIdentity,
         DeviceProperties,
         ElemType,
         FloatKind,
         HardwareProperties,
         MemoryDeviceProperties,
-        StorageType,
         Type,
         UIntKind,
     };
@@ -338,6 +326,7 @@ mod tests {
     fn hardware() -> HardwareProperties {
         HardwareProperties {
             load_width: 128,
+            vector_register_count: None,
             plane_size_min: 32,
             plane_size_max: 32,
             max_bindings: 8,
@@ -347,21 +336,21 @@ mod tests {
             max_cube_dim: (1024, 1024, 64),
             num_streaming_multiprocessors: None,
             num_cpu_cores: None,
+            last_level_cache_size: None,
             num_tensor_cores: None,
             min_tensor_cores_dim: None,
             max_vector_size: 4,
+            cube_mma_reserved_shared_memory: 0,
         }
     }
 
     fn properties() -> DeviceProperties {
         DeviceProperties::new(
             Features::default(),
-            MemoryDeviceProperties {
-                max_page_size: 1 << 30,
-                alignment: 32,
-            },
+            MemoryDeviceProperties::new(1 << 30, 32),
             hardware(),
             TimingMethod::System,
+            DeviceIdentity::default(),
         )
     }
 
@@ -393,7 +382,7 @@ mod tests {
     fn storage_and_arithmetic_are_reported_separately() {
         let mut properties = properties();
         properties.register_type_usage(
-            StorageType::Scalar(ElemType::UInt(UIntKind::U16)),
+            ElemType::UInt(UIntKind::U16),
             TypeUsage::Buffer | TypeUsage::Conversion,
         );
 
@@ -467,10 +456,7 @@ mod tests {
     #[test]
     fn a_type_registered_for_arithmetic_reports_it() {
         let mut properties = properties();
-        properties.register_type_usage(
-            StorageType::Scalar(ElemType::UInt(UIntKind::U16)),
-            TypeUsage::all(),
-        );
+        properties.register_type_usage(ElemType::UInt(UIntKind::U16), TypeUsage::all());
 
         let capabilities = Capabilities::from_properties(any_accelerator(), &properties);
 
@@ -482,7 +468,7 @@ mod tests {
     fn atomic_add_is_reported_only_when_registered() {
         let mut properties = properties();
         properties.register_atomic_type_usage(
-            Type::scalar(ElemType::UInt(UIntKind::U32)),
+            Type::new(ElemType::UInt(UIntKind::U32)),
             AtomicUsage::LoadStore | AtomicUsage::Add,
         );
 
@@ -584,8 +570,8 @@ mod tests {
     }
 
     fn f16_into_f32() -> MmaConfig {
-        let f16_type = StorageType::Scalar(ElemType::Float(FloatKind::F16));
-        let f32_type = StorageType::Scalar(ElemType::Float(FloatKind::F32));
+        let f16_type = ElemType::Float(FloatKind::F16);
+        let f32_type = ElemType::Float(FloatKind::F32);
 
         MmaConfig {
             a_type: f16_type,
@@ -623,7 +609,7 @@ mod tests {
     fn a_combination_with_mixed_inputs_is_not_reported() {
         let mut properties = properties();
         let mut combination = f16_into_f32();
-        combination.b_type = StorageType::Scalar(ElemType::Float(FloatKind::BF16));
+        combination.b_type = ElemType::Float(FloatKind::BF16);
         properties.features.matmul.cmma.insert(combination);
 
         let capabilities = Capabilities::from_properties(any_accelerator(), &properties);

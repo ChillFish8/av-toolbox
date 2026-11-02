@@ -1,7 +1,7 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use cubecl::prelude::{ArrayArg, CubePrimitive, Runtime};
+use cubecl::prelude::{BufferArg, CubePrimitive};
 use cubecl::server::Handle;
 
 use crate::frame::format::{ColourInfo, FrameFormat, MaskChroma, MaskFormat, StreamFormat};
@@ -155,14 +155,14 @@ impl Plane {
     /// carried over from the plane's own sample format. One `array` serves both a kernel that
     /// reads the plane and one that writes it, because the binding only carries the handle, and
     /// it is the kernel that decides what to do with it.
-    pub fn array<C: CubePrimitive, R: Runtime>(&self) -> ArrayArg<R> {
+    pub fn array<C: CubePrimitive>(&self) -> BufferArg {
         let handle = self.buffer.handle().clone();
-        let elements = self.buffer.bytes() / C::type_size();
+        let elements = self.buffer.bytes() / C::size();
 
         // Safety: `elements` is this window's own byte count divided by `C`'s size, so it names
         // exactly as many `C` values as the window holds, matching what a kernel declaring `C`
         // computes from the same handle at launch.
-        unsafe { ArrayArg::from_raw_parts(handle, elements) }
+        unsafe { BufferArg::from_raw_parts(handle, elements) }
     }
 
     /// Whether this is the only holder of the buffer.
@@ -577,25 +577,13 @@ impl From<Mask> for StreamItem {
 
 #[cfg(test)]
 mod tests {
-    // Whichever backend this build enables, picked in the same order `Backend` tries them, so the
-    // array tests below need no device and run under every feature set.
-    #[cfg(all(feature = "cuda", not(any(feature = "vulkan", feature = "metal"))))]
-    use cubecl::cuda::CudaRuntime as TestRuntime;
-    #[cfg(all(
-        feature = "rocm",
-        not(any(feature = "vulkan", feature = "metal", feature = "cuda"))
-    ))]
-    use cubecl::hip::HipRuntime as TestRuntime;
-    use cubecl::server::{Binding, Handle};
-    use cubecl::stream_id::StreamId;
-    #[cfg(any(feature = "vulkan", feature = "metal"))]
-    use cubecl::wgpu::WgpuRuntime as TestRuntime;
+    use cubecl::server::BufferBinding;
 
     use super::*;
     use crate::frame::format::{ChromaLocation, ColourRange};
     use crate::frame::layout::{FrameLayout, Subsampling};
     use crate::frame::sample::SampleFormat;
-    use crate::testing::CountingAllocator;
+    use crate::testing::{CountingAllocator, detached_handle};
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     use crate::{Backend, test_device};
     use crate::{BufferPool, HostPlanes, RingSpec, StreamFormat, StreamPolicy};
@@ -626,7 +614,7 @@ mod tests {
     /// writes the memory it names.
     fn plane(width: u32, height: u32) -> Plane {
         let bytes = width as usize * height as usize;
-        let handle = Handle::new(StreamId::current(), bytes as u64);
+        let handle = detached_handle(bytes);
 
         Plane::new(PlaneBuffer::view(None, handle, bytes), width, height)
     }
@@ -995,10 +983,10 @@ mod tests {
     ///
     /// A plane never launches through an input array of its own, so `array` always produces the
     /// `Handle` variant. This just unwraps it once for the offset test below to read from.
-    fn binding<C: CubePrimitive>(plane: &Plane) -> Binding {
-        match plane.array::<C, TestRuntime>() {
-            ArrayArg::Handle { handle } => handle.handle,
-            ArrayArg::Alias { .. } => panic!("a plane binds its own buffer, never an alias"),
+    fn binding<C: CubePrimitive>(plane: &Plane) -> BufferBinding {
+        match plane.array::<C>() {
+            BufferArg::Handle { handle } => handle.handle,
+            BufferArg::Alias { .. } => panic!("a plane binds its own buffer, never an alias"),
         }
     }
 
@@ -1006,7 +994,7 @@ mod tests {
     fn array_declares_one_element_per_sample_for_a_matching_element_type() {
         let plane = plane(8, 4);
 
-        assert_eq!(plane.array::<u8, TestRuntime>().size(), plane.samples());
+        assert_eq!(plane.array::<u8>().size(), plane.samples());
     }
 
     /// The regression guard for the fix: a length taken from `samples()` instead of from the
@@ -1015,7 +1003,7 @@ mod tests {
     fn array_does_not_overclaim_for_an_element_type_wider_than_the_plane() {
         let plane = plane(8, 4);
 
-        assert_eq!(plane.array::<u16, TestRuntime>().size(), plane.samples() / 2);
+        assert_eq!(plane.array::<u16>().size(), plane.samples() / 2);
     }
 
     /// The regression guard for the ring case: a binding built from the wrong handle would carry
