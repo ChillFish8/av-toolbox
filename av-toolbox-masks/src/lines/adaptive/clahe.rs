@@ -33,7 +33,7 @@ fn level_of(value: f32) -> u32 {
 }
 
 #[cube(launch_unchecked)]
-fn clear_histograms(histograms: &mut Array<u32>) {
+fn clear_histograms(histograms: &mut [u32]) {
     if ABSOLUTE_POS >= histograms.len() {
         terminate!();
     }
@@ -45,8 +45,8 @@ fn clear_histograms(histograms: &mut Array<u32>) {
 /// into its tile's histogram.
 #[cube(launch_unchecked)]
 fn count_levels(
-    input: &Array<f32>,
-    histograms: &mut Array<Atomic<u32>>,
+    input: &[f32],
+    histograms: &mut [Atomic<u32>],
     width: u32,
     height: u32,
     tile_width: u32,
@@ -72,7 +72,7 @@ fn count_levels(
 
 /// Clips one tile's histogram, spreads the excess evenly, and writes its running count as a table.
 #[cube(launch_unchecked)]
-fn build_tables(histograms: &Array<u32>, tables: &mut Array<f32>, limit: f32, tile_samples: f32) {
+fn build_tables(histograms: &[u32], tables: &mut [f32], limit: f32, tile_samples: f32) {
     let tile = ABSOLUTE_POS as u32;
     if tile >= TILES * TILES {
         terminate!();
@@ -95,7 +95,7 @@ fn build_tables(histograms: &Array<u32>, tables: &mut Array<f32>, limit: f32, ti
 }
 
 #[cube]
-fn table_at(tables: &Array<f32>, tile_x: u32, tile_y: u32, level: u32) -> f32 {
+fn table_at(tables: &[f32], tile_x: u32, tile_y: u32, level: u32) -> f32 {
     let tile = tile_y * TILES + tile_x;
 
     tables[(tile * LEVELS + level) as usize]
@@ -114,9 +114,9 @@ fn tile_before(position: f32) -> u32 {
 /// Maps each sample through the tables of the four nearest tile centres, blended bilinearly.
 #[cube(launch_unchecked)]
 fn equalise_samples(
-    input: &Array<f32>,
-    tables: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    tables: &[f32],
+    output: &mut [f32],
     width: u32,
     tile_width: u32,
     tile_height: u32,
@@ -156,8 +156,8 @@ fn equalise_samples(
 /// The image is split into an 8 by 8 grid of equal tiles, extended with reflect-101 samples on the
 /// right and bottom until each side divides by the grid. Each tile's histogram is clipped at `clip`
 /// times its average bin, rounded down and at least 1.
-pub(super) fn equalise<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn equalise(
+    client: &Client,
     context: &FrameContext,
     sizing: &Sizing<'_>,
     planes: EqualisePlanes<'_>,
@@ -176,17 +176,17 @@ pub(super) fn equalise<R: Runtime>(
     let histograms = Scratch::line::<u32>(context, entries);
     let tables = Scratch::line::<f32>(context, entries);
 
-    let cleared = histograms.plane().array::<R>();
+    let cleared = histograms.plane().array();
     let cubes = sizing.0.cube_count(entries);
     let shape = sizing.0.cube_dim();
 
     // Safety: the histograms hold `entries` u32 values and the kernel writes nothing past them.
     unsafe {
-        clear_histograms::launch_unchecked::<R>(client, cubes, shape, cleared);
+        clear_histograms::launch_unchecked(client, cubes, shape, cleared);
     }
 
-    let input = planes.input.array::<R>();
-    let counted = histograms.plane().array::<R>();
+    let input = planes.input.array();
+    let counted = histograms.plane().array();
     let cubes = sizing.0.cube_count(extended_samples);
     let shape = sizing.0.cube_dim();
 
@@ -194,7 +194,7 @@ pub(super) fn equalise<R: Runtime>(
     // column falls in a tile below `TILES` on its axis and each level is below `LEVELS`, so every
     // histogram index stays below `entries`.
     unsafe {
-        count_levels::launch_unchecked::<R>(
+        count_levels::launch_unchecked(
             client,
             cubes,
             shape,
@@ -207,8 +207,8 @@ pub(super) fn equalise<R: Runtime>(
         );
     }
 
-    let counts = histograms.plane().array::<R>();
-    let built = tables.plane().array::<R>();
+    let counts = histograms.plane().array();
+    let built = tables.plane().array();
     let tile_count = (TILES * TILES) as usize;
     let cubes = sizing.0.cube_count(tile_count);
     let shape = sizing.0.cube_dim();
@@ -216,19 +216,19 @@ pub(super) fn equalise<R: Runtime>(
     // Safety: both buffers hold `entries` values and each of the `TILES * TILES` units touches only
     // its own tile's `LEVELS` entries.
     unsafe {
-        build_tables::launch_unchecked::<R>(client, cubes, shape, counts, built, limit, tile_samples);
+        build_tables::launch_unchecked(client, cubes, shape, counts, built, limit, tile_samples);
     }
 
-    let input = planes.input.array::<R>();
-    let looked_up = tables.plane().array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let looked_up = tables.plane().array();
+    let output = planes.output.array();
     let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
 
     // Safety: the input and output hold `samples` f32 values, and tiles are clamped below `TILES`
     // and levels below `LEVELS`, so every table index stays below `entries`.
     unsafe {
-        equalise_samples::launch_unchecked::<R>(
+        equalise_samples::launch_unchecked(
             client,
             cubes,
             shape,

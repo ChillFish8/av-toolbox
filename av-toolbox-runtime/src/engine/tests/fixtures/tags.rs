@@ -33,7 +33,6 @@ use av_toolbox_gpu::{
     LayerId,
     Offered,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use schemars::JsonSchema;
@@ -163,8 +162,8 @@ impl ProviderDefinition for Tagging {
         Ok(())
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: &BoundInputs,
         _formats: &ResolvedFormats,
@@ -258,8 +257,8 @@ impl MetaSinkDefinition for TagRecording {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         inputs: BoundInputs,
         _formats: &ResolvedFormats,

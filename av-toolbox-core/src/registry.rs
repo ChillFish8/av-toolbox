@@ -517,7 +517,6 @@ mod tests {
         Offered,
         OutputFormats,
         ResolvedFormats,
-        Runtime,
         StreamFormat,
         StreamTemplate,
     };
@@ -623,8 +622,8 @@ mod tests {
             unreachable!("not exercised by these tests")
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             _opened: Self::Opened,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
@@ -674,8 +673,8 @@ mod tests {
             unreachable!("not exercised by these tests")
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             _opened: Self::Opened,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
@@ -723,8 +722,8 @@ mod tests {
             unreachable!("not exercised by these tests")
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             _opened: Self::Opened,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
@@ -758,8 +757,8 @@ mod tests {
             })
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             args: Self::Args,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
@@ -919,8 +918,8 @@ mod tests {
             Ok(FormatSet::of([offered.sample()]))
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             _args: Self::Args,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
@@ -967,8 +966,8 @@ mod tests {
             Ok(FormatSet::of([offered.sample()]))
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             _args: Self::Args,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
@@ -1069,8 +1068,8 @@ mod tests {
             unreachable!("not exercised by these tests")
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             _opened: Self::Opened,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,

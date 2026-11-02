@@ -10,7 +10,7 @@ use av_toolbox_gpu::{
     SampleFormat,
     StreamFormat,
 };
-use cubecl::prelude::{ComputeClient, CubeCount, CubeDim, Runtime};
+use cubecl::prelude::{Client, CubeCount, CubeDim};
 
 use crate::{BuiltMask, Inputs, Mask, Sided, StageError, StageInstance};
 
@@ -28,9 +28,9 @@ impl Dispatch for Sizing<'_> {
 }
 
 /// A device mask whose output also carries a chroma plane, downscaled from its full plane.
-pub(crate) struct ChromaMask<R: Runtime> {
+pub(crate) struct ChromaMask {
     inner: Box<dyn Mask>,
-    client: ComputeClient<R>,
+    client: Client,
     width: u32,
     height: u32,
     chroma: MaskChroma,
@@ -38,17 +38,12 @@ pub(crate) struct ChromaMask<R: Runtime> {
     down: Weights,
 }
 
-impl<R: Runtime> ChromaMask<R> {
+impl ChromaMask {
     /// Wraps `inner`, building the bilinear weight tables for masks of `format` once.
     ///
     /// Each axis is scaled by its subsampling factor and offset to where the chroma location places
     /// a chroma sample.
-    pub(crate) fn new(
-        inner: Box<dyn Mask>,
-        client: ComputeClient<R>,
-        format: &MaskFormat,
-        chroma: MaskChroma,
-    ) -> Self {
+    pub(crate) fn new(inner: Box<dyn Mask>, client: Client, format: &MaskFormat, chroma: MaskChroma) -> Self {
         let (factor_x, factor_y) = chroma.factors();
         let (offset_x, offset_y) = chroma.location.offsets(factor_x, factor_y);
         let (chroma_width, chroma_height) = chroma.subsampling.chroma_dimensions(format.width, format.height);
@@ -70,13 +65,13 @@ impl<R: Runtime> ChromaMask<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for ChromaMask<R> {
+impl StageInstance for ChromaMask {
     fn start_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
         self.inner.start_of_stream(context)
     }
 }
 
-impl<R: Runtime> Mask for ChromaMask<R> {
+impl Mask for ChromaMask {
     fn select(&mut self, context: &mut FrameContext, inputs: Inputs) -> Result<DeviceMask, StageError> {
         let selected = self.inner.select(context, inputs)?;
 
@@ -132,8 +127,8 @@ impl<R: Runtime> Mask for ChromaMask<R> {
 }
 
 /// Wraps a built mask in a [ChromaMask] when its resolved output carries a chroma plane.
-pub(crate) fn add_chroma_plane<R: Runtime>(
-    context: &BuildContext<R>,
+pub(crate) fn add_chroma_plane(
+    context: &BuildContext,
     formats: &ResolvedFormats,
     built: BuiltMask,
 ) -> Result<BuiltMask, StageError> {

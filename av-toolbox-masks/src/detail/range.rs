@@ -72,7 +72,7 @@ impl RangeArgs {
 }
 
 #[cube(launch_unchecked)]
-fn scale_kernel(input: &Array<f32>, output: &mut Array<f32>, multi: f32) {
+fn scale_kernel(input: &[f32], output: &mut [f32], multi: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -81,22 +81,16 @@ fn scale_kernel(input: &Array<f32>, output: &mut Array<f32>, multi: f32) {
 }
 
 /// Writes `input * multi` into `output`.
-fn scale<R: Runtime>(
-    client: &ComputeClient<R>,
-    sizing: &Sizing<'_>,
-    input: DevicePlane<'_>,
-    output: DevicePlane<'_>,
-    multi: f32,
-) {
+fn scale(client: &Client, sizing: &Sizing<'_>, input: DevicePlane<'_>, output: DevicePlane<'_>, multi: f32) {
     let samples = output.samples();
-    let read = input.array::<R>();
-    let written = output.array::<R>();
+    let read = input.array();
+    let written = output.array();
     let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
 
     // Safety: `input` and `output` each hold `samples` f32 values.
     unsafe {
-        scale_kernel::launch_unchecked::<R>(client, cubes, shape, read, written, multi);
+        scale_kernel::launch_unchecked(client, cubes, shape, read, written, multi);
     }
 }
 
@@ -104,16 +98,16 @@ fn no_frame() -> StageError {
     StageError::msg(format!("{NAME} expected a frame in slot 0"))
 }
 
-struct RangeMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct RangeMask {
+    client: Client,
     luma: Luma,
     radius: u32,
     multi: f32,
 }
 
-impl<R: Runtime> StageInstance for RangeMask<R> {}
+impl StageInstance for RangeMask {}
 
-impl<R: Runtime> Mask for RangeMask<R> {
+impl Mask for RangeMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
 
@@ -209,8 +203,8 @@ impl MaskDefinition for Range {
         produces_luma_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

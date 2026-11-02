@@ -18,7 +18,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use schemars::JsonSchema;
@@ -116,8 +115,8 @@ impl SourceDefinition for Fill {
         Ok(produced)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -199,8 +198,8 @@ impl FilterDefinition for SolidLike {
         Ok(produced)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

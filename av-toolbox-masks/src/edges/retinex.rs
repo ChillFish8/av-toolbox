@@ -29,7 +29,7 @@ use av_toolbox_gpu::{
     ResolvedFormats,
     StreamFormat,
 };
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -149,8 +149,8 @@ fn no_frame() -> StageError {
     StageError::msg(format!("{NAME} expected a frame in slot 0"))
 }
 
-struct RetinexMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct RetinexMask {
+    client: Client,
     luma: Luma,
     settings: RetinexSettings,
     retinex_blurs: RetinexBlurs,
@@ -158,9 +158,9 @@ struct RetinexMask<R: Runtime> {
     binarize_threshold: Option<f32>,
 }
 
-impl<R: Runtime> StageInstance for RetinexMask<R> {}
+impl StageInstance for RetinexMask {}
 
-impl<R: Runtime> Mask for RetinexMask<R> {
+impl Mask for RetinexMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
 
@@ -355,8 +355,8 @@ impl MaskDefinition for Retinex {
         produces_luma_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

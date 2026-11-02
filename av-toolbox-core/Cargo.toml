@@ -18,6 +18,8 @@ av-toolbox-cubek = { workspace = true }
 av-toolbox-gpu = { workspace = true }
 
 [dev-dependencies]
+cubecl-common = { workspace = true }
+cubecl-environment = { workspace = true }
 av-toolbox-cubek = { workspace = true, features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 

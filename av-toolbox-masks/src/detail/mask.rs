@@ -27,7 +27,7 @@ use av_toolbox_gpu::{
     ResolvedFormats,
     StreamFormat,
 };
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -101,8 +101,8 @@ fn no_frame() -> StageError {
     StageError::msg(format!("{NAME} expected a frame in slot 0"))
 }
 
-struct DetailMasker<R: Runtime> {
-    client: ComputeClient<R>,
+struct DetailMasker {
+    client: Client,
     luma: Luma,
     blur: Option<Gaussian>,
     radius: u32,
@@ -110,9 +110,9 @@ struct DetailMasker<R: Runtime> {
     edge_threshold: f32,
 }
 
-impl<R: Runtime> StageInstance for DetailMasker<R> {}
+impl StageInstance for DetailMasker {}
 
-impl<R: Runtime> Mask for DetailMasker<R> {
+impl Mask for DetailMasker {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
 
@@ -272,8 +272,8 @@ impl MaskDefinition for DetailMask {
         produces_luma_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

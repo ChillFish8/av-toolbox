@@ -1,5 +1,5 @@
 use av_toolbox_cubek::blur::Gaussian;
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 
 /// The blur radius for `sigma`, `ceil(6 * sigma + 1) / 2`, as vs-jetpack rounds it.
 pub(crate) fn jetpack_radius(sigma: f32) -> u32 {
@@ -9,7 +9,7 @@ pub(crate) fn jetpack_radius(sigma: f32) -> u32 {
 }
 
 /// The Gaussian blur vs-jetpack builds for `sigma`.
-pub(crate) fn gaussian_for<R: Runtime>(client: &ComputeClient<R>, sigma: f32) -> Gaussian {
+pub(crate) fn gaussian_for(client: &Client, sigma: f32) -> Gaussian {
     let radius = jetpack_radius(sigma);
 
     Gaussian::with_radius(client, sigma, radius)

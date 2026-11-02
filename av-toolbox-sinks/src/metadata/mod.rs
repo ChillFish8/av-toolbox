@@ -28,7 +28,6 @@ use av_toolbox_gpu::{
     MetaRecord,
     Offered,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use av_toolbox_providers::{SceneRequest, SceneScores, Scenes, ScoreRequest};
@@ -125,8 +124,8 @@ impl MetaSinkDefinition for Ndjson {
     /// Opens the descriptor or path.
     ///
     /// Opening a FIFO waits until something opens it to read.
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         _formats: &ResolvedFormats,

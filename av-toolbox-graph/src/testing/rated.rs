@@ -24,7 +24,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -106,8 +105,8 @@ impl SourceDefinition for Rated {
         Ok(frames_at(format))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -188,8 +187,8 @@ impl FilterDefinition for Retime {
         Ok(frames_at(retimed))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

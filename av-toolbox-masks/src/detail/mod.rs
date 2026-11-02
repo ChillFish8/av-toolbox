@@ -14,7 +14,7 @@ pub(crate) use self::range::Range;
 use crate::sizing::Sizing;
 
 #[cube(launch_unchecked)]
-fn subtract_kernel(maximum: &Array<f32>, output: &mut Array<f32>) {
+fn subtract_kernel(maximum: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -23,26 +23,21 @@ fn subtract_kernel(maximum: &Array<f32>, output: &mut Array<f32>) {
 }
 
 /// Writes `maximum - output` into `output`.
-fn subtract<R: Runtime>(
-    client: &ComputeClient<R>,
-    sizing: &Sizing<'_>,
-    maximum: DevicePlane<'_>,
-    output: DevicePlane<'_>,
-) {
+fn subtract(client: &Client, sizing: &Sizing<'_>, maximum: DevicePlane<'_>, output: DevicePlane<'_>) {
     let samples = output.samples();
-    let read = maximum.array::<R>();
-    let written = output.array::<R>();
+    let read = maximum.array();
+    let written = output.array();
     let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
 
     // Safety: `maximum` and `output` each hold `samples` f32 values.
     unsafe {
-        subtract_kernel::launch_unchecked::<R>(client, cubes, shape, read, written);
+        subtract_kernel::launch_unchecked(client, cubes, shape, read, written);
     }
 }
 
 #[cube(launch_unchecked)]
-fn join_maximum_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>) {
+fn join_maximum_kernel(first: &[f32], second: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -51,28 +46,28 @@ fn join_maximum_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Arr
 }
 
 /// Writes the larger of `first` and `second` at each sample into `output`.
-fn join_maximum<R: Runtime>(
-    client: &ComputeClient<R>,
+fn join_maximum(
+    client: &Client,
     sizing: &Sizing<'_>,
     first: DevicePlane<'_>,
     second: DevicePlane<'_>,
     output: DevicePlane<'_>,
 ) {
     let samples = output.samples();
-    let first_array = first.array::<R>();
-    let second_array = second.array::<R>();
-    let written = output.array::<R>();
+    let first_array = first.array();
+    let second_array = second.array();
+    let written = output.array();
     let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
 
     // Safety: `first`, `second` and `output` each hold `samples` f32 values.
     unsafe {
-        join_maximum_kernel::launch_unchecked::<R>(client, cubes, shape, first_array, second_array, written);
+        join_maximum_kernel::launch_unchecked(client, cubes, shape, first_array, second_array, written);
     }
 }
 
 #[cube(launch_unchecked)]
-fn excess_over_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>) {
+fn excess_over_kernel(first: &[f32], second: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -81,23 +76,23 @@ fn excess_over_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Arra
 }
 
 /// Writes how far `first` rises above `second` at each sample into `output`, or 0 where it does not.
-fn excess_over<R: Runtime>(
-    client: &ComputeClient<R>,
+fn excess_over(
+    client: &Client,
     sizing: &Sizing<'_>,
     first: DevicePlane<'_>,
     second: DevicePlane<'_>,
     output: DevicePlane<'_>,
 ) {
     let samples = output.samples();
-    let first_array = first.array::<R>();
-    let second_array = second.array::<R>();
-    let written = output.array::<R>();
+    let first_array = first.array();
+    let second_array = second.array();
+    let written = output.array();
     let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
 
     // Safety: `first`, `second` and `output` each hold `samples` f32 values.
     unsafe {
-        excess_over_kernel::launch_unchecked::<R>(client, cubes, shape, first_array, second_array, written);
+        excess_over_kernel::launch_unchecked(client, cubes, shape, first_array, second_array, written);
     }
 }
 
@@ -105,8 +100,8 @@ fn excess_over<R: Runtime>(
 ///
 /// Overwrites `scratch`, `maximum` and `output`, and leaves `input` untouched. `radius` must be at
 /// least 1, since with no passes nothing is written.
-pub(crate) fn range<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn range(
+    client: &Client,
     sizing: &Sizing<'_>,
     input: DevicePlane<'_>,
     scratch: DevicePlane<'_>,

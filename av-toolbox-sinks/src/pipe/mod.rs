@@ -8,7 +8,6 @@ use av_toolbox_gpu::{
     HostSide,
     Offered,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use schemars::JsonSchema;
@@ -69,8 +68,8 @@ impl SinkDefinition for Pipe {
     /// Opens the descriptor or path.
     ///
     /// Opening a FIFO waits until something opens it to read.
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

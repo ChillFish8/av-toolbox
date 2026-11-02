@@ -28,7 +28,7 @@ use av_toolbox_gpu::{
     ResolvedFormats,
     StreamFormat,
 };
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -123,8 +123,8 @@ fn no_mode(mode: u32) -> StageError {
     StageError::msg(format!("{NAME} has no RemoveGrain mode {mode}"))
 }
 
-struct NeoMasker<R: Runtime> {
-    client: ComputeClient<R>,
+struct NeoMasker {
+    client: Client,
     luma: Luma,
     gaussian: Gaussian,
     sigma: f32,
@@ -133,9 +133,9 @@ struct NeoMasker<R: Runtime> {
     mode: RemoveGrainMode,
 }
 
-impl<R: Runtime> StageInstance for NeoMasker<R> {}
+impl StageInstance for NeoMasker {}
 
-impl<R: Runtime> Mask for NeoMasker<R> {
+impl Mask for NeoMasker {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
 
@@ -322,8 +322,8 @@ impl MaskDefinition for Neo {
         produces_luma_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

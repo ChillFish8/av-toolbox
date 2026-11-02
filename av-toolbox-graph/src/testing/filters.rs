@@ -25,7 +25,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -110,8 +109,8 @@ impl FilterDefinition for Failing {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -188,8 +187,8 @@ impl FilterDefinition for Recording {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -289,8 +288,8 @@ impl FilterDefinition for Prefers16 {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -389,8 +388,8 @@ impl FilterDefinition for Sparse {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -480,8 +479,8 @@ impl FilterDefinition for Temporal {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -631,8 +630,8 @@ impl FilterDefinition for ResampleDepth {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

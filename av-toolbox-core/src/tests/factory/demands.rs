@@ -6,7 +6,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -64,8 +63,8 @@ macro_rules! pass_through_filter {
                 })
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 _args: Self::Args,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,

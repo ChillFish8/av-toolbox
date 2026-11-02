@@ -47,7 +47,7 @@ fn missing_mask() -> StageError {
 pub(crate) struct UnionArgs {}
 
 #[cube(launch_unchecked)]
-fn copy_mask(input: &Array<u8>, output: &mut Array<u8>) {
+fn copy_mask(input: &[u8], output: &mut [u8]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -56,7 +56,7 @@ fn copy_mask(input: &Array<u8>, output: &mut Array<u8>) {
 }
 
 #[cube(launch_unchecked)]
-fn keep_largest(input: &Array<u8>, output: &mut Array<u8>) {
+fn keep_largest(input: &[u8], output: &mut [u8]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -66,13 +66,13 @@ fn keep_largest(input: &Array<u8>, output: &mut Array<u8>) {
     }
 }
 
-struct UnionMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct UnionMask {
+    client: Client,
 }
 
-impl<R: Runtime> StageInstance for UnionMask<R> {}
+impl StageInstance for UnionMask {}
 
-impl<R: Runtime> Mask for UnionMask<R> {
+impl Mask for UnionMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let first = inputs.take_mask(0).ok_or_else(missing_first_mask)?;
 
@@ -85,29 +85,29 @@ impl<R: Runtime> Mask for UnionMask<R> {
         let output = context.alloc_mask(&format, meta);
         let samples = output.plane().samples();
 
-        let read = first.plane().array::<u8, R>();
-        let write = output.plane().array::<u8, R>();
+        let read = first.plane().array::<u8>();
+        let write = output.plane().array::<u8>();
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
 
         // Safety: both bindings name exactly as many elements as their plane holds, and the kernel
         // writes nothing past the length it is given.
         unsafe {
-            copy_mask::launch_unchecked::<R>(&self.client, cubes, shape, read, write);
+            copy_mask::launch_unchecked(&self.client, cubes, shape, read, write);
         }
 
         for index in 1..inputs.len() {
             let input = inputs.take_mask(index).ok_or_else(missing_mask)?;
 
-            let read = input.plane().array::<u8, R>();
-            let write = output.plane().array::<u8, R>();
+            let read = input.plane().array::<u8>();
+            let write = output.plane().array::<u8>();
             let cubes = context.cube_count(samples);
             let shape = context.cube_dim();
 
             // Safety: both bindings name exactly as many elements as their plane holds, and the
             // kernel writes nothing past the length it is given.
             unsafe {
-                keep_largest::launch_unchecked::<R>(&self.client, cubes, shape, read, write);
+                keep_largest::launch_unchecked(&self.client, cubes, shape, read, write);
             }
         }
 
@@ -167,8 +167,8 @@ impl MaskDefinition for Union {
         produces_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

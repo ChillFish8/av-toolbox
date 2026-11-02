@@ -25,7 +25,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -106,8 +105,8 @@ impl FilterDefinition for Grain {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -165,8 +164,8 @@ impl FilterDefinition for Scenes {
         Grain::produces(capabilities, args, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,

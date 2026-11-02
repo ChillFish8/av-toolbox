@@ -30,7 +30,6 @@ use av_toolbox_gpu::{
     HostSide,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -198,8 +197,8 @@ impl SourceDefinition for File {
         Ok(produced)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

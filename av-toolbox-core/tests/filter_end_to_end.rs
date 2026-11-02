@@ -62,7 +62,7 @@ const STALE: f32 = 99.0;
 const AMOUNT: f32 = 0.25;
 
 #[cube(launch_unchecked)]
-fn brighten_in_place(plane: &mut Array<f32>, amount: f32) {
+fn brighten_in_place(plane: &mut [f32], amount: f32) {
     if ABSOLUTE_POS >= plane.len() {
         terminate!();
     }
@@ -71,7 +71,7 @@ fn brighten_in_place(plane: &mut Array<f32>, amount: f32) {
 }
 
 #[cube(launch_unchecked)]
-fn brighten_into(input: &Array<f32>, output: &mut Array<f32>, amount: f32) {
+fn brighten_into(input: &[f32], output: &mut [f32], amount: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -80,7 +80,7 @@ fn brighten_into(input: &Array<f32>, output: &mut Array<f32>, amount: f32) {
 }
 
 #[cube(launch_unchecked)]
-fn fill(plane: &mut Array<f32>, value: f32) {
+fn fill(plane: &mut [f32], value: f32) {
     if ABSOLUTE_POS >= plane.len() {
         terminate!();
     }
@@ -108,42 +108,42 @@ struct BrightenArgs {
 }
 
 /// Adds a constant to a frame's luma, leaving its chroma as it found it.
-struct BrightenFilter<R: Runtime> {
-    client: ComputeClient<R>,
+struct BrightenFilter {
+    client: Client,
     format: FrameFormat,
     amount: f32,
 }
 
-impl<R: Runtime> BrightenFilter<R> {
+impl BrightenFilter {
     fn brighten_plane(&self, context: &FrameContext, plane: &Plane, amount: f32) {
         let cubes = context.cube_count(plane.samples());
         let shape = context.cube_dim();
-        let binding = plane.array::<f32, R>();
+        let binding = plane.array::<f32>();
 
         // Safety: the binding names exactly as many elements as the plane holds, and the kernel
         // writes nothing past the length it is given.
         unsafe {
-            brighten_in_place::launch_unchecked::<R>(&self.client, cubes, shape, binding, amount);
+            brighten_in_place::launch_unchecked(&self.client, cubes, shape, binding, amount);
         }
     }
 
     fn brighten_into_plane(&self, context: &FrameContext, source: &Plane, target: &Plane, amount: f32) {
         let cubes = context.cube_count(target.samples());
         let shape = context.cube_dim();
-        let read = source.array::<f32, R>();
-        let write = target.array::<f32, R>();
+        let read = source.array::<f32>();
+        let write = target.array::<f32>();
 
         // Safety: both bindings name exactly as many elements as their plane holds, and the kernel
         // writes nothing past the length it is given.
         unsafe {
-            brighten_into::launch_unchecked::<R>(&self.client, cubes, shape, read, write, amount);
+            brighten_into::launch_unchecked(&self.client, cubes, shape, read, write, amount);
         }
     }
 }
 
-impl<R: Runtime> StageInstance for BrightenFilter<R> {}
+impl StageInstance for BrightenFilter {}
 
-impl<R: Runtime> Filter for BrightenFilter<R> {
+impl Filter for BrightenFilter {
     fn process(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<Vec<Frame>, StageError> {
         let frame = inputs
             .take_frame(0)
@@ -235,8 +235,8 @@ impl FilterDefinition for Brighten {
         })
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -285,12 +285,7 @@ fn built_filter(backend: &Backend) -> Box<dyn Filter> {
 }
 
 /// A frame whose luma and chroma each hold one known value.
-fn filled_frame<R: Runtime>(
-    build: &BuildContext<R>,
-    context: &FrameContext,
-    luma: f32,
-    chroma: f32,
-) -> Frame {
+fn filled_frame(build: &BuildContext, context: &FrameContext, luma: f32, chroma: f32) -> Frame {
     let frame = context.alloc_frame(&frame_format(), FrameMeta::at(0));
 
     for channel in frame.format().channels() {
@@ -299,12 +294,12 @@ fn filled_frame<R: Runtime>(
 
         let cubes = context.cube_count(plane.samples());
         let shape = context.cube_dim();
-        let binding = plane.array::<f32, R>();
+        let binding = plane.array::<f32>();
 
         // Safety: the binding names exactly as many elements as the plane holds, and the kernel
         // writes nothing past the length it is given.
         unsafe {
-            fill::launch_unchecked::<R>(build.client(), cubes, shape, binding, value);
+            fill::launch_unchecked(build.client(), cubes, shape, binding, value);
         }
     }
 
@@ -322,7 +317,7 @@ fn only_frame(mut frames: Vec<Frame>) -> Frame {
     frames.remove(0)
 }
 
-fn read_plane<R: Runtime>(build: &BuildContext<R>, frame: &Frame, channel: Channel) -> Vec<f32> {
+fn read_plane(build: &BuildContext, frame: &Frame, channel: Channel) -> Vec<f32> {
     let plane = frame.plane(channel).expect("the frame carries this channel");
     let bytes = build
         .client()
@@ -352,7 +347,7 @@ struct RunExclusive {
 impl BuildTask for RunExclusive {
     type Output = Processed;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let input = filled_frame(build, &context, LUMA_IN, CHROMA_IN);
 
@@ -379,7 +374,7 @@ struct RunShared {
 impl BuildTask for RunShared {
     type Output = ProcessedShared;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
         let input = filled_frame(build, &context, LUMA_IN, CHROMA_IN);
 

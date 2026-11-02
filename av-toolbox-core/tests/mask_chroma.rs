@@ -54,7 +54,7 @@ const CHROMA_WIDTH: u32 = 4;
 const CHROMA_HEIGHT: u32 = 3;
 
 #[cube(launch_unchecked)]
-fn copy(input: &Array<u8>, output: &mut Array<u8>) {
+fn copy(input: &[u8], output: &mut [u8]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -85,13 +85,13 @@ fn mask_format(chroma: Option<MaskChroma>) -> MaskFormat {
 struct PatternArgs {}
 
 /// Writes [pattern] into a fresh mask with no chroma plane.
-struct PatternMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct PatternMask {
+    client: Client,
 }
 
-impl<R: Runtime> StageInstance for PatternMask<R> {}
+impl StageInstance for PatternMask {}
 
-impl<R: Runtime> Mask for PatternMask<R> {
+impl Mask for PatternMask {
     fn select(
         &mut self,
         context: &mut FrameContext,
@@ -107,24 +107,24 @@ impl<R: Runtime> Mask for PatternMask<R> {
 
         let cubes = context.cube_count(plane_samples);
         let shape = context.cube_dim();
-        let read = bytes_array::<R>(&uploaded, plane_samples);
-        let write = plane.array::<u8, R>();
+        let read = bytes_array(&uploaded, plane_samples);
+        let write = plane.array::<u8>();
 
         // Safety: both bindings name exactly `WIDTH * HEIGHT` bytes, and the kernel writes nothing
         // past the length it is given.
         unsafe {
-            copy::launch_unchecked::<R>(&self.client, cubes, shape, read, write);
+            copy::launch_unchecked(&self.client, cubes, shape, read, write);
         }
 
         Ok(mask)
     }
 }
 
-fn bytes_array<R: Runtime>(handle: &cubecl::server::Handle, len: usize) -> ArrayArg<R> {
+fn bytes_array(handle: &cubecl::server::Handle, len: usize) -> BufferArg {
     let owned = handle.clone();
 
     // Safety: every caller passes a buffer made from exactly `len` bytes.
-    unsafe { ArrayArg::from_raw_parts(owned, len) }
+    unsafe { BufferArg::from_raw_parts(owned, len) }
 }
 
 fn mask_accepts_input(offered: StreamFormat) -> Result<FormatSet, StageError> {
@@ -185,8 +185,8 @@ impl MaskDefinition for Pattern {
         mask_produces()
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -254,8 +254,8 @@ impl MaskDefinition for HostPattern {
         mask_produces()
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -312,7 +312,7 @@ struct RunMask {
 impl BuildTask for RunMask {
     type Output = Selected;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
 
         self.mask
@@ -332,7 +332,7 @@ impl BuildTask for RunMask {
     }
 }
 
-fn read_plane<R: Runtime>(build: &BuildContext<R>, plane: &av_toolbox_gpu::Plane) -> Vec<u8> {
+fn read_plane(build: &BuildContext, plane: &av_toolbox_gpu::Plane) -> Vec<u8> {
     let handle = plane.buffer().handle().clone();
     let bytes = build
         .client()

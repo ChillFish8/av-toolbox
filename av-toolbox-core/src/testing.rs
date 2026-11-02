@@ -10,7 +10,6 @@ use av_toolbox_gpu::{
     LayerId,
     MetaValue,
     ResolvedFormats,
-    Runtime,
     Side,
     StreamFormat,
 };
@@ -145,8 +144,8 @@ macro_rules! stamping_provider {
                 Ok(())
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 args: Self::Args,
                 _inputs: &BoundInputs,
                 _formats: &ResolvedFormats,

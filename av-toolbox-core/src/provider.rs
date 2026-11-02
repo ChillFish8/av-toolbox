@@ -8,7 +8,6 @@ use av_toolbox_gpu::{
     FrameFormat,
     LayerId,
     ResolvedFormats,
-    Runtime,
     Side,
     StreamFormat,
 };
@@ -74,8 +73,8 @@ pub trait ProviderDefinition: StageDefinition<Args = Vec<LayerDemand>> {
     /// Builds the provider.
     ///
     /// `inputs` hands out what was provided for its own demands.
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: &BoundInputs,
         formats: &ResolvedFormats,

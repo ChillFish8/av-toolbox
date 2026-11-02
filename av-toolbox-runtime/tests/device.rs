@@ -39,7 +39,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -138,8 +137,8 @@ impl SourceDefinition for Frames {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -220,8 +219,8 @@ impl FilterDefinition for Pass {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -293,8 +292,8 @@ impl SinkDefinition for Recording {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

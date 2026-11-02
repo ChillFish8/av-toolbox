@@ -77,14 +77,7 @@ impl CannyArgs {
 
 /// The gradient magnitude at a pixel, or 0 outside the plane.
 #[cube]
-fn magnitude_at(
-    horizontal: &Array<f32>,
-    vertical: &Array<f32>,
-    width: u32,
-    height: u32,
-    column: i32,
-    row: i32,
-) -> f32 {
+fn magnitude_at(horizontal: &[f32], vertical: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
     let mut magnitude = 0.0f32;
 
     if column >= 0 && column < width as i32 && row >= 0 && row < height as i32 {
@@ -99,10 +92,10 @@ fn magnitude_at(
 /// gradient, marking candidates and strong edges.
 #[cube(launch_unchecked)]
 fn suppress(
-    horizontal: &Array<f32>,
-    vertical: &Array<f32>,
-    candidates: &mut Array<u8>,
-    strong: &mut Array<u8>,
+    horizontal: &[f32],
+    vertical: &[f32],
+    candidates: &mut [u8],
+    strong: &mut [u8],
     width: u32,
     height: u32,
     low: f32,
@@ -149,21 +142,21 @@ fn suppress(
     }
 }
 
-struct CannyMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct CannyMask {
+    client: Client,
     luma: Luma,
     smooth: Gaussian,
     low: f32,
     high: f32,
 }
 
-impl<R: Runtime> StageInstance for CannyMask<R> {}
+impl StageInstance for CannyMask {}
 
 fn no_frame() -> StageError {
     StageError::msg("lines/canny expected a frame in slot 0")
 }
 
-impl<R: Runtime> Mask for CannyMask<R> {
+impl Mask for CannyMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
 
@@ -197,17 +190,17 @@ impl<R: Runtime> Mask for CannyMask<R> {
 
         let candidates = Scratch::new::<u8>(context, width, height);
         let strong = Scratch::new::<u8>(context, width, height);
-        let horizontal_read = horizontal.plane().array::<R>();
-        let vertical_read = vertical.plane().array::<R>();
-        let candidates_write = candidates.plane().array::<R>();
-        let strong_write = strong.plane().array::<R>();
+        let horizontal_read = horizontal.plane().array();
+        let vertical_read = vertical.plane().array();
+        let candidates_write = candidates.plane().array();
+        let strong_write = strong.plane().array();
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
         // Safety: every plane holds `samples` elements of its declared type and the kernel writes
         // nothing past them.
         unsafe {
-            suppress::launch_unchecked::<R>(
+            suppress::launch_unchecked(
                 &self.client,
                 cubes,
                 shape,
@@ -303,8 +296,8 @@ impl MaskDefinition for Canny {
         produces_luma_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

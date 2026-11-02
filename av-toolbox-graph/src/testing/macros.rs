@@ -60,8 +60,8 @@ macro_rules! fixture_source {
                 })
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 _opened: Self::Opened,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,
@@ -170,8 +170,8 @@ macro_rules! fixture_stage {
                 })
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 _args: Self::Args,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,
@@ -237,8 +237,8 @@ macro_rules! fixture_sink {
                 Ok(FormatSet::of([offered.sample()]))
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 _args: Self::Args,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,
@@ -314,8 +314,8 @@ macro_rules! opinionated_source {
                 })
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 _opened: Self::Opened,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,
@@ -397,8 +397,8 @@ macro_rules! opinionated_filter {
                 })
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 _args: Self::Args,
                 _inputs: BoundInputs,
                 _formats: &ResolvedFormats,

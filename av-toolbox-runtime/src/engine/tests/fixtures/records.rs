@@ -30,7 +30,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -159,8 +158,8 @@ impl FilterDefinition for Marking {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -294,8 +293,8 @@ impl MetaSinkDefinition for FlowRecording {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

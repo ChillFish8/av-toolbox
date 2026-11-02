@@ -6,7 +6,6 @@ use av_toolbox_gpu::{
     FormatSet,
     Offered,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use serde_json::Value;
@@ -37,8 +36,8 @@ struct BuildMetaSink<'a, D: MetaSinkDefinition> {
 impl<'a, D: MetaSinkDefinition> BuildTask for BuildMetaSink<'a, D> {
     type Output = Result<Box<dyn MetaSink>, StageError>;
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-        D::build::<R>(context, self.args, self.inputs, self.formats)
+    fn run(self, context: &BuildContext) -> Self::Output {
+        D::build(context, self.args, self.inputs, self.formats)
     }
 }
 

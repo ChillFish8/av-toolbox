@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use av_toolbox_gpu::{BuildContext, ResolvedFormats, Runtime};
+use av_toolbox_gpu::{BuildContext, ResolvedFormats};
 use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value;
@@ -340,8 +340,8 @@ fn chunk_authority_name(signature: &InputSignature, inputs: &BoundInputs) -> Opt
 }
 
 /// Hands back a built stage as it is, for the kinds with nothing to add after building.
-pub(super) fn keep<R: Runtime, T>(
-    _context: &BuildContext<R>,
+pub(super) fn keep<T>(
+    _context: &BuildContext,
     _formats: &ResolvedFormats,
     built: T,
 ) -> Result<T, StageError> {

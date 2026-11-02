@@ -27,7 +27,6 @@ use av_toolbox_gpu::{
     HostStreamItem,
     LayerId,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 
@@ -98,8 +97,8 @@ impl ProviderDefinition for SceneScoreProvider {
         Ok(())
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: &BoundInputs,
         formats: &ResolvedFormats,

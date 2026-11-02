@@ -17,7 +17,6 @@ use av_toolbox_gpu::{
     HostSide,
     Offered,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use schemars::JsonSchema;
@@ -70,8 +69,8 @@ impl SinkDefinition for Stdout {
         accepts(offered, args.frame_rate)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

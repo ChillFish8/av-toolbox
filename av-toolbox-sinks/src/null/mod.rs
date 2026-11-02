@@ -16,7 +16,6 @@ use av_toolbox_gpu::{
     HostSide,
     Offered,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use schemars::JsonSchema;
@@ -63,8 +62,8 @@ impl SinkDefinition for Discard {
         accepts(offered)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

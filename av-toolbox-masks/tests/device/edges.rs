@@ -2,7 +2,6 @@ use av_toolbox_cubek::edges::{EdgeLimits, Operator};
 use av_toolbox_cubek::testing::reference_edges;
 use av_toolbox_gpu::{BuildContext, BuildTask, FrameFormat, StreamFormat};
 use av_toolbox_masks::testing::store_mask;
-use cubecl::prelude::Runtime;
 use serde_json::{Value, json};
 
 use crate::reference::square;
@@ -382,7 +381,7 @@ struct StoreMaskClamp {
 impl BuildTask for StoreMaskClamp {
     type Output = Vec<u8>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let context = build.frame_context();
         let input_handle = upload_f32(client, &[self.value]);

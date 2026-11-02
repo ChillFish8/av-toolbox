@@ -28,7 +28,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -97,8 +96,8 @@ impl SinkDefinition for FloatMask {
         Ok(FormatSet::of([SampleFormat::F32]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -213,8 +212,8 @@ impl SourceDefinition for WideningSource {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -309,8 +308,8 @@ impl SinkDefinition for Y4m {
         Ok(samples)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

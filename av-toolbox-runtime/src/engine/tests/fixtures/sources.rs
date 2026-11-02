@@ -29,7 +29,6 @@ use av_toolbox_gpu::{
     MetaValue,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -223,8 +222,8 @@ impl SourceDefinition for Listed {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -344,8 +343,8 @@ impl SourceDefinition for HostListed {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

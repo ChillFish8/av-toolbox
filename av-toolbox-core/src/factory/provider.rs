@@ -8,7 +8,6 @@ use av_toolbox_gpu::{
     FormatSet,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -42,8 +41,8 @@ struct BuildProvider<'a, D: ProviderDefinition> {
 impl<'a, D: ProviderDefinition> BuildTask for BuildProvider<'a, D> {
     type Output = Result<BuiltProvider, StageError>;
 
-    fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-        let stage = D::build::<R>(context, self.args, &self.inputs, self.formats)?;
+    fn run(self, context: &BuildContext) -> Self::Output {
+        let stage = D::build(context, self.args, &self.inputs, self.formats)?;
 
         Ok(<D::Side as ProviderSide>::provider(stage))
     }

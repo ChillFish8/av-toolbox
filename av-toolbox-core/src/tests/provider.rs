@@ -8,7 +8,6 @@ use av_toolbox_gpu::{
     HostSide,
     HostStreamItem,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use serde_json::json;
@@ -125,8 +124,8 @@ macro_rules! cuts_provider {
                 }
             }
 
-            fn build<R: Runtime>(
-                _context: &BuildContext<R>,
+            fn build(
+                _context: &BuildContext,
                 _args: Self::Args,
                 _inputs: &BoundInputs,
                 _formats: &ResolvedFormats,

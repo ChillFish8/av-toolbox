@@ -51,7 +51,7 @@ fn default_cutoff() -> u8 {
 }
 
 #[cube(launch_unchecked)]
-fn harden(input: &Array<u8>, output: &mut Array<u8>, cutoff: u32) {
+fn harden(input: &[u8], output: &mut [u8], cutoff: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -64,14 +64,14 @@ fn harden(input: &Array<u8>, output: &mut Array<u8>, cutoff: u32) {
     }
 }
 
-struct ThresholdMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct ThresholdMask {
+    client: Client,
     cutoff: u8,
 }
 
-impl<R: Runtime> StageInstance for ThresholdMask<R> {}
+impl StageInstance for ThresholdMask {}
 
-impl<R: Runtime> Mask for ThresholdMask<R> {
+impl Mask for ThresholdMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let input = inputs.take_mask(0).ok_or_else(missing_mask)?;
 
@@ -86,14 +86,14 @@ impl<R: Runtime> Mask for ThresholdMask<R> {
         let samples = output.plane().samples();
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
-        let read = input.plane().array::<u8, R>();
-        let write = output.plane().array::<u8, R>();
+        let read = input.plane().array::<u8>();
+        let write = output.plane().array::<u8>();
         let cutoff = u32::from(self.cutoff);
 
         // Safety: both bindings name exactly as many elements as their plane holds, and the kernel
         // writes nothing past the length it is given.
         unsafe {
-            harden::launch_unchecked::<R>(&self.client, cubes, shape, read, write, cutoff);
+            harden::launch_unchecked(&self.client, cubes, shape, read, write, cutoff);
         }
 
         Ok(output)
@@ -150,8 +150,8 @@ impl MaskDefinition for Threshold {
         produces_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

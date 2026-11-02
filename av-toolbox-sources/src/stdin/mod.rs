@@ -10,7 +10,7 @@ use av_toolbox_core::{
     StageDefinition,
     StageError,
 };
-use av_toolbox_gpu::{BuildContext, Capabilities, HostSide, OutputFormats, ResolvedFormats, Runtime};
+use av_toolbox_gpu::{BuildContext, Capabilities, HostSide, OutputFormats, ResolvedFormats};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -74,8 +74,8 @@ impl SourceDefinition for Stdin {
         Ok(produced)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

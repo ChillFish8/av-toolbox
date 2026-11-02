@@ -163,7 +163,7 @@ pub(crate) fn block_sigma(block_size: u32) -> f32 {
 }
 
 #[cube(launch_unchecked)]
-fn below_local_mean(smoothed: &Array<f32>, mean: &Array<f32>, output: &mut Array<u8>, offset: f32) {
+fn below_local_mean(smoothed: &[f32], mean: &[f32], output: &mut [u8], offset: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -175,8 +175,8 @@ fn below_local_mean(smoothed: &Array<f32>, mean: &Array<f32>, output: &mut Array
     }
 }
 
-struct AdaptiveMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct AdaptiveMask {
+    client: Client,
     luma: Luma,
     smooth: Gaussian,
     local: Gaussian,
@@ -185,7 +185,7 @@ struct AdaptiveMask<R: Runtime> {
     recovery: Option<(ShadowRecovery, u32)>,
 }
 
-impl<R: Runtime> AdaptiveMask<R> {
+impl AdaptiveMask {
     /// Writes 255 where `plane` sits `offset` below its neighbourhood, and 0 elsewhere.
     fn threshold(
         &self,
@@ -216,16 +216,16 @@ impl<R: Runtime> AdaptiveMask<R> {
         };
         self.local.apply(&self.client, sizing, local_planes);
 
-        let smoothed_read = smoothed.plane().array::<R>();
-        let mean_read = mean.plane().array::<R>();
-        let written = output.array::<R>();
+        let smoothed_read = smoothed.plane().array();
+        let mean_read = mean.plane().array();
+        let written = output.array();
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
         // Safety: every plane holds `samples` elements of its declared type and the kernel writes
         // nothing past them.
         unsafe {
-            below_local_mean::launch_unchecked::<R>(
+            below_local_mean::launch_unchecked(
                 &self.client,
                 cubes,
                 shape,
@@ -238,13 +238,13 @@ impl<R: Runtime> AdaptiveMask<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for AdaptiveMask<R> {}
+impl StageInstance for AdaptiveMask {}
 
 fn no_frame() -> StageError {
     StageError::msg("lines/adaptive expected a frame in slot 0")
 }
 
-impl<R: Runtime> Mask for AdaptiveMask<R> {
+impl Mask for AdaptiveMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
 
@@ -339,8 +339,8 @@ impl MaskDefinition for Adaptive {
         produces_luma_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

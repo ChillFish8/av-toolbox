@@ -41,7 +41,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamItem,
 };
@@ -178,8 +177,8 @@ impl ProviderDefinition for Breaking {
         Ok(())
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: &BoundInputs,
         _formats: &ResolvedFormats,
@@ -253,8 +252,8 @@ impl ProviderDefinition for Marking {
         Ok(())
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         inputs: &BoundInputs,
         _formats: &ResolvedFormats,
@@ -396,8 +395,8 @@ impl ProviderDefinition for Relaying {
         Ok(())
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: &BoundInputs,
         _formats: &ResolvedFormats,
@@ -492,8 +491,8 @@ impl ProviderDefinition for Tagging {
         Ok(())
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         _inputs: &BoundInputs,
         _formats: &ResolvedFormats,
@@ -569,8 +568,8 @@ impl MetaSinkDefinition for TagReading {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -788,8 +787,8 @@ impl FilterDefinition for Demanding {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -882,8 +881,8 @@ impl FilterDefinition for DemandingPair {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

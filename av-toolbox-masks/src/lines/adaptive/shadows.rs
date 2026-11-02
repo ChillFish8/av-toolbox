@@ -12,7 +12,7 @@ use crate::sizing::{Scratch, Sizing};
 
 /// Smooths noise while keeping edges, over the samples within 3 of the centre.
 #[cube(launch_unchecked)]
-fn bilateral(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, colour_sigma: f32) {
+fn bilateral(input: &[f32], output: &mut [f32], width: u32, height: u32, colour_sigma: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -50,12 +50,14 @@ fn bilateral(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u3
 }
 
 #[cube(launch_unchecked)]
-fn divide_out_light(denoised: &Array<f32>, blurred: &Array<f32>, output: &mut Array<f32>) {
+fn divide_out_light(denoised: &[f32], blurred: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
 
-    let evened = denoised[ABSOLUTE_POS] / (blurred[ABSOLUTE_POS] + 1.0 / 255.0) * (128.0 / 255.0);
+    let epsilon = 1.0_f32 / 255.0_f32;
+    let target = 128.0_f32 / 255.0_f32;
+    let evened = denoised[ABSOLUTE_POS] / (blurred[ABSOLUTE_POS] + epsilon) * target;
 
     output[ABSOLUTE_POS] = f32::clamp(evened, 0.0, 1.0);
 }
@@ -68,7 +70,7 @@ pub(super) struct ShadowRecovery {
 }
 
 impl ShadowRecovery {
-    pub(super) fn new<R: Runtime>(client: &ComputeClient<R>, shadows: &Shadows) -> Self {
+    pub(super) fn new(client: &Client, shadows: &Shadows) -> Self {
         let light = Gaussian::new(client, shadows.blur_sigma);
 
         Self {
@@ -79,9 +81,9 @@ impl ShadowRecovery {
     }
 
     /// Writes `luma` denoised, divided by its own lighting and equalised into `output`.
-    pub(super) fn flatten<R: Runtime>(
+    pub(super) fn flatten(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         context: &FrameContext,
         sizing: &Sizing<'_>,
         luma: DevicePlane<'_>,
@@ -92,14 +94,14 @@ impl ShadowRecovery {
         let samples = luma.samples();
 
         let denoised = Scratch::new::<f32>(context, width, height);
-        let luma_read = luma.array::<R>();
-        let denoised_write = denoised.plane().array::<R>();
+        let luma_read = luma.array();
+        let denoised_write = denoised.plane().array();
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
         // Safety: both planes hold `samples` f32 values and the kernel writes nothing past them.
         unsafe {
-            bilateral::launch_unchecked::<R>(
+            bilateral::launch_unchecked(
                 client,
                 cubes,
                 shape,
@@ -121,15 +123,15 @@ impl ShadowRecovery {
         self.light.apply(client, sizing, light_planes);
 
         let evened = Scratch::new::<f32>(context, width, height);
-        let denoised_read = denoised.plane().array::<R>();
-        let blurred_read = blurred.plane().array::<R>();
-        let evened_write = evened.plane().array::<R>();
+        let denoised_read = denoised.plane().array();
+        let blurred_read = blurred.plane().array();
+        let evened_write = evened.plane().array();
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
         // Safety: all three planes hold `samples` f32 values and the kernel writes nothing past them.
         unsafe {
-            divide_out_light::launch_unchecked::<R>(
+            divide_out_light::launch_unchecked(
                 client,
                 cubes,
                 shape,
@@ -148,8 +150,8 @@ impl ShadowRecovery {
 }
 
 /// Copies `lines` into `output`, leaving out groups of fewer than `min_speck` line samples.
-pub(super) fn remove_specks<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn remove_specks(
+    client: &Client,
     context: &FrameContext,
     sizing: &Sizing<'_>,
     lines: DevicePlane<'_>,

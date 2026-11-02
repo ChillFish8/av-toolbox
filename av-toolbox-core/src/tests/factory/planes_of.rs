@@ -7,7 +7,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
 };
@@ -71,8 +70,8 @@ fn planes_of_mask_produces(
     })
 }
 
-fn planes_of_mask_build<R: Runtime>(
-    _context: &BuildContext<R>,
+fn planes_of_mask_build(
+    _context: &BuildContext,
     _args: PlanesOfArgs,
     _inputs: BoundInputs,
     _formats: &ResolvedFormats,
@@ -129,8 +128,8 @@ impl MaskDefinition for ValidPlanesOf {
         planes_of_mask_produces(capabilities, args, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -185,8 +184,8 @@ impl MaskDefinition for MaskNamingAMissingInput {
         planes_of_mask_produces(capabilities, args, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -242,8 +241,8 @@ impl MaskDefinition for PlanesOfOnAFrameInput {
         planes_of_mask_produces(capabilities, args, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -302,8 +301,8 @@ impl FilterDefinition for FilterNamingAMissingInput {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

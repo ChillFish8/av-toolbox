@@ -34,7 +34,7 @@ use av_toolbox_gpu::{
     Subsampling,
     test_device,
 };
-use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
+use cubecl::prelude::{Client, CubeElement};
 use cubecl::server::Handle;
 use serde_json::Value;
 
@@ -180,7 +180,7 @@ pub fn yuv420(width: u32, height: u32) -> FrameFormat {
     }
 }
 
-pub fn read_mask<R: Runtime>(build: &BuildContext<R>, mask: &GpuMask) -> Vec<u8> {
+pub fn read_mask(build: &BuildContext, mask: &GpuMask) -> Vec<u8> {
     let handle = mask.plane().buffer().handle().clone();
     let bytes = build
         .client()
@@ -209,7 +209,7 @@ pub struct SelectMasks {
 impl BuildTask for SelectMasks {
     type Output = Selected;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
 
         let held: Vec<GpuMask> = self
@@ -254,7 +254,7 @@ pub struct SelectFrames {
 impl BuildTask for SelectFrames {
     type Output = Vec<Vec<u8>>;
 
-    fn run<R: Runtime>(mut self, build: &BuildContext<R>) -> Self::Output {
+    fn run(mut self, build: &BuildContext) -> Self::Output {
         let mut context = build.frame_context();
 
         self.mask
@@ -301,17 +301,17 @@ pub fn wide_bytes(samples: &[u16]) -> Vec<u8> {
     samples.iter().flat_map(|sample| sample.to_le_bytes()).collect()
 }
 
-pub fn upload_f32<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Handle {
+pub fn upload_f32(client: &Client, values: &[f32]) -> Handle {
     let bytes = f32::as_bytes(values);
 
     client.create_from_slice(bytes)
 }
 
-pub fn empty<R: Runtime>(client: &ComputeClient<R>, bytes: usize) -> Handle {
+pub fn empty(client: &Client, bytes: usize) -> Handle {
     client.empty(bytes)
 }
 
-pub fn read_u8<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u8> {
+pub fn read_u8(client: &Client, handle: &Handle) -> Vec<u8> {
     let owned = handle.clone();
     let bytes = client
         .read_one(owned)

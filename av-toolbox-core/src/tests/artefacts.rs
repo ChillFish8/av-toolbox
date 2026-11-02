@@ -7,7 +7,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use serde_json::json;
@@ -168,8 +167,8 @@ impl<const ARTEFACTS: usize> FilterDefinition for Declaring<ARTEFACTS> {
         unreachable!("not exercised by these tests")
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -489,8 +488,8 @@ impl SinkDefinition for LogSink {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -545,8 +544,8 @@ impl MetaSinkDefinition for LogMetaSink {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

@@ -153,7 +153,7 @@ impl Luma {
 }
 
 #[cube(launch_unchecked)]
-fn normalise<E: Int>(input: &Array<E>, output: &mut Array<f32>, scale: f32) {
+fn normalise<E: Int>(input: &[E], output: &mut [f32], scale: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -162,12 +162,12 @@ fn normalise<E: Int>(input: &Array<E>, output: &mut Array<f32>, scale: f32) {
 }
 
 #[cube(launch_unchecked)]
-fn scale_kernel(values: &mut Array<f32>, scale: f32) {
+fn scale_kernel(values: &mut [f32], scale: f32) {
     if ABSOLUTE_POS >= values.len() {
         terminate!();
     }
 
-    values[ABSOLUTE_POS] = values[ABSOLUTE_POS] * scale;
+    values[ABSOLUTE_POS] *= scale;
 }
 
 fn no_luma(stage: &str) -> StageError {
@@ -176,28 +176,23 @@ fn no_luma(stage: &str) -> StageError {
     StageError::msg(message)
 }
 
-fn scale_codes<R: Runtime>(
-    client: &ComputeClient<R>,
-    sizing: &Sizing<'_>,
-    values: DevicePlane<'_>,
-    scale: f32,
-) {
+fn scale_codes(client: &Client, sizing: &Sizing<'_>, values: DevicePlane<'_>, scale: f32) {
     if scale == 1.0 {
         return;
     }
 
-    let written = values.array::<R>();
+    let written = values.array();
     let cubes = sizing.0.cube_count(values.samples());
     let shape = sizing.0.cube_dim();
 
     // Safety: `values` holds `samples` f32 values and the kernel stays inside its length.
     unsafe {
-        scale_kernel::launch_unchecked::<R>(client, cubes, shape, written, scale);
+        scale_kernel::launch_unchecked(client, cubes, shape, written, scale);
     }
 }
 
-fn load_luma_scaled<R: Runtime>(
-    client: &ComputeClient<R>,
+fn load_luma_scaled(
+    client: &Client,
     sizing: &Sizing<'_>,
     stage: &str,
     frame: &Frame,
@@ -218,7 +213,7 @@ fn load_luma_scaled<R: Runtime>(
         return Ok(());
     }
 
-    let written = output.array::<R>();
+    let written = output.array();
     let samples = luma.samples();
     let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
@@ -227,11 +222,11 @@ fn load_luma_scaled<R: Runtime>(
     // `samples` f32 values, and the kernel writes nothing past the output's length.
     unsafe {
         if luma.wide {
-            let read = plane.array::<u16, R>();
-            normalise::launch_unchecked::<u16, R>(client, cubes, shape, read, written, scale);
+            let read = plane.array::<u16>();
+            normalise::launch_unchecked::<u16>(client, cubes, shape, read, written, scale);
         } else {
-            let read = plane.array::<u8, R>();
-            normalise::launch_unchecked::<u8, R>(client, cubes, shape, read, written, scale);
+            let read = plane.array::<u8>();
+            normalise::launch_unchecked::<u8>(client, cubes, shape, read, written, scale);
         }
     }
 
@@ -239,8 +234,8 @@ fn load_luma_scaled<R: Runtime>(
 }
 
 /// Writes the frame's luma into `output` as f32 between 0 and 1.
-pub(crate) fn load_luma<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn load_luma(
+    client: &Client,
     sizing: &Sizing<'_>,
     stage: &str,
     frame: &Frame,
@@ -253,8 +248,8 @@ pub(crate) fn load_luma<R: Runtime>(
 }
 
 /// Writes the frame's luma into `output` as f32 code values, unscaled.
-pub(crate) fn load_luma_code_values<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn load_luma_code_values(
+    client: &Client,
     sizing: &Sizing<'_>,
     stage: &str,
     frame: &Frame,
@@ -265,7 +260,7 @@ pub(crate) fn load_luma_code_values<R: Runtime>(
 }
 
 #[cube(launch_unchecked)]
-fn store_mask_kernel(input: &Array<f32>, output: &mut Array<u8>, peak: f32) {
+fn store_mask_kernel(input: &[f32], output: &mut [u8], peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -277,22 +272,22 @@ fn store_mask_kernel(input: &Array<f32>, output: &mut Array<u8>, peak: f32) {
 }
 
 /// Writes `round(clamp(v, 0, peak) * 255 / peak)` from `input` into `output` as u8.
-pub(crate) fn store_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn store_mask(
+    client: &Client,
     sizing: &Sizing<'_>,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     peak: f32,
 ) {
     let samples = output.samples();
-    let read = input.array::<R>();
-    let written = output.array::<R>();
+    let read = input.array();
+    let written = output.array();
     let cubes = sizing.0.cube_count(samples);
     let shape = sizing.0.cube_dim();
 
     // Safety: `input` holds `samples` f32 values and `output` holds `samples` u8 values.
     unsafe {
-        store_mask_kernel::launch_unchecked::<R>(client, cubes, shape, read, written, peak);
+        store_mask_kernel::launch_unchecked(client, cubes, shape, read, written, peak);
     }
 }
 

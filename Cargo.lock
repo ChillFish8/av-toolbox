@@ -362,6 +362,8 @@ dependencies = [
  "av-toolbox-cubek",
  "av-toolbox-gpu",
  "cubecl",
+ "cubecl-common",
+ "cubecl-environment",
  "jsonschema",
  "schemars",
  "serde",

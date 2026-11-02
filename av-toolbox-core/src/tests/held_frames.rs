@@ -11,7 +11,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     SampleFormat,
     StreamFormat,
     StreamTemplate,
@@ -119,8 +118,8 @@ impl FilterDefinition for HoldingNothing {
         same_as_input(chosen)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -182,8 +181,8 @@ impl FilterDefinition for WidthHolding {
         same_as_input(chosen)
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

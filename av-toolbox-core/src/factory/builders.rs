@@ -7,7 +7,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use serde_json::Value;
@@ -60,8 +59,8 @@ macro_rules! impl_stage_factory {
         impl<'a, D: $definition_trait> BuildTask for $task<'a, D> {
             type Output = Result<$built, StageError>;
 
-            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-                let stage = D::build::<R>(context, self.args, self.inputs, self.formats)?;
+            fn run(self, context: &BuildContext) -> Self::Output {
+                let stage = D::build(context, self.args, self.inputs, self.formats)?;
                 let built = <D::Side as StageSide>::$wrap(stage);
 
                 $finish(context, self.formats, built)
@@ -168,9 +167,8 @@ macro_rules! impl_source_factory {
         impl<'a, D: SourceDefinition> BuildTask for $task<'a, D> {
             type Output = Result<BuiltSource, StageError>;
 
-            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-                D::build::<R>(context, self.opened, self.inputs, self.formats)
-                    .map(<D::Side as StageSide>::source)
+            fn run(self, context: &BuildContext) -> Self::Output {
+                D::build(context, self.opened, self.inputs, self.formats).map(<D::Side as StageSide>::source)
             }
         }
 
@@ -281,8 +279,8 @@ macro_rules! impl_sink_factory {
         impl<'a, D: SinkDefinition> BuildTask for $task<'a, D> {
             type Output = Result<BuiltSink, StageError>;
 
-            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
-                D::build::<R>(context, self.args, self.inputs, self.formats).map(<D::Side as StageSide>::sink)
+            fn run(self, context: &BuildContext) -> Self::Output {
+                D::build(context, self.args, self.inputs, self.formats).map(<D::Side as StageSide>::sink)
             }
         }
 

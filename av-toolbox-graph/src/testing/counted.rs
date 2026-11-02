@@ -18,7 +18,6 @@ use av_toolbox_gpu::{
     FrameContext,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamTemplate,
 };
 
@@ -77,8 +76,8 @@ impl SourceDefinition for Counted {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -136,8 +135,8 @@ impl SourceDefinition for Unopenable {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _opened: Self::Opened,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

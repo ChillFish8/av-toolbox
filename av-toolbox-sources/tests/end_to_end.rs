@@ -29,7 +29,6 @@ use av_toolbox_gpu::{
     HostSide,
     Offered,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     test_device,
 };
@@ -110,8 +109,8 @@ impl SinkDefinition for Recording {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         _inputs: BoundInputs,
         _formats: &ResolvedFormats,

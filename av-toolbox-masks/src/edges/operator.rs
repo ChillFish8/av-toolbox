@@ -27,7 +27,7 @@ use av_toolbox_gpu::{
     ResolvedFormats,
     StreamFormat,
 };
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -208,8 +208,8 @@ impl<O: EdgeOperator> MaskDefinition for Edges<O> {
         produces_luma_mask(&stage, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -231,15 +231,15 @@ impl<O: EdgeOperator> MaskDefinition for Edges<O> {
     }
 }
 
-struct EdgesMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct EdgesMask {
+    client: Client,
     stage: String,
     luma: Luma,
     operator: Operator,
     limits: EdgeLimits,
 }
 
-impl<R: Runtime> StageInstance for EdgesMask<R> {}
+impl StageInstance for EdgesMask {}
 
 fn no_frame(stage: &str) -> StageError {
     let message = format!("{stage} expected a frame in slot 0");
@@ -247,7 +247,7 @@ fn no_frame(stage: &str) -> StageError {
     StageError::msg(message)
 }
 
-impl<R: Runtime> Mask for EdgesMask<R> {
+impl Mask for EdgesMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let Some(frame) = inputs.take_frame(0) else {
             return Err(no_frame(&self.stage));

@@ -28,7 +28,7 @@ pub(crate) struct Scratch {
 impl Scratch {
     pub(crate) fn new<E: CubePrimitive>(context: &FrameContext, width: u32, height: u32) -> Self {
         let samples = width as usize * height as usize;
-        let bytes = samples * E::type_size();
+        let bytes = samples * E::size();
         let buffer = context.scratch(bytes);
 
         Self {

@@ -8,7 +8,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 use schemars::JsonSchema;
@@ -137,7 +136,6 @@ pub trait StageInstance: Send + 'static {
 ///     Offered,
 ///     OutputFormats,
 ///     ResolvedFormats,
-///     Runtime,
 ///     StreamFormat,
 ///     StreamTemplate,
 /// };
@@ -218,8 +216,8 @@ pub trait StageInstance: Send + 'static {
 ///         })
 ///     }
 ///
-///     fn build<R: Runtime>(
-///         _context: &BuildContext<R>,
+///     fn build(
+///         _context: &BuildContext,
 ///         args: Self::Args,
 ///         _inputs: BoundInputs,
 ///         _formats: &ResolvedFormats,
@@ -338,8 +336,8 @@ pub trait SourceDefinition: StageDefinition {
     /// What it could produce, given what opening the input found.
     fn produces(capabilities: &Capabilities, opened: &Self::Opened) -> Result<OutputFormats, StageError>;
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         opened: Self::Opened,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -383,8 +381,8 @@ pub trait FilterDefinition: StageDefinition {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError>;
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -428,8 +426,8 @@ pub trait MaskDefinition: StageDefinition {
         chosen: &[Option<StreamFormat>],
     ) -> Result<OutputFormats, StageError>;
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -450,8 +448,8 @@ pub trait MetaSinkDefinition: StageDefinition {
     ) -> Result<FormatSet, StageError>;
 
     /// Builds the instance. A metadata-only sink has no side to build for.
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -500,8 +498,8 @@ pub trait SinkDefinition: StageDefinition {
         inputs: &[Offered],
     ) -> Result<FormatSet, StageError>;
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         inputs: BoundInputs,
         formats: &ResolvedFormats,
@@ -594,8 +592,8 @@ mod tests {
             })
         }
 
-        fn build<R: Runtime>(
-            _context: &BuildContext<R>,
+        fn build(
+            _context: &BuildContext,
             args: Self::Args,
             _inputs: BoundInputs,
             _formats: &ResolvedFormats,
@@ -619,7 +617,7 @@ mod tests {
         impl BuildTask for BuildExample {
             type Output = Result<Box<dyn Filter>, StageError>;
 
-            fn run<R: Runtime>(self, context: &BuildContext<R>) -> Self::Output {
+            fn run(self, context: &BuildContext) -> Self::Output {
                 let formats = ResolvedFormats::new(vec![], None);
                 ExampleDefinition::build(context, self.args, self.inputs, &formats)
             }

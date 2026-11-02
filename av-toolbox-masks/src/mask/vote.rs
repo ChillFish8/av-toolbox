@@ -78,7 +78,7 @@ impl VoteArgs {
 }
 
 #[cube(launch_unchecked)]
-fn clear_votes(counts: &mut Array<u32>) {
+fn clear_votes(counts: &mut [u32]) {
     if ABSOLUTE_POS >= counts.len() {
         terminate!();
     }
@@ -87,7 +87,7 @@ fn clear_votes(counts: &mut Array<u32>) {
 }
 
 #[cube(launch_unchecked)]
-fn cast_vote(input: &Array<u8>, counts: &mut Array<u32>, threshold: u32) {
+fn cast_vote(input: &[u8], counts: &mut [u32], threshold: u32) {
     if ABSOLUTE_POS >= counts.len() {
         terminate!();
     }
@@ -99,7 +99,7 @@ fn cast_vote(input: &Array<u8>, counts: &mut Array<u32>, threshold: u32) {
 }
 
 #[cube(launch_unchecked)]
-fn tally_votes(counts: &Array<u32>, output: &mut Array<u8>, votes: u32) {
+fn tally_votes(counts: &[u32], output: &mut [u8], votes: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -111,15 +111,15 @@ fn tally_votes(counts: &Array<u32>, output: &mut Array<u8>, votes: u32) {
     }
 }
 
-struct VoteMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct VoteMask {
+    client: Client,
     votes: u32,
     threshold: u32,
 }
 
-impl<R: Runtime> StageInstance for VoteMask<R> {}
+impl StageInstance for VoteMask {}
 
-impl<R: Runtime> Mask for VoteMask<R> {
+impl Mask for VoteMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let first = inputs.take_mask(0).ok_or_else(missing_first_mask)?;
 
@@ -136,14 +136,14 @@ impl<R: Runtime> Mask for VoteMask<R> {
         let tally_handle = tally.handle().clone();
 
         // Safety: the tally was allocated to hold exactly `samples` u32 values.
-        let counts = unsafe { ArrayArg::from_raw_parts(tally_handle, samples) };
+        let counts = unsafe { BufferArg::from_raw_parts(tally_handle, samples) };
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
 
         // Safety: every binding names no more elements than its buffer holds, and the kernel writes
         // nothing past the length it is given.
         unsafe {
-            clear_votes::launch_unchecked::<R>(&self.client, cubes, shape, counts);
+            clear_votes::launch_unchecked(&self.client, cubes, shape, counts);
         }
 
         self.cast(context, &first, &tally, samples);
@@ -157,35 +157,35 @@ impl<R: Runtime> Mask for VoteMask<R> {
         let tally_handle = tally.handle().clone();
 
         // Safety: the tally was allocated to hold exactly `samples` u32 values.
-        let counts = unsafe { ArrayArg::from_raw_parts(tally_handle, samples) };
-        let write = output.plane().array::<u8, R>();
+        let counts = unsafe { BufferArg::from_raw_parts(tally_handle, samples) };
+        let write = output.plane().array::<u8>();
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
 
         // Safety: every binding names no more elements than its buffer holds, and the kernel writes
         // nothing past the length it is given.
         unsafe {
-            tally_votes::launch_unchecked::<R>(&self.client, cubes, shape, counts, write, self.votes);
+            tally_votes::launch_unchecked(&self.client, cubes, shape, counts, write, self.votes);
         }
 
         Ok(output)
     }
 }
 
-impl<R: Runtime> VoteMask<R> {
+impl VoteMask {
     fn cast(&self, context: &FrameContext, input: &GpuMask, tally: &PlaneBuffer, samples: usize) {
         let tally_handle = tally.handle().clone();
 
         // Safety: the tally was allocated to hold exactly `samples` u32 values.
-        let counts = unsafe { ArrayArg::from_raw_parts(tally_handle, samples) };
-        let read = input.plane().array::<u8, R>();
+        let counts = unsafe { BufferArg::from_raw_parts(tally_handle, samples) };
+        let read = input.plane().array::<u8>();
         let cubes = context.cube_count(samples);
         let shape = context.cube_dim();
 
         // Safety: every binding names no more elements than its buffer holds, and the kernel writes
         // nothing past the length it is given.
         unsafe {
-            cast_vote::launch_unchecked::<R>(&self.client, cubes, shape, read, counts, self.threshold);
+            cast_vote::launch_unchecked(&self.client, cubes, shape, read, counts, self.threshold);
         }
     }
 }
@@ -244,8 +244,8 @@ impl MaskDefinition for Vote {
         produces_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,

@@ -38,7 +38,6 @@ use av_toolbox_gpu::{
     Offered,
     OutputFormats,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
     StreamTemplate,
     test_device,
@@ -182,8 +181,8 @@ impl FilterDefinition for Chunked {
         })
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -265,8 +264,8 @@ impl SinkDefinition for Whole {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         inputs: BoundInputs,
         _formats: &ResolvedFormats,
@@ -324,8 +323,8 @@ impl SinkDefinition for Pieces {
         Ok(FormatSet::of([offered.sample()]))
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         _args: Self::Args,
         inputs: BoundInputs,
         _formats: &ResolvedFormats,

@@ -22,8 +22,10 @@ use av_toolbox_gpu::{
     StreamPolicy,
     Subsampling,
 };
+use cubecl::device::DeviceId;
 use cubecl::server::Handle;
-use cubecl::stream_id::StreamId;
+use cubecl_common::device::ServiceId;
+use cubecl_environment::stream::StreamId;
 
 use crate::testing::FixtureCuts;
 use crate::{
@@ -44,7 +46,9 @@ struct FakeAllocator;
 
 impl DeviceAllocator for FakeAllocator {
     fn empty(&self, bytes: usize) -> Handle {
-        Handle::new(StreamId::current(), bytes as u64)
+        let service = ServiceId::of::<FakeAllocator>(DeviceId::new(0, 0));
+
+        Handle::new(service, StreamId::current(), bytes as u64)
     }
 
     fn upload(&self, bytes: &[u8]) -> Handle {

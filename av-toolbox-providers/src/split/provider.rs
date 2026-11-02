@@ -28,7 +28,6 @@ use av_toolbox_gpu::{
     FrameRate,
     LayerId,
     ResolvedFormats,
-    Runtime,
     StreamFormat,
 };
 
@@ -141,8 +140,8 @@ impl ProviderDefinition for SceneSplitProvider {
         Ok(())
     }
 
-    fn build<R: Runtime>(
-        _context: &BuildContext<R>,
+    fn build(
+        _context: &BuildContext,
         args: Self::Args,
         inputs: &BoundInputs,
         formats: &ResolvedFormats,

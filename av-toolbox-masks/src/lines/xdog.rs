@@ -110,7 +110,7 @@ impl XdogArgs {
 }
 
 #[cube(launch_unchecked)]
-fn difference_of_gaussians(near: &Array<f32>, far: &Array<f32>, output: &mut Array<f32>, tau: f32) {
+fn difference_of_gaussians(near: &[f32], far: &[f32], output: &mut [f32], tau: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -121,9 +121,9 @@ fn difference_of_gaussians(near: &Array<f32>, far: &Array<f32>, output: &mut Arr
 /// Settles `eps` and `phi` into `parameters`, from the frame when asked to and from the args otherwise.
 #[cube(launch_unchecked)]
 fn resolve_parameters(
-    found_eps: &Array<f32>,
-    totals: &Array<f32>,
-    parameters: &mut Array<f32>,
+    found_eps: &[f32],
+    totals: &[f32],
+    parameters: &mut [f32],
     fixed_eps: f32,
     fixed_phi: f32,
     automatic_eps: u32,
@@ -146,7 +146,7 @@ fn resolve_parameters(
 }
 
 #[cube(launch_unchecked)]
-fn soft_threshold(difference: &Array<f32>, parameters: &Array<f32>, output: &mut Array<f32>) {
+fn soft_threshold(difference: &[f32], parameters: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -164,7 +164,7 @@ fn soft_threshold(difference: &Array<f32>, parameters: &Array<f32>, output: &mut
 }
 
 #[cube(launch_unchecked)]
-fn stretch_into_mask(edges: &Array<f32>, range: &Array<f32>, output: &mut Array<u8>) {
+fn stretch_into_mask(edges: &[f32], range: &[f32], output: &mut [u8]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -185,8 +185,8 @@ fn no_frame() -> StageError {
     StageError::msg("lines/xdog expected a frame in slot 0")
 }
 
-struct XdogMask<R: Runtime> {
-    client: ComputeClient<R>,
+struct XdogMask {
+    client: Client,
     luma: Luma,
     near: Gaussian,
     far: Gaussian,
@@ -196,7 +196,7 @@ struct XdogMask<R: Runtime> {
     eps_percentile: f32,
 }
 
-impl<R: Runtime> XdogMask<R> {
+impl XdogMask {
     /// Finds `eps` and `phi` for this frame's response, leaving them on the device.
     fn parameters(
         &self,
@@ -231,9 +231,9 @@ impl<R: Runtime> XdogMask<R> {
         }
 
         let parameters = Scratch::line::<f32>(context, 2);
-        let found = found_eps.plane().array::<R>();
-        let summed = totals.plane().array::<R>();
-        let settled = parameters.plane().array::<R>();
+        let found = found_eps.plane().array();
+        let summed = totals.plane().array();
+        let settled = parameters.plane().array();
         let fixed_eps = self.eps.unwrap_or(0.0);
         let fixed_phi = self.phi.unwrap_or(0.0);
         let eps_is_unset = self.eps.is_none();
@@ -245,7 +245,7 @@ impl<R: Runtime> XdogMask<R> {
 
         // Safety: each buffer holds the one or two f32 values the kernel reads or writes.
         unsafe {
-            resolve_parameters::launch_unchecked::<R>(
+            resolve_parameters::launch_unchecked(
                 &self.client,
                 one_cube,
                 one_unit,
@@ -264,9 +264,9 @@ impl<R: Runtime> XdogMask<R> {
     }
 }
 
-impl<R: Runtime> StageInstance for XdogMask<R> {}
+impl StageInstance for XdogMask {}
 
-impl<R: Runtime> Mask for XdogMask<R> {
+impl Mask for XdogMask {
     fn select(&mut self, context: &mut FrameContext, mut inputs: Inputs) -> Result<GpuMask, StageError> {
         let frame = inputs.take_frame(0).ok_or_else(no_frame)?;
 
@@ -298,15 +298,15 @@ impl<R: Runtime> Mask for XdogMask<R> {
         self.far.apply(&self.client, &sizing, far_planes);
 
         let difference = Scratch::new::<f32>(context, width, height);
-        let near_read = near.plane().array::<R>();
-        let far_read = far.plane().array::<R>();
-        let difference_write = difference.plane().array::<R>();
+        let near_read = near.plane().array();
+        let far_read = far.plane().array();
+        let difference_write = difference.plane().array();
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
         // Safety: every plane holds `samples` f32 values and the kernel writes nothing past them.
         unsafe {
-            difference_of_gaussians::launch_unchecked::<R>(
+            difference_of_gaussians::launch_unchecked(
                 &self.client,
                 cubes,
                 shape,
@@ -321,16 +321,16 @@ impl<R: Runtime> Mask for XdogMask<R> {
         let parameters = self.parameters(context, &sizing, difference_plane);
 
         let edges = Scratch::new::<f32>(context, width, height);
-        let difference_read = difference.plane().array::<R>();
-        let parameters_read = parameters.plane().array::<R>();
-        let edges_write = edges.plane().array::<R>();
+        let difference_read = difference.plane().array();
+        let parameters_read = parameters.plane().array();
+        let edges_write = edges.plane().array();
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
         // Safety: the difference and edges hold `samples` f32 values, the parameters two, and the
         // kernel writes nothing past the edges' length.
         unsafe {
-            soft_threshold::launch_unchecked::<R>(
+            soft_threshold::launch_unchecked(
                 &self.client,
                 cubes,
                 shape,
@@ -349,15 +349,15 @@ impl<R: Runtime> Mask for XdogMask<R> {
         let meta = frame.meta().clone();
         let format = self.luma.mask_format();
         let output = context.alloc_mask(&format, meta);
-        let edges_read = edges.plane().array::<R>();
-        let range_read = range.plane().array::<R>();
-        let mask_write = mask_plane(&output).array::<R>();
+        let edges_read = edges.plane().array();
+        let range_read = range.plane().array();
+        let mask_write = mask_plane(&output).array();
         let cubes = sizing.0.cube_count(samples);
         let shape = sizing.0.cube_dim();
 
         // Safety: the edges hold `samples` f32 values, the range two, and the mask `samples` bytes.
         unsafe {
-            stretch_into_mask::launch_unchecked::<R>(
+            stretch_into_mask::launch_unchecked(
                 &self.client,
                 cubes,
                 shape,
@@ -423,8 +423,8 @@ impl MaskDefinition for Xdog {
         produces_luma_mask(NAME, chosen)
     }
 
-    fn build<R: Runtime>(
-        context: &BuildContext<R>,
+    fn build(
+        context: &BuildContext,
         args: Self::Args,
         _inputs: BoundInputs,
         formats: &ResolvedFormats,
