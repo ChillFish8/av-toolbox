@@ -1,7 +1,15 @@
 use std::path::Path;
+use std::time::Duration;
 
 use av_toolbox_core::PipelineRegistry;
-use av_toolbox_gpu::{Accelerator, Backend, COMPILATION_CACHE_ENV, Device, install_compilation_cache};
+use av_toolbox_gpu::{
+    Accelerator,
+    Backend,
+    COMPILATION_CACHE_ENV,
+    Device,
+    Tuning,
+    install_compilation_cache,
+};
 use av_toolbox_graph::{Diagnostic, StageSpec};
 use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline, PipelineError, Supplied};
 use codespan_reporting::term::termcolor::WriteColor;
@@ -21,6 +29,21 @@ pub(crate) fn registry() -> Option<PipelineRegistry> {
 
             None
         },
+    }
+}
+
+/// How long a source waits for room on its frame budget while a stage tunes its kernels mid-run.
+///
+/// It matches how long av-denoise waits for another process to finish tuning.
+const TUNING_STALL_DEADLINE: Duration = Duration::from_secs(15 * 60);
+
+/// How long a source may wait for room on its frame budget, `None` for the budget's own default.
+///
+/// [Tuning::Auto] may tune kernels mid-run, and a source waits on the stage tuning them.
+pub(crate) fn stall_deadline_for(tuning: Tuning) -> Option<Duration> {
+    match tuning {
+        Tuning::Auto => Some(TUNING_STALL_DEADLINE),
+        Tuning::Cached | Tuning::Off => None,
     }
 }
 
@@ -100,11 +123,16 @@ pub(crate) fn backend(args: &Args) -> Option<Backend> {
         },
     }
 
-    let opened = av_toolbox_pipeline::open_backend(&args.accelerators, args.device);
+    let opened = av_toolbox_pipeline::open_backend(&args.accelerators, args.device, args.tune);
     match opened {
         Ok(backend) => {
             let accelerator = backend.accelerator();
-            tracing::info!(accelerator = %accelerator, device = %args.device, "opened the backend");
+            tracing::info!(
+                accelerator = %accelerator,
+                device = %args.device,
+                tuning = %args.tune,
+                "opened the backend"
+            );
 
             Some(backend)
         },
@@ -229,6 +257,13 @@ fn device_mismatch(profile_device: &str, opened: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_auto_tuning_waits_longer_on_the_frame_budget() {
+        assert_eq!(stall_deadline_for(Tuning::Auto), Some(TUNING_STALL_DEADLINE));
+        assert_eq!(stall_deadline_for(Tuning::Cached), None);
+        assert_eq!(stall_deadline_for(Tuning::Off), None);
+    }
 
     #[test]
     fn a_profile_from_the_opened_device_raises_no_warning() {

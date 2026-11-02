@@ -1,4 +1,4 @@
-use av_toolbox_gpu::{Accelerator, Backend, Device};
+use av_toolbox_gpu::{Accelerator, Backend, Device, Tuning};
 
 /// No accelerator could open the device asked for.
 #[derive(Debug, thiserror::Error)]
@@ -19,11 +19,17 @@ impl OpenBackendError {
 }
 
 /// Opens the first of `accelerators` that starts on `device`, trying them in order.
-pub fn open_backend(accelerators: &[Accelerator], device: Device) -> Result<Backend, OpenBackendError> {
+///
+/// Stages built against the backend pick their kernels by `tuning`.
+pub fn open_backend(
+    accelerators: &[Accelerator],
+    device: Device,
+    tuning: Tuning,
+) -> Result<Backend, OpenBackendError> {
     for accelerator in accelerators {
         let opened = Backend::open(*accelerator, device);
         if let Some(backend) = opened {
-            return Ok(backend);
+            return Ok(backend.with_tuning(tuning));
         }
     }
 
@@ -50,7 +56,7 @@ mod tests {
     fn no_accelerators_fails_naming_the_device() {
         let device = Device::Discrete { index: 3 };
 
-        let result = open_backend(&[], device);
+        let result = open_backend(&[], device, Tuning::Cached);
         let Err(error) = result else {
             panic!("nothing to try");
         };

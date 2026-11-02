@@ -49,8 +49,10 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> E
         return ExitCode::FAILURE;
     };
 
+    let stall_deadline = load::stall_deadline_for(backend.context().tuning());
     let settings = Settings {
         frame_budget: execute.frame_budget,
+        stall_deadline,
         ..Settings::default()
     };
     let built = compiled.engine(settings);

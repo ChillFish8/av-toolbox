@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use av_denoise_core::tune::{TuneReport, TuningFrame, is_tuned};
 use av_denoise_core::{DevicePlane, Engine, EngineSpec, Nl4dOptions, TuningConfig, build_engine};
 use av_toolbox_core::{Artefact, Filter, Inputs, StageError, StageInstance, WantedArtefacts};
 use av_toolbox_cubek::depth::{Element, Source};
@@ -18,13 +19,21 @@ use av_toolbox_gpu::{
     Plane,
     PlaneBuffer,
     SampleFormat,
+    Tuning,
 };
 use cubecl::server::Handle;
 
 use super::args::{AvdArgs, engine_spec};
 use super::grain::{GRAIN_TABLE, GrainLog};
 use super::planes::{PlaneGroups, needs_padding, normalises, plane_groups, stage_geometry};
-use super::tuning::tuning_config;
+use super::tuning::{
+    guarded_tuning,
+    needs_tuning_pass,
+    tune_once,
+    tuning_config,
+    tuning_prefix,
+    tuning_store,
+};
 use crate::bits::bits_of;
 use crate::codes::sample_range;
 use crate::masked::INPUT;
@@ -88,6 +97,11 @@ fn no_grain_export(stage: &str) -> StageError {
     let message = format!("{stage} has no engine that measures grain");
 
     StageError::msg(message)
+}
+
+/// Why a frame could not be copied for a tuning pass, which skips the pass.
+fn skip_reason(error: impl std::fmt::Display) -> String {
+    format!("a frame could not be copied for tuning: {error}")
 }
 
 fn bad_frame(stage: &str, error: FrameError) -> StageError {
@@ -269,6 +283,7 @@ pub(crate) struct AvdFilter {
     stage: &'static str,
     client: Client,
     device: cubecl::Device,
+    mode: Tuning,
     tuning: TuningConfig,
     format: FrameFormat,
     /// The input's format with F32 samples, which every output frame has.
@@ -283,6 +298,8 @@ pub(crate) struct AvdFilter {
     held: VecDeque<Frame>,
     /// What the engine measured on luma, when a grain table is wanted.
     grain: Option<GrainLog>,
+    /// How many frames to hold for a tuning pass before the engine sees any, while one is due.
+    tuning_prefix: Option<usize>,
 }
 
 impl AvdFilter {
@@ -309,14 +326,17 @@ impl AvdFilter {
 
         let client = context.client();
         let device = context.cubecl_device();
-        let tuning = tuning_config(context.tuning(), None);
+        let mode = context.tuning();
+        let store = tuning_store();
+        let tuning = tuning_config(mode, store);
         let built = build_engine(device, client, spec, &tuning);
         let engine = built.map_err(|error| unbuildable(A::STAGE, error))?;
 
-        Ok(Self {
+        let mut filter = Self {
             stage: A::STAGE,
             client: client.clone(),
             device: device.clone(),
+            mode,
             tuning,
             format: input,
             output,
@@ -325,7 +345,20 @@ impl AvdFilter {
             paths,
             held: VecDeque::new(),
             grain: None,
-        })
+            tuning_prefix: None,
+        };
+        filter.tuning_prefix = filter.planned_prefix();
+
+        Ok(filter)
+    }
+
+    /// How many frames a tuning pass on the spec wants, when the spec has not been tuned yet.
+    fn planned_prefix(&self) -> Option<usize> {
+        let specs = [self.spec];
+        let tuned = || is_tuned(&self.device, &self.client, &specs, &self.tuning);
+        let needed = needs_tuning_pass(self.mode, tuned);
+
+        needed.then(|| tuning_prefix(self.spec))
     }
 
     fn engine(&mut self) -> Result<&mut Box<dyn Engine>, StageError> {
@@ -353,6 +386,7 @@ impl AvdFilter {
         let engine = built.map_err(|error| unbuildable(self.stage, error))?;
         self.engine = Some(engine);
         self.spec = spec;
+        self.tuning_prefix = self.planned_prefix();
 
         let numerator = u64::from(rate.numerator());
         let denominator = u64::from(rate.denominator());
@@ -483,23 +517,27 @@ impl AvdFilter {
         Some(context.scratch(bytes))
     }
 
+    /// Every plane of `frame`, luma first, with the scratch it is staged through on its way into the engine.
+    fn staged_planes<'a>(
+        &self,
+        context: &FrameContext,
+        frame: &'a Frame,
+    ) -> Result<Vec<(&'a Plane, Option<PlaneBuffer>)>, StageError> {
+        let mut staged = Vec::with_capacity(self.paths.len());
+        for (plane_index, path) in self.paths.iter().enumerate() {
+            let plane = self.plane_of(frame, plane_index)?;
+            let scratch = self.staged_input(context, path, plane);
+            staged.push((plane, scratch));
+        }
+
+        Ok(staged)
+    }
+
     /// Pushes every plane of `frame` into the engine and returns how many frames are ready.
     fn push(&mut self, context: &FrameContext, frame: &Frame) -> Result<usize, StageError> {
-        let mut sources = Vec::with_capacity(self.paths.len());
-        for plane_index in 0..self.paths.len() {
-            let plane = self.plane_of(frame, plane_index)?;
-            sources.push(plane);
-        }
-
-        let mut staged = Vec::with_capacity(sources.len());
-        for (plane, path) in sources.iter().zip(&self.paths) {
-            let scratch = self.staged_input(context, path, plane);
-            staged.push(scratch);
-        }
-
-        let handles: Vec<&Handle> = sources
+        let staged = self.staged_planes(context, frame)?;
+        let handles: Vec<&Handle> = staged
             .iter()
-            .zip(&staged)
             .map(|(plane, scratch)| bound_handle(plane, scratch))
             .collect();
         let planes = device_planes(&handles, &self.paths);
@@ -508,6 +546,89 @@ impl AvdFilter {
         let pushed = self.engine()?.push(&planes);
 
         pushed.map_err(|error| refused(stage, error))
+    }
+
+    /// A device copy of `frame` as the engine reads it, for a tuning pass.
+    fn tuning_frame(&self, context: &FrameContext, frame: &Frame) -> Result<TuningFrame, String> {
+        let staged = self.staged_planes(context, frame).map_err(skip_reason)?;
+        let handles: Vec<&Handle> = staged
+            .iter()
+            .map(|(plane, scratch)| bound_handle(plane, scratch))
+            .collect();
+        let planes = device_planes(&handles, &self.paths);
+
+        let specs = [self.spec];
+        let copied = TuningFrame::copy_from(&self.client, &specs, &[&planes]);
+
+        copied.map_err(skip_reason)
+    }
+
+    /// Copies every held frame and tunes on them, skipping the pass when a frame cannot be copied.
+    fn copy_and_tune(&self, context: &FrameContext) -> TuneReport {
+        let mut tuning_frames = Vec::with_capacity(self.held.len());
+        for frame in &self.held {
+            let copied = self.tuning_frame(context, frame);
+
+            match copied {
+                Ok(tuning_frame) => tuning_frames.push(tuning_frame),
+                Err(reason) => return TuneReport::skipped(reason),
+            }
+        }
+
+        tune_once(
+            &self.device,
+            &self.client,
+            self.spec,
+            &tuning_frames,
+            &self.tuning,
+        )
+    }
+
+    /// Tunes on the held frames, then builds the engine and runs every held frame through it in order.
+    fn tune_and_replay(&mut self, context: &FrameContext) -> Result<Vec<Frame>, StageError> {
+        self.tuning_prefix = None;
+
+        // The tuning pass builds engines of its own, so this one is dropped to leave the GPU to them.
+        drop(self.engine.take());
+
+        guarded_tuning(self.stage, || self.copy_and_tune(context));
+
+        let built = build_engine(&self.device, &self.client, self.spec, &self.tuning);
+        let engine = built.map_err(|error| unbuildable(self.stage, error))?;
+        self.engine = Some(engine);
+
+        let prefix: Vec<Frame> = self.held.drain(..).collect();
+        let mut outputs = Vec::with_capacity(prefix.len());
+        for frame in prefix {
+            let emitted = self.advance(context, frame)?;
+            outputs.extend(emitted);
+        }
+
+        Ok(outputs)
+    }
+
+    /// Holds `frame` for a tuning pass, running the pass once `wanted` frames are held.
+    fn hold_for_tuning(
+        &mut self,
+        context: &FrameContext,
+        frame: Frame,
+        wanted: usize,
+    ) -> Result<Vec<Frame>, StageError> {
+        self.held.push_back(frame);
+
+        if self.held.len() < wanted {
+            return Ok(Vec::new());
+        }
+
+        self.tune_and_replay(context)
+    }
+
+    /// Pushes `frame` into the engine and emits every frame that is then ready.
+    fn advance(&mut self, context: &FrameContext, frame: Frame) -> Result<Vec<Frame>, StageError> {
+        let ready = self.push(context, &frame)?;
+        self.held.push_back(frame);
+
+        self.emit(context, ready)
     }
 
     /// A fresh F32 plane of `width` by `height`.
@@ -685,18 +806,26 @@ impl Filter for AvdFilter {
             grain.saw(frame.meta().index);
         }
 
-        let ready = self.push(context, &frame)?;
-        self.held.push_back(frame);
+        if let Some(wanted) = self.tuning_prefix {
+            return self.hold_for_tuning(context, frame, wanted);
+        }
 
-        self.emit(context, ready)
+        self.advance(context, frame)
     }
 
     fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<Vec<Frame>, StageError> {
+        // A stream shorter than the tuning pass wants is tuned on every frame it had.
+        let mut frames = Vec::new();
+        if self.tuning_prefix.is_some() && !self.held.is_empty() {
+            frames = self.tune_and_replay(context)?;
+        }
+
         let stage = self.stage;
         let finished = self.engine()?.finish();
         let ready = finished.map_err(|error| refused(stage, error))?;
 
-        let frames = self.emit(context, ready)?;
+        let emitted = self.emit(context, ready)?;
+        frames.extend(emitted);
 
         if !self.held.is_empty() {
             return Err(left_over(self.stage, self.held.len()));

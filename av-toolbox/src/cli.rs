@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use av_toolbox_core::StageKind;
-use av_toolbox_gpu::{Accelerator, Device, default_accelerators};
+use av_toolbox_gpu::{Accelerator, Device, Tuning, default_accelerators};
 use clap::{Parser, Subcommand, ValueEnum};
 use codespan_reporting::term::termcolor::ColorChoice;
 
@@ -42,6 +42,16 @@ pub(crate) struct Args {
     /// It is for testing a pipeline, not for real encodes.
     #[arg(short, long, env = "AVTB_DEVICE", default_value = "default", global = true)]
     pub(crate) device: Device,
+
+    /// How kernels pick between their candidate versions.
+    ///
+    /// `auto` times the candidates of any kernel without a stored result and stores the fastest.
+    ///
+    /// `cached` uses stored results only, and a kernel without one runs its baseline.
+    ///
+    /// `off` always runs the baseline.
+    #[arg(long, env = "AVTB_TUNE", default_value = "cached", global = true)]
+    pub(crate) tune: Tuning,
 
     /// When to colour diagnostics.
     ///
@@ -352,5 +362,31 @@ mod tests {
     #[test]
     fn a_var_without_a_name_is_refused() {
         assert!(parse_var("=1").is_err());
+    }
+
+    #[test]
+    fn tune_defaults_to_cached_and_parses_every_mode() {
+        let defaulted = Args::try_parse_from(["av-toolbox", "list-devices"]).expect("should parse");
+        assert_eq!(defaulted.tune, Tuning::Cached);
+
+        let modes = [
+            ("auto", Tuning::Auto),
+            ("cached", Tuning::Cached),
+            ("off", Tuning::Off),
+        ];
+
+        for (spelling, mode) in modes {
+            let parsed = Args::try_parse_from(["av-toolbox", "list-devices", "--tune", spelling]);
+            let args = parsed.expect("should parse");
+
+            assert_eq!(args.tune, mode, "{spelling}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_tune_mode_is_refused() {
+        let parsed = Args::try_parse_from(["av-toolbox", "--tune", "always", "list-devices"]);
+
+        assert!(parsed.is_err());
     }
 }

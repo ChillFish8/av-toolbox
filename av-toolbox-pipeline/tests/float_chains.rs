@@ -286,7 +286,7 @@ args.path = "{input}"
 [filter.denoise]
 type = "av-denoise/nl4d"
 inputs = ["input"]
-args.preset = "veryfast"
+args.temporal_radius = 1
 # Denoising chroma too builds a second engine, which adds about a minute.
 args.planes = ["y"]
 

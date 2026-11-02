@@ -11,6 +11,7 @@ use std::io::IsTerminal;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use av_toolbox_core::PipelineRegistry;
 use av_toolbox_graph::StageSpec;
@@ -173,7 +174,8 @@ fn profile_passes(
         profile.frames
     );
 
-    let measure_settings = pass_settings(profile, warmup_items, Some(profiling));
+    let stall_deadline = load::stall_deadline_for(setup.backend.context().tuning());
+    let measure_settings = pass_settings(profile, warmup_items, stall_deadline, Some(profiling));
     let undeclared = specs::undeclared(written);
     let measure_end = run_pass(setup, &undeclared, measure_settings, Warnings::Show, stderr);
     let measured = finished(measure_end, setup.interrupt)?;
@@ -184,7 +186,7 @@ fn profile_passes(
     let mut tuned = model::suggest(&costs, max_workers);
     mark_declared(&mut tuned, written);
 
-    let plain_settings = pass_settings(profile, warmup_items, None);
+    let plain_settings = pass_settings(profile, warmup_items, stall_deadline, None);
     tracing::info!("running the pipeline as written (pass 2 of 3)");
     let baseline_end = run_pass(setup, written, plain_settings.clone(), Warnings::Hide, stderr);
     let baseline = finished(baseline_end, setup.interrupt)?;
@@ -298,15 +300,20 @@ fn timed_frames(
     Ok(counted)
 }
 
-fn pass_settings(profile: &ProfileArgs, warmup_items: u64, profiling: Option<Profiling>) -> Settings {
+fn pass_settings(
+    profile: &ProfileArgs,
+    warmup_items: u64,
+    stall_deadline: Option<Duration>,
+    profiling: Option<Profiling>,
+) -> Settings {
     let frame_limit = profile.warmup.saturating_add(profile.frames);
 
     Settings {
         frame_budget: profile.frame_budget,
+        stall_deadline,
         frame_limit: Some(frame_limit),
         warmup: warmup_items,
         profiling,
-        ..Settings::default()
     }
 }
 

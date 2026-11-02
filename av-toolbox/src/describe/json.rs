@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(stage["identifier"], "av-denoise/nl4d");
         assert_eq!(stage["kind"], "filter");
         assert_eq!(stage["tags"], serde_json::json!(["denoise"]));
-        assert!(stage["schema"]["properties"]["preset"].is_object());
+        assert!(stage["schema"]["properties"]["temporal_radius"].is_object());
     }
 
     #[test]
