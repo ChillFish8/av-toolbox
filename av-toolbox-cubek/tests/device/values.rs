@@ -11,7 +11,6 @@ use av_toolbox_cubek::values::{
     widen,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{
     Sizing,
@@ -35,7 +34,7 @@ struct Widen {
 impl BuildTask for Widen {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -62,7 +61,7 @@ struct Narrow {
 impl BuildTask for Narrow {
     type Output = Vec<u16>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -133,7 +132,7 @@ struct Offset {
 impl BuildTask for Offset {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -183,7 +182,7 @@ struct MapCodes {
 impl BuildTask for MapCodes {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -322,7 +321,7 @@ struct IntegerCodes {
 impl BuildTask for IntegerCodes {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

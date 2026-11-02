@@ -103,7 +103,7 @@ pub fn expansion_passes(horizontal: u32, vertical: u32, expansion: Expansion) ->
 }
 
 #[cube]
-fn read(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f32 {
+fn read(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
     let x = reflect(column, width as i32);
     let y = reflect(row, height as i32);
     let index = y as u32 * width + x as u32;
@@ -112,7 +112,7 @@ fn read(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f
 }
 
 #[cube]
-fn read_edge(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32, clamp: u32) -> f32 {
+fn read_edge(input: &[f32], width: u32, height: u32, column: i32, row: i32, clamp: u32) -> f32 {
     let x = if clamp == 1u32 {
         i32::clamp(column, 0, width as i32 - 1)
     } else {
@@ -140,14 +140,7 @@ fn in_shape(shape: u32, offset_x: i32, offset_y: i32) -> bool {
 }
 
 #[cube(launch_unchecked)]
-fn extreme_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    height: u32,
-    shape: u32,
-    maximum: u32,
-) {
+fn extreme_kernel(input: &[f32], output: &mut [f32], width: u32, height: u32, shape: u32, maximum: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -178,14 +171,7 @@ fn extreme_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn spread_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    height: u32,
-    inflate: u32,
-    clamp: u32,
-) {
+fn spread_kernel(input: &[f32], output: &mut [f32], width: u32, height: u32, inflate: u32, clamp: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -217,8 +203,8 @@ fn spread_kernel(
 }
 
 /// Writes the largest or smallest value among each sample and its neighbours in `shape`.
-pub fn extreme<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn extreme(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: NeighbourPlanes<'_>,
     extreme: Extreme,
@@ -231,33 +217,28 @@ pub fn extreme<R: Runtime>(
     let samples = planes.output.samples();
     let shape_code = shape.code();
     let maximum = u32::from(extreme == Extreme::Maximum);
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `width` by `height` f32 samples, and every read is reflected inside the
     // plane.
     unsafe {
-        extreme_kernel::launch_unchecked::<R>(
+        extreme_kernel::launch_unchecked(
             client, cubes, unit, input, output, width, height, shape_code, maximum,
         );
     }
 }
 
 /// Blurs a plane with a 3x3 kernel.
-pub fn smooth<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: NeighbourPlanes<'_>,
-    smooth: Smooth,
-) {
+pub fn smooth(client: &Client, dispatch: &impl Dispatch, planes: NeighbourPlanes<'_>, smooth: Smooth) {
     smooth_with_edge(client, dispatch, planes, smooth, Edge::Reflect);
 }
 
 /// The same as [smooth], reading past the plane's edge as `edge` says.
-pub fn smooth_with_edge<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn smooth_with_edge(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: NeighbourPlanes<'_>,
     smooth: Smooth,
@@ -273,18 +254,13 @@ pub fn smooth_with_edge<R: Runtime>(
 
 /// Moves each sample to the mean of its 8 neighbours when the mean is larger for inflate, or
 /// smaller for deflate.
-pub fn spread<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: NeighbourPlanes<'_>,
-    spread: Spread,
-) {
+pub fn spread(client: &Client, dispatch: &impl Dispatch, planes: NeighbourPlanes<'_>, spread: Spread) {
     spread_with_edge(client, dispatch, planes, spread, Edge::Reflect);
 }
 
 /// The same as [spread], reading past the plane's edge as `edge` says.
-pub fn spread_with_edge<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn spread_with_edge(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: NeighbourPlanes<'_>,
     spread: Spread,
@@ -297,16 +273,14 @@ pub fn spread_with_edge<R: Runtime>(
     let samples = planes.output.samples();
     let inflate = u32::from(spread == Spread::Inflate);
     let clamp = u32::from(edge == Edge::Clamp);
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `width` by `height` f32 samples, and every read is folded inside the
     // plane.
     unsafe {
-        spread_kernel::launch_unchecked::<R>(
-            client, cubes, unit, input, output, width, height, inflate, clamp,
-        );
+        spread_kernel::launch_unchecked(client, cubes, unit, input, output, width, height, inflate, clamp);
     }
 }

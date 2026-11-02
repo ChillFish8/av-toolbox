@@ -32,24 +32,24 @@ struct GapRows {
 
 #[cube]
 impl GapRows {
-    fn up(&self, input: &Array<f32>, column: u32) -> f32 {
+    fn up(&self, input: &[f32], column: u32) -> f32 {
         field_sample(input, self.width, self.offset, self.gap, column)
     }
 
-    fn down(&self, input: &Array<f32>, column: u32) -> f32 {
+    fn down(&self, input: &[f32], column: u32) -> f32 {
         field_sample(input, self.width, self.offset, self.gap + 1, column)
     }
 
-    fn up_direction(&self, directions: &Array<f32>, column: u32) -> f32 {
+    fn up_direction(&self, directions: &[f32], column: u32) -> f32 {
         directions[(self.gap * self.width + column) as usize]
     }
 
-    fn down_direction(&self, directions: &Array<f32>, column: u32) -> f32 {
+    fn down_direction(&self, directions: &[f32], column: u32) -> f32 {
         directions[((self.gap + 1) * self.width + column) as usize]
     }
 
     /// The average of the samples directly above and below `column`, rounded up.
-    fn vertical(&self, input: &Array<f32>, column: u32) -> f32 {
+    fn vertical(&self, input: &[f32], column: u32) -> f32 {
         let up = self.up(input, column);
         let down = self.down(input, column);
 
@@ -105,7 +105,7 @@ impl HalfPair {
 ///
 /// A negative variance, possible above 8 bits, is not low.
 #[cube]
-fn has_low_variance(input: &Array<f32>, rows: &GapRows, column: u32, reduce: f32) -> bool {
+fn has_low_variance(input: &[f32], rows: &GapRows, column: u32, reduce: f32) -> bool {
     let mut sum = 0.0f32;
     let mut sum_of_squares = 0.0f32;
 
@@ -137,7 +137,7 @@ struct Neighbourhood {
 }
 
 #[cube]
-fn neighbourhood(input: &Array<f32>, rows: &GapRows, row: u32, column: u32) -> Neighbourhood {
+fn neighbourhood(input: &[f32], rows: &GapRows, row: u32, column: u32) -> Neighbourhood {
     let width = rows.width;
     let offset = rows.offset;
 
@@ -172,7 +172,7 @@ fn is_ridge(samples: &Neighbourhood, three: f32) -> bool {
 ///
 /// `column` must lie at least 2 inside the row.
 #[cube]
-fn is_extremum(input: &Array<f32>, rows: &GapRows, column: u32, three: f32) -> bool {
+fn is_extremum(input: &[f32], rows: &GapRows, column: u32, three: f32) -> bool {
     let up = neighbourhood(input, rows, rows.gap, column);
     let down = neighbourhood(input, rows, rows.gap + 1, column);
     let valleys = is_valley(&up, three) && is_valley(&down, three);
@@ -183,7 +183,7 @@ fn is_extremum(input: &Array<f32>, rows: &GapRows, column: u32, three: f32) -> b
 
 /// The cost of pairing the samples above `column` with those below shifted by `shift`, both ways.
 #[cube]
-fn crossing_cost(input: &Array<f32>, rows: &GapRows, column: u32, shift: i32) -> f32 {
+fn crossing_cost(input: &[f32], rows: &GapRows, column: u32, shift: i32) -> f32 {
     let mut total = 0.0f32;
 
     for tap in 0..3u32 {
@@ -225,7 +225,7 @@ fn is_near(value: f32, claim: &Claim) -> bool {
 
 /// Whether the cleaned directions along `shift` back up the claim, both above and below.
 #[cube]
-fn is_supported(directions: &Array<f32>, rows: &GapRows, column: u32, shift: i32, claim: &Claim) -> bool {
+fn is_supported(directions: &[f32], rows: &GapRows, column: u32, shift: i32, claim: &Claim) -> bool {
     let mut near_above = false;
     let mut near_below = false;
 
@@ -256,7 +256,7 @@ fn pairs_below(above: f32, below_down: f32, below_up: f32, claim: &Claim) -> boo
 /// Whether the cleaned directions at the half-pixel pair of `shift` agree with each other and with the
 /// claim.
 #[cube]
-fn is_matched(directions: &Array<f32>, rows: &GapRows, column: u32, shift: i32, claim: &Claim) -> bool {
+fn is_matched(directions: &[f32], rows: &GapRows, column: u32, shift: i32, claim: &Claim) -> bool {
     let pair = HalfPair::of(column, shift);
     let above_down = rows.up_direction(directions, pair.above_down);
     let above_up = rows.up_direction(directions, pair.above_up);
@@ -275,7 +275,7 @@ fn is_matched(directions: &Array<f32>, rows: &GapRows, column: u32, shift: i32, 
 
 /// The cost of pairing the 3 samples above and below the half-pixel point of `shift`.
 #[cube]
-fn half_cost(input: &Array<f32>, rows: &GapRows, column: u32, shift: i32) -> f32 {
+fn half_cost(input: &[f32], rows: &GapRows, column: u32, shift: i32) -> f32 {
     let half_down = half_toward_zero(shift);
     let mut total = 0.0f32;
 
@@ -299,7 +299,7 @@ struct PairSums {
 }
 
 #[cube]
-fn pair_sums(input: &Array<f32>, rows: &GapRows, column: u32, shift: i32) -> PairSums {
+fn pair_sums(input: &[f32], rows: &GapRows, column: u32, shift: i32) -> PairSums {
     let pair = HalfPair::of(column, shift);
     let above_down = rows.up(input, pair.above_down);
     let above_up = rows.up(input, pair.above_up);
@@ -329,8 +329,8 @@ struct Pick {
 /// The directional search within 2 pixels of the claim, clamped so every read stays inside the row.
 #[cube]
 fn directional_pick(
-    input: &Array<f32>,
-    directions: &Array<f32>,
+    input: &[f32],
+    directions: &[f32],
     rows: &GapRows,
     column: u32,
     claim: &Claim,
@@ -376,7 +376,7 @@ fn directional_pick(
 
 /// The fallback search within `dt`, taking only a value between the samples directly above and below.
 #[cube]
-fn fallback_pick(input: &Array<f32>, rows: &GapRows, column: u32, scale: &LatticeScale) -> Pick {
+fn fallback_pick(input: &[f32], rows: &GapRows, column: u32, scale: &LatticeScale) -> Pick {
     let room_left = column - 1;
     let room_right = rows.width - 2 - column;
     let room = u32::min(room_left, room_right);
@@ -427,8 +427,8 @@ struct Rebuilt {
 /// `column` must lie inside the row.
 #[cube]
 fn rebuild(
-    input: &Array<f32>,
-    directions: &Array<f32>,
+    input: &[f32],
+    directions: &[f32],
     rows: &GapRows,
     column: u32,
     claim: &Claim,
@@ -480,11 +480,11 @@ fn rebuild(
 /// A pixel with no direction gets the vertical average and `peak`.
 #[cube(launch_unchecked)]
 fn lattice_candidates_kernel(
-    input: &Array<f32>,
-    directions: &Array<f32>,
-    gaps: &Array<f32>,
-    values: &mut Array<f32>,
-    candidate_directions: &mut Array<f32>,
+    input: &[f32],
+    directions: &[f32],
+    gaps: &[f32],
+    values: &mut [f32],
+    candidate_directions: &mut [f32],
     width: u32,
     offset: u32,
     peak: f32,
@@ -545,12 +545,12 @@ fn lattice_candidates_kernel(
 /// Every other pixel takes its candidate.
 #[cube(launch_unchecked)]
 fn lattice_resolve_kernel(
-    input: &Array<f32>,
-    gaps: &Array<f32>,
-    values: &Array<f32>,
-    candidate_directions: &Array<f32>,
-    used: &mut Array<f32>,
-    rebuilt: &mut Array<f32>,
+    input: &[f32],
+    gaps: &[f32],
+    values: &[f32],
+    candidate_directions: &[f32],
+    used: &mut [f32],
+    rebuilt: &mut [f32],
     width: u32,
     gap_rows: u32,
     offset: u32,
@@ -600,11 +600,11 @@ fn lattice_resolve_kernel(
 /// the vertical average, unless the lattice used `peak` or `neutral` there.
 #[cube(launch_unchecked)]
 fn assemble_kernel(
-    input: &Array<f32>,
-    used: &Array<f32>,
-    refiltered: &Array<f32>,
-    rebuilt: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    used: &[f32],
+    refiltered: &[f32],
+    rebuilt: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     offset: u32,
@@ -656,8 +656,8 @@ fn assemble_kernel(
 
 /// Launches pass 15, reading `D3` in `directions` and `X4` in `working`, and writing the candidate values
 /// into `candidates` and their directions into `spare`.
-pub(super) fn lattice_candidates<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn lattice_candidates(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -672,13 +672,13 @@ pub(super) fn lattice_candidates<R: Runtime>(
     // and searches only pixels inside the row, with every shift clamped so each column it reads stays
     // inside the row.
     unsafe {
-        let input = pass.input.array::<R>();
-        let directions = pass.field_array::<R>(FieldBuffer::Directions);
-        let gaps = pass.gap_array::<R>(GapBuffer::Working);
-        let values = pass.gap_array::<R>(GapBuffer::Candidates);
-        let candidate_directions = pass.gap_array::<R>(GapBuffer::Spare);
+        let input = pass.input.array();
+        let directions = pass.field_array(FieldBuffer::Directions);
+        let gaps = pass.gap_array(GapBuffer::Working);
+        let values = pass.gap_array(GapBuffer::Candidates);
+        let candidate_directions = pass.gap_array(GapBuffer::Spare);
 
-        lattice_candidates_kernel::launch_unchecked::<R>(
+        lattice_candidates_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -706,11 +706,7 @@ pub(super) fn lattice_candidates<R: Runtime>(
 
 /// Launches pass 16, resolving the candidates along each gap row into `L` in `directions` and `R` in
 /// `rebuilt`, with one unit per gap row.
-pub(super) fn lattice_resolve<R: Runtime>(
-    client: &ComputeClient<R>,
-    pass: &FieldPass<'_>,
-    settings: &Eedi2Settings,
-) {
+pub(super) fn lattice_resolve(client: &Client, pass: &FieldPass<'_>, settings: &Eedi2Settings) {
     let gap_rows = pass.rows - 1;
     let (cubes, unit) = row_launch(gap_rows);
 
@@ -718,14 +714,14 @@ pub(super) fn lattice_resolve<R: Runtime>(
     // `width * (rows - 1)`, as `FieldPass::new` checked. Each unit owns one gap row, the only row it writes,
     // and reads a neighbour's direction only for columns inside the row.
     unsafe {
-        let input = pass.input.array::<R>();
-        let gaps = pass.gap_array::<R>(GapBuffer::Working);
-        let values = pass.gap_array::<R>(GapBuffer::Candidates);
-        let candidate_directions = pass.gap_array::<R>(GapBuffer::Spare);
-        let used = pass.gap_array::<R>(GapBuffer::Directions);
-        let rebuilt = pass.gap_array::<R>(GapBuffer::Rebuilt);
+        let input = pass.input.array();
+        let gaps = pass.gap_array(GapBuffer::Working);
+        let values = pass.gap_array(GapBuffer::Candidates);
+        let candidate_directions = pass.gap_array(GapBuffer::Spare);
+        let used = pass.gap_array(GapBuffer::Directions);
+        let rebuilt = pass.gap_array(GapBuffer::Rebuilt);
 
-        lattice_resolve_kernel::launch_unchecked::<R>(
+        lattice_resolve_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -750,8 +746,8 @@ pub(super) fn lattice_resolve<R: Runtime>(
 /// `rebuilt`.
 ///
 /// `output` must be as large as the input plane.
-pub(super) fn assemble<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn assemble(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     output: DevicePlane<'_>,
@@ -767,13 +763,13 @@ pub(super) fn assemble<R: Runtime>(
     // input. Each unit writes only its own output sample. A rebuilt row lies strictly between two kept rows,
     // so its gap index is below `rows - 1` and the rows it averages exist.
     unsafe {
-        let input = pass.input.array::<R>();
-        let used = pass.gap_array::<R>(GapBuffer::Directions);
-        let refiltered = pass.gap_array::<R>(GapBuffer::Working);
-        let rebuilt = pass.gap_array::<R>(GapBuffer::Rebuilt);
-        let output = output.array::<R>();
+        let input = pass.input.array();
+        let used = pass.gap_array(GapBuffer::Directions);
+        let refiltered = pass.gap_array(GapBuffer::Working);
+        let rebuilt = pass.gap_array(GapBuffer::Rebuilt);
+        let output = output.array();
 
-        assemble_kernel::launch_unchecked::<R>(
+        assemble_kernel::launch_unchecked(
             client,
             cubes,
             unit,

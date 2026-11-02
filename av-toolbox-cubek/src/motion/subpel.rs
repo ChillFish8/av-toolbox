@@ -12,7 +12,7 @@ use crate::Dispatch;
 /// bottom left, then bottom right.
 #[cube]
 pub(crate) fn half_pel_sample(
-    plane: &Array<f32>,
+    plane: &[f32],
     x2: i32,
     y2: i32,
     #[comptime] width: u32,
@@ -53,8 +53,8 @@ pub(crate) fn half_pel_sample(
 )]
 #[cube]
 fn half_pel_sad(
-    centre: &Array<f32>,
-    neighbour: &Array<f32>,
+    centre: &[f32],
+    neighbour: &[f32],
     origin_x: i32,
     origin_y: i32,
     vector_x: i32,
@@ -93,10 +93,10 @@ fn half_pel_sad(
 )]
 #[cube(launch_unchecked)]
 fn half_pel_kernel(
-    centre: &Array<f32>,
-    neighbour: &Array<f32>,
-    vectors: &mut Array<i32>,
-    sads: &mut Array<f32>,
+    centre: &[f32],
+    neighbour: &[f32],
+    vectors: &mut [i32],
+    sads: &mut [f32],
     #[comptime] width: u32,
     #[comptime] height: u32,
     #[comptime] blksize: u32,
@@ -155,8 +155,8 @@ fn half_pel_kernel(
 /// are then a field with `pel` 2.
 ///
 /// On a chained field, run it after [refine_seed](crate::motion::refine_seed).
-pub fn refine_half_pel<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn refine_half_pel(
+    client: &Client,
     dispatch: &impl Dispatch,
     centre: &Pyramid<'_>,
     neighbour: &Pyramid<'_>,
@@ -171,15 +171,15 @@ pub fn refine_half_pel<R: Runtime>(
     let cubes = dispatch.cube_count(grid.blocks());
     let unit = dispatch.cube_dim();
     let centre_plane = centre.levels[0];
-    let centre_array = centre_plane.array::<R>();
-    let neighbour_array = neighbour.levels[0].array::<R>();
-    let vectors = field.planes.vectors.array::<R>();
-    let sads = field.planes.sads.array::<R>();
+    let centre_array = centre_plane.array();
+    let neighbour_array = neighbour.levels[0].array();
+    let vectors = field.planes.vectors.array();
+    let sads = field.planes.sads.array();
 
     // Safety: both planes hold `width` by `height` samples that every read clamps into, and each unit
     // reads and writes only its own block's entries of `vectors` and `sads`.
     unsafe {
-        half_pel_kernel::launch_unchecked::<R>(
+        half_pel_kernel::launch_unchecked(
             client,
             cubes,
             unit,

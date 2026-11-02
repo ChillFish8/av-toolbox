@@ -67,8 +67,8 @@ pub(super) fn tile_cubes(width: u32, height: u32) -> Option<CubeCount> {
 /// otherwise, so the blurs read the tile without edge checks.
 #[cube]
 fn load_tile<F: Float>(
-    input: &Array<F>,
-    loaded: &mut SharedMemory<f32>,
+    input: &[F],
+    loaded: &mut Shared<[f32]>,
     width: u32,
     height: u32,
     #[comptime] radius: u32,
@@ -100,12 +100,7 @@ fn load_tile<F: Float>(
 /// Blurs every row of `loaded` across into `across`, which keeps the vertical border but not the
 /// horizontal one.
 #[cube]
-fn blur_across(
-    loaded: &SharedMemory<f32>,
-    taps: &Array<f32>,
-    across: &mut SharedMemory<f32>,
-    #[comptime] radius: u32,
-) {
+fn blur_across(loaded: &Shared<[f32]>, taps: &[f32], across: &mut Shared<[f32]>, #[comptime] radius: u32) {
     let loaded_width = comptime!(loaded_width(radius));
     let loaded_height = comptime!(loaded_height(radius));
 
@@ -132,9 +127,9 @@ fn blur_across(
 /// Blurs down the columns of `across` and writes the outputs that fall inside the plane.
 #[cube]
 fn blur_down<F: Float>(
-    across: &SharedMemory<f32>,
-    taps: &Array<f32>,
-    output: &mut Array<F>,
+    across: &Shared<[f32]>,
+    taps: &[f32],
+    output: &mut [F],
     width: u32,
     height: u32,
     #[comptime] radius: u32,
@@ -169,9 +164,9 @@ fn blur_down<F: Float>(
 /// Blurs one tile of the plane in a single cube, staging it and its border through shared memory.
 #[cube(launch_unchecked)]
 fn blur_tile<F: Float>(
-    input: &Array<F>,
-    weights: &Array<f32>,
-    output: &mut Array<F>,
+    input: &[F],
+    weights: &[f32],
+    output: &mut [F],
     width: u32,
     height: u32,
     #[comptime] radius: u32,
@@ -180,8 +175,8 @@ fn blur_tile<F: Float>(
     let tap_count = comptime!(2 * radius + 1);
     let loaded_width = comptime!(loaded_width(radius));
     let loaded_height = comptime!(loaded_height(radius));
-    let mut loaded = SharedMemory::<f32>::new(comptime!((loaded_width * loaded_height) as usize));
-    let mut across = SharedMemory::<f32>::new(comptime!((TILE_WIDTH * loaded_height) as usize));
+    let mut loaded = Shared::<[f32]>::new_slice(comptime!((loaded_width * loaded_height) as usize));
+    let mut across = Shared::<[f32]>::new_slice(comptime!((TILE_WIDTH * loaded_height) as usize));
 
     let mut taps = Array::<f32>::new(comptime!(tap_count as usize));
     #[unroll]
@@ -193,20 +188,20 @@ fn blur_tile<F: Float>(
 
     sync_cube();
 
-    blur_across(&loaded, &taps, &mut across, radius);
+    blur_across(&loaded, taps.as_slice(), &mut across, radius);
 
     sync_cube();
 
-    blur_down(&across, &taps, output, width, height, radius);
+    blur_down(&across, taps.as_slice(), output, width, height, radius);
 }
 
 /// Blurs `planes.input` into `planes.output` in one dispatch, one output tile a cube.
 ///
 /// It reads past the edge as `edge` says. It panics when the plane needs more cubes than
 /// [tile_cubes](crate::blur::tiled::tile_cubes) allows.
-pub(super) fn blur_tiled<R: Runtime>(
-    client: &ComputeClient<R>,
-    weights: ArrayArg<R>,
+pub(super) fn blur_tiled(
+    client: &Client,
+    weights: BufferArg,
     planes: FilterPlanes<'_>,
     radius: u32,
     edge: Edge,
@@ -217,17 +212,17 @@ pub(super) fn blur_tiled<R: Runtime>(
     let cubes = tile_cubes(width, height).expect("the plane should fit the tiled blur's cube count");
     let shape = CubeDim::new_2d(UNITS_ACROSS, UNITS_DOWN);
     let clamp = edge == Edge::Clamp;
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
 
     // Safety: both planes hold `width * height` values of `storage`, every read is folded into the
     // plane and every write is guarded to it.
     unsafe {
         match storage {
-            Storage::F32 => blur_tile::launch_unchecked::<f32, R>(
+            Storage::F32 => blur_tile::launch_unchecked::<f32>(
                 client, cubes, shape, input, weights, output, width, height, radius, clamp,
             ),
-            Storage::F16 => blur_tile::launch_unchecked::<half::f16, R>(
+            Storage::F16 => blur_tile::launch_unchecked::<half::f16>(
                 client, cubes, shape, input, weights, output, width, height, radius, clamp,
             ),
         }

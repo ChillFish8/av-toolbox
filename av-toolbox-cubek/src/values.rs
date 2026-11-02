@@ -7,7 +7,7 @@ use crate::matrix::{MatrixSamples, SampleRange, scaling};
 use crate::{DevicePlane, Dispatch};
 
 #[cube(launch_unchecked)]
-fn widen_kernel<E: Int>(input: &Array<E>, output: &mut Array<f32>) {
+fn widen_kernel<E: Int>(input: &[E], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -16,7 +16,7 @@ fn widen_kernel<E: Int>(input: &Array<E>, output: &mut Array<f32>) {
 }
 
 #[cube(launch_unchecked)]
-fn narrow_kernel<E: Int>(input: &Array<f32>, output: &mut Array<E>, peak: f32) {
+fn narrow_kernel<E: Int>(input: &[f32], output: &mut [E], peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -28,7 +28,7 @@ fn narrow_kernel<E: Int>(input: &Array<f32>, output: &mut Array<E>, peak: f32) {
 }
 
 #[cube(launch_unchecked)]
-fn offset_kernel(input: &Array<f32>, output: &mut Array<f32>, amount: f32) {
+fn offset_kernel(input: &[f32], output: &mut [f32], amount: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -37,7 +37,7 @@ fn offset_kernel(input: &Array<f32>, output: &mut Array<f32>, amount: f32) {
 }
 
 #[cube(launch_unchecked)]
-fn float_to_codes_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f32, scale: f32, peak: f32) {
+fn float_to_codes_kernel(input: &[f32], output: &mut [f32], offset: f32, scale: f32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -50,13 +50,7 @@ fn float_to_codes_kernel(input: &Array<f32>, output: &mut Array<f32>, offset: f3
 }
 
 #[cube(launch_unchecked)]
-fn float_to_whole_codes_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    offset: f32,
-    scale: f32,
-    peak: f32,
-) {
+fn float_to_whole_codes_kernel(input: &[f32], output: &mut [f32], offset: f32, scale: f32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -70,7 +64,7 @@ fn float_to_whole_codes_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn codes_to_float_kernel<I: Numeric>(input: &Array<I>, output: &mut Array<f32>, offset: f32, scale: f32) {
+fn codes_to_float_kernel<I: Numeric>(input: &[I], output: &mut [f32], offset: f32, scale: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -81,40 +75,40 @@ fn codes_to_float_kernel<I: Numeric>(input: &Array<I>, output: &mut Array<f32>, 
 }
 
 /// Copies an integer plane into f32 code values.
-pub fn widen<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn widen(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     element: Element,
 ) {
     match element {
-        Element::U8 => launch_widen::<u8, R>(client, dispatch, input, output),
-        Element::U16 => launch_widen::<u16, R>(client, dispatch, input, output),
+        Element::U8 => launch_widen::<u8>(client, dispatch, input, output),
+        Element::U16 => launch_widen::<u16>(client, dispatch, input, output),
     }
 }
 
-fn launch_widen<E: Int, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_widen<E: Int>(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
 ) {
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input holds `samples` values of `E` and the output as many f32 values.
     unsafe {
-        widen_kernel::launch_unchecked::<E, R>(client, cubes, unit, input_array, output_array);
+        widen_kernel::launch_unchecked::<E>(client, cubes, unit, input_array, output_array);
     }
 }
 
 /// Rounds f32 code values to nearest, clamped to `0..=peak`, into an integer plane.
-pub fn narrow<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn narrow(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -122,47 +116,47 @@ pub fn narrow<R: Runtime>(
     peak: f32,
 ) {
     match element {
-        Element::U8 => launch_narrow::<u8, R>(client, dispatch, input, output, peak),
-        Element::U16 => launch_narrow::<u16, R>(client, dispatch, input, output, peak),
+        Element::U8 => launch_narrow::<u8>(client, dispatch, input, output, peak),
+        Element::U16 => launch_narrow::<u16>(client, dispatch, input, output, peak),
     }
 }
 
-fn launch_narrow<E: Int, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_narrow<E: Int>(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     peak: f32,
 ) {
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input holds `samples` f32 values and the output as many values of `E`.
     unsafe {
-        narrow_kernel::launch_unchecked::<E, R>(client, cubes, unit, input_array, output_array, peak);
+        narrow_kernel::launch_unchecked::<E>(client, cubes, unit, input_array, output_array, peak);
     }
 }
 
 /// Adds `amount` to every sample of an f32 plane, writing the result into `output`.
-pub fn offset<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn offset(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     amount: f32,
 ) {
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input and the output each hold `samples` f32 values.
     unsafe {
-        offset_kernel::launch_unchecked::<R>(client, cubes, unit, input_array, output_array, amount);
+        offset_kernel::launch_unchecked(client, cubes, unit, input_array, output_array, amount);
     }
 }
 
@@ -201,22 +195,22 @@ impl FloatCodes {
 }
 
 /// Maps float samples to f32 code values held to `0..=peak`, without rounding. A NaN sample reads as 0.
-pub fn float_to_codes<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn float_to_codes(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     codes: FloatCodes,
 ) {
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input and the output each hold `samples` f32 values.
     unsafe {
-        float_to_codes_kernel::launch_unchecked::<R>(
+        float_to_codes_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -233,22 +227,22 @@ pub fn float_to_codes<R: Runtime>(
 ///
 /// It suits kernels defined on integer codes. Without it, an F32 sample a hair below its code would read one
 /// code lower.
-pub fn float_to_whole_codes<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn float_to_whole_codes(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     codes: FloatCodes,
 ) {
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input and the output each hold `samples` f32 values.
     unsafe {
-        float_to_whole_codes_kernel::launch_unchecked::<R>(
+        float_to_whole_codes_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -264,8 +258,8 @@ pub fn float_to_whole_codes<R: Runtime>(
 /// Maps code values held as `source` samples back to float samples, neither rounded nor clamped.
 ///
 /// It divides by the scale rather than multiplying by its inverse, which keeps black and white on 0 and 1.
-pub fn codes_to_float<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn codes_to_float(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -273,28 +267,28 @@ pub fn codes_to_float<R: Runtime>(
     codes: FloatCodes,
 ) {
     match source {
-        Source::U8 => launch_codes_to_float::<u8, R>(client, dispatch, input, output, codes),
-        Source::U16 => launch_codes_to_float::<u16, R>(client, dispatch, input, output, codes),
-        Source::F32 => launch_codes_to_float::<f32, R>(client, dispatch, input, output, codes),
+        Source::U8 => launch_codes_to_float::<u8>(client, dispatch, input, output, codes),
+        Source::U16 => launch_codes_to_float::<u16>(client, dispatch, input, output, codes),
+        Source::F32 => launch_codes_to_float::<f32>(client, dispatch, input, output, codes),
     }
 }
 
-fn launch_codes_to_float<I: Numeric, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_codes_to_float<I: Numeric>(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     codes: FloatCodes,
 ) {
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input holds `samples` values of `I` and the output as many f32 values.
     unsafe {
-        codes_to_float_kernel::launch_unchecked::<I, R>(
+        codes_to_float_kernel::launch_unchecked::<I>(
             client,
             cubes,
             unit,

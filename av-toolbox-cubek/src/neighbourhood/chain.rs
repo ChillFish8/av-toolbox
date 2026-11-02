@@ -1,4 +1,4 @@
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 
 use super::{Edge, Extreme, NeighbourPlanes, Shape, Spread, extreme, spread_with_edge};
 use crate::{DevicePlane, Dispatch};
@@ -40,18 +40,13 @@ impl ChainPlanes<'_> {
 /// The steps alternate between `scratch` and `output` so no step reads the plane it writes, and the
 /// last step always lands in `output`. `input` is left untouched. `scratch` is overwritten when
 /// there are two or more steps. The three planes must differ, and `steps` must not be empty.
-pub fn chain<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: ChainPlanes<'_>,
-    steps: &[Step],
-) {
+pub fn chain(client: &Client, dispatch: &impl Dispatch, planes: ChainPlanes<'_>, steps: &[Step]) {
     chain_with_edge(client, dispatch, planes, steps, Edge::Reflect);
 }
 
 /// The same as [chain], reading past the plane's edge as `edge` says in each spread step.
-pub fn chain_with_edge<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn chain_with_edge(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: ChainPlanes<'_>,
     steps: &[Step],

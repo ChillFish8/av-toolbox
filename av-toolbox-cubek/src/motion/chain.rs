@@ -22,9 +22,9 @@ fn block_at(position: i32, #[comptime] span: u32, #[comptime] step: u32, #[compt
 /// seed is the sum of both. Only the block lookups clamp, the position keeps its true value.
 #[cube(launch_unchecked)]
 fn chain_kernel(
-    first: &Array<i32>,
-    second: &Array<i32>,
-    seed: &mut Array<i32>,
+    first: &[i32],
+    second: &[i32],
+    seed: &mut [i32],
     #[comptime] step: u32,
     #[comptime] across: u32,
     #[comptime] down: u32,
@@ -75,8 +75,8 @@ fn chain_kernel(
 ///
 /// Each block follows `first` from its centre, then adds the vector of the block of `second` it lands
 /// in. All three fields share one grid and hold whole pixel vectors, so each has `pel` 1.
-pub fn chain<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn chain(
+    client: &Client,
     dispatch: &impl Dispatch,
     first: &MotionField<'_>,
     second: &MotionField<'_>,
@@ -100,14 +100,14 @@ pub fn chain<R: Runtime>(
     let grid = &seed.grid;
     let cubes = dispatch.cube_count(grid.blocks());
     let unit = dispatch.cube_dim();
-    let first_array = first.planes.vectors.array::<R>();
-    let second_array = second.planes.vectors.array::<R>();
-    let seed_array = seed.planes.vectors.array::<R>();
+    let first_array = first.planes.vectors.array();
+    let second_array = second.planes.vectors.array();
+    let seed_array = seed.planes.vectors.array();
 
     // Safety: every field holds two i32 per block of `grid`, each unit reads one block of each field,
     // clamped to the grid, and writes its own block of the seed.
     unsafe {
-        chain_kernel::launch_unchecked::<R>(
+        chain_kernel::launch_unchecked(
             client,
             cubes,
             unit,

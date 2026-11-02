@@ -10,13 +10,7 @@ use crate::Dispatch;
 /// The assembly, one unit per output sample, which copies the kept rows from the input and the rebuilt
 /// rows from the scratch.
 #[cube(launch_unchecked)]
-fn assemble_kernel(
-    input: &Array<f32>,
-    rebuilt: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    offset: u32,
-) {
+fn assemble_kernel(input: &[f32], rebuilt: &[f32], output: &mut [f32], width: u32, offset: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -128,8 +122,8 @@ fn shifted(column: u32, shift: i32, width: u32) -> u32 {
 /// The value the check falls back to at `column` of plane row `row`, from `sclip` or the vertical cubic.
 #[cube]
 fn fallback_value(
-    input: &Array<f32>,
-    sclip: &Array<f32>,
+    input: &[f32],
+    sclip: &[f32],
     row: u32,
     column: u32,
     width: u32,
@@ -162,11 +156,11 @@ fn fallback_value(
 /// `checked` holds the row two above after its check, starting at `checked_start`, and is read only for a
 /// blended sample. Without `sclip`, the input stands in for it and is never read as one.
 #[cube]
-fn checked_sample<L: List<f32>>(
-    input: &Array<f32>,
-    rebuilt: &Array<f32>,
-    directions: &Array<i32>,
-    sclip: &Array<f32>,
+fn checked_sample<L: List<f32> + ?Sized>(
+    input: &[f32],
+    rebuilt: &[f32],
+    directions: &[i32],
+    sclip: &[f32],
     checked: &L,
     checked_start: u32,
     column: u32,
@@ -202,7 +196,7 @@ fn checked_sample<L: List<f32>>(
             here: rebuilt[(here_start + column) as usize] as i32,
             here_ahead: rebuilt[(here_start + ahead) as usize] as i32,
             here_behind: rebuilt[(here_start + behind) as usize] as i32,
-            checked_above: checked.read((checked_start + ahead) as usize) as i32,
+            checked_above: checked[(checked_start + ahead) as usize] as i32,
             unchecked_below: rebuilt[(below_start + behind) as usize] as i32,
             kept_above: input[(kept_above_start + column) as usize] as i32,
             kept_below: input[(kept_below_start + column) as usize] as i32,
@@ -221,11 +215,11 @@ fn checked_sample<L: List<f32>>(
 /// two below from `rebuilt`, before their checks.
 #[cube(launch_unchecked)]
 fn check_kernel(
-    input: &Array<f32>,
-    rebuilt: &Array<f32>,
-    directions: &Array<i32>,
-    sclip: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    rebuilt: &[f32],
+    directions: &[i32],
+    sclip: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     field_row: u32,
@@ -252,12 +246,12 @@ fn check_kernel(
         vthresh2,
     };
 
-    let value = checked_sample::<Array<f32>>(
+    let value = checked_sample::<[f32]>(
         input,
         rebuilt,
         directions,
         sclip,
-        output,
+        &*output,
         checked_start,
         column,
         field_row,
@@ -281,12 +275,12 @@ fn check_kernel(
 /// checked where the row has a rebuilt row two above and two below.
 #[cube]
 fn check_parity(
-    input: &Array<f32>,
-    rebuilt: &Array<f32>,
-    directions: &Array<i32>,
-    sclip: &Array<f32>,
-    output: &mut Array<f32>,
-    written: &mut SharedMemory<f32>,
+    input: &[f32],
+    rebuilt: &[f32],
+    directions: &[i32],
+    sclip: &[f32],
+    output: &mut [f32],
+    written: &mut Shared<[f32]>,
     width: u32,
     height: u32,
     rows: u32,
@@ -313,12 +307,12 @@ fn check_parity(
             output[kept_index] = input[kept_index];
 
             let value = if is_checked {
-                let checked_value = checked_sample::<SharedMemory<f32>>(
+                let checked_value = checked_sample::<Shared<[f32]>>(
                     input,
                     rebuilt,
                     directions,
                     sclip,
-                    written,
+                    &*written,
                     above_half,
                     column,
                     field_row,
@@ -347,11 +341,11 @@ fn check_parity(
 /// The reliability check of one field pass in a single cube, which also assembles the output.
 #[cube(launch_unchecked)]
 fn persistent_check_kernel(
-    input: &Array<f32>,
-    rebuilt: &Array<f32>,
-    directions: &Array<i32>,
-    sclip: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    rebuilt: &[f32],
+    directions: &[i32],
+    sclip: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     rows: u32,
@@ -366,7 +360,7 @@ fn persistent_check_kernel(
     #[comptime] capacity: u32,
     #[comptime] has_sclip: bool,
 ) {
-    let mut written = SharedMemory::<f32>::new(comptime!((2 * capacity) as usize));
+    let mut written = Shared::<[f32]>::new_slice(comptime!((2 * capacity) as usize));
     let weights = CheckWeights {
         reciprocal0,
         reciprocal1,
@@ -400,14 +394,14 @@ fn persistent_check_kernel(
 /// buffers. The cubes each hold their own shared memory and never wait on each other.
 #[cube(launch_unchecked)]
 fn persistent_checks_kernel(
-    input: &Array<f32>,
-    sclip: &Array<f32>,
-    rebuilt: &Array<f32>,
-    directions: &Array<i32>,
-    output: &mut Array<f32>,
-    other_rebuilt: &Array<f32>,
-    other_directions: &Array<i32>,
-    other_output: &mut Array<f32>,
+    input: &[f32],
+    sclip: &[f32],
+    rebuilt: &[f32],
+    directions: &[i32],
+    output: &mut [f32],
+    other_rebuilt: &[f32],
+    other_directions: &[i32],
+    other_output: &mut [f32],
     width: u32,
     height: u32,
     rows: u32,
@@ -424,7 +418,7 @@ fn persistent_checks_kernel(
     #[comptime] capacity: u32,
     #[comptime] has_sclip: bool,
 ) {
-    let mut written = SharedMemory::<f32>::new(comptime!((2 * capacity) as usize));
+    let mut written = Shared::<[f32]>::new_slice(comptime!((2 * capacity) as usize));
     let weights = CheckWeights {
         reciprocal0,
         reciprocal1,
@@ -474,11 +468,7 @@ fn persistent_checks_kernel(
 }
 
 /// Launches the assembly of the output from the kept rows and the rebuilt rows.
-pub(super) fn assemble<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    pass: &FieldPass<'_>,
-) {
+pub(super) fn assemble(client: &Client, dispatch: &impl Dispatch, pass: &FieldPass<'_>) {
     let samples = pass.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -487,11 +477,11 @@ pub(super) fn assemble<R: Runtime>(
     // sample, as `FieldPass::new` checked. Each unit writes only its own output sample, and reads the
     // input or the scratch at the same position.
     unsafe {
-        let input = pass.input.array::<R>();
-        let rebuilt = pass.rebuilt_array::<R>();
-        let output = pass.output.array::<R>();
+        let input = pass.input.array();
+        let rebuilt = pass.rebuilt_array();
+        let output = pass.output.array();
 
-        assemble_kernel::launch_unchecked::<R>(
+        assemble_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -508,7 +498,7 @@ pub(super) fn assemble<R: Runtime>(
 const PERSISTENT_UNITS: u32 = 1024;
 
 /// The units of each persistent check cube, as many as the device allows up to [PERSISTENT_UNITS].
-fn persistent_unit<R: Runtime>(client: &ComputeClient<R>) -> CubeDim {
+fn persistent_unit(client: &Client) -> CubeDim {
     let hardware = &client.properties().hardware;
     let most_units = hardware.max_units_per_cube.min(hardware.max_cube_dim.0);
     let units = PERSISTENT_UNITS.min(most_units);
@@ -530,11 +520,7 @@ fn share_sources(pass: &FieldPass<'_>, other: &FieldPass<'_>) -> bool {
 ///
 /// Two passes must read the same input, `sclip` and settings. `capacity` is the widest row each cube's
 /// shared memory holds, and must be at least the passes' width.
-pub(super) fn persistent_check<R: Runtime>(
-    client: &ComputeClient<R>,
-    passes: &[FieldPass<'_>],
-    capacity: u32,
-) {
+pub(super) fn persistent_check(client: &Client, passes: &[FieldPass<'_>], capacity: u32) {
     let width = passes[0].width;
     assert!(
         width <= capacity,
@@ -552,7 +538,7 @@ pub(super) fn persistent_check<R: Runtime>(
 }
 
 /// Launches the reliability check of `pass` as one cube.
-fn persistent_check_one<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>, capacity: u32) {
+fn persistent_check_one(client: &Client, pass: &FieldPass<'_>, capacity: u32) {
     let unit = persistent_unit(client);
     let weights = pass.settings.weights;
     let has_sclip = pass.sclip.is_some();
@@ -565,13 +551,13 @@ fn persistent_check_one<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<
     // indices stay below `2 * capacity` because the width is at most `capacity`. Every unit reaches every
     // `sync_cube`, because the row loop is uniform and nothing exits early.
     unsafe {
-        let input = pass.input.array::<R>();
-        let rebuilt = pass.rebuilt_array::<R>();
-        let directions = pass.directions_array::<R>();
-        let sclip = sclip.array::<R>();
-        let output = pass.output.array::<R>();
+        let input = pass.input.array();
+        let rebuilt = pass.rebuilt_array();
+        let directions = pass.directions_array();
+        let sclip = sclip.array();
+        let output = pass.output.array();
 
-        persistent_check_kernel::launch_unchecked::<R>(
+        persistent_check_kernel::launch_unchecked(
             client,
             CubeCount::Static(1, 1, 1),
             unit,
@@ -598,12 +584,7 @@ fn persistent_check_one<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<
 }
 
 /// Launches the reliability checks of `pass` and `other` as two cubes of one launch.
-fn persistent_check_two<R: Runtime>(
-    client: &ComputeClient<R>,
-    pass: &FieldPass<'_>,
-    other: &FieldPass<'_>,
-    capacity: u32,
-) {
+fn persistent_check_two(client: &Client, pass: &FieldPass<'_>, other: &FieldPass<'_>, capacity: u32) {
     assert!(
         share_sources(pass, other),
         "the two passes of one persistent check read different sources"
@@ -623,16 +604,16 @@ fn persistent_check_two<R: Runtime>(
     // Every unit of a cube takes the same branch and reaches every `sync_cube`, because the row loop is
     // uniform and nothing exits early.
     unsafe {
-        let input = pass.input.array::<R>();
-        let sclip = sclip.array::<R>();
-        let rebuilt = pass.rebuilt_array::<R>();
-        let directions = pass.directions_array::<R>();
-        let output = pass.output.array::<R>();
-        let other_rebuilt = other.rebuilt_array::<R>();
-        let other_directions = other.directions_array::<R>();
-        let other_output = other.output.array::<R>();
+        let input = pass.input.array();
+        let sclip = sclip.array();
+        let rebuilt = pass.rebuilt_array();
+        let directions = pass.directions_array();
+        let output = pass.output.array();
+        let other_rebuilt = other.rebuilt_array();
+        let other_directions = other.directions_array();
+        let other_output = other.output.array();
 
-        persistent_checks_kernel::launch_unchecked::<R>(
+        persistent_checks_kernel::launch_unchecked(
             client,
             CubeCount::Static(2, 1, 1),
             unit,
@@ -667,11 +648,7 @@ fn persistent_check_two<R: Runtime>(
 ///
 /// Each row reads the row above after its check, so every row is its own launch, which the device finishes
 /// before the next starts.
-pub(super) fn reliability_check<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    pass: &FieldPass<'_>,
-) {
+pub(super) fn reliability_check(client: &Client, dispatch: &impl Dispatch, pass: &FieldPass<'_>) {
     let cubes = dispatch.cube_count(pass.width as usize);
     let unit = dispatch.cube_dim();
     let weights = pass.settings.weights;
@@ -689,13 +666,13 @@ pub(super) fn reliability_check<R: Runtime>(
         // sample of plane row `row`, reads the rebuilt rows either side, which exist for every row checked,
         // and clamps every column it reads into the row.
         unsafe {
-            let input = pass.input.array::<R>();
-            let rebuilt = pass.rebuilt_array::<R>();
-            let directions = pass.directions_array::<R>();
-            let sclip = sclip.array::<R>();
-            let output = pass.output.array::<R>();
+            let input = pass.input.array();
+            let rebuilt = pass.rebuilt_array();
+            let directions = pass.directions_array();
+            let sclip = sclip.array();
+            let output = pass.output.array();
 
-            check_kernel::launch_unchecked::<R>(
+            check_kernel::launch_unchecked(
                 client,
                 cubes.clone(),
                 unit,

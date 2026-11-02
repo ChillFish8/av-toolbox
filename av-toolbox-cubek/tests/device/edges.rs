@@ -2,7 +2,6 @@ use av_toolbox_cubek::edges::{EdgeLimits, Operator, add_capped, binarize, edges}
 use av_toolbox_cubek::neighbourhood::NeighbourPlanes;
 use av_toolbox_cubek::testing::{reference_add_capped, reference_binarize, reference_edges};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::neighbourhood::busy;
 use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, upload_f32};
@@ -25,7 +24,7 @@ struct Edges {
 impl BuildTask for Edges {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -75,7 +74,7 @@ struct AddCapped {
 impl BuildTask for AddCapped {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

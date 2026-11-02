@@ -27,7 +27,6 @@ use av_toolbox_cubek::testing::{
     reference_search,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::{DevicePyramid, assert_same_field, read_field};
 use crate::support::{Sizing, backend};
@@ -83,7 +82,7 @@ impl MotionRun {
 impl BuildTask for MotionRun {
     type Output = Outputs;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let grid = BlockGrid::new(&self.settings, self.width, self.height);

@@ -8,9 +8,9 @@ use crate::{Dispatch, Edge};
 
 #[cube(launch_unchecked)]
 fn blur_rows<F: Float>(
-    input: &Array<F>,
-    weights: &Array<f32>,
-    output: &mut Array<F>,
+    input: &[F],
+    weights: &[f32],
+    output: &mut [F],
     width: u32,
     radius: u32,
     #[comptime] clamp: bool,
@@ -36,9 +36,9 @@ fn blur_rows<F: Float>(
 
 #[cube(launch_unchecked)]
 fn blur_columns<F: Float>(
-    input: &Array<F>,
-    weights: &Array<f32>,
-    output: &mut Array<F>,
+    input: &[F],
+    weights: &[f32],
+    output: &mut [F],
     width: u32,
     height: u32,
     radius: u32,
@@ -66,8 +66,8 @@ fn blur_columns<F: Float>(
 /// Blurs rows then columns with one thread a sample, reading the taps straight from memory.
 ///
 /// It reads past the edge as `edge` says.
-pub(super) fn apply<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn apply(
+    client: &Client,
     dispatch: &impl Dispatch,
     gaussian: &Gaussian,
     planes: BlurPlanes<'_>,
@@ -82,15 +82,15 @@ pub(super) fn apply<R: Runtime>(
 
     let radius = gaussian.radius();
     let clamp = edge == Edge::Clamp;
-    let input = planes.input.array::<R>();
-    let scratch = planes.scratch.array::<R>();
-    let weights = gaussian.weights::<R>();
+    let input = planes.input.array();
+    let scratch = planes.scratch.array();
+    let weights = gaussian.weights();
 
     // Safety: every plane holds `samples` values of `storage` and the kernel writes nothing past the
     // output's length.
     unsafe {
         match storage {
-            Storage::F32 => blur_rows::launch_unchecked::<f32, R>(
+            Storage::F32 => blur_rows::launch_unchecked::<f32>(
                 client,
                 cubes.clone(),
                 shape,
@@ -101,7 +101,7 @@ pub(super) fn apply<R: Runtime>(
                 radius,
                 clamp,
             ),
-            Storage::F16 => blur_rows::launch_unchecked::<half::f16, R>(
+            Storage::F16 => blur_rows::launch_unchecked::<half::f16>(
                 client,
                 cubes.clone(),
                 shape,
@@ -115,18 +115,18 @@ pub(super) fn apply<R: Runtime>(
         }
     }
 
-    let scratch = planes.scratch.array::<R>();
-    let output = planes.output.array::<R>();
-    let weights = gaussian.weights::<R>();
+    let scratch = planes.scratch.array();
+    let output = planes.output.array();
+    let weights = gaussian.weights();
 
     // Safety: every plane holds `samples` values of `storage` and the kernel writes nothing past the
     // output's length.
     unsafe {
         match storage {
-            Storage::F32 => blur_columns::launch_unchecked::<f32, R>(
+            Storage::F32 => blur_columns::launch_unchecked::<f32>(
                 client, cubes, shape, scratch, weights, output, width, height, radius, clamp,
             ),
-            Storage::F16 => blur_columns::launch_unchecked::<half::f16, R>(
+            Storage::F16 => blur_columns::launch_unchecked::<half::f16>(
                 client, cubes, shape, scratch, weights, output, width, height, radius, clamp,
             ),
         }
@@ -138,9 +138,9 @@ pub(super) fn apply<R: Runtime>(
 /// Each row's sum across is finished before it is weighted down, in the order a two pass blur takes.
 #[cube(launch_unchecked)]
 fn blur_both_axes<F: Float>(
-    input: &Array<F>,
-    weights: &Array<f32>,
-    output: &mut Array<F>,
+    input: &[F],
+    weights: &[f32],
+    output: &mut [F],
     width: u32,
     height: u32,
     radius: u32,
@@ -177,10 +177,10 @@ fn blur_both_axes<F: Float>(
 /// Blurs across then down in one dispatch, one thread a sample, reading past the edge as `edge` says.
 ///
 /// Every read goes straight to memory, so it suits only short kernels.
-pub(super) fn apply_in_one_pass<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn apply_in_one_pass(
+    client: &Client,
     dispatch: &impl Dispatch,
-    weights: ArrayArg<R>,
+    weights: BufferArg,
     radius: u32,
     planes: FilterPlanes<'_>,
     edge: Edge,
@@ -192,17 +192,17 @@ pub(super) fn apply_in_one_pass<R: Runtime>(
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
     let clamp = edge == Edge::Clamp;
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
 
     // Safety: both planes hold `samples` values of `storage`, every read is folded into the plane and
     // the kernel writes nothing past the output's length.
     unsafe {
         match storage {
-            Storage::F32 => blur_both_axes::launch_unchecked::<f32, R>(
+            Storage::F32 => blur_both_axes::launch_unchecked::<f32>(
                 client, cubes, shape, input, weights, output, width, height, radius, clamp,
             ),
-            Storage::F16 => blur_both_axes::launch_unchecked::<half::f16, R>(
+            Storage::F16 => blur_both_axes::launch_unchecked::<half::f16>(
                 client, cubes, shape, input, weights, output, width, height, radius, clamp,
             ),
         }

@@ -223,6 +223,7 @@ pub fn strided_variant(
 
 /// The plane's place in the workgroup's grid of planes.
 #[derive(CubeType, Clone, Copy)]
+#[expand(derive(Clone, Copy))]
 struct PlaneSpot {
     /// The quad index of the plane's scratch tile in shared memory.
     scratch: u32,
@@ -261,8 +262,8 @@ fn first_up_sample(#[comptime] shape: StridedShape) -> u32 {
 /// samples in row-major order.
 #[cube]
 fn stage_samples(
-    input: &Array<Load>,
-    staged: &mut SharedMemory<Load>,
+    input: &[Load],
+    staged: &mut Shared<[Load]>,
     width: u32,
     height: u32,
     #[comptime] shape: StridedShape,
@@ -297,8 +298,8 @@ fn stage_samples(
 /// Multiplies the staged samples by the weight matrix into the plane's accumulators.
 #[cube]
 fn multiply(
-    staged: &SharedMemory<Load>,
-    weights: &Array<Load>,
+    staged: &Shared<[Load]>,
+    weights: &[Load],
     accumulators: &Sequence<cmma::Matrix<f32>>,
     spot: PlaneSpot,
     #[comptime] shape: StridedShape,
@@ -334,8 +335,8 @@ fn multiply(
 
                 let start = (first_sample * stride + chunk as u32 * TILE) / LOAD_WIDTH;
                 let rows = staged.slice(start as usize, (start + fragment_loads) as usize);
-                let pixels = fragment(cmma::MatrixIdent::A, cmma::MatrixLayout::RowMajor);
-                cmma::load(&pixels, &rows, row_step);
+                let mut pixels = fragment(cmma::MatrixIdent::A, cmma::MatrixLayout::RowMajor);
+                cmma::load(&mut pixels, rows, row_step);
                 lhs.push(pixels);
             }
 
@@ -346,14 +347,14 @@ fn multiply(
                 let column = (spot.first_column_tile + channel_tile as u32) * TILE;
                 let start = (depth_row * columns + column) / LOAD_WIDTH;
                 let matrix_rows = weights.slice(start as usize, (start + weight_loads) as usize);
-                let rhs = fragment(cmma::MatrixIdent::B, cmma::MatrixLayout::RowMajor);
-                cmma::load(&rhs, &matrix_rows, columns);
+                let mut rhs = fragment(cmma::MatrixIdent::B, cmma::MatrixLayout::RowMajor);
+                cmma::load(&mut rhs, matrix_rows, columns);
 
                 #[unroll]
                 for pixel_tile in 0..pixel_tiles {
                     let accumulator =
                         accumulators.index(comptime!(pixel_tile * channel_tiles + channel_tile));
-                    cmma::execute::<f16, f16, f32, f32>(
+                    cmma::execute::<f16, f16, f32, f32, cmma::Plane>(
                         lhs.index(pixel_tile),
                         &rhs,
                         accumulator,
@@ -367,6 +368,7 @@ fn multiply(
 
 /// Where a value lands in the output, in quads, and whether that sample lies inside the output map.
 #[derive(CubeType, Clone, Copy)]
+#[expand(derive(Clone, Copy))]
 struct OutputQuad {
     position: u32,
     inside: bool,
@@ -417,8 +419,8 @@ fn output_quad(
 #[cube]
 fn write_strided(
     accumulators: &Sequence<cmma::Matrix<f32>>,
-    scratch: &mut SharedMemory<Sums>,
-    output: &mut Array<Quad>,
+    scratch: &mut Shared<[Sums]>,
+    output: &mut [Quad],
     spot: PlaneSpot,
     width: u32,
     height: u32,
@@ -444,8 +446,8 @@ fn write_strided(
             // A plane may hold several subgroups that each computed the same accumulator, so only the first
             // stores it. The condition is uniform within each subgroup.
             if UNIT_POS_X < PLANE_DIM {
-                let mut tile_slice = scratch.slice_mut(start, start + tile_quads as usize);
-                cmma::store(&mut tile_slice, accumulator, TILE, cmma::MatrixLayout::RowMajor);
+                let tile_slice = scratch.slice_mut(start, start + tile_quads as usize);
+                cmma::store(tile_slice, accumulator, TILE, cmma::MatrixLayout::RowMajor);
             }
 
             sync_cube();
@@ -470,9 +472,9 @@ fn write_strided(
 /// Runs one block of a down or up layer on cooperative matrices accumulating in f32, writing f16.
 #[cube(launch_unchecked)]
 fn strided_kernel(
-    input: &Array<Load>,
-    weights: &Array<Load>,
-    output: &mut Array<Quad>,
+    input: &[Load],
+    weights: &[Load],
+    output: &mut [Quad],
     width: u32,
     height: u32,
     #[comptime] shape: StridedShape,
@@ -481,9 +483,9 @@ fn strided_kernel(
     let pixel_tiles = comptime!(shape.pixel_tiles_per_plane() as usize);
     let channel_tiles = comptime!(shape.channel_tiles_per_plane() as usize);
 
-    let mut staged = SharedMemory::<Load>::new(comptime!(shape.staged_loads() as usize));
+    let mut staged = Shared::<[Load]>::new_slice(comptime!(shape.staged_loads() as usize));
     let mut scratch =
-        SharedMemory::<Sums>::new(comptime!((shape.planes() * TILE_VALUES / WRITE_WIDTH) as usize));
+        Shared::<[Sums]>::new_slice(comptime!((shape.planes() * TILE_VALUES / WRITE_WIDTH) as usize));
 
     stage_samples(input, &mut staged, width, height, shape);
     // Every plane reads samples another plane staged.
@@ -493,8 +495,8 @@ fn strided_kernel(
 
     #[unroll]
     for _ in 0..pixel_tiles * channel_tiles {
-        let matrix = fragment::<f32>(cmma::MatrixIdent::Accumulator, cmma::MatrixLayout::Undefined);
-        cmma::fill(&matrix, 0.0);
+        let mut matrix = fragment::<f32>(cmma::MatrixIdent::Accumulator, cmma::MatrixLayout::Undefined);
+        cmma::fill(&mut matrix, 0.0);
         accumulators.push(matrix);
     }
 
@@ -519,8 +521,8 @@ pub struct StridedLayer<'a> {
 /// Runs `layer` with `variant`.
 ///
 /// Gives an error if the variant cannot run on the device or with this layer's channels.
-pub fn run_strided<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn run_strided(
+    client: &Client,
     variant: StridedVariant,
     layer: &StridedLayer<'_>,
 ) -> Result<(), CnnError> {
@@ -601,11 +603,11 @@ pub fn run_strided<R: Runtime>(
     //   read only the channel halves each staged sample holds, never its padding.
     // - The launch takes each length in f16 values, and the kernel sees it in loads or quads.
     unsafe {
-        let input = ArrayArg::from_raw_parts(layer.input.clone(), input_values);
-        let weights = ArrayArg::from_raw_parts(layer.weights.clone(), weight_values);
-        let output = ArrayArg::from_raw_parts(layer.output.clone(), output_values);
+        let input = BufferArg::from_raw_parts(layer.input.clone(), input_values);
+        let weights = BufferArg::from_raw_parts(layer.weights.clone(), weight_values);
+        let output = BufferArg::from_raw_parts(layer.output.clone(), output_values);
 
-        strided_kernel::launch_unchecked::<R>(
+        strided_kernel::launch_unchecked(
             client,
             cubes,
             unit,

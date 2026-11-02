@@ -1,6 +1,5 @@
 use av_toolbox_cubek::aa::transpose;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::aa::transposed_plane;
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -14,7 +13,7 @@ struct Transpose {
 impl BuildTask for Transpose {
     type Output = (Vec<f32>, Vec<f32>);
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

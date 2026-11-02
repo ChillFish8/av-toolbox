@@ -8,10 +8,10 @@ use crate::{DevicePlane, Dispatch};
 
 #[cube(launch_unchecked)]
 fn first_layer_kernel<F: Float>(
-    input: &Array<f32>,
-    weights: &Array<F>,
-    bias: &Array<F>,
-    output: &mut Array<F>,
+    input: &[f32],
+    weights: &[F],
+    bias: &[F],
+    output: &mut [F],
     plane_width: u32,
     region_x: u32,
     region_y: u32,
@@ -76,7 +76,7 @@ impl CoreUnit {
 /// rounded to a whole code when `rounded` is set.
 #[cube]
 fn write_doubled(
-    output: &mut Array<f32>,
+    output: &mut [f32],
     output_width: u32,
     unit: &CoreUnit,
     value: f32,
@@ -97,10 +97,10 @@ fn write_doubled(
 
 #[cube(launch_unchecked)]
 fn last_layer_kernel<F: Float>(
-    input: &Array<F>,
-    weights: &Array<F>,
-    bias: &Array<F>,
-    output: &mut Array<f32>,
+    input: &[F],
+    weights: &[F],
+    bias: &[F],
+    output: &mut [f32],
     output_width: u32,
     region_x: u32,
     region_y: u32,
@@ -141,8 +141,8 @@ fn last_layer_kernel<F: Float>(
 
 #[cube(launch_unchecked)]
 fn shuffle_kernel(
-    scratch: &Array<f32>,
-    output: &mut Array<f32>,
+    scratch: &[f32],
+    output: &mut [f32],
     output_width: u32,
     region_x: u32,
     region_y: u32,
@@ -172,8 +172,8 @@ fn shuffle_kernel(
 /// Runs the network's first layer over `region` of `input`, divided by `peak`, into NHWC maps in `output`.
 ///
 /// The region's edge is padded with zero.
-pub fn first_layer<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn first_layer(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     input: DevicePlane<'_>,
@@ -205,7 +205,7 @@ pub fn first_layer<R: Runtime>(
         "the output is smaller than the region's maps"
     );
 
-    let input_array = input.array::<R>();
+    let input_array = input.array();
     let weight_count = (features * 9) as usize;
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
@@ -213,12 +213,12 @@ pub fn first_layer<R: Runtime>(
     // Safety: the weights hold `F * 9` values and the bias `F`, the output holds the region times `F`, and
     // every read of the input is inside the region, which lies inside the plane.
     unsafe {
-        let weights = ArrayArg::from_raw_parts(layer.weights.clone(), weight_count);
-        let bias = ArrayArg::from_raw_parts(layer.bias.clone(), features as usize);
-        let output_array = ArrayArg::from_raw_parts(output.clone(), units);
+        let weights = BufferArg::from_raw_parts(layer.weights.clone(), weight_count);
+        let bias = BufferArg::from_raw_parts(layer.bias.clone(), features as usize);
+        let output_array = BufferArg::from_raw_parts(output.clone(), units);
 
         match network.precision() {
-            Precision::F16 => first_layer_kernel::launch_unchecked::<half::f16, R>(
+            Precision::F16 => first_layer_kernel::launch_unchecked::<half::f16>(
                 client,
                 cubes,
                 unit,
@@ -234,7 +234,7 @@ pub fn first_layer<R: Runtime>(
                 features,
                 peak,
             ),
-            Precision::F32 => first_layer_kernel::launch_unchecked::<f32, R>(
+            Precision::F32 => first_layer_kernel::launch_unchecked::<f32>(
                 client,
                 cubes,
                 unit,
@@ -262,8 +262,8 @@ pub fn first_layer<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn last_layer<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn last_layer(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     input: &Handle,
@@ -289,7 +289,7 @@ pub fn last_layer<R: Runtime>(
     );
 
     let weight_count = (4 * 9 * features) as usize;
-    let output_array = output.array::<R>();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
@@ -297,12 +297,12 @@ pub fn last_layer<R: Runtime>(
     // read stays inside the region, and every write lands in the doubled core, which lies inside the output
     // plane.
     unsafe {
-        let input_array = ArrayArg::from_raw_parts(input.clone(), input_count);
-        let weights = ArrayArg::from_raw_parts(layer.weights.clone(), weight_count);
-        let bias = ArrayArg::from_raw_parts(layer.bias.clone(), 4);
+        let input_array = BufferArg::from_raw_parts(input.clone(), input_count);
+        let weights = BufferArg::from_raw_parts(layer.weights.clone(), weight_count);
+        let bias = BufferArg::from_raw_parts(layer.bias.clone(), 4);
 
         match network.precision() {
-            Precision::F16 => last_layer_kernel::launch_unchecked::<half::f16, R>(
+            Precision::F16 => last_layer_kernel::launch_unchecked::<half::f16>(
                 client,
                 cubes,
                 unit,
@@ -323,7 +323,7 @@ pub fn last_layer<R: Runtime>(
                 peak,
                 rounded,
             ),
-            Precision::F32 => last_layer_kernel::launch_unchecked::<f32, R>(
+            Precision::F32 => last_layer_kernel::launch_unchecked::<f32>(
                 client,
                 cubes,
                 unit,
@@ -375,8 +375,8 @@ fn check_core(region: Region, core: Region, output: DevicePlane<'_>) {
 /// into `scratch` as NHWC maps of 16 f32 channels. Gives whether the forced blueprint ran.
 ///
 /// The first four channels are the last layer's, and the other twelve are zero.
-pub fn padded_last_layer<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn padded_last_layer(
+    client: &Client,
     network: &Network,
     input: &Handle,
     region: Region,
@@ -392,8 +392,8 @@ pub fn padded_last_layer<R: Runtime>(
 /// The same as [padded_last_layer](crate::artcnn::padded_last_layer), keeping the inferred blueprint unless
 /// `allow_forced` is set.
 #[cfg(any(test, feature = "test-support"))]
-pub fn padded_last_layer_with_blueprint<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn padded_last_layer_with_blueprint(
+    client: &Client,
     network: &Network,
     input: &Handle,
     region: Region,
@@ -419,8 +419,8 @@ pub fn padded_last_layer_with_blueprint<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn shuffle<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn shuffle(
+    client: &Client,
     dispatch: &impl Dispatch,
     scratch: &Handle,
     region: Region,
@@ -442,16 +442,16 @@ pub fn shuffle<R: Runtime>(
     let core_samples = core.samples();
     let units = (core_samples * 4) as usize;
     let channels = PADDED_CHANNELS as u32;
-    let output_array = output.array::<R>();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
     // Safety: the scratch holds the region times 16 values, every read stays inside the region, and every
     // write lands in the doubled core, which lies inside the output plane.
     unsafe {
-        let scratch_array = ArrayArg::from_raw_parts(scratch.clone(), scratch_count);
+        let scratch_array = BufferArg::from_raw_parts(scratch.clone(), scratch_count);
 
-        shuffle_kernel::launch_unchecked::<R>(
+        shuffle_kernel::launch_unchecked(
             client,
             cubes,
             unit,

@@ -71,11 +71,11 @@ pub(crate) fn restore_limits(bits: u32) -> (f32, f32) {
 
 #[cube(launch_unchecked)]
 fn restore_kernel(
-    input: &Array<f32>,
-    difference: &Array<f32>,
-    positive: &Array<f32>,
-    negative: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    difference: &[f32],
+    positive: &[f32],
+    negative: &[f32],
+    output: &mut [f32],
     above: f32,
     below: f32,
     peak: f32,
@@ -104,12 +104,7 @@ fn restore_kernel(
 ///
 /// Differences more than a couple of rows high are restored to `reference`. `bits` is the sample depth
 /// the planes hold values for, between 8 and 16.
-pub fn shimmer<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: ShimmerPlanes<'_>,
-    bits: u32,
-) {
+pub fn shimmer(client: &Client, dispatch: &impl Dispatch, planes: ShimmerPlanes<'_>, bits: u32) {
     assert_bits(bits);
 
     let width = planes.input.width();
@@ -151,16 +146,16 @@ pub fn shimmer<R: Runtime>(
     };
     chain_with_edge(client, dispatch, negative, &NEGATIVE_STEPS, Edge::Clamp);
 
-    let input = planes.input.array::<R>();
-    let difference = planes.difference.array::<R>();
-    let positive_choke = planes.positive_choke.array::<R>();
-    let negative_choke = planes.negative_choke.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let difference = planes.difference.array();
+    let positive_choke = planes.positive_choke.array();
+    let negative_choke = planes.negative_choke.array();
+    let output = planes.output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, each unit reads and writes only its own
     // sample, and the choke planes are only read.
     unsafe {
-        restore_kernel::launch_unchecked::<R>(
+        restore_kernel::launch_unchecked(
             client,
             cubes,
             unit,

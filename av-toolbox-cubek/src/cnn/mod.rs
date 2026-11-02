@@ -19,7 +19,12 @@ pub use self::body::{Activation, BodyPath, CnnError, Finish, LayerMaps, LayerRun
 pub use self::body::{body_layer_with_blueprint, convolve_with_blueprint, convolve_without_bias, epilogue};
 pub use self::convolution::run_padded_layer;
 #[cfg(any(test, feature = "test-support"))]
-pub use self::convolution::{offers_cmma_16, takes_forced_blueprint};
+pub use self::convolution::{
+    convolve_forced_past_the_shared_memory_limit,
+    forced_shared_bytes,
+    offers_cmma_16,
+    takes_forced_blueprint,
+};
 pub(crate) use self::kernels::launch_candidate;
 #[cfg(test)]
 pub(crate) use self::kernels::transform_values;

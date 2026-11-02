@@ -17,7 +17,6 @@ use av_toolbox_cubek::testing::{
     reference_qed_plane,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::*;
 
 use crate::support::{Sizing, backend, plane, read_u8, upload_u8};
 
@@ -45,7 +44,7 @@ struct Interiors {
 impl BuildTask for Interiors {
     type Output = Vec<u8>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let table = upload_change_table(client, self.table_samples);
         let source = upload_u8(client, &self.source);

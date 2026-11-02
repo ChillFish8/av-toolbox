@@ -12,7 +12,7 @@ pub struct BobWeights {
 }
 
 impl BobWeights {
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, plane_height: u32, parity: Parity) -> Self {
+    pub fn new(client: &Client, plane_height: u32, parity: Parity) -> Self {
         assert!(
             plane_height.is_multiple_of(2) && plane_height >= 2,
             "the plane is {plane_height} rows, expected an even count of at least 2"
@@ -54,7 +54,7 @@ impl QtgmcTables {
     /// Builds the tables for planes of `planes` sizes, as `(width, height)`.
     ///
     /// The first plane is luma, which the gaussians blur.
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, planes: &[(u32, u32)]) -> Self {
+    pub fn new(client: &Client, planes: &[(u32, u32)]) -> Self {
         assert!(!planes.is_empty(), "expected at least the luma plane");
 
         let bobs = planes
@@ -77,7 +77,7 @@ impl QtgmcTables {
     /// Builds the gaussian tables of a `luma` plane, as `(width, height)`, without any bob taps.
     ///
     /// This is for frames that are never split into fields, whose planes may have an odd height.
-    pub fn without_bobs<R: Runtime>(client: &ComputeClient<R>, luma: (u32, u32)) -> Self {
+    pub fn without_bobs(client: &Client, luma: (u32, u32)) -> Self {
         Self {
             bobs: Vec::new(),
             narrow: GaussTables::new(client, luma, 2.0),

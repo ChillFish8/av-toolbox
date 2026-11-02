@@ -18,7 +18,6 @@ use av_toolbox_cubek::testing::{
     reference_fill_round,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
@@ -82,7 +81,7 @@ struct StagePasses {
 impl BuildTask for StagePasses {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -292,7 +291,7 @@ struct UndersizedScratch;
 impl BuildTask for UndersizedScratch {
     type Output = ();
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -351,7 +350,7 @@ struct FieldPasses {
 impl BuildTask for FieldPasses {
     type Output = [Vec<f32>; 2];
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -663,7 +662,7 @@ struct FillRounds(FillRoundCases);
 impl BuildTask for FillRounds {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

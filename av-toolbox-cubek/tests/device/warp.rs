@@ -2,7 +2,6 @@ use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::testing::{reference_blur_mask, reference_warp_sharp};
 use av_toolbox_cubek::warp::{BlurKind, WarpParams, WarpPlanes, blur_mask, blur_mask_passes, warp_sharp};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{
     Sizing,
@@ -28,7 +27,7 @@ struct WarpSharp {
 impl BuildTask for WarpSharp {
     type Output = Vec<u16>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -216,7 +215,7 @@ struct BlurMasks(Vec<BlurCase>);
 impl BuildTask for BlurMasks {
     type Output = Vec<Vec<u32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let mut blurred = Vec::with_capacity(self.0.len());

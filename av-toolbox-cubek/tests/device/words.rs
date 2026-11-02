@@ -1,7 +1,6 @@
 use av_toolbox_cubek::depth::Element;
 use av_toolbox_cubek::words::copy_plane;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, from_bytes, plane, read_u8, to_bytes, upload_u8};
 
@@ -14,7 +13,7 @@ struct Copy {
 impl BuildTask for Copy {
     type Output = Vec<u16>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

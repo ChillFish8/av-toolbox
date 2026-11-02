@@ -10,7 +10,6 @@ use av_toolbox_cubek::dehalo::fine::{
     scale_values,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::ranged_plane;
 use crate::neighbourhood::busy;
@@ -29,7 +28,7 @@ struct Contrasharpen {
 impl BuildTask for Contrasharpen {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -135,7 +134,7 @@ struct Ramp {
 impl BuildTask for Ramp {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -192,7 +191,7 @@ struct Scale {
 impl BuildTask for Scale {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -249,7 +248,7 @@ struct Outside {
 impl BuildTask for Outside {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

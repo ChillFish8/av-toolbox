@@ -15,13 +15,7 @@ pub const fn segments(width: u32) -> u32 {
 }
 
 #[cube(launch_unchecked)]
-fn difference_sums_kernel(
-    first: &Array<f32>,
-    second: &Array<f32>,
-    sums: &mut Array<u32>,
-    width: u32,
-    segments: u32,
-) {
+fn difference_sums_kernel(first: &[f32], second: &[f32], sums: &mut [u32], width: u32, segments: u32) {
     if ABSOLUTE_POS >= sums.len() {
         terminate!();
     }
@@ -55,11 +49,7 @@ pub struct DifferencePlanes<'a> {
 }
 
 /// Sums `|first - second|` over every `SEGMENT` columns of every row.
-pub fn difference_sums<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: DifferencePlanes<'_>,
-) {
+pub fn difference_sums(client: &Client, dispatch: &impl Dispatch, planes: DifferencePlanes<'_>) {
     let width = planes.first.width();
     let height = planes.first.height();
     assert_plane(&planes.second, width, height, "second");
@@ -74,14 +64,14 @@ pub fn difference_sums<R: Runtime>(
 
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
-    let first = planes.first.array::<R>();
-    let second = planes.second.array::<R>();
-    let sums = planes.sums.array::<R>();
+    let first = planes.first.array();
+    let second = planes.second.array();
+    let sums = planes.sums.array();
 
     // Safety: both planes hold `width * height` f32 values, and each unit reads only its own row's segment
     // and writes only its own sum.
     unsafe {
-        difference_sums_kernel::launch_unchecked::<R>(
+        difference_sums_kernel::launch_unchecked(
             client,
             cubes,
             unit,

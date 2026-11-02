@@ -70,7 +70,7 @@ struct DirectionPair {
 
 /// Kept line `line` at `column + shift`, with the column clamped into the plane.
 #[cube]
-fn kept_sample(input: &Array<f32>, width: u32, offset: u32, line: u32, column: u32, shift: i32) -> f32 {
+fn kept_sample(input: &[f32], width: u32, offset: u32, line: u32, column: u32, shift: i32) -> f32 {
     let reached = column as i32 + shift;
     let last_column = width as i32 - 1;
     let at_least_zero = i32::max(reached, 0);
@@ -112,7 +112,7 @@ fn average(first: f32, second: f32) -> f32 {
 /// straight down at 4 to 3 columns right at 8.
 #[cube]
 fn direction_pair(
-    input: &Array<f32>,
+    input: &[f32],
     width: u32,
     offset: u32,
     gap: u32,
@@ -156,7 +156,7 @@ fn direction_pair(
 /// The raw cost of `direction` at `column` in gap `gap`, zero for the first and last gaps.
 #[cube]
 fn raw_cost(
-    input: &Array<f32>,
+    input: &[f32],
     width: u32,
     offset: u32,
     field_height: u32,
@@ -181,8 +181,8 @@ fn raw_cost(
 /// and the next.
 #[cube]
 fn line_sum(
-    input: &Array<f32>,
-    smoothed: &Array<f32>,
+    input: &[f32],
+    smoothed: &[f32],
     width: u32,
     field_height: u32,
     offset: u32,
@@ -218,8 +218,8 @@ fn line_sum(
 /// Each unit sums 7 columns of the line sums around its own, divides by 16 and caps at `max`.
 #[cube(launch_unchecked)]
 fn sangnom_smooth_row_kernel(
-    input: &Array<f32>,
-    smoothed: &mut Array<f32>,
+    input: &[f32],
+    smoothed: &mut [f32],
     width: u32,
     field_height: u32,
     offset: u32,
@@ -243,7 +243,7 @@ fn sangnom_smooth_row_kernel(
         let tap_column = clamped as u32;
         total += line_sum(
             input,
-            smoothed,
+            &*smoothed,
             width,
             field_height,
             offset,
@@ -264,7 +264,7 @@ fn sangnom_smooth_row_kernel(
 /// The vertical direction wins ties and any pixel whose lowest cost is above `aaf`. Otherwise the
 /// lowest cost wins, taking ties in the order 5, 3, 6, 2, 7, 1, 8, 0.
 #[cube]
-fn choose_direction(smoothed: &Array<f32>, index: u32, samples: u32, aaf: f32) -> u32 {
+fn choose_direction(smoothed: &[f32], index: u32, samples: u32, aaf: f32) -> u32 {
     let cost_0 = smoothed[index as usize];
     let cost_1 = smoothed[(samples + index) as usize];
     let cost_2 = smoothed[(2 * samples + index) as usize];
@@ -309,9 +309,9 @@ fn choose_direction(smoothed: &Array<f32>, index: u32, samples: u32, aaf: f32) -
 /// Writes one output sample, copying kept rows and rebuilding the others along their chosen direction.
 #[cube(launch_unchecked)]
 fn sangnom_choose_kernel(
-    input: &Array<f32>,
-    smoothed: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    smoothed: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     offset: u32,
@@ -351,8 +351,8 @@ fn sangnom_choose_kernel(
 /// [sangnom_aaf](crate::aa::sangnom_aaf), and `max` the cap from [sangnom_max](crate::aa::sangnom_max),
 /// so a rebuilt sample may pass the format's peak. The row with no kept row on one side copies its kept
 /// neighbour. The plane's height must be even.
-pub fn sangnom_field<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn sangnom_field(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: SangnomPlanes<'_>,
     offset: u32,
@@ -397,10 +397,10 @@ pub fn sangnom_field<R: Runtime>(
         // `9 * (height / 2) * width`, both asserted above. Each unit writes only its own sample of gap
         // `gap`, reads only gap `gap - 1`, and clamps every column into the plane.
         unsafe {
-            let input = planes.input.array::<R>();
-            let smoothed = ArrayArg::from_raw_parts(planes.smoothed.clone(), smoothed_values);
+            let input = planes.input.array();
+            let smoothed = BufferArg::from_raw_parts(planes.smoothed.clone(), smoothed_values);
 
-            sangnom_smooth_row_kernel::launch_unchecked::<R>(
+            sangnom_smooth_row_kernel::launch_unchecked(
                 client,
                 row_cubes.clone(),
                 row_unit,
@@ -422,11 +422,11 @@ pub fn sangnom_field<R: Runtime>(
     // `9 * (height / 2) * width`, all asserted above. Each unit writes only its own output sample, and every
     // read is clamped into the plane.
     unsafe {
-        let input = planes.input.array::<R>();
-        let smoothed = ArrayArg::from_raw_parts(planes.smoothed.clone(), smoothed_values);
-        let output = planes.output.array::<R>();
+        let input = planes.input.array();
+        let smoothed = BufferArg::from_raw_parts(planes.smoothed.clone(), smoothed_values);
+        let output = planes.output.array();
 
-        sangnom_choose_kernel::launch_unchecked::<R>(
+        sangnom_choose_kernel::launch_unchecked(
             client, cubes, unit, input, smoothed, output, width, height, offset, aaf, max,
         );
     }

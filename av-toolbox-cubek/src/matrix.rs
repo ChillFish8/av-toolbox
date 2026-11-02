@@ -186,15 +186,15 @@ pub struct AffineValues {
 const AFFINE_VALUES: usize = 12;
 
 impl AffineValues {
-    fn values<R: Runtime>(&self) -> ArrayArg<R> {
+    fn values(&self) -> BufferArg {
         let handle = self.values.clone();
 
         // Safety: the buffer was made from exactly `AFFINE_VALUES` f32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, AFFINE_VALUES) }
+        unsafe { BufferArg::from_raw_parts(handle, AFFINE_VALUES) }
     }
 }
 
-pub fn upload_affine<R: Runtime>(client: &ComputeClient<R>, affine: &Affine) -> AffineValues {
+pub fn upload_affine(client: &Client, affine: &Affine) -> AffineValues {
     let weights = affine.weights.iter().flatten();
     let all = weights.chain(affine.offsets.iter());
     let values: Vec<f32> = all.map(|value| *value as f32).collect();
@@ -212,7 +212,7 @@ pub struct MatrixPlanes<'a> {
 }
 
 #[cube]
-fn affine_row(affine: &Array<f32>, row: u32, first: f32, second: f32, third: f32) -> f32 {
+fn affine_row(affine: &[f32], row: u32, first: f32, second: f32, third: f32) -> f32 {
     let start = (row * 3) as usize;
     let weighted = affine[start] * first + affine[start + 1] * second + affine[start + 2] * third;
 
@@ -232,14 +232,14 @@ fn finished(value: f32, largest: f32, #[comptime] rounds: bool) -> f32 {
 }
 
 #[cube(launch_unchecked)]
-fn matrix_kernel<I: CubePrimitive, O: CubePrimitive>(
-    first: &Array<I>,
-    second: &Array<I>,
-    third: &Array<I>,
-    affine: &Array<f32>,
-    first_out: &mut Array<O>,
-    second_out: &mut Array<O>,
-    third_out: &mut Array<O>,
+fn matrix_kernel<I: Scalar, O: Scalar>(
+    first: &[I],
+    second: &[I],
+    third: &[I],
+    affine: &[f32],
+    first_out: &mut [O],
+    second_out: &mut [O],
+    third_out: &mut [O],
     largest: f32,
     #[comptime] rounds: bool,
 ) {
@@ -265,8 +265,8 @@ fn matrix_kernel<I: CubePrimitive, O: CubePrimitive>(
 ///
 /// Integer outputs are rounded to nearest and clamped to their depth. Float outputs are written as they
 /// come, so values outside the gamut survive.
-pub fn convert<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn convert(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: MatrixPlanes<'_>,
     conversion: &MatrixConversion,
@@ -284,48 +284,48 @@ pub fn convert<R: Runtime>(
 
     let output = conversion.output_samples;
     match conversion.input_samples {
-        MatrixSamples::U8 => launch_into::<u8, R>(client, dispatch, planes, output, values),
+        MatrixSamples::U8 => launch_into::<u8>(client, dispatch, planes, output, values),
         MatrixSamples::U16 { bits } => {
             assert_supported_depth(bits);
 
-            launch_into::<u16, R>(client, dispatch, planes, output, values)
+            launch_into::<u16>(client, dispatch, planes, output, values)
         },
-        MatrixSamples::F32 => launch_into::<f32, R>(client, dispatch, planes, output, values),
+        MatrixSamples::F32 => launch_into::<f32>(client, dispatch, planes, output, values),
     }
 }
 
 /// Launches the kernel reading `I` and writing samples held as `output`.
-fn launch_into<I: CubePrimitive, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_into<I: Scalar>(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: MatrixPlanes<'_>,
     output: MatrixSamples,
     values: &AffineValues,
 ) {
     match output {
-        MatrixSamples::U8 => launch::<I, u8, R>(client, dispatch, planes, values, 255.0, true),
+        MatrixSamples::U8 => launch::<I, u8>(client, dispatch, planes, values, 255.0, true),
         MatrixSamples::U16 { bits } => {
             assert_supported_depth(bits);
 
             let largest = ((1u32 << bits) - 1) as f32;
 
-            launch::<I, u16, R>(client, dispatch, planes, values, largest, true)
+            launch::<I, u16>(client, dispatch, planes, values, largest, true)
         },
-        MatrixSamples::F32 => launch::<I, f32, R>(client, dispatch, planes, values, 0.0, false),
+        MatrixSamples::F32 => launch::<I, f32>(client, dispatch, planes, values, 0.0, false),
     }
 }
 
-fn launch<I: CubePrimitive, O: CubePrimitive, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch<I: Scalar, O: Scalar>(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: MatrixPlanes<'_>,
     values: &AffineValues,
     largest: f32,
     rounds: bool,
 ) {
-    let [first, second, third] = planes.inputs.map(|plane| plane.array::<R>());
-    let [first_out, second_out, third_out] = planes.outputs.map(|plane| plane.array::<R>());
-    let affine = values.values::<R>();
+    let [first, second, third] = planes.inputs.map(|plane| plane.array());
+    let [first_out, second_out, third_out] = planes.outputs.map(|plane| plane.array());
+    let affine = values.values();
     let samples = planes.outputs[0].samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -334,7 +334,7 @@ fn launch<I: CubePrimitive, O: CubePrimitive, R: Runtime>(
     // samples of `I` and each output as many of `O`, which `DevicePlane::new` requires. The affine
     // buffer holds its 12 values.
     unsafe {
-        matrix_kernel::launch_unchecked::<I, O, R>(
+        matrix_kernel::launch_unchecked::<I, O>(
             client, cubes, unit, first, second, third, affine, first_out, second_out, third_out, largest,
             rounds,
         );

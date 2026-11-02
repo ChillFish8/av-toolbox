@@ -41,7 +41,7 @@ impl KeptRows {
 /// The three absolute differences of one tap, between the upper rows at column `upper` and the lower rows
 /// at column `lower`.
 #[cube]
-fn column_difference(input: &Array<f32>, rows: &KeptRows, width: u32, upper: i32, lower: i32) -> i32 {
+fn column_difference(input: &[f32], rows: &KeptRows, width: u32, upper: i32, lower: i32) -> i32 {
     let far_above = sample_at(input, rows.far_above, upper, width);
     let above_upper = sample_at(input, rows.above, upper, width);
     let below_upper = sample_at(input, rows.below, upper, width);
@@ -60,7 +60,7 @@ fn column_difference(input: &Array<f32>, rows: &KeptRows, width: u32, upper: i32
 /// `lower_shift`, summed over the `2 nrad + 1` columns around `column`.
 #[cube]
 fn band_sum(
-    input: &Array<f32>,
+    input: &[f32],
     rows: &KeptRows,
     width: u32,
     column: i32,
@@ -111,7 +111,7 @@ fn bands_along(connection: i32, left: i32, right: i32, column: i32, direction: i
 /// The three band sums of a connection added together, each summed from scratch.
 #[cube]
 fn band_total(
-    input: &Array<f32>,
+    input: &[f32],
     rows: &KeptRows,
     width: u32,
     column: i32,
@@ -119,7 +119,7 @@ fn band_total(
     #[comptime] nrad: u32,
 ) -> i32 {
     let connection = band_sum(input, rows, width, column, direction, -direction, nrad);
-    let left = band_sum(input, rows, width, column, 0, -2 * direction, nrad);
+    let left = band_sum(input, rows, width, column, 0, -2i32 * direction, nrad);
     let right = band_sum(input, rows, width, column, 2 * direction, 0, nrad);
 
     bands_along(connection, left, right, column, direction, width)
@@ -127,7 +127,7 @@ fn band_total(
 
 /// How far the rows above and below `column` sit from the plain average along `direction`.
 #[cube]
-fn vertical_difference(input: &Array<f32>, rows: &KeptRows, width: u32, column: i32, direction: i32) -> i32 {
+fn vertical_difference(input: &[f32], rows: &KeptRows, width: u32, column: i32, direction: i32) -> i32 {
     let above = sample_at(input, rows.above, column + direction, width);
     let below = sample_at(input, rows.below, column - direction, width);
     let average = (above + below + 1) >> 1;
@@ -160,7 +160,7 @@ fn cost_of(bands: i32, difference: i32, direction: i32, weights: &CostWeights) -
 /// The cost of connecting `column` of a rebuilt row along `direction`.
 #[cube]
 fn connection_cost(
-    input: &Array<f32>,
+    input: &[f32],
     rows: &KeptRows,
     width: u32,
     column: i32,
@@ -209,7 +209,7 @@ impl BandSums {
     /// Fills each band's delay line with its taps around `column`, and sets its sum to their total.
     fn fill(
         &mut self,
-        input: &Array<f32>,
+        input: &[f32],
         rows: &KeptRows,
         width: u32,
         column: i32,
@@ -241,7 +241,7 @@ impl BandSums {
     /// and taking away the one that leaves.
     fn slide(
         &mut self,
-        input: &Array<f32>,
+        input: &[f32],
         rows: &KeptRows,
         width: u32,
         column: i32,
@@ -299,8 +299,8 @@ struct RowShape {
 /// lenders, or 0 when no row lends it.
 #[cube]
 fn lent_cost(
-    input: &Array<f32>,
-    lenders: &Array<i32>,
+    input: &[f32],
+    lenders: &[i32],
     slot: u32,
     shape: &RowShape,
     column: i32,
@@ -360,10 +360,10 @@ fn copied_code(previous_code: u32, column: u32, width: u32, direction: i32, mdis
 /// and leads to direction 0.
 #[cube(launch_unchecked)]
 fn path_kernel(
-    input: &Array<f32>,
-    mclip: &Array<f32>,
-    lenders: &mut Array<i32>,
-    backpointers: &mut Array<u32>,
+    input: &[f32],
+    mclip: &[f32],
+    lenders: &mut [i32],
+    backpointers: &mut [u32],
     width: u32,
     groups: u32,
     active_words: u32,
@@ -400,7 +400,7 @@ fn path_kernel(
         vertical,
     };
     let half = comptime!((2 * EEDI3_MAX_MDIS + 1) as usize);
-    let mut path_costs = SharedMemory::<f32>::new(comptime!(2 * half));
+    let mut path_costs = Shared::<[f32]>::new_slice(comptime!(2 * half));
 
     let mask_start = row * width;
     let leaving_distance = mdis as i32 + 1;
@@ -501,12 +501,12 @@ fn path_kernel(
 
             if !active && column == 0 {
                 if direction == 0 {
-                    path_cost = lent_cost(input, lenders, lent_slot, &shape, 0, 0, &weights, nrad);
+                    path_cost = lent_cost(input, &*lenders, lent_slot, &shape, 0, 0, &weights, nrad);
                 }
             } else if !active && column == 1 {
                 if inside {
                     let slot = lent_slot + 1;
-                    path_cost = lent_cost(input, lenders, slot, &shape, 1, direction, &weights, nrad);
+                    path_cost = lent_cost(input, &*lenders, slot, &shape, 1, direction, &weights, nrad);
                 }
             } else if !active {
                 path_cost = path_costs[previous + lane as usize];
@@ -536,7 +536,7 @@ fn path_kernel(
 
 /// Launches the path search over every rebuilt row, writing the backpointers and, under a mask, the
 /// active bits.
-pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>) {
+pub(super) fn search_paths(client: &Client, pass: &FieldPass<'_>) {
     let span = pass.span();
     let cubes = row_cubes(pass.rows);
     let shape = CubeDim::new_1d(span);
@@ -553,14 +553,14 @@ pub(super) fn search_paths<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPa
     // lie after every lender. Every read of the input reflects and clamps into the plane, and the mask is
     // read only inside the row. A lender is a rebuilt row above, or -1 and never read.
     unsafe {
-        let input = pass.input.array::<R>();
-        let mclip = mask.array::<R>();
-        let lenders = pass.lenders_array::<R>();
-        let backpointers = pass.backpointers_array::<R>();
+        let input = pass.input.array();
+        let mclip = mask.array();
+        let lenders = pass.lenders_array();
+        let backpointers = pass.backpointers_array();
         let groups = pass.groups();
         let active_words = pass.active_words();
 
-        path_kernel::launch_unchecked::<R>(
+        path_kernel::launch_unchecked(
             client,
             cubes,
             shape,

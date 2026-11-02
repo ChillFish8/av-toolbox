@@ -15,7 +15,6 @@ use av_toolbox_cubek::artcnn::{
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::body::{PEAK, UNTOUCHED, largest_error, r8f64, supported_runs, supports};
 use super::{forced_eligible, synced, textured};
@@ -37,7 +36,7 @@ struct Tiled {
 impl BuildTask for Tiled {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -101,7 +100,7 @@ struct WarmUp {
 impl BuildTask for WarmUp {
     type Output = Result<(), CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -163,7 +162,7 @@ struct SmallFrame {
 impl BuildTask for SmallFrame {
     type Output = Result<(), CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -225,11 +224,11 @@ struct ForcedRegions {
 impl BuildTask for ForcedRegions {
     type Output = (Vec<bool>, bool);
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let network = Network::upload(client, &self.weights, self.precision).expect("the weights are valid");
         let halo = network.halo();
-        let eligible = forced_eligible(client);
+        let eligible = forced_eligible(client, network.features());
 
         let regions = tiles(self.width, self.height, self.tile, halo);
         let forced = regions

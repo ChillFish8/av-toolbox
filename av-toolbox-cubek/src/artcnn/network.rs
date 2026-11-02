@@ -63,19 +63,15 @@ pub struct Network {
 
 impl Network {
     /// Uploads `weights` in `precision`'s type, refusing weights whose layers do not match their model.
-    pub fn upload<R: Runtime>(
-        client: &ComputeClient<R>,
-        weights: &Weights,
-        precision: Precision,
-    ) -> Result<Self, WeightsError> {
+    pub fn upload(client: &Client, weights: &Weights, precision: Precision) -> Result<Self, WeightsError> {
         upload_network(client, None, weights, precision)
     }
 
     /// Uploads `model`'s `weights` in `precision`'s type, refusing weights of another shape.
     ///
     /// On f16 maps, a model on the Winograd allow-list also holds its body layers' transformed weights.
-    pub fn upload_model<R: Runtime>(
-        client: &ComputeClient<R>,
+    pub fn upload_model(
+        client: &Client,
         model: Model,
         weights: &Weights,
         precision: Precision,
@@ -151,8 +147,8 @@ impl Network {
 
 /// Uploads `weights` in `precision`'s type as `model`, refusing weights whose layers do not match their
 /// model.
-fn upload_network<R: Runtime>(
-    client: &ComputeClient<R>,
+fn upload_network(
+    client: &Client,
     model: Option<Model>,
     weights: &Weights,
     precision: Precision,
@@ -205,11 +201,7 @@ fn upload_network<R: Runtime>(
     })
 }
 
-fn upload_buffers<R: Runtime>(
-    client: &ComputeClient<R>,
-    layer: &Layer,
-    precision: Precision,
-) -> LayerBuffers {
+fn upload_buffers(client: &Client, layer: &Layer, precision: Precision) -> LayerBuffers {
     let widened_weights = widen(&layer.weights);
     let widened_bias = widen(&layer.bias);
     let weight_bytes = encode(&widened_weights, precision);
@@ -256,8 +248,8 @@ pub struct Maps<'a> {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn run_region<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn run_region(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     path: BodyPath,
@@ -286,8 +278,8 @@ pub fn run_region<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn run_region_with_candidate<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn run_region_with_candidate(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     candidate: Candidate,
@@ -320,8 +312,8 @@ struct Body {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-fn run_region_on<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_region_on(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     body: Body,
@@ -463,8 +455,8 @@ fn run_region_on<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
 )]
-fn run_body_layer<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_body_layer(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     body: Body,

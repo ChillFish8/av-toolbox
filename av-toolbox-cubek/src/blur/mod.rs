@@ -8,7 +8,7 @@ mod tests;
 mod tiled;
 mod wide;
 
-use cubecl::prelude::{ArrayArg, ComputeClient, CubeCount, CubeElement, Runtime};
+use cubecl::prelude::{BufferArg, Client, CubeCount, CubeElement};
 use cubecl::server::Handle;
 
 pub(crate) use self::fixed::{OUTPUTS_DOWN, TILE_HEIGHT, TILE_WIDTH, UNITS_ACROSS, UNITS_DOWN, fixed_cubes};
@@ -155,13 +155,13 @@ pub struct Gaussian {
 }
 
 impl Gaussian {
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, sigma: f32) -> Self {
+    pub fn new(client: &Client, sigma: f32) -> Self {
         let radius = radius_for(sigma);
 
         Self::with_radius(client, sigma, radius)
     }
 
-    pub fn with_radius<R: Runtime>(client: &ComputeClient<R>, sigma: f32, radius: u32) -> Self {
+    pub fn with_radius(client: &Client, sigma: f32, radius: u32) -> Self {
         let mut weights = gaussian_weights(sigma, radius);
         let padded_taps = staged::padded_tap_count(radius);
         weights.resize(padded_taps as usize, 0.0);
@@ -186,36 +186,31 @@ impl Gaussian {
         self.tier
     }
 
-    fn weights<R: Runtime>(&self) -> ArrayArg<R> {
+    fn weights(&self) -> BufferArg {
         let taps = 2 * self.radius as usize + 1;
         let handle = self.weights.clone();
 
         // Safety: the weights buffer was made from at least `taps` f32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, taps) }
+        unsafe { BufferArg::from_raw_parts(handle, taps) }
     }
 
     /// The weights, followed by the zeros that pad them to the staged tier's tap count.
-    fn padded_weights<R: Runtime>(&self) -> ArrayArg<R> {
+    fn padded_weights(&self) -> BufferArg {
         let taps = staged::padded_tap_count(self.radius) as usize;
         let handle = self.weights.clone();
 
         // Safety: the weights buffer was padded to exactly `taps` f32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, taps) }
+        unsafe { BufferArg::from_raw_parts(handle, taps) }
     }
 
-    pub fn apply<R: Runtime>(
-        &self,
-        client: &ComputeClient<R>,
-        dispatch: &impl Dispatch,
-        planes: BlurPlanes<'_>,
-    ) {
+    pub fn apply(&self, client: &Client, dispatch: &impl Dispatch, planes: BlurPlanes<'_>) {
         self.apply_as(client, dispatch, planes, Storage::F32);
     }
 
     /// Blurs `planes.input` into `planes.output`, with every plane holding samples of `storage`.
-    pub fn apply_as<R: Runtime>(
+    pub fn apply_as(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: BlurPlanes<'_>,
         storage: Storage,
@@ -226,9 +221,9 @@ impl Gaussian {
     /// Blurs `planes.input` into `planes.output`, reading past the edge as `edge` says.
     ///
     /// Every plane holds samples of `storage`.
-    pub fn apply_with_edge<R: Runtime>(
+    pub fn apply_with_edge(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: BlurPlanes<'_>,
         edge: Edge,
@@ -251,7 +246,7 @@ impl Gaussian {
         match tier {
             Tier::Plain => plain::apply(client, dispatch, self, planes, edge, storage),
             Tier::Tiled => {
-                let weights = self.weights::<R>();
+                let weights = self.weights();
                 let filter_planes = FilterPlanes {
                     input: planes.input,
                     output: planes.output,

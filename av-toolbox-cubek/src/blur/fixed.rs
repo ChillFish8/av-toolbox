@@ -31,7 +31,7 @@ pub enum Smooth {
 /// It weighs them `1 2 1` for the binomial and `1 1 1` for the box.
 #[cube]
 fn row_sum<F: Float>(
-    input: &Array<F>,
+    input: &[F],
     width: u32,
     left: u32,
     centre: u32,
@@ -56,8 +56,8 @@ fn row_sum<F: Float>(
 /// Each row's sum is read once and slides down through `above`, `centre` and `below`.
 #[cube]
 fn smooth_run<F: Float>(
-    input: &Array<F>,
-    output: &mut Array<F>,
+    input: &[F],
+    output: &mut [F],
     width: u32,
     height: u32,
     column: u32,
@@ -96,8 +96,8 @@ fn smooth_run<F: Float>(
 /// Writes the outputs of one unit of the vertical `1 2 1`, a short run down one column of one tile.
 #[cube]
 fn vertical_run<F: Float>(
-    input: &Array<F>,
-    output: &mut Array<F>,
+    input: &[F],
+    output: &mut [F],
     width: u32,
     height: u32,
     column: u32,
@@ -131,8 +131,8 @@ fn vertical_run<F: Float>(
 /// allows along an axis.
 #[cube(launch_unchecked)]
 fn smooth_kernel<F: Float>(
-    input: &Array<F>,
-    output: &mut Array<F>,
+    input: &[F],
+    output: &mut [F],
     width: u32,
     height: u32,
     #[comptime] binomial: bool,
@@ -159,8 +159,8 @@ fn smooth_kernel<F: Float>(
 /// Runs the vertical `1 2 1`, each cube walking the tiles its grid position lands on.
 #[cube(launch_unchecked)]
 fn vertical_kernel<F: Float>(
-    input: &Array<F>,
-    output: &mut Array<F>,
+    input: &[F],
+    output: &mut [F],
     width: u32,
     height: u32,
     #[comptime] clamp: bool,
@@ -200,8 +200,8 @@ fn assert_filter_planes(planes: &FilterPlanes<'_>, storage: Storage) {
 /// Blurs `planes.input` into `planes.output` with a 3x3 kernel, reading past the edge as `edge` says.
 ///
 /// Both planes hold samples of `storage`. The sums stay f32 either way.
-pub fn smooth<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn smooth(
+    client: &Client,
     _dispatch: &impl Dispatch,
     planes: FilterPlanes<'_>,
     smooth: Smooth,
@@ -216,17 +216,17 @@ pub fn smooth<R: Runtime>(
     let shape = CubeDim::new_2d(UNITS_ACROSS, UNITS_DOWN);
     let binomial = smooth == Smooth::Binomial;
     let clamp = edge == Edge::Clamp;
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
 
     // Safety: both planes hold `width * height` values of `storage`, every read is folded into the
     // plane and every write is guarded to it.
     unsafe {
         match storage {
-            Storage::F32 => smooth_kernel::launch_unchecked::<f32, R>(
+            Storage::F32 => smooth_kernel::launch_unchecked::<f32>(
                 client, cubes, shape, input, output, width, height, binomial, clamp,
             ),
-            Storage::F16 => smooth_kernel::launch_unchecked::<half::f16, R>(
+            Storage::F16 => smooth_kernel::launch_unchecked::<half::f16>(
                 client, cubes, shape, input, output, width, height, binomial, clamp,
             ),
         }
@@ -236,8 +236,8 @@ pub fn smooth<R: Runtime>(
 /// The vertical `1 2 1` blur over 4, reading past the top and bottom as `edge` says.
 ///
 /// Both planes hold samples of `storage`. The sums stay f32 either way.
-pub fn vertical_121<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn vertical_121(
+    client: &Client,
     _dispatch: &impl Dispatch,
     planes: FilterPlanes<'_>,
     edge: Edge,
@@ -250,17 +250,17 @@ pub fn vertical_121<R: Runtime>(
     let cubes = fixed_cubes(width, height);
     let shape = CubeDim::new_2d(UNITS_ACROSS, UNITS_DOWN);
     let clamp = edge == Edge::Clamp;
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
 
     // Safety: both planes hold `width * height` values of `storage`, every read is folded into the
     // plane and every write is guarded to it.
     unsafe {
         match storage {
-            Storage::F32 => vertical_kernel::launch_unchecked::<f32, R>(
+            Storage::F32 => vertical_kernel::launch_unchecked::<f32>(
                 client, cubes, shape, input, output, width, height, clamp,
             ),
-            Storage::F16 => vertical_kernel::launch_unchecked::<half::f16, R>(
+            Storage::F16 => vertical_kernel::launch_unchecked::<half::f16>(
                 client, cubes, shape, input, output, width, height, clamp,
             ),
         }

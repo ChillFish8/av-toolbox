@@ -1,4 +1,4 @@
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use cubecl::server::Handle;
 use half::f16;
 
@@ -43,8 +43,8 @@ impl ConvLayer {
     ///
     /// Panics if `weights` does not hold `features * 9 * features` values, or `bias` does not hold
     /// `features`.
-    pub fn upload<R: Runtime>(
-        client: &ComputeClient<R>,
+    pub fn upload(
+        client: &Client,
         weights: &[f32],
         bias: Option<&[f32]>,
         features: u32,
@@ -107,8 +107,8 @@ impl PaddedLastLayer {
     /// zeros to 16 output channels. A missing bias is zero.
     ///
     /// Panics if `out_channels` is not between 1 and 16, or the values do not match the channels.
-    pub fn upload<R: Runtime>(
-        client: &ComputeClient<R>,
+    pub fn upload(
+        client: &Client,
         weights: &[f32],
         bias: Option<&[f32]>,
         in_channels: u32,
@@ -155,14 +155,14 @@ impl PaddedLastLayer {
     }
 }
 
-fn upload_encoded<R: Runtime>(client: &ComputeClient<R>, values: &[f32], precision: Precision) -> Handle {
+fn upload_encoded(client: &Client, values: &[f32], precision: Precision) -> Handle {
     let bytes = encode(values, precision);
 
     client.create_from_slice(&bytes)
 }
 
 /// The f16 Winograd weights of a `features` wide layer on the device.
-fn upload_transformed<R: Runtime>(client: &ComputeClient<R>, weights: &[f32], features: u32) -> Handle {
+fn upload_transformed(client: &Client, weights: &[f32], features: u32) -> Handle {
     let transformed = transform_values(weights, features, features);
     let bytes: Vec<u8> = transformed.iter().flat_map(|value| value.to_le_bytes()).collect();
 

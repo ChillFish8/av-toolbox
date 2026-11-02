@@ -377,6 +377,7 @@ dependencies = [
  "av-toolbox-gpu",
  "av-toolbox-models",
  "cubecl",
+ "cubecl-environment",
  "cubek-convolution",
  "cubek-matmul",
  "cubek-std",

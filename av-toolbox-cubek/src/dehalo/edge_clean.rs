@@ -84,14 +84,7 @@ pub fn levels_sample(value: f32, low: f32, span: f32, exponent: f32, peak: f32) 
 }
 
 #[cube(launch_unchecked)]
-fn threshold_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    low: f32,
-    high: f32,
-    peak: f32,
-    invert: u32,
-) {
+fn threshold_kernel(input: &[f32], output: &mut [f32], low: f32, high: f32, peak: f32, invert: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -113,7 +106,7 @@ fn threshold_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn levels_kernel(input: &Array<f32>, output: &mut Array<f32>, low: f32, span: f32, exponent: f32, peak: f32) {
+fn levels_kernel(input: &[f32], output: &mut [f32], low: f32, span: f32, exponent: f32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -125,7 +118,7 @@ fn levels_kernel(input: &Array<f32>, output: &mut Array<f32>, low: f32, span: f3
 }
 
 #[cube(launch_unchecked)]
-fn offset_difference_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>, offset: f32) {
+fn offset_difference_kernel(first: &[f32], second: &[f32], output: &mut [f32], offset: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -134,8 +127,8 @@ fn offset_difference_kernel(first: &Array<f32>, second: &Array<f32>, output: &mu
 }
 
 /// Writes `threshold_sample` at each sample.
-pub fn threshold_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn threshold_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RampPlanes<'_>,
     low: f32,
@@ -144,31 +137,21 @@ pub fn threshold_mask<R: Runtime>(
     invert: bool,
 ) {
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let invert_flag = u32::from(invert);
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        threshold_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            input,
-            output,
-            low,
-            high,
-            peak,
-            invert_flag,
-        );
+        threshold_kernel::launch_unchecked(client, cubes, unit, input, output, low, high, peak, invert_flag);
     }
 }
 
 /// Writes `levels_sample` at each sample.
-pub fn levels<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn levels(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RampPlanes<'_>,
     low: f32,
@@ -177,33 +160,33 @@ pub fn levels<R: Runtime>(
     peak: f32,
 ) {
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        levels_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, low, span, exponent, peak);
+        levels_kernel::launch_unchecked(client, cubes, unit, input, output, low, span, exponent, peak);
     }
 }
 
 /// Writes `first - second + offset` at each sample.
-pub fn offset_difference<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn offset_difference(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DifferencePlanes<'_>,
     offset: f32,
 ) {
     let samples = planes.output.samples();
-    let first = planes.first.array::<R>();
-    let second = planes.second.array::<R>();
-    let output = planes.output.array::<R>();
+    let first = planes.first.array();
+    let second = planes.second.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        offset_difference_kernel::launch_unchecked::<R>(client, cubes, unit, first, second, output, offset);
+        offset_difference_kernel::launch_unchecked(client, cubes, unit, first, second, output, offset);
     }
 }

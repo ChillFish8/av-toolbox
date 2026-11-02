@@ -187,7 +187,7 @@ const fn forgetful_selection_of_49() -> [(usize, usize); 624] {
 
 /// Puts the smaller of two window values at `first` and the larger at `second`.
 #[cube]
-fn exchange(window: &mut Array<f32>, #[comptime] first: usize, #[comptime] second: usize) {
+fn exchange(window: &mut [f32], #[comptime] first: usize, #[comptime] second: usize) {
     let first_value = window[first];
     let second_value = window[second];
 
@@ -196,14 +196,14 @@ fn exchange(window: &mut Array<f32>, #[comptime] first: usize, #[comptime] secon
 }
 
 /// Runs the exchange network for a window `radius` samples each side, returning the median.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "the unrolled loops read the exchange tables when the kernel compiles"
-)]
 #[cube]
-fn select_median(window: &mut Array<f32>, #[comptime] radius: u32) -> f32 {
+fn select_median(window: &mut [f32], #[comptime] radius: u32) -> f32 {
     if comptime!(radius == 1) {
         #[unroll]
+        #[expect(
+            clippy::needless_range_loop,
+            reason = "the unrolled loops read the exchange tables when the kernel compiles"
+        )]
         for step in 0..MEDIAN_OF_9.len() {
             exchange(
                 window,
@@ -215,6 +215,10 @@ fn select_median(window: &mut Array<f32>, #[comptime] radius: u32) -> f32 {
         window[MEDIAN_OF_9_AT]
     } else if comptime!(radius == 2) {
         #[unroll]
+        #[expect(
+            clippy::needless_range_loop,
+            reason = "the unrolled loops read the exchange tables when the kernel compiles"
+        )]
         for step in 0..MEDIAN_OF_25.len() {
             exchange(
                 window,
@@ -226,6 +230,10 @@ fn select_median(window: &mut Array<f32>, #[comptime] radius: u32) -> f32 {
         window[MEDIAN_OF_25_AT]
     } else {
         #[unroll]
+        #[expect(
+            clippy::needless_range_loop,
+            reason = "the unrolled loops read the exchange tables when the kernel compiles"
+        )]
         for step in 0..MEDIAN_OF_49.len() {
             exchange(
                 window,
@@ -239,13 +247,7 @@ fn select_median(window: &mut Array<f32>, #[comptime] radius: u32) -> f32 {
 }
 
 #[cube(launch_unchecked)]
-fn median_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    height: u32,
-    #[comptime] radius: u32,
-) {
+fn median_kernel(input: &[f32], output: &mut [f32], width: u32, height: u32, #[comptime] radius: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -282,31 +284,26 @@ fn median_kernel(
         }
     }
 
-    output[ABSOLUTE_POS] = select_median(&mut window, radius);
+    output[ABSOLUTE_POS] = select_median(window.as_mut_slice(), radius);
 }
 
 /// Writes the median of each sample's square window reaching `radius` samples each side.
 ///
 /// `radius` is 1, 2 or 3, for a 3x3, 5x5 or 7x7 window.
-pub fn median<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: NeighbourPlanes<'_>,
-    radius: u32,
-) {
+pub fn median(client: &Client, dispatch: &impl Dispatch, planes: NeighbourPlanes<'_>, radius: u32) {
     assert!((1..=3).contains(&radius), "radius is 1, 2 or 3");
 
     let width = planes.input.width();
     let height = planes.input.height();
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `samples` f32 values, every read is reflected inside the plane, and the window
     // holds every slot the network for `radius` touches.
     unsafe {
-        median_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, radius);
+        median_kernel::launch_unchecked(client, cubes, unit, input, output, width, height, radius);
     }
 }

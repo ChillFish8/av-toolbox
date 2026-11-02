@@ -49,7 +49,7 @@ pub struct GaussTables {
 
 impl GaussTables {
     /// Builds the tables of a `size` plane, as `(width, height)`, for fmtc's gaussian of `a1 = sharpness`.
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, size: (u32, u32), sharpness: f32) -> Self {
+    pub fn new(client: &Client, size: (u32, u32), sharpness: f32) -> Self {
         let across = fmtc_gauss_taps(size.0, sharpness);
         let down = fmtc_gauss_taps(size.1, sharpness);
         assert_centred(&across);
@@ -82,8 +82,8 @@ fn assert_centred(taps: &Taps) {
 /// Copies the tile and its border from `input` into `loaded`, clamping every coordinate into the plane.
 #[cube]
 fn load_tile(
-    input: &Array<f32>,
-    loaded: &mut SharedMemory<f32>,
+    input: &[f32],
+    loaded: &mut Shared<[f32]>,
     width: u32,
     height: u32,
     first_column: u32,
@@ -108,7 +108,7 @@ fn load_tile(
 
 /// The `1 2 1` sum of the three loaded samples around `column` in `row`.
 #[cube]
-fn row_sum(loaded: &SharedMemory<f32>, row: u32, column: u32) -> f32 {
+fn row_sum(loaded: &Shared<[f32]>, row: u32, column: u32) -> f32 {
     let centre = row * LOADED_WIDTH + column;
     let left = loaded[(centre - 1) as usize];
     let middle = loaded[centre as usize];
@@ -122,8 +122,8 @@ fn row_sum(loaded: &SharedMemory<f32>, row: u32, column: u32) -> f32 {
 /// A sample past the plane's edge takes the blur of the edge sample it clamps to.
 #[cube]
 fn smooth_tile(
-    loaded: &SharedMemory<f32>,
-    blurred: &mut SharedMemory<f32>,
+    loaded: &Shared<[f32]>,
+    blurred: &mut Shared<[f32]>,
     width: u32,
     height: u32,
     first_column: u32,
@@ -155,9 +155,9 @@ fn smooth_tile(
 /// Runs the gaussian along every row of `blurred` into `across`, which keeps the vertical reach only.
 #[cube]
 fn spread_across(
-    blurred: &SharedMemory<f32>,
-    weights: &Array<f32>,
-    across: &mut SharedMemory<f32>,
+    blurred: &Shared<[f32]>,
+    weights: &[f32],
+    across: &mut Shared<[f32]>,
     width: u32,
     first_column: u32,
 ) {
@@ -188,9 +188,9 @@ fn spread_across(
 /// Runs the gaussian down the columns of `across` and writes the outputs that fall inside the plane.
 #[cube]
 fn spread_down(
-    across: &SharedMemory<f32>,
-    weights: &Array<f32>,
-    output: &mut Array<f32>,
+    across: &Shared<[f32]>,
+    weights: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     first_column: u32,
@@ -223,16 +223,16 @@ fn spread_down(
 /// along an axis.
 #[cube(launch_unchecked)]
 fn spread_kernel(
-    input: &Array<f32>,
-    across_weights: &Array<f32>,
-    down_weights: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    across_weights: &[f32],
+    down_weights: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
 ) {
-    let mut loaded = SharedMemory::<f32>::new(comptime!((LOADED_WIDTH * LOADED_HEIGHT) as usize));
-    let mut blurred = SharedMemory::<f32>::new(comptime!((BLURRED_WIDTH * BLURRED_HEIGHT) as usize));
-    let mut across = SharedMemory::<f32>::new(comptime!((TILE_WIDTH * BLURRED_HEIGHT) as usize));
+    let mut loaded = Shared::<[f32]>::new_slice(comptime!((LOADED_WIDTH * LOADED_HEIGHT) as usize));
+    let mut blurred = Shared::<[f32]>::new_slice(comptime!((BLURRED_WIDTH * BLURRED_HEIGHT) as usize));
+    let mut across = Shared::<[f32]>::new_slice(comptime!((TILE_WIDTH * BLURRED_HEIGHT) as usize));
 
     let mut tile_down = CUBE_POS_Y;
     while tile_down * TILE_HEIGHT < height {
@@ -280,8 +280,8 @@ fn spread_cubes(width: u32, height: u32) -> CubeCount {
 ///
 /// Both blurs clamp at the border, and the gaussian keeps each output's own weights. The planes must be
 /// separate.
-pub fn blur_and_spread<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn blur_and_spread(
+    client: &Client,
     _dispatch: &impl Dispatch,
     gauss: &GaussTables,
     input: DevicePlane<'_>,
@@ -309,14 +309,14 @@ pub fn blur_and_spread<R: Runtime>(
 
     let cubes = spread_cubes(width, height);
     let unit = CubeDim::new_2d(UNITS_ACROSS, UNITS_DOWN);
-    let input = input.array::<R>();
-    let across = gauss.across.weights::<R>();
-    let down = gauss.down.weights::<R>();
-    let output = output.array::<R>();
+    let input = input.array();
+    let across = gauss.across.weights();
+    let down = gauss.down.weights();
+    let output = output.array();
 
     // Safety: both planes hold `width * height` f32 values and the tables 9 weights for each output of
     // their axis. Every read is clamped into the plane or its table, and every write is guarded to the plane.
     unsafe {
-        spread_kernel::launch_unchecked::<R>(client, cubes, unit, input, across, down, output, width, height);
+        spread_kernel::launch_unchecked(client, cubes, unit, input, across, down, output, width, height);
     }
 }

@@ -13,7 +13,6 @@ use av_toolbox_cubek::depth::{
 use av_toolbox_cubek::matrix::SampleRange;
 use av_toolbox_cubek::testing::{reference_depth, reference_float_depth};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_u8, upload_u8};
 
@@ -30,7 +29,7 @@ struct Depth {
 impl BuildTask for Depth {
     type Output = Vec<u8>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

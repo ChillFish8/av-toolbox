@@ -145,9 +145,9 @@ pub fn compare_sums_len(width: u32, height: u32) -> usize {
 
 #[cube(launch_unchecked)]
 fn field_differences_kernel(
-    first: &Array<f32>,
-    second: &Array<f32>,
-    differences: &mut Array<u32>,
+    first: &[f32],
+    second: &[f32],
+    differences: &mut [u32],
     width: u32,
     start_row: u32,
 ) {
@@ -167,7 +167,7 @@ fn field_differences_kernel(
 }
 
 #[cube]
-fn difference_at(differences: &Array<u32>, width: u32, column: u32, row: u32) -> u32 {
+fn difference_at(differences: &[u32], width: u32, column: u32, row: u32) -> u32 {
     differences[(row * width + column) as usize]
 }
 
@@ -175,14 +175,14 @@ fn difference_at(differences: &Array<u32>, width: u32, column: u32, row: u32) ->
 ///
 /// The loops and their early exits follow `buildDiffMap`.
 #[cube]
-fn map_value(differences: &Array<u32>, width: u32, height: u32, row: u32, x: u32, shift: u32) -> u32 {
+fn map_value(differences: &[u32], width: u32, height: u32, row: u32, x: u32, shift: u32) -> u32 {
     let low = 3u32 << shift;
     let high = 19u32 << shift;
     let difference = difference_at(differences, width, x, row);
     let mut value = 0u32;
 
     if difference > low {
-        let mut count: u32 = 0u32;
+        let mut count = 0u32;
         let mut column = x - 1;
         while column < x + 2 && count < 2 {
             if difference_at(differences, width, column, row - 1) > low {
@@ -213,10 +213,10 @@ fn map_value(differences: &Array<u32>, width: u32, height: u32, row: u32, x: u32
 
 /// What `buildDiffMap` adds to a sample above both thresholds, 0, 2 or 4.
 #[cube]
-fn wide_value(differences: &Array<u32>, width: u32, height: u32, row: u32, x: u32, high: u32) -> u32 {
+fn wide_value(differences: &[u32], width: u32, height: u32, row: u32, x: u32, high: u32) -> u32 {
     let mut upper = false;
     let mut lower = false;
-    let mut count: u32 = 0u32;
+    let mut count = 0u32;
     let mut column = x - 1;
     while column < x + 2 && count < 6 {
         if difference_at(differences, width, column, row - 1) > high {
@@ -290,8 +290,8 @@ fn wide_value(differences: &Array<u32>, width: u32, height: u32, row: u32, x: u3
 
 #[cube(launch_unchecked)]
 fn diff_map_kernel(
-    differences: &Array<u32>,
-    map: &mut Array<u32>,
+    differences: &[u32],
+    map: &mut [u32],
     width: u32,
     height: u32,
     map_start: u32,
@@ -317,7 +317,7 @@ fn diff_map_kernel(
 
 /// The difference of one match's woven rows from the kept field's centre, as `compareFieldsSlow` measures it.
 #[cube]
-fn match_difference(frame: &Array<f32>, width: u32, x: u32, matched_row: u32, centre: i32) -> u32 {
+fn match_difference(frame: &[f32], width: u32, x: u32, matched_row: u32, centre: i32) -> u32 {
     let upper = tap(frame, width, x, matched_row);
     let lower = tap(frame, width, x, matched_row + 2);
     let woven = 3 * (upper + lower);
@@ -331,11 +331,11 @@ fn match_difference(frame: &Array<f32>, width: u32, x: u32, matched_row: u32, ce
     reason = "each argument is a distinct input of the launch"
 )]
 fn field_sums_kernel(
-    first: &Array<f32>,
-    second: &Array<f32>,
-    current: &Array<f32>,
-    map: &Array<u32>,
-    sums: &mut Array<u32>,
+    first: &[f32],
+    second: &[f32],
+    current: &[f32],
+    map: &[u32],
+    sums: &mut [u32],
     width: u32,
     field: u32,
     exclude_from: u32,
@@ -444,8 +444,8 @@ pub struct ComparePlanes<'a> {
 /// The map gets VFM's 0, 1, 3 or 5 per sample. For each row pair and [SEGMENT] of columns, `sums` gets the
 /// [FIELD_SUMS] sums, which [FieldSums::from_partials] adds up. An excluded row pair's sums are 0. The plane
 /// must have an even height of at least 4 rows.
-pub fn compare_fields<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn compare_fields(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: ComparePlanes<'_>,
     pass: ComparePass,
@@ -495,13 +495,13 @@ pub fn compare_fields<R: Runtime>(
     // Safety: every frame holds `width * height` f32 values, and each unit reads one sample of row
     // `field + 2 * row`, below `height`, and writes only its own difference.
     unsafe {
-        field_differences_kernel::launch_unchecked::<R>(
+        field_differences_kernel::launch_unchecked(
             client,
             cubes,
             unit,
-            first.array::<R>(),
-            second.array::<R>(),
-            planes.differences.array::<R>(),
+            first.array(),
+            second.array(),
+            planes.differences.array(),
             width,
             pass.field,
         );
@@ -517,12 +517,12 @@ pub fn compare_fields<R: Runtime>(
     // Safety: each unit reads difference rows within two of its own, which the edge-row checks keep inside
     // the `height / 2` rows, and writes only its own map sample.
     unsafe {
-        diff_map_kernel::launch_unchecked::<R>(
+        diff_map_kernel::launch_unchecked(
             client,
             cubes,
             unit,
-            planes.differences.array::<R>(),
-            planes.map.array::<R>(),
+            planes.differences.array(),
+            planes.map.array(),
             width,
             height,
             map_start,
@@ -538,15 +538,15 @@ pub fn compare_fields<R: Runtime>(
     // Safety: each unit reads frame and map rows between `1 - field + 2 * pair` and `5 - field + 2 * pair`,
     // inside the plane for every summed pair, and writes only its own six sums.
     unsafe {
-        field_sums_kernel::launch_unchecked::<R>(
+        field_sums_kernel::launch_unchecked(
             client,
             cubes,
             unit,
-            first.array::<R>(),
-            second.array::<R>(),
-            current.array::<R>(),
-            planes.map.array::<R>(),
-            planes.sums.array::<R>(),
+            first.array(),
+            second.array(),
+            current.array(),
+            planes.map.array(),
+            planes.sums.array(),
             width,
             pass.field,
             pass.exclude_from,

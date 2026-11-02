@@ -27,7 +27,6 @@ use av_toolbox_cubek::testing::{
     reference_spread,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, seeded_plane, upload_f32};
 
@@ -53,7 +52,7 @@ struct Neighbours {
 impl BuildTask for Neighbours {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -407,7 +406,7 @@ struct Chained {
 impl BuildTask for Chained {
     type Output = ChainRun;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

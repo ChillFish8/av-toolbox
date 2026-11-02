@@ -219,8 +219,8 @@ fn edge_offset(
 
 #[cube(launch_unchecked)]
 fn recursive_rows(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     real_gain: f32,
@@ -324,7 +324,7 @@ fn recursive_rows(
 
 #[cube(launch_unchecked)]
 fn recursive_columns(
-    output: &mut Array<f32>,
+    output: &mut [f32],
     width: u32,
     height: u32,
     real_gain: f32,
@@ -433,23 +433,23 @@ fn recursive_columns(
 /// two sections backward over that result. The backward pass starts from the state that a line
 /// extended by copies of its last sample would reach, found from the forward pass's end state
 /// through the filter's edge matrix.
-pub fn recursive_gaussian<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn recursive_gaussian(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RecursivePlanes<'_>,
     filter: RecursiveGaussian,
 ) {
     let width = planes.input.width();
     let height = planes.input.height();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(height as usize);
     let unit = dispatch.cube_dim();
     let [first_row, last_row, difference_row] = filter.edge;
 
     // Safety: both planes hold `width * height` f32 values, and each thread walks only its own row.
     unsafe {
-        recursive_rows::launch_unchecked::<R>(
+        recursive_rows::launch_unchecked(
             client,
             cubes,
             unit,
@@ -472,14 +472,14 @@ pub fn recursive_gaussian<R: Runtime>(
         );
     }
 
-    let output = planes.output.array::<R>();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(width as usize);
     let unit = dispatch.cube_dim();
 
     // Safety: the output plane holds `width * height` f32 values, and each thread walks only its
     // own column.
     unsafe {
-        recursive_columns::launch_unchecked::<R>(
+        recursive_columns::launch_unchecked(
             client,
             cubes,
             unit,

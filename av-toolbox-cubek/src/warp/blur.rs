@@ -74,6 +74,7 @@ const _: () = assert!(fits(true) && fits(false));
 
 /// Where a cube's tile and its staged square sit in the plane.
 #[derive(CubeType, Clone, Copy)]
+#[expand(derive(Clone, Copy))]
 struct Window {
     columns: i32,
     rows: i32,
@@ -100,7 +101,7 @@ fn span(first: i32, tile: i32, spread: i32, length: i32) -> (i32, i32) {
 /// the samples on the inner side are read, and where both ends are that close `start_wins` picks the start.
 #[cube]
 fn blur_taps(
-    taps: &Array<i32>,
+    taps: &[i32],
     position: i32,
     length: i32,
     start_wins: bool,
@@ -185,8 +186,8 @@ fn blur_taps(
 /// Copies the staged square from `input`, clamping each read into the plane.
 #[cube]
 fn load_staged(
-    input: &Array<u32>,
-    staged: &mut SharedMemory<u32>,
+    input: &[u32],
+    staged: &mut Shared<[u32]>,
     window: Window,
     #[comptime] wide: bool,
     #[comptime] passes: u32,
@@ -220,8 +221,8 @@ fn load_staged(
 /// the columns the step before wrote.
 #[cube]
 fn blur_staged_rows(
-    staged: &SharedMemory<u32>,
-    across: &mut SharedMemory<u32>,
+    staged: &Shared<[u32]>,
+    across: &mut Shared<[u32]>,
     window: Window,
     row_spread: i32,
     column_spread: i32,
@@ -266,7 +267,7 @@ fn blur_staged_rows(
 
                 if column >= column_start && column < column_end {
                     let blurred = blur_taps(
-                        &taps,
+                        taps.as_slice(),
                         column,
                         window.columns,
                         false,
@@ -288,9 +289,9 @@ fn blur_staged_rows(
 /// write back into `staged`.
 #[cube]
 fn blur_staged_columns(
-    across: &SharedMemory<u32>,
-    staged: &mut SharedMemory<u32>,
-    output: &mut Array<u32>,
+    across: &Shared<[u32]>,
+    staged: &mut Shared<[u32]>,
+    output: &mut [u32],
     window: Window,
     spread: i32,
     #[comptime] wide: bool,
@@ -334,7 +335,14 @@ fn blur_staged_columns(
                 let row = first + step as i32;
 
                 if row >= row_start && row < row_end {
-                    let blurred = blur_taps(&taps, row, window.rows, true, comptime!(step + reach), wide);
+                    let blurred = blur_taps(
+                        taps.as_slice(),
+                        row,
+                        window.rows,
+                        true,
+                        comptime!(step + reach),
+                        wide,
+                    );
 
                     if last {
                         output[(row * window.columns + column) as usize] = blurred;
@@ -357,8 +365,8 @@ fn blur_staged_columns(
 /// allows along an axis.
 #[cube(launch_unchecked)]
 fn blur_staged_kernel(
-    input: &Array<u32>,
-    output: &mut Array<u32>,
+    input: &[u32],
+    output: &mut [u32],
     width: u32,
     height: u32,
     #[comptime] wide: bool,
@@ -369,8 +377,8 @@ fn blur_staged_kernel(
     let border = comptime!(border_of(wide, passes) as i32);
     let tile_height = comptime!(tile_height_of(wide, passes));
     let staged_samples = comptime!((stride_of(wide, passes) * staged_height_of(wide, passes)) as usize);
-    let mut staged = SharedMemory::<u32>::new(staged_samples);
-    let mut across = SharedMemory::<u32>::new(staged_samples);
+    let mut staged = Shared::<[u32]>::new_slice(staged_samples);
+    let mut across = Shared::<[u32]>::new_slice(staged_samples);
 
     let mut tile_down = CUBE_POS_Y;
     while tile_down * tile_height < height {
@@ -449,8 +457,8 @@ fn blur_staged_kernel(
 }
 
 /// Blurs `input` into `output` `passes` times in one launch.
-fn launch_staged<R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_staged(
+    client: &Client,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
     kind: BlurKind,
@@ -474,20 +482,18 @@ fn launch_staged<R: Runtime>(
     let tile_height = tile_height_of(wide, passes);
     let cubes = capped_tile_cubes(width, height, TILE_WIDTH, tile_height);
     let unit = CubeDim::new_1d(UNITS);
-    let input = input.array::<R>();
-    let output = output.array::<R>();
+    let input = input.array();
+    let output = output.array();
 
     // Safety: both planes hold `width * height` u32 values, every read is clamped into the plane and the
     // staged square, and every write is guarded to the plane.
     unsafe {
-        blur_staged_kernel::launch_unchecked::<R>(
-            client, cubes, unit, input, output, width, height, wide, passes,
-        );
+        blur_staged_kernel::launch_unchecked(client, cubes, unit, input, output, width, height, wide, passes);
     }
 }
 
 #[cube(launch_unchecked)]
-fn copy_kernel(input: &Array<u32>, output: &mut Array<u32>) {
+fn copy_kernel(input: &[u32], output: &mut [u32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -503,8 +509,8 @@ fn copy_kernel(input: &Array<u32>, output: &mut Array<u32>) {
 /// # Panics
 ///
 /// Panics when the planes differ in size, share a handle, or hold more than `i32::MAX` samples.
-pub fn blur_mask_passes<'a, R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn blur_mask_passes<'a>(
+    client: &Client,
     _dispatch: &impl Dispatch,
     mask: DevicePlane<'a>,
     scratch: DevicePlane<'a>,
@@ -530,8 +536,8 @@ pub fn blur_mask_passes<'a, R: Runtime>(
 /// Blurs `mask` once with `kind`, passing through `scratch`.
 ///
 /// Both planes hold u32 values and are one size. The pass lands in `scratch` and is copied back into `mask`.
-pub fn blur_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn blur_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     mask: DevicePlane<'_>,
     scratch: DevicePlane<'_>,
@@ -542,11 +548,11 @@ pub fn blur_mask<R: Runtime>(
     let samples = mask.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let blurred = blurred.array::<R>();
-    let mask = mask.array::<R>();
+    let blurred = blurred.array();
+    let mask = mask.array();
 
     // Safety: both planes hold `samples` u32 values, and the kernel stays below the output's length.
     unsafe {
-        copy_kernel::launch_unchecked::<R>(client, cubes, unit, blurred, mask);
+        copy_kernel::launch_unchecked(client, cubes, unit, blurred, mask);
     }
 }

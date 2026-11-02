@@ -75,7 +75,7 @@ pub(super) fn round_average(total: f32, count: u32) -> f32 {
 
 /// The value at position `rank` of the first `length` values once sorted ascending.
 #[cube]
-pub(super) fn ranked(values: &Array<f32>, length: u32, rank: u32) -> f32 {
+pub(super) fn ranked(values: &[f32], length: u32, rank: u32) -> f32 {
     let mut chosen = 0.0f32;
 
     for candidate_slot in 0..length {
@@ -103,7 +103,7 @@ pub(super) fn ranked(values: &Array<f32>, length: u32, rank: u32) -> f32 {
 
 /// The median of `length` values, averaging the middle two rounded up when `length` is even.
 #[cube]
-fn median(values: &Array<f32>, length: u32) -> f32 {
+fn median(values: &[f32], length: u32) -> f32 {
     let upper = ranked(values, length, length / 2);
     let is_odd = length % 2 == 1;
     let mut mid = upper;
@@ -127,7 +127,7 @@ pub(super) struct Consensus {
 
 /// Keeps the first `length` values, none of them `peak`, that lie within `LIM(mid)` of their median.
 #[cube]
-pub(super) fn consensus(values: &Array<f32>, length: u32, scale: &MapScale) -> Consensus {
+pub(super) fn consensus(values: &[f32], length: u32, scale: &MapScale) -> Consensus {
     let mid = median(values, length);
     let threshold = lim(mid, scale);
     let mut count = 0u32;
@@ -152,7 +152,7 @@ pub(super) fn consensus(values: &Array<f32>, length: u32, scale: &MapScale) -> C
 
 /// Appends `value` to the first `length` slots of `values` unless it is `peak`, giving the new length.
 #[cube]
-pub(super) fn push_present(values: &mut Array<f32>, length: u32, value: f32, peak: f32) -> u32 {
+pub(super) fn push_present(values: &mut [f32], length: u32, value: f32, peak: f32) -> u32 {
     let mut new_length = length;
 
     if value != peak {
@@ -167,7 +167,7 @@ pub(super) fn push_present(values: &mut Array<f32>, length: u32, value: f32, pea
 /// around `column`, skipping the centre unless `with_centre` is set. Gives how many it collected.
 #[cube]
 pub(super) fn gather_block(
-    map: &Array<f32>,
+    map: &[f32],
     width: u32,
     first_row: u32,
     last_row: u32,
@@ -175,7 +175,7 @@ pub(super) fn gather_block(
     column: u32,
     peak: f32,
     with_centre: bool,
-    values: &mut Array<f32>,
+    values: &mut [f32],
 ) -> u32 {
     let mut length = 0u32;
 
@@ -196,7 +196,7 @@ pub(super) fn gather_block(
 
 /// The filter of passes 7 and 11, keeping a direction only where at least 4 of its block agree.
 #[cube]
-pub(super) fn filter_vote(values: &Array<f32>, length: u32, centre: f32, scale: &MapScale) -> f32 {
+pub(super) fn filter_vote(values: &[f32], length: u32, centre: f32, scale: &MapScale) -> f32 {
     let mut result = scale.peak;
 
     if length >= 4 {
@@ -215,7 +215,7 @@ pub(super) fn filter_vote(values: &Array<f32>, length: u32, centre: f32, scale: 
 /// The expansion of passes 8 and 12, giving a pixel with no direction one where at least 5 neighbours
 /// agree.
 #[cube]
-pub(super) fn expand_vote(values: &Array<f32>, length: u32, scale: &MapScale) -> f32 {
+pub(super) fn expand_vote(values: &[f32], length: u32, scale: &MapScale) -> f32 {
     let mut result = scale.peak;
 
     if length >= 5 {

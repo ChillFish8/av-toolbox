@@ -172,16 +172,16 @@ pub struct Pattern {
 }
 
 impl Pattern {
-    fn values<R: Runtime>(&self) -> ArrayArg<R> {
+    fn values(&self) -> BufferArg {
         let handle = self.values.clone();
         let len = (self.size * self.size) as usize;
 
         // Safety: the buffer was made from exactly `size * size` f32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, len) }
+        unsafe { BufferArg::from_raw_parts(handle, len) }
     }
 }
 
-pub fn upload_pattern<R: Runtime>(client: &ComputeClient<R>, thresholds: &Thresholds) -> Pattern {
+pub fn upload_pattern(client: &Client, thresholds: &Thresholds) -> Pattern {
     let bytes = f32::as_bytes(&thresholds.values);
     let values = client.create_from_slice(bytes);
 
@@ -200,9 +200,9 @@ pub struct DepthPlanes<'a> {
 
 #[cube(launch_unchecked)]
 fn convert_depth<I: Numeric, O: Int>(
-    input: &Array<I>,
-    pattern: &Array<f32>,
-    output: &mut Array<O>,
+    input: &[I],
+    pattern: &[f32],
+    output: &mut [O],
     width: u32,
     size: u32,
     across: u32,
@@ -230,13 +230,7 @@ fn convert_depth<I: Numeric, O: Int>(
 }
 
 #[cube(launch_unchecked)]
-fn convert_to_float<I: Numeric>(
-    input: &Array<I>,
-    output: &mut Array<f32>,
-    multiplier: f32,
-    offset: f32,
-    divisor: f32,
-) {
+fn convert_to_float<I: Numeric>(input: &[I], output: &mut [f32], multiplier: f32, offset: f32, divisor: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -246,8 +240,8 @@ fn convert_to_float<I: Numeric>(
 }
 
 /// Converts `planes.input` into `planes.output`, rounding through `pattern` moved by `shift`.
-pub fn convert<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn convert(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DepthPlanes<'_>,
     conversion: &Conversion,
@@ -256,44 +250,44 @@ pub fn convert<R: Runtime>(
 ) {
     match (conversion.input, conversion.output) {
         (Source::U8, Destination::U8) => {
-            launch::<u8, u8, R>(client, dispatch, planes, conversion, pattern, shift)
+            launch::<u8, u8>(client, dispatch, planes, conversion, pattern, shift)
         },
         (Source::U8, Destination::U16) => {
-            launch::<u8, u16, R>(client, dispatch, planes, conversion, pattern, shift)
+            launch::<u8, u16>(client, dispatch, planes, conversion, pattern, shift)
         },
         (Source::U16, Destination::U8) => {
-            launch::<u16, u8, R>(client, dispatch, planes, conversion, pattern, shift)
+            launch::<u16, u8>(client, dispatch, planes, conversion, pattern, shift)
         },
         (Source::U16, Destination::U16) => {
-            launch::<u16, u16, R>(client, dispatch, planes, conversion, pattern, shift)
+            launch::<u16, u16>(client, dispatch, planes, conversion, pattern, shift)
         },
         (Source::F32, Destination::U8) => {
-            launch::<f32, u8, R>(client, dispatch, planes, conversion, pattern, shift)
+            launch::<f32, u8>(client, dispatch, planes, conversion, pattern, shift)
         },
         (Source::F32, Destination::U16) => {
-            launch::<f32, u16, R>(client, dispatch, planes, conversion, pattern, shift)
+            launch::<f32, u16>(client, dispatch, planes, conversion, pattern, shift)
         },
-        (Source::U8, Destination::F32) => launch_to_float::<u8, R>(client, dispatch, planes, conversion),
-        (Source::U16, Destination::F32) => launch_to_float::<u16, R>(client, dispatch, planes, conversion),
-        (Source::F32, Destination::F32) => launch_to_float::<f32, R>(client, dispatch, planes, conversion),
+        (Source::U8, Destination::F32) => launch_to_float::<u8>(client, dispatch, planes, conversion),
+        (Source::U16, Destination::F32) => launch_to_float::<u16>(client, dispatch, planes, conversion),
+        (Source::F32, Destination::F32) => launch_to_float::<f32>(client, dispatch, planes, conversion),
     }
 }
 
-fn launch_to_float<I: Numeric, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_to_float<I: Numeric>(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DepthPlanes<'_>,
     conversion: &Conversion,
 ) {
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input and output hold the same number of samples of `I` and `f32`.
     unsafe {
-        convert_to_float::launch_unchecked::<I, R>(
+        convert_to_float::launch_unchecked::<I>(
             client,
             cubes,
             unit,
@@ -306,8 +300,8 @@ fn launch_to_float<I: Numeric, R: Runtime>(
     }
 }
 
-fn launch<I: Numeric, O: Int, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch<I: Numeric, O: Int>(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DepthPlanes<'_>,
     conversion: &Conversion,
@@ -315,9 +309,9 @@ fn launch<I: Numeric, O: Int, R: Runtime>(
     shift: Shift,
 ) {
     let width = planes.input.width();
-    let input = planes.input.array::<R>();
-    let values = pattern.values::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let values = pattern.values();
+    let output = planes.output.array();
     let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -325,7 +319,7 @@ fn launch<I: Numeric, O: Int, R: Runtime>(
     // Safety: the input and output hold `width * height` samples of `I` and `O`, and every pattern
     // index is wrapped inside its `size * size` values.
     unsafe {
-        convert_depth::launch_unchecked::<I, O, R>(
+        convert_depth::launch_unchecked::<I, O>(
             client,
             cubes,
             unit,

@@ -69,28 +69,21 @@ fn average(first: i32, second: i32) -> i32 {
 }
 
 #[cube]
-fn sample_at<E: Int>(input: &Array<E>, width: u32, column: i32, row: i32) -> i32 {
+fn sample_at<E: Int>(input: &[E], width: u32, column: i32, row: i32) -> i32 {
     let index = row as u32 * width + column as u32;
 
     i32::cast_from(input[index as usize])
 }
 
 #[cube]
-fn mask_at(mask: &Array<u32>, width: u32, column: i32, row: i32) -> i32 {
+fn mask_at(mask: &[u32], width: u32, column: i32, row: i32) -> i32 {
     let index = row as u32 * width + column as u32;
 
     i32::cast_from(mask[index as usize])
 }
 
 #[cube(launch_unchecked)]
-fn edge_mask_kernel<E: Int>(
-    input: &Array<E>,
-    mask: &mut Array<u32>,
-    width: u32,
-    height: u32,
-    peak: i32,
-    thresh: i32,
-) {
+fn edge_mask_kernel<E: Int>(input: &[E], mask: &mut [u32], width: u32, height: u32, peak: i32, thresh: i32) {
     if ABSOLUTE_POS >= mask.len() {
         terminate!();
     }
@@ -140,9 +133,9 @@ fn edge_mask_kernel<E: Int>(
 
 #[cube(launch_unchecked)]
 fn warp_kernel<E: Int>(
-    input: &Array<E>,
-    mask: &Array<u32>,
-    output: &mut Array<E>,
+    input: &[E],
+    mask: &[u32],
+    output: &mut [E],
     width: u32,
     height: u32,
     extra_bits: i32,
@@ -210,21 +203,21 @@ fn warp_kernel<E: Int>(
 /// Writes aWarpSharp2's edge mask of `input` into `mask`, which holds u32 values.
 ///
 /// Every plane is one size. A plane under 3 samples across or down gets an all-zero mask.
-pub fn edge_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn edge_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     mask: DevicePlane<'_>,
     params: &WarpParams,
 ) {
     match params.element {
-        Element::U8 => launch_edge_mask::<u8, R>(client, dispatch, input, mask, params),
-        Element::U16 => launch_edge_mask::<u16, R>(client, dispatch, input, mask, params),
+        Element::U8 => launch_edge_mask::<u8>(client, dispatch, input, mask, params),
+        Element::U16 => launch_edge_mask::<u16>(client, dispatch, input, mask, params),
     }
 }
 
-fn launch_edge_mask<E: Int, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_edge_mask<E: Int>(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     mask: DevicePlane<'_>,
@@ -235,15 +228,15 @@ fn launch_edge_mask<E: Int, R: Runtime>(
     let samples = mask.samples();
     let peak = params.peak();
     let thresh = params.scaled_thresh();
-    let input_array = input.array::<R>();
-    let mask_array = mask.array::<R>();
+    let input_array = input.array();
+    let mask_array = mask.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input holds `width * height` samples of `E` and the mask as many u32 values, and
     // every read is clamped inside the plane.
     unsafe {
-        edge_mask_kernel::launch_unchecked::<E, R>(
+        edge_mask_kernel::launch_unchecked::<E>(
             client,
             cubes,
             unit,
@@ -260,8 +253,8 @@ fn launch_edge_mask<E: Int, R: Runtime>(
 /// Moves each sample of `input` along the slope of `mask` into `output`.
 ///
 /// Every plane is one size.
-pub fn warp_plane<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn warp_plane(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     mask: DevicePlane<'_>,
@@ -269,13 +262,13 @@ pub fn warp_plane<R: Runtime>(
     params: &WarpParams,
 ) {
     match params.element {
-        Element::U8 => launch_warp::<u8, R>(client, dispatch, input, mask, output, params),
-        Element::U16 => launch_warp::<u16, R>(client, dispatch, input, mask, output, params),
+        Element::U8 => launch_warp::<u8>(client, dispatch, input, mask, output, params),
+        Element::U16 => launch_warp::<u16>(client, dispatch, input, mask, output, params),
     }
 }
 
-fn launch_warp<E: Int, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_warp<E: Int>(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     mask: DevicePlane<'_>,
@@ -287,16 +280,16 @@ fn launch_warp<E: Int, R: Runtime>(
     let samples = output.samples();
     let extra_bits = params.bits as i32 - 8;
     let peak = params.peak();
-    let input_array = input.array::<R>();
-    let mask_array = mask.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let mask_array = mask.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input and output hold `width * height` samples of `E` and the mask as many u32
     // values, and every read is clamped inside the plane.
     unsafe {
-        warp_kernel::launch_unchecked::<E, R>(
+        warp_kernel::launch_unchecked::<E>(
             client,
             cubes,
             unit,
@@ -316,12 +309,7 @@ fn launch_warp<E: Int, R: Runtime>(
 ///
 /// It builds the edge mask, blurs it `params.passes` times, then warps the input along it. The blurred
 /// mask may end in either `mask` or `scratch`.
-pub fn warp_sharp<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: WarpPlanes<'_>,
-    params: &WarpParams,
-) {
+pub fn warp_sharp(client: &Client, dispatch: &impl Dispatch, planes: WarpPlanes<'_>, params: &WarpParams) {
     edge_mask(client, dispatch, planes.input, planes.mask, params);
 
     let blurred = blur_mask_passes(

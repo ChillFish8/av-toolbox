@@ -21,9 +21,6 @@ use av_toolbox_cubek::testing::{
     reference_scene_changed,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
-// by name.
-use cubecl::prelude::*;
 
 use crate::motion::{CHROMA, DevicePyramid, read_field};
 use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32};
@@ -87,7 +84,7 @@ impl DegrainRun {
 impl BuildTask for DegrainRun {
     type Output = Outputs;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let frames = &self.frames;
@@ -332,7 +329,7 @@ struct LoneRun {
 impl BuildTask for LoneRun {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let height = self.centre.len() as u32 / self.width;

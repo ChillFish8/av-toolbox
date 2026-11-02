@@ -107,8 +107,8 @@ struct ChainRun {
 }
 
 /// The device, its tables and the clip's format.
-struct Device<'a, R: Runtime> {
-    client: &'a ComputeClient<R>,
+struct Device<'a> {
+    client: &'a Client,
     sizing: Sizing,
     tables: QtgmcTables,
     sizes: [(u32, u32); 3],
@@ -117,7 +117,7 @@ struct Device<'a, R: Runtime> {
 
 const SCALES: [PlaneScale; 3] = [PlaneScale::LUMA, CHROMA, CHROMA];
 
-impl<R: Runtime> Device<'_, R> {
+impl Device<'_> {
     fn empty(&self, plane_index: usize) -> Handle {
         let (width, height) = self.sizes[plane_index];
 
@@ -473,7 +473,7 @@ fn chosen<'a>(
 impl BuildTask for ChainRun {
     type Output = DeviceSteps;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let device = Device {
             client,

@@ -72,7 +72,7 @@ pub struct RetinexBlurs {
 }
 
 impl RetinexBlurs {
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, settings: &RetinexSettings) -> Self {
+    pub fn new(client: &Client, settings: &RetinexSettings) -> Self {
         let blurs = settings
             .sigmas
             .iter()
@@ -84,7 +84,7 @@ impl RetinexBlurs {
     }
 }
 
-fn scale_blur<R: Runtime>(client: &ComputeClient<R>, sigma: f32) -> ScaleBlur {
+fn scale_blur(client: &Client, sigma: f32) -> ScaleBlur {
     if uses_gaussian(sigma) {
         let gaussian = Gaussian::new(client, sigma);
         return ScaleBlur::Gaussian(gaussian);
@@ -116,7 +116,7 @@ pub struct RetinexPlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn normalise(input: &Array<f32>, range: &Array<f32>, normalised: &mut Array<f32>) {
+fn normalise(input: &[f32], range: &[f32], normalised: &mut [f32]) {
     if ABSOLUTE_POS >= normalised.len() {
         terminate!();
     }
@@ -133,7 +133,7 @@ fn normalise(input: &Array<f32>, range: &Array<f32>, normalised: &mut Array<f32>
 }
 
 #[cube(launch_unchecked)]
-fn fill(msr: &mut Array<f32>, value: f32) {
+fn fill(msr: &mut [f32], value: f32) {
     if ABSOLUTE_POS >= msr.len() {
         terminate!();
     }
@@ -142,7 +142,7 @@ fn fill(msr: &mut Array<f32>, value: f32) {
 }
 
 #[cube(launch_unchecked)]
-fn accumulate(normalised: &Array<f32>, blurred: &Array<f32>, msr: &mut Array<f32>) {
+fn accumulate(normalised: &[f32], blurred: &[f32], msr: &mut [f32]) {
     if ABSOLUTE_POS >= msr.len() {
         terminate!();
     }
@@ -159,16 +159,16 @@ fn accumulate(normalised: &Array<f32>, blurred: &Array<f32>, msr: &mut Array<f32
 }
 
 #[cube(launch_unchecked)]
-fn finish(msr: &mut Array<f32>, count: f32) {
+fn finish(msr: &mut [f32], count: f32) {
     if ABSOLUTE_POS >= msr.len() {
         terminate!();
     }
 
-    msr[ABSOLUTE_POS] = msr[ABSOLUTE_POS] / count;
+    msr[ABSOLUTE_POS] /= count;
 }
 
 #[cube(launch_unchecked)]
-fn stretch(msr: &Array<f32>, low: &Array<f32>, high: &Array<f32>, output: &mut Array<f32>, scale: f32) {
+fn stretch(msr: &[f32], low: &[f32], high: &[f32], output: &mut [f32], scale: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -188,12 +188,7 @@ fn stretch(msr: &Array<f32>, low: &Array<f32>, high: &Array<f32>, output: &mut A
 /// Blurs `planes.normalised` into `planes.blurred` with `blur`.
 ///
 /// The gaussian passes through `planes.output`, which is free until the response is stretched.
-fn blur_scale<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: RetinexPlanes<'_>,
-    blur: &ScaleBlur,
-) {
+fn blur_scale(client: &Client, dispatch: &impl Dispatch, planes: RetinexPlanes<'_>, blur: &ScaleBlur) {
     match blur {
         ScaleBlur::Gaussian(gaussian) => {
             let blur_planes = BlurPlanes {
@@ -219,8 +214,8 @@ fn blur_scale<R: Runtime>(
 /// a log response. The response is stretched between its `settings.lower` and `settings.upper`
 /// percentiles and scaled by `settings.scale`. A flat input or crossed percentiles give 0
 /// everywhere. `blurs` must be built from `settings`.
-pub fn retinex<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn retinex(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RetinexPlanes<'_>,
     settings: &RetinexSettings,
@@ -242,49 +237,49 @@ pub fn retinex<R: Runtime>(
     };
     extremes(client, dispatch, input_range_planes);
 
-    let input = planes.input.array::<R>();
-    let range = planes.range.array::<R>();
-    let normalised = planes.normalised.array::<R>();
+    let input = planes.input.array();
+    let range = planes.range.array();
+    let normalised = planes.normalised.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the input and normalised planes hold `samples` f32 values, and the range plane 2.
     unsafe {
-        normalise::launch_unchecked::<R>(client, cubes, unit, input, range, normalised);
+        normalise::launch_unchecked(client, cubes, unit, input, range, normalised);
     }
 
-    let msr = planes.msr.array::<R>();
+    let msr = planes.msr.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the msr plane holds `samples` f32 values.
     unsafe {
-        fill::launch_unchecked::<R>(client, cubes, unit, msr, 0.0);
+        fill::launch_unchecked(client, cubes, unit, msr, 0.0);
     }
 
     for blur in &blurs.blurs {
         blur_scale(client, dispatch, planes, blur);
 
-        let normalised = planes.normalised.array::<R>();
-        let blurred = planes.blurred.array::<R>();
-        let msr = planes.msr.array::<R>();
+        let normalised = planes.normalised.array();
+        let blurred = planes.blurred.array();
+        let msr = planes.msr.array();
         let cubes = dispatch.cube_count(samples);
         let unit = dispatch.cube_dim();
 
         // Safety: the normalised, blurred and msr planes each hold `samples` f32 values.
         unsafe {
-            accumulate::launch_unchecked::<R>(client, cubes, unit, normalised, blurred, msr);
+            accumulate::launch_unchecked(client, cubes, unit, normalised, blurred, msr);
         }
     }
 
     let count = settings.sigmas.len() as f32;
-    let msr = planes.msr.array::<R>();
+    let msr = planes.msr.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the msr plane holds `samples` f32 values.
     unsafe {
-        finish::launch_unchecked::<R>(client, cubes, unit, msr, count);
+        finish::launch_unchecked(client, cubes, unit, msr, count);
     }
 
     let msr_range_planes = ReducePlanes {
@@ -313,15 +308,15 @@ pub fn retinex<R: Runtime>(
     };
     percentile(client, dispatch, high_planes, upper_percentile);
 
-    let msr = planes.msr.array::<R>();
-    let low = planes.low.array::<R>();
-    let high = planes.high.array::<R>();
-    let output = planes.output.array::<R>();
+    let msr = planes.msr.array();
+    let low = planes.low.array();
+    let high = planes.high.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the msr and output planes hold `samples` f32 values, and low and high each hold 1.
     unsafe {
-        stretch::launch_unchecked::<R>(client, cubes, unit, msr, low, high, output, settings.scale);
+        stretch::launch_unchecked(client, cubes, unit, msr, low, high, output, settings.scale);
     }
 }

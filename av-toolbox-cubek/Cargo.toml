@@ -19,6 +19,7 @@ thiserror = { workspace = true }
 av-toolbox-cubek = { path = ".", features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 av-toolbox-models = { workspace = true }
+cubecl-environment = { workspace = true }
 
 [features]
 vulkan = ["cubecl/vulkan", "av-toolbox-gpu/vulkan"]

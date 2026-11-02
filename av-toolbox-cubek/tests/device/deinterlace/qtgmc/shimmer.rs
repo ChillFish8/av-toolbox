@@ -1,7 +1,6 @@
 use av_toolbox_cubek::deinterlace::qtgmc::{ShimmerPlanes, shimmer};
 use av_toolbox_cubek::testing::{assert_plane_within, qtgmc_fixture, reference_shimmer};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::{FIXTURE_TOLERANCE, assert_fixture_within, codes};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -18,7 +17,7 @@ struct ShimmerRun {
 impl BuildTask for ShimmerRun {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let bytes = self.input.len() * size_of::<f32>();

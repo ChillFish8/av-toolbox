@@ -160,13 +160,13 @@ fn device_degrain_weight(sad: f32, threshold: f32) -> f32 {
 )]
 #[cube(launch_unchecked)]
 fn degrain_kernel(
-    centre: &Array<f32>,
-    planes: &Sequence<Array<f32>>,
-    vectors: &Sequence<Array<i32>>,
-    sads: &Sequence<Array<f32>>,
-    flags: &Sequence<Array<u32>>,
+    centre: &[f32],
+    planes: &Sequence<Box<[f32]>>,
+    vectors: &Sequence<Box<[i32]>>,
+    sads: &Sequence<Box<[f32]>>,
+    flags: &Sequence<Box<[u32]>>,
     flag_indices: &Sequence<u32>,
-    output: &mut Array<f32>,
+    output: &mut [f32],
     threshold: f32,
     #[comptime] count: u32,
     #[comptime] width: u32,
@@ -242,7 +242,7 @@ fn degrain_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn copy_kernel(input: &Array<f32>, output: &mut Array<f32>) {
+fn copy_kernel(input: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -251,21 +251,16 @@ fn copy_kernel(input: &Array<f32>, output: &mut Array<f32>) {
 }
 
 /// Writes `centre` into `output`, which both hold at `centre`'s size.
-fn copy_centre<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    centre: DevicePlane<'_>,
-    output: DevicePlane<'_>,
-) {
+fn copy_centre(client: &Client, dispatch: &impl Dispatch, centre: DevicePlane<'_>, output: DevicePlane<'_>) {
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let centre_array = centre.array::<R>();
-    let output_array = output.array::<R>();
+    let centre_array = centre.array();
+    let output_array = output.array();
 
     // Safety: both planes were checked to hold the same number of f32 samples, and each unit reads and
     // writes only its own sample.
     unsafe {
-        copy_kernel::launch_unchecked::<R>(client, cubes, unit, centre_array, output_array);
+        copy_kernel::launch_unchecked(client, cubes, unit, centre_array, output_array);
     }
 }
 
@@ -284,8 +279,8 @@ fn copy_centre<R: Runtime>(
     clippy::too_many_arguments,
     reason = "degrain takes each plane and setting as its own argument"
 )]
-pub fn degrain<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn degrain(
+    client: &Client,
     dispatch: &impl Dispatch,
     centre: DevicePlane<'_>,
     neighbours: &[DegrainNeighbour<'_>],
@@ -310,18 +305,18 @@ pub fn degrain<R: Runtime>(
     crate::assert_plane(&output, width, height, "output");
 
     let Some(first) = neighbours.first() else {
-        copy_centre::<R>(client, dispatch, centre, output);
+        copy_centre(client, dispatch, centre, output);
         return;
     };
     let grid = &first.field.grid;
     let pel = first.field.pel;
     assert_blocks(grid, (width, height), scale);
 
-    let mut planes = SequenceArg::<R, Array<f32>>::new();
-    let mut vectors = SequenceArg::<R, Array<i32>>::new();
-    let mut sads = SequenceArg::<R, Array<f32>>::new();
-    let mut flags = SequenceArg::<R, Array<u32>>::new();
-    let mut flag_indices = SequenceArg::<R, u32>::new();
+    let mut planes = SequenceArg::<Box<[f32]>>::new();
+    let mut vectors = SequenceArg::<Box<[i32]>>::new();
+    let mut sads = SequenceArg::<Box<[f32]>>::new();
+    let mut flags = SequenceArg::<Box<[u32]>>::new();
+    let mut flag_indices = SequenceArg::<u32>::new();
     for neighbour in neighbours {
         crate::assert_plane(&neighbour.plane, width, height, "neighbour");
         assert_field(&neighbour.field);
@@ -329,24 +324,24 @@ pub fn degrain<R: Runtime>(
         assert_eq!(neighbour.field.grid, *grid, "the neighbours' grids differ");
         assert_eq!(neighbour.field.pel, pel, "the neighbours' pels differ");
 
-        planes.push(neighbour.plane.array::<R>());
-        vectors.push(neighbour.field.planes.vectors.array::<R>());
-        sads.push(neighbour.field.planes.sads.array::<R>());
-        flags.push(neighbour.flag.flags.array::<R>());
+        planes.push(neighbour.plane.array());
+        vectors.push(neighbour.field.planes.vectors.array());
+        sads.push(neighbour.field.planes.sads.array());
+        flags.push(neighbour.flag.flags.array());
         flag_indices.push(neighbour.flag.index);
     }
 
     let threshold = settings.sad_threshold(grid.blksize, chroma);
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let centre_array = centre.array::<R>();
-    let output_array = output.array::<R>();
+    let centre_array = centre.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` samples that each read clamps into, the fields hold a
     // vector pair and a SAD for each block of `grid`, each flag index is inside its plane, and each
     // unit writes only its own output sample.
     unsafe {
-        degrain_kernel::launch_unchecked::<R>(
+        degrain_kernel::launch_unchecked(
             client,
             cubes,
             unit,

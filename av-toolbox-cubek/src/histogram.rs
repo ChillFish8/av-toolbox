@@ -17,7 +17,7 @@ pub struct PercentilePlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn clear_bins(bins: &mut Array<u32>) {
+fn clear_bins(bins: &mut [u32]) {
     if ABSOLUTE_POS >= bins.len() {
         terminate!();
     }
@@ -26,7 +26,7 @@ fn clear_bins(bins: &mut Array<u32>) {
 }
 
 #[cube(launch_unchecked)]
-fn count_bins(input: &Array<f32>, range: &Array<f32>, bins: &mut Array<Atomic<u32>>, bin_count: u32) {
+fn count_bins(input: &[f32], range: &[f32], bins: &mut [Atomic<u32>], bin_count: u32) {
     if ABSOLUTE_POS >= input.len() {
         terminate!();
     }
@@ -47,13 +47,7 @@ fn count_bins(input: &Array<f32>, range: &Array<f32>, bins: &mut Array<Atomic<u3
 
 /// Finds the first bin whose running count reaches `target`, and writes its centre.
 #[cube(launch_unchecked)]
-fn find_percentile(
-    bins: &Array<u32>,
-    range: &Array<f32>,
-    result: &mut Array<f32>,
-    target: f32,
-    bin_count: u32,
-) {
+fn find_percentile(bins: &[u32], range: &[f32], result: &mut [f32], target: f32, bin_count: u32) {
     let low = range[0];
     let span = range[1] - low;
     let bin_width = span / f32::cast_from(bin_count);
@@ -77,44 +71,39 @@ fn find_percentile(
 ///
 /// The value is the centre of the bin it falls in, so it is within half a bin of the exact
 /// percentile. A plane whose values are all equal gives that value.
-pub fn percentile<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: PercentilePlanes<'_>,
-    percentile: f32,
-) {
-    let bins = planes.bins.array::<R>();
+pub fn percentile(client: &Client, dispatch: &impl Dispatch, planes: PercentilePlanes<'_>, percentile: f32) {
+    let bins = planes.bins.array();
     let cubes = dispatch.cube_count(BINS as usize);
     let shape = dispatch.cube_dim();
 
     // Safety: every plane holds at least as many elements as the kernel reads or writes.
     unsafe {
-        clear_bins::launch_unchecked::<R>(client, cubes, shape, bins);
+        clear_bins::launch_unchecked(client, cubes, shape, bins);
     }
 
     let samples = planes.input.samples();
-    let input = planes.input.array::<R>();
-    let range = planes.range.array::<R>();
-    let bins = planes.bins.array::<R>();
+    let input = planes.input.array();
+    let range = planes.range.array();
+    let bins = planes.bins.array();
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
 
     // Safety: the input holds `samples` f32 values, the range two and the bins `BINS` u32 values,
     // and the kernel reads and writes nothing past those lengths.
     unsafe {
-        count_bins::launch_unchecked::<R>(client, cubes, shape, input, range, bins, BINS);
+        count_bins::launch_unchecked(client, cubes, shape, input, range, bins, BINS);
     }
 
     let target = percentile / 100.0 * samples as f32;
-    let bins = planes.bins.array::<R>();
-    let range = planes.range.array::<R>();
-    let result = planes.result.array::<R>();
+    let bins = planes.bins.array();
+    let range = planes.range.array();
+    let result = planes.result.array();
     let single = CubeCount::Static(1, 1, 1);
     let lone = CubeDim::new_1d(1);
 
     // Safety: the bins hold `BINS` u32 values, the range two and the result one, and the kernel
     // reads and writes nothing past those lengths.
     unsafe {
-        find_percentile::launch_unchecked::<R>(client, single, lone, bins, range, result, target, BINS);
+        find_percentile::launch_unchecked(client, single, lone, bins, range, result, target, BINS);
     }
 }

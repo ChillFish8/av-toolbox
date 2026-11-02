@@ -113,12 +113,7 @@ pub struct RingPlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn contra_limit_kernel(
-    smoothed: &Array<f32>,
-    sharpened: &Array<f32>,
-    repaired: &Array<f32>,
-    output: &mut Array<f32>,
-) {
+fn contra_limit_kernel(smoothed: &[f32], sharpened: &[f32], repaired: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -135,14 +130,7 @@ fn contra_limit_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn limit_kernel(
-    plane: &Array<f32>,
-    filtered: &Array<f32>,
-    output: &mut Array<f32>,
-    thr: f32,
-    darkthr: f32,
-    elast: f32,
-) {
+fn limit_kernel(plane: &[f32], filtered: &[f32], output: &mut [f32], thr: f32, darkthr: f32, elast: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -171,13 +159,7 @@ fn limit_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn ring_mask_kernel(
-    outer: &Array<f32>,
-    inner: &Array<f32>,
-    output: &mut Array<f32>,
-    incedge: u32,
-    peak: f32,
-) {
+fn ring_mask_kernel(outer: &[f32], inner: &[f32], output: &mut [f32], incedge: u32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -194,30 +176,24 @@ fn ring_mask_kernel(
 }
 
 /// Writes `contra_limit_sample` at each sample.
-pub fn contra_limit<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: ContraPlanes<'_>,
-) {
+pub fn contra_limit(client: &Client, dispatch: &impl Dispatch, planes: ContraPlanes<'_>) {
     let samples = planes.output.samples();
-    let smoothed = planes.smoothed.array::<R>();
-    let sharpened = planes.sharpened.array::<R>();
-    let repaired = planes.repaired.array::<R>();
-    let output = planes.output.array::<R>();
+    let smoothed = planes.smoothed.array();
+    let sharpened = planes.sharpened.array();
+    let repaired = planes.repaired.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        contra_limit_kernel::launch_unchecked::<R>(
-            client, cubes, unit, smoothed, sharpened, repaired, output,
-        );
+        contra_limit_kernel::launch_unchecked(client, cubes, unit, smoothed, sharpened, repaired, output);
     }
 }
 
 /// Writes `limit_sample` at each sample.
-pub fn limit_filter<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn limit_filter(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: LimitPlanes<'_>,
     thr: f32,
@@ -225,47 +201,36 @@ pub fn limit_filter<R: Runtime>(
     elast: f32,
 ) {
     let samples = planes.output.samples();
-    let plane = planes.plane.array::<R>();
-    let filtered = planes.filtered.array::<R>();
-    let output = planes.output.array::<R>();
+    let plane = planes.plane.array();
+    let filtered = planes.filtered.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        limit_kernel::launch_unchecked::<R>(
-            client, cubes, unit, plane, filtered, output, thr, darkthr, elast,
-        );
+        limit_kernel::launch_unchecked(client, cubes, unit, plane, filtered, output, thr, darkthr, elast);
     }
 }
 
 /// Writes `ring_mask_sample` at each sample.
-pub fn ring_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn ring_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RingPlanes<'_>,
     incedge: bool,
     peak: f32,
 ) {
     let samples = planes.output.samples();
-    let outer = planes.outer.array::<R>();
-    let inner = planes.inner.array::<R>();
-    let output = planes.output.array::<R>();
+    let outer = planes.outer.array();
+    let inner = planes.inner.array();
+    let output = planes.output.array();
     let incedge_flag = u32::from(incedge);
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        ring_mask_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            outer,
-            inner,
-            output,
-            incedge_flag,
-            peak,
-        );
+        ring_mask_kernel::launch_unchecked(client, cubes, unit, outer, inner, output, incedge_flag, peak);
     }
 }

@@ -1,7 +1,6 @@
 use av_toolbox_cubek::sobel::{SobelPlanes, sobel};
 use av_toolbox_cubek::testing::reflect;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, upload_f32};
 
@@ -43,7 +42,7 @@ struct Gradients {
 impl BuildTask for Gradients {
     type Output = (Vec<f32>, Vec<f32>);
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

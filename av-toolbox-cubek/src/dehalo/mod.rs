@@ -25,13 +25,7 @@ pub struct MergePlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn merge_masked_kernel(
-    clip: &Array<f32>,
-    filtered: &Array<f32>,
-    mask: &Array<f32>,
-    output: &mut Array<f32>,
-    peak: f32,
-) {
+fn merge_masked_kernel(clip: &[f32], filtered: &[f32], mask: &[f32], output: &mut [f32], peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -43,23 +37,18 @@ fn merge_masked_kernel(
 }
 
 /// Moves `clip` toward `filtered` by `mask / peak` at each sample.
-pub fn merge_masked<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: MergePlanes<'_>,
-    peak: f32,
-) {
+pub fn merge_masked(client: &Client, dispatch: &impl Dispatch, planes: MergePlanes<'_>, peak: f32) {
     let samples = planes.output.samples();
-    let clip = planes.clip.array::<R>();
-    let filtered = planes.filtered.array::<R>();
-    let mask = planes.mask.array::<R>();
-    let output = planes.output.array::<R>();
+    let clip = planes.clip.array();
+    let filtered = planes.filtered.array();
+    let mask = planes.mask.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        merge_masked_kernel::launch_unchecked::<R>(client, cubes, unit, clip, filtered, mask, output, peak);
+        merge_masked_kernel::launch_unchecked(client, cubes, unit, clip, filtered, mask, output, peak);
     }
 }
 
@@ -72,7 +61,7 @@ pub struct DifferencePlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn difference_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>) {
+fn difference_kernel(first: &[f32], second: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -81,20 +70,16 @@ fn difference_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array
 }
 
 /// Writes `first - second` at each sample, which may be negative.
-pub fn difference<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: DifferencePlanes<'_>,
-) {
+pub fn difference(client: &Client, dispatch: &impl Dispatch, planes: DifferencePlanes<'_>) {
     let samples = planes.output.samples();
-    let first = planes.first.array::<R>();
-    let second = planes.second.array::<R>();
-    let output = planes.output.array::<R>();
+    let first = planes.first.array();
+    let second = planes.second.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        difference_kernel::launch_unchecked::<R>(client, cubes, unit, first, second, output);
+        difference_kernel::launch_unchecked(client, cubes, unit, first, second, output);
     }
 }

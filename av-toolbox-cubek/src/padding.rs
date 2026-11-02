@@ -6,8 +6,8 @@ use crate::{DevicePlane, Dispatch};
 
 #[cube(launch_unchecked)]
 fn pad_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    output: &mut [f32],
     input_width: u32,
     input_height: u32,
     output_width: u32,
@@ -30,13 +30,7 @@ fn pad_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn crop_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    input_width: u32,
-    output_width: u32,
-    amount: u32,
-) {
+fn crop_kernel(input: &[f32], output: &mut [f32], input_width: u32, output_width: u32, amount: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -53,8 +47,8 @@ fn crop_kernel(
 }
 
 /// Grows `input` by `amount` on every side, each new sample repeating the nearest edge sample.
-pub fn pad<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn pad(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -69,14 +63,14 @@ pub fn pad<R: Runtime>(
     debug_assert!(output_height == input_height + 2 * amount);
 
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the output holds its own samples, and every read clamps into the input.
     unsafe {
-        pad_kernel::launch_unchecked::<R>(
+        pad_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -91,8 +85,8 @@ pub fn pad<R: Runtime>(
 }
 
 /// Removes `amount` from every side of `input`.
-pub fn crop<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn crop(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -107,14 +101,14 @@ pub fn crop<R: Runtime>(
     debug_assert!(input_height == output_height + 2 * amount);
 
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the output holds its own samples, and every read lands inside the input.
     unsafe {
-        crop_kernel::launch_unchecked::<R>(
+        crop_kernel::launch_unchecked(
             client,
             cubes,
             unit,

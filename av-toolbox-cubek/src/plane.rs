@@ -1,4 +1,4 @@
-use cubecl::prelude::{ArrayArg, Runtime};
+use cubecl::prelude::BufferArg;
 use cubecl::server::Handle;
 
 /// A plane on the device, `width` samples across and `height` down, in row order.
@@ -39,12 +39,12 @@ impl<'a> DevicePlane<'a> {
     }
 
     /// This plane as a kernel argument.
-    pub fn array<R: Runtime>(&self) -> ArrayArg<R> {
+    pub fn array(&self) -> BufferArg {
         let handle = self.handle.clone();
         let samples = self.samples();
 
         // Safety: `new` requires the buffer to hold `samples` elements of the type the kernel declares.
-        unsafe { ArrayArg::from_raw_parts(handle, samples) }
+        unsafe { BufferArg::from_raw_parts(handle, samples) }
     }
 }
 

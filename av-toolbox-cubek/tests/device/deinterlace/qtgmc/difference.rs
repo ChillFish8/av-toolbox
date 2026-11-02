@@ -1,7 +1,6 @@
 use av_toolbox_cubek::deinterlace::qtgmc::clamped_difference;
 use av_toolbox_cubek::testing::{assert_plane_within, reference_clamped_difference};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
@@ -15,7 +14,7 @@ struct DifferenceRun {
 impl BuildTask for DifferenceRun {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let width = self.first.len() as u32;

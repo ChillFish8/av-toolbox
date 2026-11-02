@@ -39,7 +39,7 @@ use av_toolbox_cubek::testing::{
     worked_edge_plane,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use cubecl::server::Handle;
 
 use crate::aa::transposed_plane;
@@ -165,7 +165,7 @@ struct DeviceScratch {
 }
 
 impl DeviceScratch {
-    fn new<R: Runtime>(client: &ComputeClient<R>, sizes: &Eedi3ScratchSizes) -> Self {
+    fn new(client: &Client, sizes: &Eedi3ScratchSizes) -> Self {
         Self {
             rebuilt: empty(client, sizes.rebuilt),
             directions: empty(client, sizes.directions),
@@ -204,9 +204,9 @@ struct FieldPasses {
 impl FieldPasses {
     /// The output and spread directions of the pass keeping the rows of parity `offset`, once the device
     /// has finished.
-    fn read_pass<R: Runtime>(
+    fn read_pass(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         output: &Handle,
         scratch: &DeviceScratch,
         offset: u32,
@@ -224,9 +224,9 @@ impl FieldPasses {
     }
 
     /// Both passes through one call, each with its own output and scratch.
-    fn run_together<R: Runtime>(
+    fn run_together(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         sizing: &Sizing,
         input: DevicePlane<'_>,
         clips: Eedi3DeviceClips<'_>,
@@ -269,7 +269,7 @@ impl FieldPasses {
 impl BuildTask for FieldPasses {
     type Output = Vec<DevicePass>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

@@ -8,6 +8,7 @@ use crate::cnn::kernels::direct::{LOAD_WIDTH, Load, Quad, Sums, TILE, WRITE_WIDT
 
 /// The plane's place in the workgroup's grid of planes.
 #[derive(CubeType, Clone, Copy)]
+#[expand(derive(Clone, Copy))]
 struct PlaneSpot {
     /// The index of the plane's first scratch quad in shared memory.
     scratch: u32,
@@ -58,13 +59,9 @@ fn add_scaled(sum: Sums, value: Sums, #[comptime] coefficient: i32) -> Sums {
 ///
 /// The transform runs in f32 and is rounded to f16 once. Samples outside the frame are zero, the network's
 /// padding.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "the unrolled loops read the transform matrices when the kernel compiles"
-)]
 #[cube]
 fn transform_position(
-    input: &Array<Quad>,
+    input: &[Quad],
     tile_row: u32,
     tile_column: u32,
     part: u32,
@@ -79,6 +76,10 @@ fn transform_position(
     let mut sum = Sums::new(0.0);
 
     #[unroll]
+    #[expect(
+        clippy::needless_range_loop,
+        reason = "the unrolled loops read the transform matrices when the kernel compiles"
+    )]
     for window_row in 0..window {
         let row_coefficient = comptime!(INPUT_TRANSFORM[position_row][window_row]);
 
@@ -88,6 +89,10 @@ fn transform_position(
             let mut across = Sums::new(0.0);
 
             #[unroll]
+            #[expect(
+                clippy::needless_range_loop,
+                reason = "the unrolled loops read the transform matrices when the kernel compiles"
+            )]
             for window_column in 0..window {
                 let column_coefficient = comptime!(INPUT_TRANSFORM[position_column][window_column]);
 
@@ -116,8 +121,8 @@ fn transform_position(
 /// `transformed`, by tile and channel.
 #[cube]
 fn stage_position(
-    input: &Array<Quad>,
-    transformed: &mut SharedMemory<Quad>,
+    input: &[Quad],
+    transformed: &mut Shared<[Quad]>,
     block_row: u32,
     block_column: u32,
     width: u32,
@@ -159,8 +164,8 @@ fn stage_position(
 #[cfg(any(test, feature = "test-support"))]
 #[cube(launch_unchecked)]
 pub(super) fn input_transform_kernel(
-    input: &Array<Quad>,
-    transformed: &mut Array<Quad>,
+    input: &[Quad],
+    transformed: &mut [Quad],
     width: u32,
     height: u32,
     columns: u32,
@@ -208,12 +213,12 @@ pub(super) fn input_transform_kernel(
 /// `Aᵀ m A` in f32. The workgroup transforms its own windows into shared memory one position at a time.
 #[cube(launch_unchecked)]
 pub(super) fn winograd_kernel(
-    input: &Array<Quad>,
-    weights: &Array<Load>,
-    bias: &Array<Quad>,
-    residual: &Array<Quad>,
-    skip: &Array<Quad>,
-    output: &mut Array<Quad>,
+    input: &[Quad],
+    weights: &[Load],
+    bias: &[Quad],
+    residual: &[Quad],
+    skip: &[Quad],
+    output: &mut [Quad],
     width: u32,
     height: u32,
     #[comptime] shape: WinogradShape,
@@ -224,8 +229,8 @@ pub(super) fn winograd_kernel(
     let window = comptime!(WINDOW as usize);
     let sums_per_unit = comptime!(shape.sums_per_unit() as usize);
 
-    let mut transformed = SharedMemory::<Quad>::new(comptime!(shape.transformed_quads() as usize));
-    let mut scratch = SharedMemory::<Sums>::new(comptime!(shape.scratch_quads() as usize));
+    let mut transformed = Shared::<[Quad]>::new_slice(comptime!(shape.transformed_quads() as usize));
+    let mut scratch = Shared::<[Sums]>::new_slice(comptime!(shape.scratch_quads() as usize));
     let mut sums = Array::<Sums>::new(sums_per_unit);
 
     #[unroll]
@@ -262,12 +267,19 @@ pub(super) fn winograd_kernel(
             store_products(&products, &mut scratch, spot, shape);
             // Every unit reads products its plane's first subgroup stored.
             sync_cube();
-            fold_products(&scratch, &mut sums, spot, position_row, position_column, shape);
+            fold_products(
+                &scratch,
+                sums.as_mut_slice(),
+                spot,
+                position_row,
+                position_column,
+                shape,
+            );
         }
     }
 
     write_out(
-        &sums,
+        sums.as_slice(),
         bias,
         residual,
         skip,
@@ -286,8 +298,8 @@ pub(super) fn winograd_kernel(
 /// Gives a product for each of the plane's groups of 16 tiles and channel tiles, the groups' first.
 #[cube]
 fn multiply_position(
-    transformed: &SharedMemory<Quad>,
-    weights: &Array<Load>,
+    transformed: &Shared<[Quad]>,
+    weights: &[Load],
     spot: PlaneSpot,
     #[comptime] position: u32,
     #[comptime] shape: WinogradShape,
@@ -304,8 +316,8 @@ fn multiply_position(
 
     #[unroll]
     for _ in 0..groups * channel_tiles {
-        let matrix = fragment::<f32>(cmma::MatrixIdent::Accumulator, cmma::MatrixLayout::Undefined);
-        cmma::fill(&matrix, 0.0);
+        let mut matrix = fragment::<f32>(cmma::MatrixIdent::Accumulator, cmma::MatrixLayout::Undefined);
+        cmma::fill(&mut matrix, 0.0);
         products.push(matrix);
     }
 
@@ -316,11 +328,11 @@ fn multiply_position(
         #[unroll]
         for group in 0..groups {
             let first_tile = (spot.first_group + group as u32) * TILE;
-            let windows = fragment(cmma::MatrixIdent::A, cmma::MatrixLayout::RowMajor);
+            let mut windows = fragment(cmma::MatrixIdent::A, cmma::MatrixLayout::RowMajor);
 
             let start = (first_tile * shared_stride + chunk as u32 * TILE) / WRITE_WIDTH;
             let rows = transformed.slice(start as usize, (start + shared_quads) as usize);
-            cmma::load(&windows, &rows, shared_stride);
+            cmma::load(&mut windows, rows, shared_stride);
 
             lhs.push(windows);
         }
@@ -330,13 +342,13 @@ fn multiply_position(
             let channel = (spot.first_channel_tile + channel_tile as u32) * TILE;
             let start = (weights_start + channel * features + chunk as u32 * TILE) / LOAD_WIDTH;
             let columns = weights.slice(start as usize, (start + weight_loads) as usize);
-            let rhs = fragment(cmma::MatrixIdent::B, cmma::MatrixLayout::ColMajor);
-            cmma::load(&rhs, &columns, features);
+            let mut rhs = fragment(cmma::MatrixIdent::B, cmma::MatrixLayout::ColMajor);
+            cmma::load(&mut rhs, columns, features);
 
             #[unroll]
             for group in 0..groups {
                 let product = products.index(comptime!(group * channel_tiles + channel_tile));
-                cmma::execute::<f16, f16, f32, f32>(lhs.index(group), &rhs, product, product);
+                cmma::execute::<f16, f16, f32, f32, cmma::Plane>(lhs.index(group), &rhs, product, product);
             }
         }
     }
@@ -348,7 +360,7 @@ fn multiply_position(
 #[cube]
 fn store_products(
     products: &Sequence<cmma::Matrix<f32>>,
-    scratch: &mut SharedMemory<Sums>,
+    scratch: &mut Shared<[Sums]>,
     spot: PlaneSpot,
     #[comptime] shape: WinogradShape,
 ) {
@@ -360,23 +372,19 @@ fn store_products(
         #[unroll]
         for fragment_index in 0..fragments {
             let start = (spot.scratch + fragment_index as u32 * TILE_QUADS) as usize;
-            let mut tile = scratch.slice_mut(start, start + TILE_QUADS as usize);
+            let tile = scratch.slice_mut(start, start + TILE_QUADS as usize);
             let product = products.index(fragment_index);
-            cmma::store(&mut tile, product, TILE, cmma::MatrixLayout::RowMajor);
+            cmma::store(tile, product, TILE, cmma::MatrixLayout::RowMajor);
         }
     }
 }
 
 /// Adds `Aᵀ m A`'s share of the products at position `position_row`, `position_column` to the unit's output
 /// sums, from the plane's scratch tiles.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "the unrolled loops read the transform matrices when the kernel compiles"
-)]
 #[cube]
 fn fold_products(
-    scratch: &SharedMemory<Sums>,
-    sums: &mut Array<Sums>,
+    scratch: &Shared<[Sums]>,
+    sums: &mut [Sums],
     spot: PlaneSpot,
     #[comptime] position_row: usize,
     #[comptime] position_column: usize,
@@ -395,8 +403,16 @@ fn fold_products(
             let product = scratch[(spot.scratch + fragment_index as u32 * TILE_QUADS + index) as usize];
 
             #[unroll]
+            #[expect(
+                clippy::needless_range_loop,
+                reason = "the unrolled loops read the transform matrices when the kernel compiles"
+            )]
             for output_row in 0..2usize {
                 #[unroll]
+                #[expect(
+                    clippy::needless_range_loop,
+                    reason = "the unrolled loops read the transform matrices when the kernel compiles"
+                )]
                 for output_column in 0..2usize {
                     let row_coefficient = comptime!(OUTPUT_TRANSFORM[output_row][position_row]);
                     let column_coefficient = comptime!(OUTPUT_TRANSFORM[output_column][position_column]);
@@ -418,11 +434,11 @@ fn fold_products(
 /// Samples outside the frame are not written.
 #[cube]
 fn write_out(
-    sums: &Array<Sums>,
-    bias: &Array<Quad>,
-    residual: &Array<Quad>,
-    skip: &Array<Quad>,
-    output: &mut Array<Quad>,
+    sums: &[Sums],
+    bias: &[Quad],
+    residual: &[Quad],
+    skip: &[Quad],
+    output: &mut [Quad],
     spot: PlaneSpot,
     block_row: u32,
     block_column: u32,

@@ -2,14 +2,14 @@
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 use cubek_matmul::definition::MatmulElems;
-use cubek_matmul::launch::Strategy as MatmulStrategy;
+use cubek_matmul::multi_level::Strategy as MatmulStrategy;
 use cubek_std::InputBinding;
 
 use crate::cnn::convolution::{
     contiguous,
+    elem_type,
     matmul_failed,
     offers_cmma_16,
-    storage_type,
     tensor,
     uniform_globals,
 };
@@ -61,7 +61,7 @@ impl HeadLayer {
     ///
     /// Panics if `layer` is not a 3x3 convolution from one or three image channels and the strength channel
     /// to 64 features.
-    pub fn upload<R: Runtime>(client: &ComputeClient<R>, layer: &WeightLayer, precision: Precision) -> Self {
+    pub fn upload(client: &Client, layer: &WeightLayer, precision: Precision) -> Self {
         let image_channels = layer.in_channels.saturating_sub(1) as usize;
         let shaped = layer.kind == LayerKind::Conv && layer.out_channels == HEAD_FEATURES;
         assert!(
@@ -89,13 +89,7 @@ impl HeadLayer {
 
 /// The sample at `index` of image plane `channel`.
 #[cube]
-fn plane_sample(
-    first: &Array<f32>,
-    second: &Array<f32>,
-    third: &Array<f32>,
-    channel: u32,
-    index: usize,
-) -> f32 {
+fn plane_sample(first: &[f32], second: &[f32], third: &[f32], channel: u32, index: usize) -> f32 {
     let mut value = first[index];
     if channel == 1 {
         value = second[index];
@@ -108,11 +102,11 @@ fn plane_sample(
 
 #[cube(launch_unchecked)]
 fn head_kernel<F: Float>(
-    first: &Array<f32>,
-    second: &Array<f32>,
-    third: &Array<f32>,
-    weights: &Array<F>,
-    output: &mut Array<F>,
+    first: &[f32],
+    second: &[f32],
+    third: &[f32],
+    weights: &[F],
+    output: &mut [F],
     plane_width: u32,
     plane_height: u32,
     region_x: u32,
@@ -169,7 +163,7 @@ fn head_kernel<F: Float>(
 }
 
 #[cube(launch_unchecked)]
-fn gather_kernel<F: Float>(input: &Array<F>, output: &mut Array<F>, width: u32, channels: u32) {
+fn gather_kernel<F: Float>(input: &[F], output: &mut [F], width: u32, channels: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -191,7 +185,7 @@ fn gather_kernel<F: Float>(input: &Array<F>, output: &mut Array<F>, width: u32, 
 }
 
 #[cube(launch_unchecked)]
-fn scatter_kernel<F: Float>(input: &Array<F>, output: &mut Array<F>, width: u32, channels: u32) {
+fn scatter_kernel<F: Float>(input: &[F], output: &mut [F], width: u32, channels: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -212,7 +206,7 @@ fn scatter_kernel<F: Float>(input: &Array<F>, output: &mut Array<F>, width: u32,
 }
 
 #[cube(launch_unchecked)]
-fn add_kernel<F: Float>(values: &mut Array<F>, addend: &Array<F>) {
+fn add_kernel<F: Float>(values: &mut [F], addend: &[F]) {
     if ABSOLUTE_POS >= values.len() {
         terminate!();
     }
@@ -224,10 +218,10 @@ fn add_kernel<F: Float>(values: &mut Array<F>, addend: &Array<F>) {
 
 #[cube(launch_unchecked)]
 fn direct_tail_kernel<F: Float>(
-    input: &Array<F>,
-    weights: &Array<F>,
-    bias: &Array<f32>,
-    scratch: &mut Array<f32>,
+    input: &[F],
+    weights: &[F],
+    bias: &[f32],
+    scratch: &mut [f32],
     region_width: u32,
     region_height: u32,
     in_channels: u32,
@@ -266,9 +260,9 @@ fn direct_tail_kernel<F: Float>(
 /// Writes `value` to `index` of image plane `channel`.
 #[cube]
 fn write_plane(
-    first: &mut Array<f32>,
-    second: &mut Array<f32>,
-    third: &mut Array<f32>,
+    first: &mut [f32],
+    second: &mut [f32],
+    third: &mut [f32],
     channel: u32,
     index: usize,
     value: f32,
@@ -284,10 +278,10 @@ fn write_plane(
 
 #[cube(launch_unchecked)]
 fn write_out_kernel(
-    scratch: &Array<f32>,
-    first: &mut Array<f32>,
-    second: &mut Array<f32>,
-    third: &mut Array<f32>,
+    scratch: &[f32],
+    first: &mut [f32],
+    second: &mut [f32],
+    third: &mut [f32],
     plane_width: u32,
     plane_height: u32,
     region_x: u32,
@@ -374,8 +368,8 @@ fn check_values(handle: &Handle, values: usize, precision: Precision, name: &str
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn head<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn head(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &HeadLayer,
     planes: &[DevicePlane<'_>],
@@ -399,9 +393,9 @@ pub fn head<R: Runtime>(
     check_values(output, units, layer.precision, "output");
 
     let [first, second, third] = three_planes(planes);
-    let first_array = first.array::<R>();
-    let second_array = second.array::<R>();
-    let third_array = third.array::<R>();
+    let first_array = first.array();
+    let second_array = second.array();
+    let third_array = third.array();
     let strength_value = strength / STRENGTH_SCALE;
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
@@ -409,11 +403,11 @@ pub fn head<R: Runtime>(
     // Safety: the weights hold `64 * 9 * in` values and the output the region times 64, as just asserted, and
     // every read of a plane is folded inside it by the mirror.
     unsafe {
-        let weights = ArrayArg::from_raw_parts(layer.weights.clone(), weight_count);
-        let output_array = ArrayArg::from_raw_parts(output.clone(), units);
+        let weights = BufferArg::from_raw_parts(layer.weights.clone(), weight_count);
+        let output_array = BufferArg::from_raw_parts(output.clone(), units);
 
         match layer.precision {
-            Precision::F16 => head_kernel::launch_unchecked::<half::f16, R>(
+            Precision::F16 => head_kernel::launch_unchecked::<half::f16>(
                 client,
                 cubes,
                 unit,
@@ -435,7 +429,7 @@ pub fn head<R: Runtime>(
                 peak,
                 strength_value,
             ),
-            Precision::F32 => head_kernel::launch_unchecked::<f32, R>(
+            Precision::F32 => head_kernel::launch_unchecked::<f32>(
                 client,
                 cubes,
                 unit,
@@ -469,8 +463,8 @@ pub fn head<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn gather<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn gather(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: &Handle,
     width: u32,
@@ -494,11 +488,11 @@ pub fn gather<R: Runtime>(
     // Safety: the input and output each hold the maps' values, as just asserted, and every read lands inside
     // the input's whole 2x2 blocks.
     unsafe {
-        let input_array = ArrayArg::from_raw_parts(input.clone(), count);
-        let output_array = ArrayArg::from_raw_parts(output.clone(), count);
+        let input_array = BufferArg::from_raw_parts(input.clone(), count);
+        let output_array = BufferArg::from_raw_parts(output.clone(), count);
 
         match precision {
-            Precision::F16 => gather_kernel::launch_unchecked::<half::f16, R>(
+            Precision::F16 => gather_kernel::launch_unchecked::<half::f16>(
                 client,
                 cubes,
                 unit,
@@ -507,7 +501,7 @@ pub fn gather<R: Runtime>(
                 width,
                 channels,
             ),
-            Precision::F32 => gather_kernel::launch_unchecked::<f32, R>(
+            Precision::F32 => gather_kernel::launch_unchecked::<f32>(
                 client,
                 cubes,
                 unit,
@@ -535,8 +529,8 @@ pub(super) fn product_strategy(precision: Precision, offers_matrix: bool) -> Mat
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the product"
 )]
-pub fn matrix_product<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn matrix_product(
+    client: &Client,
     lhs: &Handle,
     rows: usize,
     depth: usize,
@@ -549,7 +543,7 @@ pub fn matrix_product<R: Runtime>(
     check_values(rhs, depth * columns, precision, "right matrix");
     check_values(output, rows * columns, precision, "output");
 
-    let dtype = storage_type(precision);
+    let dtype = elem_type(precision);
     let lhs_shape = [rows, depth];
     let rhs_shape = [depth, columns];
     let out_shape = [rows, columns];
@@ -557,11 +551,11 @@ pub fn matrix_product<R: Runtime>(
     let rhs_strides = contiguous(&rhs_shape);
     let out_strides = contiguous(&out_shape);
     // Safety: the left matrix holds `rows x depth` values contiguously, as just asserted.
-    let lhs_tensor = unsafe { tensor::<R>(lhs, &lhs_shape, &lhs_strides) };
+    let lhs_tensor = unsafe { tensor(lhs, &lhs_shape, &lhs_strides) };
     // Safety: the right matrix holds `depth x columns` values contiguously, as just asserted.
-    let rhs_tensor = unsafe { tensor::<R>(rhs, &rhs_shape, &rhs_strides) };
+    let rhs_tensor = unsafe { tensor(rhs, &rhs_shape, &rhs_strides) };
     // Safety: the output holds `rows x columns` values contiguously, as just asserted.
-    let out_tensor = unsafe { tensor::<R>(output, &out_shape, &out_strides) };
+    let out_tensor = unsafe { tensor(output, &out_shape, &out_strides) };
 
     let lhs_binding = InputBinding::new(lhs_tensor, dtype);
     let rhs_binding = InputBinding::new(rhs_tensor, dtype);
@@ -570,7 +564,7 @@ pub fn matrix_product<R: Runtime>(
     let offers_matrix = offers_cmma_16(client);
     let strategy = product_strategy(precision, offers_matrix);
     let launched = cubek_matmul::launch::launch_ref(
-        &strategy,
+        &strategy.into(),
         client,
         lhs_binding,
         rhs_binding,
@@ -589,8 +583,8 @@ pub fn matrix_product<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn scatter<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn scatter(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: &Handle,
     width: u32,
@@ -609,11 +603,11 @@ pub fn scatter<R: Runtime>(
     // Safety: the input and output each hold the maps' values, as just asserted, and every read lands on the
     // input sample under the output's 2x2 block.
     unsafe {
-        let input_array = ArrayArg::from_raw_parts(input.clone(), count);
-        let output_array = ArrayArg::from_raw_parts(output.clone(), count);
+        let input_array = BufferArg::from_raw_parts(input.clone(), count);
+        let output_array = BufferArg::from_raw_parts(output.clone(), count);
 
         match precision {
-            Precision::F16 => scatter_kernel::launch_unchecked::<half::f16, R>(
+            Precision::F16 => scatter_kernel::launch_unchecked::<half::f16>(
                 client,
                 cubes,
                 unit,
@@ -622,7 +616,7 @@ pub fn scatter<R: Runtime>(
                 width,
                 channels,
             ),
-            Precision::F32 => scatter_kernel::launch_unchecked::<f32, R>(
+            Precision::F32 => scatter_kernel::launch_unchecked::<f32>(
                 client,
                 cubes,
                 unit,
@@ -636,8 +630,8 @@ pub fn scatter<R: Runtime>(
 }
 
 /// Adds the first `count` values of `addend` to those of `values`, summing in f32.
-pub fn add_in_place<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn add_in_place(
+    client: &Client,
     dispatch: &impl Dispatch,
     values: &Handle,
     addend: &Handle,
@@ -652,15 +646,15 @@ pub fn add_in_place<R: Runtime>(
 
     // Safety: the values and the addend each hold `count` values, as just asserted.
     unsafe {
-        let values_array = ArrayArg::from_raw_parts(values.clone(), count);
-        let addend_array = ArrayArg::from_raw_parts(addend.clone(), count);
+        let values_array = BufferArg::from_raw_parts(values.clone(), count);
+        let addend_array = BufferArg::from_raw_parts(addend.clone(), count);
 
         match precision {
             Precision::F16 => {
-                add_kernel::launch_unchecked::<half::f16, R>(client, cubes, unit, values_array, addend_array)
+                add_kernel::launch_unchecked::<half::f16>(client, cubes, unit, values_array, addend_array)
             },
             Precision::F32 => {
-                add_kernel::launch_unchecked::<f32, R>(client, cubes, unit, values_array, addend_array)
+                add_kernel::launch_unchecked::<f32>(client, cubes, unit, values_array, addend_array)
             },
         }
     }
@@ -674,8 +668,8 @@ pub fn add_in_place<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn write_out<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn write_out(
+    client: &Client,
     dispatch: &impl Dispatch,
     scratch: &Handle,
     placement: Placement,
@@ -701,18 +695,18 @@ pub fn write_out<R: Runtime>(
     let units = (core_samples * channels) as usize;
     let scratch_channels = PADDED_CHANNELS as u32;
     let [first, second, third] = three_planes(outputs);
-    let first_array = first.array::<R>();
-    let second_array = second.array::<R>();
-    let third_array = third.array::<R>();
+    let first_array = first.array();
+    let second_array = second.array();
+    let third_array = third.array();
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
 
     // Safety: the scratch holds the region times 16 values, as just asserted, every read stays inside the
     // region since the core lies inside it, and every write lands inside a plane, which the kernel checks.
     unsafe {
-        let scratch_array = ArrayArg::from_raw_parts(scratch.clone(), scratch_count);
+        let scratch_array = BufferArg::from_raw_parts(scratch.clone(), scratch_count);
 
-        write_out_kernel::launch_unchecked::<R>(
+        write_out_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -743,8 +737,8 @@ pub fn write_out<R: Runtime>(
 ///
 /// The convolution paths run it on cooperative-matrix tiles. [BodyPath::Im2col](crate::cnn::BodyPath) runs a
 /// direct kernel that needs none.
-pub fn tail<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn tail(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &PaddedLastLayer,
     path: BodyPath,
@@ -764,8 +758,8 @@ pub fn tail<R: Runtime>(
 
 /// Runs `layer` over the NHWC maps of `region` in `input` one sample and channel a unit, into `scratch` as
 /// NHWC maps of 16 f32 channels.
-fn direct_tail<R: Runtime>(
-    client: &ComputeClient<R>,
+fn direct_tail(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &PaddedLastLayer,
     input: &Handle,
@@ -789,13 +783,13 @@ fn direct_tail<R: Runtime>(
     // Safety: the input holds the region times `in` values, the weights `16 * 9 * in`, the bias 16 and the
     // scratch the region times 16, as just asserted, and every read of the input stays inside the region.
     unsafe {
-        let input_array = ArrayArg::from_raw_parts(input.clone(), input_count);
-        let weights = ArrayArg::from_raw_parts(layer.weights.clone(), weight_count);
-        let bias = ArrayArg::from_raw_parts(layer.bias.clone(), PADDED_CHANNELS);
-        let scratch_array = ArrayArg::from_raw_parts(scratch.clone(), units);
+        let input_array = BufferArg::from_raw_parts(input.clone(), input_count);
+        let weights = BufferArg::from_raw_parts(layer.weights.clone(), weight_count);
+        let bias = BufferArg::from_raw_parts(layer.bias.clone(), PADDED_CHANNELS);
+        let scratch_array = BufferArg::from_raw_parts(scratch.clone(), units);
 
         match layer.precision {
-            Precision::F16 => direct_tail_kernel::launch_unchecked::<half::f16, R>(
+            Precision::F16 => direct_tail_kernel::launch_unchecked::<half::f16>(
                 client,
                 cubes,
                 unit,
@@ -809,7 +803,7 @@ fn direct_tail<R: Runtime>(
                 layer.out_channels,
                 scratch_channels,
             ),
-            Precision::F32 => direct_tail_kernel::launch_unchecked::<f32, R>(
+            Precision::F32 => direct_tail_kernel::launch_unchecked::<f32>(
                 client,
                 cubes,
                 unit,

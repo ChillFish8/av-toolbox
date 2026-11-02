@@ -1,9 +1,6 @@
 use av_toolbox_cubek::motion::normalise;
 use av_toolbox_cubek::testing::{assert_same_plane, qtgmc_fixture, reference_normalise};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
-// by name.
-use cubecl::prelude::*;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
@@ -25,7 +22,7 @@ struct NormaliseRun {
 impl BuildTask for NormaliseRun {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
 

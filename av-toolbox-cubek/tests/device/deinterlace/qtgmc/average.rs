@@ -1,7 +1,6 @@
 use av_toolbox_cubek::deinterlace::qtgmc::{MAX_AVERAGED, tr0_weights, weighted_sum};
 use av_toolbox_cubek::testing::{QtgmcFixture, assert_plane_within, qtgmc_fixture, reference_tr0};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -46,7 +45,7 @@ struct AverageRun {
 impl BuildTask for AverageRun {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
 

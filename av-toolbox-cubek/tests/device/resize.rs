@@ -14,7 +14,6 @@ use av_toolbox_cubek::resize::{
 use av_toolbox_cubek::testing::{reference_resize, reference_resize_float, reference_resize_wide};
 use av_toolbox_cubek::values::FloatCodes;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::neighbourhood::busy;
 use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, read_u8, upload_f32, upload_u8};
@@ -46,7 +45,7 @@ struct Resize {
 impl BuildTask for Resize {
     type Output = Vec<u8>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -282,7 +281,7 @@ struct ResizeFloat {
 impl BuildTask for ResizeFloat {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

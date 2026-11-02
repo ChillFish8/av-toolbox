@@ -76,8 +76,8 @@ fn moved_slot(step: u32, #[comptime] along_rows: bool) -> (u32, u32) {
 /// past the plane repeat its last line.
 #[cube]
 fn load_lines<F: Float>(
-    input: &Array<F>,
-    staged: &mut SharedMemory<f32>,
+    input: &[F],
+    staged: &mut Shared<[f32]>,
     first_position: i32,
     count: u32,
     width: u32,
@@ -105,8 +105,8 @@ fn load_lines<F: Float>(
 /// Writes the cube's `SEGMENT` outputs of each line from `staged` to the ones inside the plane.
 #[cube]
 fn store_lines<F: Float>(
-    staged: &SharedMemory<f32>,
-    output: &mut Array<F>,
+    staged: &Shared<[f32]>,
+    output: &mut [F],
     width: u32,
     height: u32,
     #[comptime] along_rows: bool,
@@ -134,13 +134,7 @@ fn store_lines<F: Float>(
 /// weighs into every output it reaches. `tap_count` is a multiple of `RUN`, so the window turns a
 /// whole lap each step and its slots stay fixed.
 #[cube]
-fn add_taps(
-    staged: &SharedMemory<f32>,
-    weights: &Array<f32>,
-    totals: &mut Array<f32>,
-    first_tap: u32,
-    tap_count: u32,
-) {
+fn add_taps(staged: &Shared<[f32]>, weights: &[f32], totals: &mut [f32], first_tap: u32, tap_count: u32) {
     let lane = UNIT_POS_X;
     let first_output = UNIT_POS_Y * RUN;
     let mut window = Array::<f32>::new(comptime!(RUN as usize));
@@ -174,16 +168,16 @@ fn add_taps(
 /// The window is walked in chunks of `SPAN` taps, each staged through shared memory, so any radius fits.
 #[cube(launch_unchecked)]
 fn blur_lines<F: Float>(
-    input: &Array<F>,
-    weights: &Array<f32>,
-    output: &mut Array<F>,
+    input: &[F],
+    weights: &[f32],
+    output: &mut [F],
     width: u32,
     height: u32,
     radius: u32,
     #[comptime] along_rows: bool,
     #[comptime] clamp: bool,
 ) {
-    let mut staged = SharedMemory::<f32>::new(comptime!((CHUNK * STRIDE) as usize));
+    let mut staged = Shared::<[f32]>::new_slice(comptime!((CHUNK * STRIDE) as usize));
     let mut totals = Array::<f32>::new(comptime!(RUN as usize));
 
     #[unroll]
@@ -216,7 +210,7 @@ fn blur_lines<F: Float>(
 
         sync_cube();
 
-        add_taps(&staged, weights, &mut totals, first_tap, chunk_taps);
+        add_taps(&staged, weights, totals.as_mut_slice(), first_tap, chunk_taps);
     }
 
     sync_cube();
@@ -237,8 +231,8 @@ fn blur_lines<F: Float>(
 ///
 /// Each pass stages its lines through shared memory, reading past the edge as `edge` says. It panics
 /// when the plane needs more cubes than [staged_cubes](crate::blur::staged::staged_cubes) allows.
-pub(super) fn blur_staged<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn blur_staged(
+    client: &Client,
     gaussian: &Gaussian,
     planes: BlurPlanes<'_>,
     edge: Edge,
@@ -252,32 +246,32 @@ pub(super) fn blur_staged<R: Runtime>(
     let radius = gaussian.radius();
     let clamp = edge == Edge::Clamp;
 
-    let weights = gaussian.padded_weights::<R>();
-    let input = planes.input.array::<R>();
-    let scratch = planes.scratch.array::<R>();
+    let weights = gaussian.padded_weights();
+    let input = planes.input.array();
+    let scratch = planes.scratch.array();
 
     // Safety: every plane holds `width * height` values of `storage`, every read is reflected or
     // clamped into the plane and every write is guarded to it.
     unsafe {
         match storage {
-            Storage::F32 => blur_lines::launch_unchecked::<f32, R>(
+            Storage::F32 => blur_lines::launch_unchecked::<f32>(
                 client, row_cubes, shape, input, weights, scratch, width, height, radius, true, clamp,
             ),
-            Storage::F16 => blur_lines::launch_unchecked::<half::f16, R>(
+            Storage::F16 => blur_lines::launch_unchecked::<half::f16>(
                 client, row_cubes, shape, input, weights, scratch, width, height, radius, true, clamp,
             ),
         }
     }
 
-    let column_weights = gaussian.padded_weights::<R>();
-    let scratch = planes.scratch.array::<R>();
-    let output = planes.output.array::<R>();
+    let column_weights = gaussian.padded_weights();
+    let scratch = planes.scratch.array();
+    let output = planes.output.array();
 
     // Safety: every plane holds `width * height` values of `storage`, every read is reflected or
     // clamped into the plane and every write is guarded to it.
     unsafe {
         match storage {
-            Storage::F32 => blur_lines::launch_unchecked::<f32, R>(
+            Storage::F32 => blur_lines::launch_unchecked::<f32>(
                 client,
                 column_cubes,
                 shape,
@@ -290,7 +284,7 @@ pub(super) fn blur_staged<R: Runtime>(
                 false,
                 clamp,
             ),
-            Storage::F16 => blur_lines::launch_unchecked::<half::f16, R>(
+            Storage::F16 => blur_lines::launch_unchecked::<half::f16>(
                 client,
                 column_cubes,
                 shape,

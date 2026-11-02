@@ -23,7 +23,7 @@ use av_toolbox_cubek::testing::{
     transposed_plane,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use cubecl::server::Handle;
 
 use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, upload_f32};
@@ -58,7 +58,7 @@ struct StepJobs(Vec<Job>);
 impl BuildTask for StepJobs {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -70,7 +70,7 @@ impl BuildTask for StepJobs {
     }
 }
 
-fn run_job<R: Runtime>(client: &ComputeClient<R>, sizing: &Sizing, job: Job) -> Vec<f32> {
+fn run_job(client: &Client, sizing: &Sizing, job: Job) -> Vec<f32> {
     let width = job.width;
     let height = job.height;
     let handles: Vec<Handle> = job.inputs.iter().map(|input| upload_f32(client, input)).collect();
@@ -357,7 +357,7 @@ struct TurnedClip {
 impl BuildTask for TurnedClip {
     type Output = (Vec<f32>, Vec<f32>, Vec<f32>);
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

@@ -83,11 +83,11 @@ pub struct ChangeTable {
 }
 
 impl ChangeTable {
-    fn values<R: Runtime>(&self) -> ArrayArg<R> {
+    fn values(&self) -> BufferArg {
         let handle = self.values.clone();
 
         // Safety: the buffer was made from exactly `entries` f32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, self.entries) }
+        unsafe { BufferArg::from_raw_parts(handle, self.entries) }
     }
 }
 
@@ -106,7 +106,7 @@ fn change_entries(samples: MatrixSamples) -> Vec<f32> {
 }
 
 /// Builds the change table for planes of `samples` and uploads it.
-pub fn upload_change_table<R: Runtime>(client: &ComputeClient<R>, samples: MatrixSamples) -> ChangeTable {
+pub fn upload_change_table(client: &Client, samples: MatrixSamples) -> ChangeTable {
     let entries = change_entries(samples);
     let count = entries.len();
     let bytes = f32::as_bytes(&entries);
@@ -168,10 +168,10 @@ struct ChangeLimits {
 ///
 /// Integer samples read the change table at their difference, kept between minus and plus the peak.
 #[cube]
-fn change_at<E: CubePrimitive>(
-    source: &Array<E>,
-    strong: &Array<E>,
-    changes: &Array<f32>,
+fn change_at<E: Scalar>(
+    source: &[E],
+    strong: &[E],
+    changes: &[f32],
     column: u32,
     row: u32,
     width: u32,
@@ -209,12 +209,8 @@ struct BlockSums {
 ///
 /// Rows run left to right and columns top to bottom, and the total adds the rows top to bottom. Each weighted
 /// sum pairs line `k` with line `7 - k`, whose weights differ only in sign, and adds the four pairs in order.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "the unrolled loops read the cosines when the kernel compiles"
-)]
 #[cube]
-fn block_sums(values: &Array<f32>, opaque_zero: u32) -> BlockSums {
+fn block_sums(values: &[f32], opaque_zero: u32) -> BlockSums {
     let mut rows = Array::<f32>::new(8usize);
     let mut columns = Array::<f32>::new(8usize);
 
@@ -260,6 +256,10 @@ fn block_sums(values: &Array<f32>, opaque_zero: u32) -> BlockSums {
         column_weighted += rounded_product(outer_weight, column_difference, opaque_zero);
 
         #[unroll]
+        #[expect(
+            clippy::needless_range_loop,
+            reason = "the unrolled loops read the cosines when the kernel compiles"
+        )]
         for inner in 0..4usize {
             let inner_cosine = comptime!(COSINES[inner]);
             let inner_weight = f32::new(inner_cosine);
@@ -309,13 +309,7 @@ fn round_half_away(value: f32) -> f32 {
 /// Float samples take `source - lowpass`. Integer samples round the low-pass half away from zero into the
 /// sample range, then move `source` by its distance from `neutral`, kept in the sample range.
 #[cube]
-fn interior_value<E: CubePrimitive>(
-    source: E,
-    lowpass: f32,
-    peak: f32,
-    neutral: f32,
-    #[comptime] float: bool,
-) -> E {
+fn interior_value<E: Scalar>(source: E, lowpass: f32, peak: f32, neutral: f32, #[comptime] float: bool) -> E {
     let original = f32::cast_from(source);
 
     if float {
@@ -336,16 +330,12 @@ fn interior_value<E: CubePrimitive>(
 /// Blocks are independent, so no unit waits for another. A block reads past the plane's right and bottom
 /// edges through [lowpass_mirror], and writes only its interior samples that lie inside the plane. A block
 /// with no interior sample inside the plane writes nothing.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "the unrolled loops read the cosines when the kernel compiles"
-)]
 #[cube(launch_unchecked)]
-fn qed_kernel<E: CubePrimitive>(
-    source: &Array<E>,
-    strong: &Array<E>,
-    output: &mut Array<E>,
-    changes: &Array<f32>,
+fn qed_kernel<E: Scalar>(
+    source: &[E],
+    strong: &[E],
+    output: &mut [E],
+    changes: &[f32],
     width: u32,
     height: u32,
     blocks_across: u32,
@@ -396,13 +386,17 @@ fn qed_kernel<E: CubePrimitive>(
         }
     }
 
-    let sums = block_sums(&values, opaque_zero);
+    let sums = block_sums(values.as_slice(), opaque_zero);
     let mean = sums.total * 0.015625;
     let row_part = sums.row_weighted * 0.03125;
     let column_part = sums.column_weighted * 0.03125;
     let cross_part = sums.cross * 0.0625;
 
     #[unroll]
+    #[expect(
+        clippy::needless_range_loop,
+        reason = "the unrolled loops read the cosines when the kernel compiles"
+    )]
     for row in 1..7usize {
         let y = top + row as u32;
 
@@ -412,6 +406,10 @@ fn qed_kernel<E: CubePrimitive>(
             let row_value = mean + rounded_product(row_weight, row_part, opaque_zero);
 
             #[unroll]
+            #[expect(
+                clippy::needless_range_loop,
+                reason = "the unrolled loops read the cosines when the kernel compiles"
+            )]
             for column in 1..7usize {
                 let x = left + column as u32;
 
@@ -451,8 +449,8 @@ fn assert_size(plane: DevicePlane<'_>, width: u32, height: u32, name: &str) {
 ///
 /// Panics when the planes differ in size or are empty, when `lowpass_size` is not whole 8 by 8 blocks
 /// covering the plane, or when `table` was made for other samples.
-pub fn qed_interiors<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn qed_interiors(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: QedPlanes<'_>,
     lowpass_size: (u32, u32),
@@ -479,16 +477,16 @@ pub fn qed_interiors<R: Runtime>(
     );
 
     match samples {
-        MatrixSamples::U8 => launch::<u8, R>(client, dispatch, planes, lowpass_size, table, samples, false),
+        MatrixSamples::U8 => launch::<u8>(client, dispatch, planes, lowpass_size, table, samples, false),
         MatrixSamples::U16 { .. } => {
-            launch::<u16, R>(client, dispatch, planes, lowpass_size, table, samples, false)
+            launch::<u16>(client, dispatch, planes, lowpass_size, table, samples, false)
         },
-        MatrixSamples::F32 => launch::<f32, R>(client, dispatch, planes, lowpass_size, table, samples, true),
+        MatrixSamples::F32 => launch::<f32>(client, dispatch, planes, lowpass_size, table, samples, true),
     }
 }
 
-fn launch<E: CubePrimitive, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch<E: Scalar>(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: QedPlanes<'_>,
     lowpass_size: (u32, u32),
@@ -505,17 +503,17 @@ fn launch<E: CubePrimitive, R: Runtime>(
     let height = planes.source.height();
     let peak = peak_of(samples);
     let neutral = neutral_of(samples);
-    let source = planes.source.array::<R>();
-    let strong = planes.strong.array::<R>();
-    let output = planes.output.array::<R>();
-    let changes = table.values::<R>();
+    let source = planes.source.array();
+    let strong = planes.strong.array();
+    let output = planes.output.array();
+    let changes = table.values();
 
     // Safety: every read is mirrored into the plane, which `source` and `strong` hold as `width * height`
     // samples of `E`, and every write is an interior sample inside the plane, which `output` holds the same
     // way, as `DevicePlane::new` requires. The change table is read only for integer samples, between 0 and
     // twice the peak, which a table made for `samples` holds, as `qed_interiors` checked.
     unsafe {
-        qed_kernel::launch_unchecked::<E, R>(
+        qed_kernel::launch_unchecked::<E>(
             client,
             cubes,
             unit,

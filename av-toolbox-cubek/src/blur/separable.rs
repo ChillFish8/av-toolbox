@@ -1,4 +1,4 @@
-use cubecl::prelude::{ArrayArg, ComputeClient, CubeElement, Runtime};
+use cubecl::prelude::{BufferArg, Client, CubeElement};
 use cubecl::server::Handle;
 
 use super::{FilterPlanes, Storage, plain, tiled};
@@ -56,7 +56,7 @@ pub struct Separable {
 impl Separable {
     /// Uploads `weights`, which hold `2r + 1` symmetric values for a radius `r` of at most
     /// [SEPARABLE_MAX_RADIUS].
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, weights: &[f32]) -> Self {
+    pub fn new(client: &Client, weights: &[f32]) -> Self {
         let (radius, total) = checked_radius(weights);
         let normalised: Vec<f32> = weights.iter().map(|weight| weight / total).collect();
 
@@ -66,20 +66,20 @@ impl Separable {
         Self { weights, radius }
     }
 
-    fn weights<R: Runtime>(&self) -> ArrayArg<R> {
+    fn weights(&self) -> BufferArg {
         let taps = 2 * self.radius as usize + 1;
         let handle = self.weights.clone();
 
         // Safety: the weights buffer was made from exactly `taps` f32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, taps) }
+        unsafe { BufferArg::from_raw_parts(handle, taps) }
     }
 
     /// Blurs `planes.input` into `planes.output`, reading past the edge as `edge` says.
     ///
     /// Both planes hold samples of `storage` and must be distinct buffers. The sums stay f32 either way.
-    pub fn apply_as<R: Runtime>(
+    pub fn apply_as(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: FilterPlanes<'_>,
         edge: Edge,
@@ -97,7 +97,7 @@ impl Separable {
         assert_plane_sized(&planes.input, width, height, bytes, "blur input");
         assert_plane_sized(&planes.output, width, height, bytes, "blur output");
 
-        let weights = self.weights::<R>();
+        let weights = self.weights();
         let fits_tiles = tiled::tile_cubes(width, height).is_some();
         if fits_tiles {
             tiled::blur_tiled(client, weights, planes, self.radius, edge, storage);

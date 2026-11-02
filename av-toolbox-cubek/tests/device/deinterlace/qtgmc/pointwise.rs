@@ -20,7 +20,6 @@ use av_toolbox_cubek::testing::{
     reference_search_inputs,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::steps::{STRENGTH, Step, luma_frames, run_step};
 use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
@@ -285,7 +284,7 @@ impl PointwiseRun {
 impl BuildTask for PointwiseRun {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let bytes = self.planes[0].len() * size_of::<f32>();

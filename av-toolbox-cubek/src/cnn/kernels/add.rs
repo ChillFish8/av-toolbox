@@ -8,7 +8,7 @@ use super::direct::{Quad, Sums, WRITE_WIDTH};
 const ADD_UNITS: u32 = 256;
 
 #[cube(launch_unchecked)]
-fn add_kernel(values: &mut Array<Quad>, addend: &Array<Quad>) {
+fn add_kernel(values: &mut [Quad], addend: &[Quad]) {
     if ABSOLUTE_POS >= values.len() {
         terminate!();
     }
@@ -19,12 +19,7 @@ fn add_kernel(values: &mut Array<Quad>, addend: &Array<Quad>) {
 }
 
 /// Adds the first `quads` groups of four f16 values of `addend` to those of `values`, summing in f32.
-pub(super) fn add_maps<R: Runtime>(
-    client: &ComputeClient<R>,
-    values: &Handle,
-    addend: &Handle,
-    quads: usize,
-) {
+pub(super) fn add_maps(client: &Client, values: &Handle, addend: &Handle, quads: usize) {
     let values_count = quads * WRITE_WIDTH as usize;
     let bytes = (values_count * size_of::<half::f16>()) as u64;
     assert!(
@@ -45,10 +40,10 @@ pub(super) fn add_maps<R: Runtime>(
     // Safety: the values and the addend each hold `quads` quads, as just asserted, and units past the end
     // return before reading. The launch takes each length in f16 values, and the kernel sees it in quads.
     unsafe {
-        let values_array = ArrayArg::from_raw_parts(values.clone(), values_count);
-        let addend_array = ArrayArg::from_raw_parts(addend.clone(), values_count);
+        let values_array = BufferArg::from_raw_parts(values.clone(), values_count);
+        let addend_array = BufferArg::from_raw_parts(addend.clone(), values_count);
 
-        add_kernel::launch_unchecked::<R>(client, count, unit, values_array, addend_array);
+        add_kernel::launch_unchecked(client, count, unit, values_array, addend_array);
     }
 }
 

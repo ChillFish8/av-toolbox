@@ -9,8 +9,8 @@ use crate::{DevicePlane, Dispatch};
 
 #[cube(launch_unchecked)]
 fn binarize_prewitt_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     threshold: u32,
@@ -97,7 +97,7 @@ fn first_weight(doubled: u32) -> f32 {
 ///
 /// It is 255 when set and 0 otherwise.
 #[cube]
-fn doubled_clip(mask: &Array<f32>, column: u32, row: u32, width: u32, height: u32, mask_peak: f32) -> f32 {
+fn doubled_clip(mask: &[f32], column: u32, row: u32, width: u32, height: u32, mask_peak: f32) -> f32 {
     let column_start = tap_start(column);
     let row_start = tap_start(row);
     let left = clamp_tap(column_start, width);
@@ -126,7 +126,7 @@ fn doubled_clip(mask: &Array<f32>, column: u32, row: u32, width: u32, height: u3
 }
 
 #[cube(launch_unchecked)]
-fn double_mclip_kernel(mask: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, mask_peak: f32) {
+fn double_mclip_kernel(mask: &[f32], output: &mut [f32], width: u32, height: u32, mask_peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -143,14 +143,14 @@ fn double_mclip_kernel(mask: &Array<f32>, output: &mut Array<f32>, width: u32, h
 /// written transposed, so every write runs along rows.
 #[cube(launch_unchecked)]
 fn double_mclip_turned_kernel(
-    mask: &Array<f32>,
-    output: &mut Array<f32>,
-    turned: &mut Array<f32>,
+    mask: &[f32],
+    output: &mut [f32],
+    turned: &mut [f32],
     width: u32,
     height: u32,
     mask_peak: f32,
 ) {
-    let mut tile = SharedMemory::<f32>::new(comptime!((TILE * TILE_STRIDE) as usize));
+    let mut tile = Shared::<[f32]>::new_slice(comptime!((TILE * TILE_STRIDE) as usize));
     let out_width = width * 2u32;
     let out_height = height * 2u32;
     let first_column = CUBE_POS_X * TILE;
@@ -175,13 +175,7 @@ fn double_mclip_turned_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn pscale_blend_kernel(
-    aa: &Array<f32>,
-    luma: &Array<f32>,
-    down: &Array<f32>,
-    output: &mut Array<f32>,
-    keep: f32,
-) {
+fn pscale_blend_kernel(aa: &[f32], luma: &[f32], down: &[f32], output: &mut [f32], keep: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -207,8 +201,8 @@ pub fn prewitt_threshold(mask_thr: u32, bits: u32) -> u32 {
 ///
 /// `input` holds integer code values. The compare is exact in integers, and the window reflects at the
 /// plane's edge as [edges](crate::edges::edges) does.
-pub fn binarize_prewitt<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn binarize_prewitt(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -222,15 +216,15 @@ pub fn binarize_prewitt<R: Runtime>(
     assert_plane(&output, width, height, "output");
 
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the asserted sizes make both planes hold `samples` f32 values, and every read is
     // reflected inside the plane.
     unsafe {
-        binarize_prewitt_kernel::launch_unchecked::<R>(
+        binarize_prewitt_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -250,8 +244,8 @@ pub fn binarize_prewitt<R: Runtime>(
 /// Each doubled sample is the bilinear mix of its two nearest mask samples on each axis, weighted 3/4
 /// and 1/4, repeating the edge sample past the plane's side. It is set when `510 * value > mask_peak`,
 /// so a value of exactly half an 8-bit code is not set. `output` is twice the mask's size.
-pub fn double_mclip<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn double_mclip(
+    client: &Client,
     dispatch: &impl Dispatch,
     mask: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -264,15 +258,15 @@ pub fn double_mclip<R: Runtime>(
     assert_plane(&output, 2 * width, 2 * height, "output");
 
     let samples = output.samples();
-    let mask_array = mask.array::<R>();
-    let output_array = output.array::<R>();
+    let mask_array = mask.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the asserted mask holds `width * height` f32 values, the asserted output `samples`, and
     // every read is clamped inside the mask.
     unsafe {
-        double_mclip_kernel::launch_unchecked::<R>(
+        double_mclip_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -288,8 +282,8 @@ pub fn double_mclip<R: Runtime>(
 /// The same as [double_mclip](crate::aa::double_mclip), also writing the clip transposed into `turned`.
 ///
 /// `turned` is twice the mask's height wide and twice its width tall.
-pub fn double_mclip_turned<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn double_mclip_turned(
+    client: &Client,
     dispatch: &impl Dispatch,
     mask: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -309,15 +303,15 @@ pub fn double_mclip_turned<R: Runtime>(
         return;
     };
 
-    let mask_array = mask.array::<R>();
-    let output_array = output.array::<R>();
-    let turned_array = turned.array::<R>();
+    let mask_array = mask.array();
+    let output_array = output.array();
+    let turned_array = turned.array();
     let unit = tile_shape();
 
     // Safety: every read is clamped inside the asserted mask, and each tile writes only the positions
     // its guards place inside the asserted output and turned planes.
     unsafe {
-        double_mclip_turned_kernel::launch_unchecked::<R>(
+        double_mclip_turned_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -332,8 +326,8 @@ pub fn double_mclip_turned<R: Runtime>(
 }
 
 /// Writes `aa + keep * (luma - down)`, where `keep` is `1 - pscale`.
-pub fn pscale_blend<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn pscale_blend(
+    client: &Client,
     dispatch: &impl Dispatch,
     aa: DevicePlane<'_>,
     luma: DevicePlane<'_>,
@@ -350,16 +344,16 @@ pub fn pscale_blend<R: Runtime>(
     assert_plane(&output, width, height, "output");
 
     let samples = output.samples();
-    let aa_array = aa.array::<R>();
-    let luma_array = luma.array::<R>();
-    let down_array = down.array::<R>();
-    let output_array = output.array::<R>();
+    let aa_array = aa.array();
+    let luma_array = luma.array();
+    let down_array = down.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the asserted sizes make all four planes hold `samples` f32 values.
     unsafe {
-        pscale_blend_kernel::launch_unchecked::<R>(
+        pscale_blend_kernel::launch_unchecked(
             client,
             cubes,
             unit,

@@ -36,8 +36,8 @@ impl Pyramid<'_> {
 
 #[cube(launch_unchecked)]
 fn downscale_kernel(
-    source: &Array<f32>,
-    output: &mut Array<f32>,
+    source: &[f32],
+    output: &mut [f32],
     #[comptime] source_width: u32,
     #[comptime] source_height: u32,
     #[comptime] width: u32,
@@ -68,7 +68,7 @@ fn downscale_kernel(
 ///
 /// Each sample is the mean of a 2x2 group, the last row or column repeated where the group runs past the
 /// edge.
-pub fn build_pyramid<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, pyramid: &Pyramid<'_>) {
+pub fn build_pyramid(client: &Client, dispatch: &impl Dispatch, pyramid: &Pyramid<'_>) {
     let width = pyramid.width();
     let height = pyramid.height();
     for (level, plane) in pyramid.levels.iter().enumerate() {
@@ -83,13 +83,13 @@ pub fn build_pyramid<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Disp
 
         let cubes = dispatch.cube_count(output.samples());
         let unit = dispatch.cube_dim();
-        let source_array = source.array::<R>();
-        let output_array = output.array::<R>();
+        let source_array = source.array();
+        let output_array = output.array();
 
         // Safety: each level holds its own size of f32 values, and each unit reads a 2x2 group of the
         // level before, clamped to it, and writes its own sample.
         unsafe {
-            downscale_kernel::launch_unchecked::<R>(
+            downscale_kernel::launch_unchecked(
                 client,
                 cubes,
                 unit,

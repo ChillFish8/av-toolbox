@@ -172,11 +172,11 @@ pub(crate) fn block_window(
 )]
 #[cube(launch_unchecked)]
 fn compensate_kernel(
-    centre: &Array<f32>,
-    neighbour: &Array<f32>,
-    vectors: &Array<i32>,
-    flags: &Array<u32>,
-    output: &mut Array<f32>,
+    centre: &[f32],
+    neighbour: &[f32],
+    vectors: &[i32],
+    flags: &[u32],
+    output: &mut [f32],
     flag_index: u32,
     #[comptime] width: u32,
     #[comptime] height: u32,
@@ -249,8 +249,8 @@ fn compensate_kernel(
 /// The vectors are in units of `1 / field.pel` pixel. On a plane smaller than luma, `scale` shrinks the
 /// blocks and overlap by the same shifts, and each vector is shifted right by them, rounding towards
 /// negative infinity.
-pub fn compensate<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn compensate(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: CompensatePlanes<'_>,
     field: &MotionField<'_>,
@@ -271,17 +271,17 @@ pub fn compensate<R: Runtime>(
 
     let cubes = dispatch.cube_count(planes.output.samples());
     let unit = dispatch.cube_dim();
-    let centre = planes.centre.array::<R>();
-    let neighbour = planes.neighbour.array::<R>();
-    let vectors = field.planes.vectors.array::<R>();
-    let flags = flag.flags.array::<R>();
-    let output = planes.output.array::<R>();
+    let centre = planes.centre.array();
+    let neighbour = planes.neighbour.array();
+    let vectors = field.planes.vectors.array();
+    let flags = flag.flags.array();
+    let output = planes.output.array();
 
     // Safety: the planes hold `width` by `height` samples that every read clamps into, the vectors hold a
     // pair for each block of `grid`, the flag index is inside its plane, and each unit
     // writes only its own sample of `output`.
     unsafe {
-        compensate_kernel::launch_unchecked::<R>(
+        compensate_kernel::launch_unchecked(
             client,
             cubes,
             unit,

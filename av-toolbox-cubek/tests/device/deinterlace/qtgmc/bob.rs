@@ -1,7 +1,6 @@
 use av_toolbox_cubek::deinterlace::qtgmc::{BobPlanes, BobWeights, Parity, bob};
 use av_toolbox_cubek::testing::{assert_plane_within, qtgmc_fixture, reference_bob};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -17,7 +16,7 @@ struct BobRun {
 impl BuildTask for BobRun {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
 

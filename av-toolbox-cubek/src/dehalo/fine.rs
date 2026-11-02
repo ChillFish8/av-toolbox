@@ -68,11 +68,11 @@ pub fn outside_sample(large: f32, strong: f32, shrink: f32, excl: bool, edgeproc
 
 #[cube(launch_unchecked)]
 fn contrast_kernel(
-    dehaloed: &Array<f32>,
-    blurred: &Array<f32>,
-    repaired: &Array<f32>,
-    clip: &Array<f32>,
-    output: &mut Array<f32>,
+    dehaloed: &[f32],
+    blurred: &[f32],
+    repaired: &[f32],
+    clip: &[f32],
+    output: &mut [f32],
     level: f32,
 ) {
     if ABSOLUTE_POS >= output.len() {
@@ -96,7 +96,7 @@ fn contrast_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn ramp_kernel(input: &Array<f32>, output: &mut Array<f32>, low: f32, range: f32, peak: f32) {
+fn ramp_kernel(input: &[f32], output: &mut [f32], low: f32, range: f32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -107,7 +107,7 @@ fn ramp_kernel(input: &Array<f32>, output: &mut Array<f32>, low: f32, range: f32
 }
 
 #[cube(launch_unchecked)]
-fn scale_kernel(input: &Array<f32>, output: &mut Array<f32>, factor: f32, peak: f32) {
+fn scale_kernel(input: &[f32], output: &mut [f32], factor: f32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -119,10 +119,10 @@ fn scale_kernel(input: &Array<f32>, output: &mut Array<f32>, factor: f32, peak: 
 
 #[cube(launch_unchecked)]
 fn outside_kernel(
-    large: &Array<f32>,
-    strong: &Array<f32>,
-    shrink: &Array<f32>,
-    output: &mut Array<f32>,
+    large: &[f32],
+    strong: &[f32],
+    shrink: &[f32],
+    output: &mut [f32],
     excl: u32,
     edgeproc: f32,
     peak: f32,
@@ -158,24 +158,19 @@ pub struct ContrastPlanes<'a> {
 }
 
 /// Adds back the part of the blur's detail the dehalo took away, where the two agree in sign.
-pub fn contrasharpen<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: ContrastPlanes<'_>,
-    level: f32,
-) {
+pub fn contrasharpen(client: &Client, dispatch: &impl Dispatch, planes: ContrastPlanes<'_>, level: f32) {
     let samples = planes.output.samples();
-    let dehaloed = planes.dehaloed.array::<R>();
-    let blurred = planes.blurred.array::<R>();
-    let repaired = planes.repaired.array::<R>();
-    let clip = planes.clip.array::<R>();
-    let output = planes.output.array::<R>();
+    let dehaloed = planes.dehaloed.array();
+    let blurred = planes.blurred.array();
+    let repaired = planes.repaired.array();
+    let clip = planes.clip.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        contrast_kernel::launch_unchecked::<R>(
+        contrast_kernel::launch_unchecked(
             client, cubes, unit, dehaloed, blurred, repaired, clip, output, level,
         );
     }
@@ -189,8 +184,8 @@ pub struct RampPlanes<'a> {
 }
 
 /// Writes `clamp((x - low) / range * 255, 0, peak)` at each sample.
-pub fn ramp<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn ramp(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RampPlanes<'_>,
     low: f32,
@@ -198,34 +193,34 @@ pub fn ramp<R: Runtime>(
     peak: f32,
 ) {
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        ramp_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, low, range, peak);
+        ramp_kernel::launch_unchecked(client, cubes, unit, input, output, low, range, peak);
     }
 }
 
 /// Writes `clamp(x * factor, 0, peak)` at each sample.
-pub fn scale_values<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn scale_values(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RampPlanes<'_>,
     factor: f32,
     peak: f32,
 ) {
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        scale_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, factor, peak);
+        scale_kernel::launch_unchecked(client, cubes, unit, input, output, factor, peak);
     }
 }
 
@@ -239,8 +234,8 @@ pub struct OutsidePlanes<'a> {
 }
 
 /// Writes the band around strong edges the dehalo is kept to.
-pub fn outside_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn outside_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: OutsidePlanes<'_>,
     excl: bool,
@@ -248,17 +243,17 @@ pub fn outside_mask<R: Runtime>(
     peak: f32,
 ) {
     let samples = planes.output.samples();
-    let large = planes.large.array::<R>();
-    let strong = planes.strong.array::<R>();
-    let shrink = planes.shrink.array::<R>();
-    let output = planes.output.array::<R>();
+    let large = planes.large.array();
+    let strong = planes.strong.array();
+    let shrink = planes.shrink.array();
+    let output = planes.output.array();
     let excl_flag = u32::from(excl);
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        outside_kernel::launch_unchecked::<R>(
+        outside_kernel::launch_unchecked(
             client, cubes, unit, large, strong, shrink, output, excl_flag, edgeproc, peak,
         );
     }

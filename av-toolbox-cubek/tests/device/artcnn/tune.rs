@@ -14,7 +14,7 @@ use av_toolbox_cubek::artcnn::{
 };
 use av_toolbox_cubek::testing::fresh_tune_label;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 
 use super::kernels::{
     EPILOGUES,
@@ -35,7 +35,7 @@ struct Offered;
 impl BuildTask for Offered {
     type Output = Vec<Candidate>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let properties = build.client().properties();
 
         offered_candidates(properties, 64, None)
@@ -162,17 +162,14 @@ struct Timings {
 
 /// The milliseconds one run of `candidate` over `convolution` takes on the device, timed as the tuner times
 /// its candidates.
-fn time_once<R: Runtime>(
-    client: &ComputeClient<R>,
-    candidate: Candidate,
-    convolution: &BodyConvolution<'_>,
-) -> f64 {
+fn time_once(client: &Client, candidate: Candidate, convolution: &BodyConvolution<'_>) -> f64 {
     let profiled = client.profile(|| run_candidate(client, candidate, convolution), "candidate");
     let (ran, duration) = profiled.expect("the device profiles a run");
     ran.expect("a candidate the tuner measured runs");
 
     let resolving = duration.resolve();
-    let ticks = cubecl::future::block_on(resolving);
+    let measured = cubecl::future::block_on(resolving);
+    let ticks = measured.expect("the device timed the run");
 
     ticks.duration().as_secs_f64() * 1e3
 }
@@ -181,8 +178,8 @@ fn time_once<R: Runtime>(
 ///
 /// The runs take turns, one of each candidate a round for `rounds` rounds, so a burst of other work on the
 /// device slows every candidate alike.
-fn interleaved_medians<R: Runtime>(
-    client: &ComputeClient<R>,
+fn interleaved_medians(
+    client: &Client,
     candidates: &[Candidate],
     convolution: &BodyConvolution<'_>,
     rounds: usize,
@@ -216,7 +213,7 @@ fn median_of((candidate, mut samples): (Candidate, Vec<f64>)) -> (Candidate, f64
 impl BuildTask for Timed {
     type Output = Option<Timings>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         if !offers_cmma_16(client) {
             return None;
@@ -314,7 +311,7 @@ struct ChangedList {
 impl BuildTask for ChangedList {
     type Output = Option<(TunedRun, Result<TunedRun, av_toolbox_cubek::artcnn::CnnError>)>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         if !offers_cmma_16(client) {
             return None;

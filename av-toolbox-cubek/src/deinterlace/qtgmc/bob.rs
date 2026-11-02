@@ -56,10 +56,10 @@ pub struct BobPlanes<'a> {
 
 #[cube(launch_unchecked)]
 fn bob_kernel(
-    frame: &Array<f32>,
-    starts: &Array<i32>,
-    weights: &Array<f32>,
-    output: &mut Array<f32>,
+    frame: &[f32],
+    starts: &[i32],
+    weights: &[f32],
+    output: &mut [f32],
     width: u32,
     field_height: u32,
     count: u32,
@@ -90,12 +90,7 @@ fn bob_kernel(
 /// Bobs the field of `parity` in `frame` to a full-height plane.
 ///
 /// `weights` holds the taps of the field's parity. Rows past the field's ends read its first and last rows.
-pub fn bob<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: BobPlanes<'_>,
-    weights: &BobWeights,
-) {
+pub fn bob(client: &Client, dispatch: &impl Dispatch, planes: BobPlanes<'_>, weights: &BobWeights) {
     let down = weights.taps();
     let parity = weights.parity();
 
@@ -114,17 +109,17 @@ pub fn bob<R: Runtime>(
         down.outputs()
     );
 
-    let frame = planes.frame.array::<R>();
-    let starts = down.starts::<R>();
-    let tap_weights = down.weights::<R>();
-    let output = planes.output.array::<R>();
+    let frame = planes.frame.array();
+    let starts = down.starts();
+    let tap_weights = down.weights();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(planes.output.samples());
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `width` by `height` f32 samples, the tables `height` starts and
     // `height * count` weights, and every tap is clamped to a row of the field before it is read.
     unsafe {
-        bob_kernel::launch_unchecked::<R>(
+        bob_kernel::launch_unchecked(
             client,
             cubes,
             unit,

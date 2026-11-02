@@ -10,9 +10,6 @@ use av_toolbox_cubek::motion::{
 };
 use av_toolbox_cubek::testing::{motion_clips, reference_scene_changed};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-// `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than
-// by name.
-use cubecl::prelude::*;
 
 use crate::degrain::{DegrainRun, Frames};
 use crate::support::{backend, plane, read_u32, upload_f32};
@@ -124,7 +121,7 @@ struct FlagRun {
 impl BuildTask for FlagRun {
     type Output = Vec<bool>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let blocks = self.grid.blocks() as u32;
 

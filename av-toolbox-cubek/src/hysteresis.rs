@@ -19,7 +19,7 @@ pub struct HysteresisPlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn mark_region(region: &Array<f32>, marks: &mut Array<u8>) {
+fn mark_region(region: &[f32], marks: &mut [u8]) {
     if ABSOLUTE_POS >= marks.len() {
         terminate!();
     }
@@ -32,7 +32,7 @@ fn mark_region(region: &Array<f32>, marks: &mut Array<u8>) {
 }
 
 #[cube(launch_unchecked)]
-fn mark_seeds(seeds_from: &Array<f32>, region: &Array<f32>, seeds: &mut Array<u8>) {
+fn mark_seeds(seeds_from: &[f32], region: &[f32], seeds: &mut [u8]) {
     if ABSOLUTE_POS >= seeds.len() {
         terminate!();
     }
@@ -45,7 +45,7 @@ fn mark_seeds(seeds_from: &Array<f32>, region: &Array<f32>, seeds: &mut Array<u8
 }
 
 #[cube(launch_unchecked)]
-fn spread_kept(kept: &Array<u8>, output: &mut Array<f32>, peak: f32) {
+fn spread_kept(kept: &[u8], output: &mut [f32], peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -61,33 +61,28 @@ fn spread_kept(kept: &Array<u8>, output: &mut Array<f32>, peak: f32) {
 ///
 /// A seed only counts where it is set in both `seeds_from` and `region`. A kept component becomes
 /// `peak` in `output`, everything else 0.
-pub fn hysteresis<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: HysteresisPlanes<'_>,
-    peak: f32,
-) {
+pub fn hysteresis(client: &Client, dispatch: &impl Dispatch, planes: HysteresisPlanes<'_>, peak: f32) {
     let samples = planes.region.samples();
 
-    let region = planes.region.array::<R>();
-    let marks = planes.marks.array::<R>();
+    let region = planes.region.array();
+    let marks = planes.marks.array();
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
 
     // Safety: `region` and `marks` each hold `samples` elements of their declared type.
     unsafe {
-        mark_region::launch_unchecked::<R>(client, cubes, shape, region, marks);
+        mark_region::launch_unchecked(client, cubes, shape, region, marks);
     }
 
-    let seeds_from = planes.seeds_from.array::<R>();
-    let region = planes.region.array::<R>();
-    let seeds = planes.seeds.array::<R>();
+    let seeds_from = planes.seeds_from.array();
+    let region = planes.region.array();
+    let seeds = planes.seeds.array();
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
 
     // Safety: `seeds_from`, `region` and `seeds` each hold `samples` elements of their declared type.
     unsafe {
-        mark_seeds::launch_unchecked::<R>(client, cubes, shape, seeds_from, region, seeds);
+        mark_seeds::launch_unchecked(client, cubes, shape, seeds_from, region, seeds);
     }
 
     let label_planes = LabelPlanes {
@@ -110,13 +105,13 @@ pub fn hysteresis<R: Runtime>(
     };
     keep(client, dispatch, keep_planes, 1);
 
-    let kept = planes.kept.array::<R>();
-    let output = planes.output.array::<R>();
+    let kept = planes.kept.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
 
     // Safety: `kept` and `output` each hold `samples` elements of their declared type.
     unsafe {
-        spread_kept::launch_unchecked::<R>(client, cubes, shape, kept, output, peak);
+        spread_kept::launch_unchecked(client, cubes, shape, kept, output, peak);
     }
 }

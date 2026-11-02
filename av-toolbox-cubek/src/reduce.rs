@@ -22,7 +22,7 @@ pub struct ReducePlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn extremes_of_plane(input: &Array<f32>, output: &mut Array<f32>, length: u32, chunk: u32) {
+fn extremes_of_plane(input: &[f32], output: &mut [f32], length: u32, chunk: u32) {
     let group = ABSOLUTE_POS as u32;
     let start = group * chunk;
     if start >= length {
@@ -43,7 +43,7 @@ fn extremes_of_plane(input: &Array<f32>, output: &mut Array<f32>, length: u32, c
 }
 
 #[cube(launch_unchecked)]
-fn extremes_of_pairs(input: &Array<f32>, output: &mut Array<f32>, pairs: u32, chunk: u32) {
+fn extremes_of_pairs(input: &[f32], output: &mut [f32], pairs: u32, chunk: u32) {
     let group = ABSOLUTE_POS as u32;
     let start = group * chunk;
     if start >= pairs {
@@ -63,7 +63,7 @@ fn extremes_of_pairs(input: &Array<f32>, output: &mut Array<f32>, pairs: u32, ch
 }
 
 #[cube(launch_unchecked)]
-fn sums_of_plane(input: &Array<f32>, output: &mut Array<f32>, length: u32, chunk: u32) {
+fn sums_of_plane(input: &[f32], output: &mut [f32], length: u32, chunk: u32) {
     let group = ABSOLUTE_POS as u32;
     let start = group * chunk;
     if start >= length {
@@ -84,7 +84,7 @@ fn sums_of_plane(input: &Array<f32>, output: &mut Array<f32>, length: u32, chunk
 }
 
 #[cube(launch_unchecked)]
-fn sums_of_pairs(input: &Array<f32>, output: &mut Array<f32>, pairs: u32, chunk: u32) {
+fn sums_of_pairs(input: &[f32], output: &mut [f32], pairs: u32, chunk: u32) {
     let group = ABSOLUTE_POS as u32;
     let start = group * chunk;
     if start >= pairs {
@@ -110,18 +110,13 @@ enum Statistic {
 }
 
 /// Folds a plane into pairs, then pairs into fewer pairs, until one pair is left in the result.
-fn reduce<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: ReducePlanes<'_>,
-    statistic: Statistic,
-) {
+fn reduce(client: &Client, dispatch: &impl Dispatch, planes: ReducePlanes<'_>, statistic: Statistic) {
     let length = planes.input.samples() as u32;
     let mut groups = length.div_ceil(CHUNK);
 
     let first_target = if groups == 1 { planes.result } else { planes.first };
-    let input = planes.input.array::<R>();
-    let output = first_target.array::<R>();
+    let input = planes.input.array();
+    let output = first_target.array();
     let cubes = dispatch.cube_count(groups as usize);
     let shape = dispatch.cube_dim();
 
@@ -130,10 +125,10 @@ fn reduce<R: Runtime>(
     unsafe {
         match statistic {
             Statistic::Extremes => {
-                extremes_of_plane::launch_unchecked::<R>(client, cubes, shape, input, output, length, CHUNK);
+                extremes_of_plane::launch_unchecked(client, cubes, shape, input, output, length, CHUNK);
             },
             Statistic::Sums => {
-                sums_of_plane::launch_unchecked::<R>(client, cubes, shape, input, output, length, CHUNK);
+                sums_of_plane::launch_unchecked(client, cubes, shape, input, output, length, CHUNK);
             },
         }
     }
@@ -145,8 +140,8 @@ fn reduce<R: Runtime>(
         let next = groups.div_ceil(CHUNK);
         let target = if next == 1 { planes.result } else { spare };
 
-        let input = current.array::<R>();
-        let output = target.array::<R>();
+        let input = current.array();
+        let output = target.array();
         let cubes = dispatch.cube_count(next as usize);
         let shape = dispatch.cube_dim();
 
@@ -154,12 +149,10 @@ fn reduce<R: Runtime>(
         unsafe {
             match statistic {
                 Statistic::Extremes => {
-                    extremes_of_pairs::launch_unchecked::<R>(
-                        client, cubes, shape, input, output, groups, CHUNK,
-                    );
+                    extremes_of_pairs::launch_unchecked(client, cubes, shape, input, output, groups, CHUNK);
                 },
                 Statistic::Sums => {
-                    sums_of_pairs::launch_unchecked::<R>(client, cubes, shape, input, output, groups, CHUNK);
+                    sums_of_pairs::launch_unchecked(client, cubes, shape, input, output, groups, CHUNK);
                 },
             }
         }
@@ -170,11 +163,11 @@ fn reduce<R: Runtime>(
 }
 
 /// Writes the smallest and largest value of `input` to the result, in that order.
-pub fn extremes<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, planes: ReducePlanes<'_>) {
+pub fn extremes(client: &Client, dispatch: &impl Dispatch, planes: ReducePlanes<'_>) {
     reduce(client, dispatch, planes, Statistic::Extremes);
 }
 
 /// Writes the sum and the sum of squares of `input` to the result, in that order.
-pub fn sums<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, planes: ReducePlanes<'_>) {
+pub fn sums(client: &Client, dispatch: &impl Dispatch, planes: ReducePlanes<'_>) {
     reduce(client, dispatch, planes, Statistic::Sums);
 }

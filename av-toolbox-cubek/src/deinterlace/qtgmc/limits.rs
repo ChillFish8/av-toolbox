@@ -9,10 +9,10 @@ const MAX_NEIGHBOURS: usize = 2;
 
 #[cube(launch_unchecked)]
 fn limits_kernel(
-    centre: &Array<f32>,
-    neighbours: &Sequence<Array<f32>>,
-    upper: &mut Array<f32>,
-    lower: &mut Array<f32>,
+    centre: &[f32],
+    neighbours: &Sequence<Box<[f32]>>,
+    upper: &mut [f32],
+    lower: &mut [f32],
     #[comptime] count: u32,
 ) {
     if ABSOLUTE_POS >= upper.len() {
@@ -36,8 +36,8 @@ fn limits_kernel(
 /// The per-sample maximum and minimum of `centre` and its compensated neighbours.
 ///
 /// There may be up to 2 neighbours. With none, both limits equal `centre`.
-pub fn temporal_limits<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn temporal_limits(
+    client: &Client,
     dispatch: &impl Dispatch,
     centre: DevicePlane<'_>,
     neighbours: &[DevicePlane<'_>],
@@ -55,23 +55,23 @@ pub fn temporal_limits<R: Runtime>(
     assert_plane(&upper, width, height, "upper");
     assert_plane(&lower, width, height, "lower");
 
-    let mut neighbour_args = SequenceArg::<R, Array<f32>>::new();
+    let mut neighbour_args = SequenceArg::<Box<[f32]>>::new();
     for neighbour in neighbours {
         assert_plane(neighbour, width, height, "neighbour");
 
-        neighbour_args.push(neighbour.array::<R>());
+        neighbour_args.push(neighbour.array());
     }
 
     let cubes = dispatch.cube_count(centre.samples());
     let unit = dispatch.cube_dim();
-    let centre_array = centre.array::<R>();
-    let upper_array = upper.array::<R>();
-    let lower_array = lower.array::<R>();
+    let centre_array = centre.array();
+    let upper_array = upper.array();
+    let lower_array = lower.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        limits_kernel::launch_unchecked::<R>(
+        limits_kernel::launch_unchecked(
             client,
             cubes,
             unit,

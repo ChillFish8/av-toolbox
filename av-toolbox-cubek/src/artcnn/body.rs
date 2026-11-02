@@ -1,6 +1,6 @@
 use cubecl::ir::DeviceProperties;
 #[cfg(any(test, feature = "test-support"))]
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use cubecl::server::Handle;
 #[cfg(test)]
 use half::f16;
@@ -81,8 +81,8 @@ pub(crate) fn transform_weights(layer: &Layer) -> Vec<f16> {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn epilogue<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn epilogue(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     values: &Handle,
@@ -106,8 +106,8 @@ pub fn epilogue<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub fn convolve_with_blueprint<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn convolve_with_blueprint(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     layer: usize,
@@ -124,8 +124,8 @@ pub fn convolve_with_blueprint<R: Runtime>(
 /// Convolves the NHWC maps of `region` in `input` with body layer `layer`'s `F -> F` weights on
 /// cooperative-matrix tiles, into `output` without the bias. Gives whether the forced blueprint ran.
 #[cfg(any(test, feature = "test-support"))]
-pub fn convolve_without_bias<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn convolve_without_bias(
+    client: &Client,
     network: &Network,
     layer: usize,
     input: &Handle,
@@ -144,8 +144,8 @@ pub fn convolve_without_bias<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
 )]
-pub fn body_layer_with_blueprint<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn body_layer_with_blueprint(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     path: BodyPath,
@@ -174,11 +174,7 @@ pub fn body_layer_with_blueprint<R: Runtime>(
 /// Whether a body convolution of `region` on the network's maps takes the forced blueprint on the client's
 /// device.
 #[cfg(any(test, feature = "test-support"))]
-pub fn takes_forced_blueprint<R: Runtime>(
-    client: &ComputeClient<R>,
-    network: &Network,
-    region: Region,
-) -> bool {
+pub fn takes_forced_blueprint(client: &Client, network: &Network, region: Region) -> bool {
     let features = network.features();
     let precision = network.precision();
 

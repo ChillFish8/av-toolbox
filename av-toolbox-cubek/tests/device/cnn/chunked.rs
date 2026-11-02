@@ -11,7 +11,6 @@ use av_toolbox_cubek::cnn::{
 };
 use av_toolbox_cubek::testing::synthetic_layer;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::artcnn::{edged_maps, f16_step, read_maps, region, synced, upload_maps};
 use crate::support::{backend, empty};
@@ -32,7 +31,7 @@ struct ChunkedPair {
 impl BuildTask for ChunkedPair {
     type Output = Option<(Vec<f32>, Vec<f32>)>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let plane_width = client.properties().hardware.plane_size_max;
         let whole = DirectVariant {

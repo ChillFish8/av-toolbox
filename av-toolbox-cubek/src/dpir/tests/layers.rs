@@ -1,4 +1,4 @@
-use cubek_matmul::launch::Strategy as MatmulStrategy;
+use cubek_matmul::multi_level::Strategy as MatmulStrategy;
 
 use crate::cnn::Precision;
 use crate::dpir::layers::product_strategy;

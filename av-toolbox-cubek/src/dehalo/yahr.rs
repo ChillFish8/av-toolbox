@@ -43,12 +43,7 @@ pub struct YahrPlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn yahr_combine_kernel(
-    clip: &Array<f32>,
-    detail: &Array<f32>,
-    limited: &Array<f32>,
-    output: &mut Array<f32>,
-) {
+fn yahr_combine_kernel(clip: &[f32], detail: &[f32], limited: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -59,17 +54,17 @@ fn yahr_combine_kernel(
 }
 
 /// Writes `clip - (detail - limited)` at each sample.
-pub fn yahr_combine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, planes: YahrPlanes<'_>) {
+pub fn yahr_combine(client: &Client, dispatch: &impl Dispatch, planes: YahrPlanes<'_>) {
     let samples = planes.output.samples();
-    let clip = planes.clip.array::<R>();
-    let detail = planes.detail.array::<R>();
-    let limited = planes.limited.array::<R>();
-    let output = planes.output.array::<R>();
+    let clip = planes.clip.array();
+    let detail = planes.detail.array();
+    let limited = planes.limited.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        yahr_combine_kernel::launch_unchecked::<R>(client, cubes, unit, clip, detail, limited, output);
+        yahr_combine_kernel::launch_unchecked(client, cubes, unit, clip, detail, limited, output);
     }
 }

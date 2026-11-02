@@ -21,7 +21,6 @@ use av_toolbox_cubek::testing::{
     reference_search_inputs,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::pointwise::TIE_GAP;
 use super::{DEVICE_TOLERANCE, codes};
@@ -55,7 +54,7 @@ pub(super) struct StepRun {
 impl BuildTask for StepRun {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let (width, height) = (self.size.0 as u32, self.size.1 as u32);
@@ -280,7 +279,7 @@ struct TablesRun {
 impl BuildTask for TablesRun {
     type Output = Vec<(usize, Parity, Parity, u32)>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let tables = QtgmcTables::new(build.client(), &self.planes);
 
         let mut found = Vec::new();

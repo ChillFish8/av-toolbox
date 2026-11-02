@@ -1,6 +1,5 @@
 use av_toolbox_cubek::motion::{BlockGrid, FieldBuffers, MotionSettings, SceneFlags};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::backend;
 
@@ -23,7 +22,7 @@ struct BufferRun {
 impl BuildTask for BufferRun {
     type Output = (FieldShape, u32, u32);
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let buffers = FieldBuffers::new(client, &self.grid);
         let field = buffers.field(self.pel, self.scored);

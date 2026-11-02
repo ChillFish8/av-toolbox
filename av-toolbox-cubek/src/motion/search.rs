@@ -21,8 +21,8 @@ use crate::{DevicePlane, Dispatch, assert_plane};
 /// Loads the block at `origin_x`, `origin_y` of `centre`, clamped to the level, into `tile`.
 #[cube]
 fn load_centre(
-    centre: &Array<f32>,
-    tile: &mut SharedMemory<f32>,
+    centre: &[f32],
+    tile: &mut Shared<[f32]>,
     origin_x: i32,
     origin_y: i32,
     #[comptime] width: u32,
@@ -52,9 +52,9 @@ fn load_centre(
 )]
 #[cube]
 fn score_candidates(
-    tile: &SharedMemory<f32>,
-    neighbour: &Array<f32>,
-    scratch: &mut SharedMemory<f32>,
+    tile: &Shared<[f32]>,
+    neighbour: &[f32],
+    scratch: &mut Shared<[f32]>,
     origin_x: i32,
     origin_y: i32,
     seed_x: i32,
@@ -104,9 +104,9 @@ fn score_candidates(
 )]
 #[cube(launch_unchecked)]
 fn block_match_coarse_kernel(
-    centre: &Array<f32>,
-    neighbour: &Array<f32>,
-    vectors: &mut Array<i32>,
+    centre: &[f32],
+    neighbour: &[f32],
+    vectors: &mut [i32],
     #[comptime] level_width: u32,
     #[comptime] level_height: u32,
     #[comptime] blksize: u32,
@@ -125,8 +125,8 @@ fn block_match_coarse_kernel(
     let window_side = comptime!(2 * search_radius + 1);
     let candidates = comptime!(window_side * window_side);
     let block_pixels = comptime!(blksize * blksize);
-    let mut scratch = SharedMemory::<f32>::new(candidates as usize);
-    let mut tile = SharedMemory::<f32>::new(block_pixels as usize);
+    let mut scratch = Shared::<[f32]>::new_slice(candidates as usize);
+    let mut tile = Shared::<[f32]>::new_slice(block_pixels as usize);
 
     load_centre(
         centre,
@@ -220,11 +220,11 @@ fn block_match_coarse_kernel(
 )]
 #[cube(launch_unchecked)]
 fn block_match_fine_kernel(
-    centre: &Array<f32>,
-    neighbour: &Array<f32>,
-    vectors: &mut Array<i32>,
-    sads: &mut Array<f32>,
-    confidence: &mut Array<f32>,
+    centre: &[f32],
+    neighbour: &[f32],
+    vectors: &mut [i32],
+    sads: &mut [f32],
+    confidence: &mut [f32],
     noise_floor: f32,
     thsad: f32,
     use_seed: u32,
@@ -254,8 +254,8 @@ fn block_match_fine_kernel(
     let window_side = comptime!(2 * search_radius + 1);
     let candidates = comptime!(window_side * window_side);
     let block_pixels = comptime!(blksize * blksize);
-    let mut scratch = SharedMemory::<f32>::new(candidates as usize);
-    let mut tile = SharedMemory::<f32>::new(block_pixels as usize);
+    let mut scratch = Shared::<[f32]>::new_slice(candidates as usize);
+    let mut tile = Shared::<[f32]>::new_slice(block_pixels as usize);
 
     load_centre(centre, &mut tile, origin_x, origin_y, width, height, blksize);
     sync_cube();
@@ -325,7 +325,7 @@ const UNUSED_SCORES: ConfidenceScores = ConfidenceScores {
     thsad: 1.0,
 };
 
-fn launch_fine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, search: FineSearch<'_, '_>) {
+fn launch_fine(client: &Client, dispatch: &impl Dispatch, search: FineSearch<'_, '_>) {
     let grid = &search.field.grid;
     let cubes = CubeCount::Static(grid.across, grid.down, 1);
     let unit = dispatch.cube_dim();
@@ -334,28 +334,28 @@ fn launch_fine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, 
     let write_confidence = search.scores.is_some();
     let scores = search.scores.unwrap_or(UNUSED_SCORES);
     let confidence = match &search.field.planes.confidence {
-        Some(plane) => plane.array::<R>(),
+        Some(plane) => plane.array(),
         None => {
             // Without confidence the kernel never reads its confidence argument, so a single value
             // stands in.
             let placeholder = client.empty(size_of::<f32>());
 
             // Safety: the placeholder holds one f32 and is never indexed.
-            unsafe { ArrayArg::from_raw_parts(placeholder, 1) }
+            unsafe { BufferArg::from_raw_parts(placeholder, 1) }
         },
     };
 
-    let centre = search.centre.array::<R>();
-    let neighbour = search.neighbour.array::<R>();
-    let vectors = search.field.planes.vectors.array::<R>();
-    let sads = search.field.planes.sads.array::<R>();
+    let centre = search.centre.array();
+    let neighbour = search.neighbour.array();
+    let vectors = search.field.planes.vectors.array();
+    let sads = search.field.planes.sads.array();
     let width = search.centre.width();
     let height = search.centre.height();
 
     // Safety: one cube per block of `grid`, each reading its block and window clamped to the planes, and
     // writing only its own block's entries.
     unsafe {
-        block_match_fine_kernel::launch_unchecked::<R>(
+        block_match_fine_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -379,8 +379,8 @@ fn launch_fine<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, 
 }
 
 /// The coarse search over the coarsest level, seeding every block of `field`.
-fn launch_coarse<R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_coarse(
+    client: &Client,
     dispatch: &impl Dispatch,
     centre: &DevicePlane<'_>,
     neighbour: &DevicePlane<'_>,
@@ -397,14 +397,14 @@ fn launch_coarse<R: Runtime>(
 
     let cubes = CubeCount::Static(across, down, 1);
     let unit = dispatch.cube_dim();
-    let centre_array = centre.array::<R>();
-    let neighbour_array = neighbour.array::<R>();
-    let vectors = field.planes.vectors.array::<R>();
+    let centre_array = centre.array();
+    let neighbour_array = neighbour.array();
+    let vectors = field.planes.vectors.array();
 
     // Safety: one cube per coarse block, each reading its block and window clamped to the level, and
     // writing the fine blocks inside its span, which no other coarse block reaches.
     unsafe {
-        block_match_coarse_kernel::launch_unchecked::<R>(
+        block_match_coarse_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -459,8 +459,8 @@ pub(super) fn assert_pyramids(centre: &Pyramid<'_>, neighbour: &Pyramid<'_>, lev
 ///
 /// `field.pel` must equal `settings.pel`. With `pel` 2 the result is then refined to half pixels, as
 /// [refine_half_pel] does. `scores` is given exactly when `field` has a confidence plane.
-pub fn search<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn search(
+    client: &Client,
     dispatch: &impl Dispatch,
     centre: &Pyramid<'_>,
     neighbour: &Pyramid<'_>,
@@ -510,8 +510,8 @@ pub fn search<R: Runtime>(
 ///
 /// `field` must have `pel` 1 and keeps it. For half pixels, follow it with [refine_half_pel]. `scores` is
 /// given exactly when `field` has a confidence plane.
-pub fn refine_seed<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn refine_seed(
+    client: &Client,
     dispatch: &impl Dispatch,
     centre: &Pyramid<'_>,
     neighbour: &Pyramid<'_>,

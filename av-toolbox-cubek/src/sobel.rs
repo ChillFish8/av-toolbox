@@ -13,7 +13,7 @@ pub struct SobelPlanes<'a> {
 }
 
 #[cube]
-fn tap(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f32 {
+fn tap(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
     let x = reflect(column, width as i32);
     let y = reflect(row, height as i32);
     let index = y as u32 * width + x as u32;
@@ -22,13 +22,7 @@ fn tap(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f3
 }
 
 #[cube(launch_unchecked)]
-fn gradients(
-    input: &Array<f32>,
-    horizontal: &mut Array<f32>,
-    vertical: &mut Array<f32>,
-    width: u32,
-    height: u32,
-) {
+fn gradients(input: &[f32], horizontal: &mut [f32], vertical: &mut [f32], width: u32, height: u32) {
     if ABSOLUTE_POS >= horizontal.len() {
         terminate!();
     }
@@ -51,19 +45,19 @@ fn gradients(
 }
 
 /// Writes the 3x3 Sobel gradients of `input`.
-pub fn sobel<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, planes: SobelPlanes<'_>) {
+pub fn sobel(client: &Client, dispatch: &impl Dispatch, planes: SobelPlanes<'_>) {
     let samples = planes.input.samples();
     let width = planes.input.width();
     let height = planes.input.height();
 
-    let input = planes.input.array::<R>();
-    let horizontal = planes.horizontal.array::<R>();
-    let vertical = planes.vertical.array::<R>();
+    let input = planes.input.array();
+    let horizontal = planes.horizontal.array();
+    let vertical = planes.vertical.array();
     let cubes = dispatch.cube_count(samples);
     let shape = dispatch.cube_dim();
 
     // Safety: all three planes hold `samples` f32 values and the kernel writes nothing past them.
     unsafe {
-        gradients::launch_unchecked::<R>(client, cubes, shape, input, horizontal, vertical, width, height);
+        gradients::launch_unchecked(client, cubes, shape, input, horizontal, vertical, width, height);
     }
 }

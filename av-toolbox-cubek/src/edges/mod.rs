@@ -52,7 +52,7 @@ impl EdgeLimits {
 }
 
 #[cube]
-pub(crate) fn tap(input: &Array<f32>, width: u32, height: u32, column: i32, row: i32) -> f32 {
+pub(crate) fn tap(input: &[f32], width: u32, height: u32, column: i32, row: i32) -> f32 {
     let x = reflect(column, width as i32);
     let y = reflect(row, height as i32);
     let index = y as u32 * width + x as u32;
@@ -183,8 +183,8 @@ fn kirsch_magnitude(
 
 #[cube(launch_unchecked)]
 fn edges_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     operator: u32,
@@ -243,7 +243,7 @@ fn edges_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn binarize_kernel(input: &Array<f32>, output: &mut Array<f32>, threshold: f32, peak: f32) {
+fn binarize_kernel(input: &[f32], output: &mut [f32], threshold: f32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -258,7 +258,7 @@ fn binarize_kernel(input: &Array<f32>, output: &mut Array<f32>, threshold: f32, 
 }
 
 #[cube(launch_unchecked)]
-fn add_capped_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>, peak: f32) {
+fn add_capped_kernel(first: &[f32], second: &[f32], output: &mut [f32], peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -268,8 +268,8 @@ fn add_capped_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array
 }
 
 /// Writes the edge strength of each sample, cut and filled by the limits.
-pub fn edges<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn edges(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: NeighbourPlanes<'_>,
     operator: Operator,
@@ -279,14 +279,14 @@ pub fn edges<R: Runtime>(
     let height = planes.input.height();
     let samples = planes.output.samples();
     let operator_code = operator.code();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
     unsafe {
-        edges_kernel::launch_unchecked::<R>(
+        edges_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -304,28 +304,28 @@ pub fn edges<R: Runtime>(
 }
 
 /// Writes `peak` where a sample is at least `threshold`, otherwise 0.
-pub fn binarize<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn binarize(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: NeighbourPlanes<'_>,
     threshold: f32,
     peak: f32,
 ) {
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `samples` f32 values.
     unsafe {
-        binarize_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, threshold, peak);
+        binarize_kernel::launch_unchecked(client, cubes, unit, input, output, threshold, peak);
     }
 }
 
 /// Writes `min(first + second, peak)`.
-pub fn add_capped<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn add_capped(
+    client: &Client,
     dispatch: &impl Dispatch,
     first: DevicePlane<'_>,
     second: DevicePlane<'_>,
@@ -333,22 +333,14 @@ pub fn add_capped<R: Runtime>(
     peak: f32,
 ) {
     let samples = output.samples();
-    let first_read = first.array::<R>();
-    let second_read = second.array::<R>();
-    let output_write = output.array::<R>();
+    let first_read = first.array();
+    let second_read = second.array();
+    let output_write = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the first, second and output planes each hold `samples` f32 values.
     unsafe {
-        add_capped_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            first_read,
-            second_read,
-            output_write,
-            peak,
-        );
+        add_capped_kernel::launch_unchecked(client, cubes, unit, first_read, second_read, output_write, peak);
     }
 }

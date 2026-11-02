@@ -354,8 +354,8 @@ fn no_transformed_weights() -> CnnError {
 /// Runs `convolution` as Winograd F(2x2, 3x3), as `variant` describes.
 ///
 /// Gives an error if the layer holds no transformed weights, or the variant cannot run on the device.
-pub(crate) fn run_winograd<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn run_winograd(
+    client: &Client,
     variant: WinogradVariant,
     convolution: &BodyConvolution<'_>,
 ) -> Result<(), CnnError> {
@@ -411,14 +411,14 @@ pub(crate) fn run_winograd<R: Runtime>(
     // - Shared-memory indices stay inside the transformed tiles and scratch tiles that `shape` sizes, and
     //   fragments never read the tiles' padding.
     unsafe {
-        let input = ArrayArg::from_raw_parts(convolution.input.clone(), map_values / quad);
-        let weights = ArrayArg::from_raw_parts(transformed.clone(), weight_values / load);
-        let bias = ArrayArg::from_raw_parts(bias.clone(), features as usize / quad);
-        let residual = ArrayArg::from_raw_parts(residual.clone(), map_values / quad);
-        let skip = ArrayArg::from_raw_parts(skip.clone(), map_values / quad);
-        let output = ArrayArg::from_raw_parts(convolution.output.clone(), map_values / quad);
+        let input = BufferArg::from_raw_parts(convolution.input.clone(), map_values / quad);
+        let weights = BufferArg::from_raw_parts(transformed.clone(), weight_values / load);
+        let bias = BufferArg::from_raw_parts(bias.clone(), features as usize / quad);
+        let residual = BufferArg::from_raw_parts(residual.clone(), map_values / quad);
+        let skip = BufferArg::from_raw_parts(skip.clone(), map_values / quad);
+        let output = BufferArg::from_raw_parts(convolution.output.clone(), map_values / quad);
 
-        winograd_kernel::launch_unchecked::<R>(
+        winograd_kernel::launch_unchecked(
             client, cubes, unit, input, weights, bias, residual, skip, output, width, height, shape,
         );
     }
@@ -431,13 +431,7 @@ pub(crate) fn run_winograd<R: Runtime>(
 ///
 /// The tiles lie in rows of half the width, rounded up, and there are half the height's rows, rounded up.
 #[cfg(any(test, feature = "test-support"))]
-pub fn transform_input<R: Runtime>(
-    client: &ComputeClient<R>,
-    input: &Handle,
-    width: u32,
-    height: u32,
-    features: u32,
-) -> Handle {
+pub fn transform_input(client: &Client, input: &Handle, width: u32, height: u32, features: u32) -> Handle {
     let quads = features / WRITE_WIDTH;
     let map_quads = width as usize * height as usize * quads as usize;
     let columns = width.div_ceil(2);
@@ -463,10 +457,10 @@ pub fn transform_input<R: Runtime>(
     // unit writes only for a tile below `tiles`, at a position below 16 and a quad below `F / 4`, which the
     // output's `16 * tiles * F / 4` quads hold.
     unsafe {
-        let input = ArrayArg::from_raw_parts(input.clone(), map_quads);
-        let output = ArrayArg::from_raw_parts(transformed.clone(), transformed_quads);
+        let input = BufferArg::from_raw_parts(input.clone(), map_quads);
+        let output = BufferArg::from_raw_parts(transformed.clone(), transformed_quads);
 
-        input_transform_kernel::launch_unchecked::<R>(
+        input_transform_kernel::launch_unchecked(
             client,
             cubes,
             CubeDim::new_1d(units),

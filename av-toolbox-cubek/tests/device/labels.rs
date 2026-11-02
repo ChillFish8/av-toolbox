@@ -1,7 +1,6 @@
 use av_toolbox_cubek::labels::{CountPlanes, KeepPlanes, LabelPlanes, UNSET, count, keep, label};
 use av_toolbox_cubek::testing::{SplitMix, reference_labels};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_u8, read_u32, upload_u8, upload_u32};
 
@@ -26,7 +25,7 @@ struct Label {
 impl BuildTask for Label {
     type Output = Labelled;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

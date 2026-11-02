@@ -79,8 +79,8 @@ pub struct DebandPlanes<'a> {
 }
 
 #[cube]
-fn nearest<E: CubePrimitive>(
-    input: &Array<E>,
+fn nearest<E: Scalar>(
+    input: &[E],
     column: u32,
     row: u32,
     offset_x: f32,
@@ -107,9 +107,9 @@ fn nearest<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-fn deband_plane<E: CubePrimitive>(
-    input: &Array<E>,
-    output: &mut Array<f32>,
+fn deband_plane<E: Scalar>(
+    input: &[E],
+    output: &mut [f32],
     width: u32,
     height: u32,
     iterations: u32,
@@ -182,22 +182,22 @@ fn deband_plane<E: CubePrimitive>(
 /// Debands `planes.input` into `planes.output`, drawing from a generator seeded with `salt`.
 ///
 /// The output holds code values, neither rounded nor clamped.
-pub fn deband<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn deband(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DebandPlanes<'_>,
     params: &DebandParams,
     salt: u32,
 ) {
     match params.element {
-        Source::U8 => launch::<u8, R>(client, dispatch, planes, params, salt),
-        Source::U16 => launch::<u16, R>(client, dispatch, planes, params, salt),
-        Source::F32 => launch::<f32, R>(client, dispatch, planes, params, salt),
+        Source::U8 => launch::<u8>(client, dispatch, planes, params, salt),
+        Source::U16 => launch::<u16>(client, dispatch, planes, params, salt),
+        Source::F32 => launch::<f32>(client, dispatch, planes, params, salt),
     }
 }
 
-fn launch<E: CubePrimitive, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch<E: Scalar>(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DebandPlanes<'_>,
     params: &DebandParams,
@@ -205,8 +205,8 @@ fn launch<E: CubePrimitive, R: Runtime>(
 ) {
     let width = planes.input.width();
     let height = planes.input.height();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -219,7 +219,7 @@ fn launch<E: CubePrimitive, R: Runtime>(
     // Safety: the input holds `width * height` samples of `E` and the output as many f32 values. Every
     // read is clamped inside the plane, including when an offset goes non-finite.
     unsafe {
-        deband_plane::launch_unchecked::<E, R>(
+        deband_plane::launch_unchecked::<E>(
             client,
             cubes,
             unit,

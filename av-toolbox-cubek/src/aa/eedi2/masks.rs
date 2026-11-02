@@ -7,7 +7,7 @@ use crate::Dispatch;
 
 /// Whether the three field rows around `row` stay within `ten` of each other at `column`.
 #[cube]
-fn is_flat(input: &Array<f32>, width: u32, offset: u32, row: u32, column: u32, ten: f32) -> bool {
+fn is_flat(input: &[f32], width: u32, offset: u32, row: u32, column: u32, ten: f32) -> bool {
     let above = field_sample(input, width, offset, row - 1, column);
     let centre = field_sample(input, width, offset, row, column);
     let below = field_sample(input, width, offset, row + 1, column);
@@ -25,7 +25,7 @@ fn is_flat(input: &Array<f32>, width: u32, offset: u32, row: u32, column: u32, t
 /// negative. The plugin's unsigned arithmetic wraps that to a huge value, so a negative variance is not low.
 #[cube]
 fn has_low_variance(
-    input: &Array<f32>,
+    input: &[f32],
     width: u32,
     offset: u32,
     row: u32,
@@ -66,7 +66,7 @@ struct MaskThresholds {
 /// Whether a pixel's gradient or curvature is strong enough to hold an edge.
 #[cube]
 fn is_steep_or_curved(
-    input: &Array<f32>,
+    input: &[f32],
     width: u32,
     offset: u32,
     row: u32,
@@ -100,14 +100,7 @@ fn is_steep_or_curved(
 
 /// Pass 1's test for one interior pixel.
 #[cube]
-fn is_edge(
-    input: &Array<f32>,
-    width: u32,
-    offset: u32,
-    row: u32,
-    column: u32,
-    settings: &MaskThresholds,
-) -> bool {
+fn is_edge(input: &[f32], width: u32, offset: u32, row: u32, column: u32, settings: &MaskThresholds) -> bool {
     let flat_here = is_flat(input, width, offset, row, column, settings.ten);
     let flat_before = is_flat(input, width, offset, row, column - 1, settings.ten);
     let flat_after = is_flat(input, width, offset, row, column + 1, settings.ten);
@@ -135,8 +128,8 @@ fn is_edge(
 /// Pass 1, the raw edge mask `E0`, 1 on an edge and 0 elsewhere. The border stays clear.
 #[cube(launch_unchecked)]
 fn edge_mask_kernel(
-    input: &Array<f32>,
-    mask: &mut Array<f32>,
+    input: &[f32],
+    mask: &mut [f32],
     width: u32,
     rows: u32,
     offset: u32,
@@ -178,7 +171,7 @@ fn edge_mask_kernel(
 
 /// The set pixels among the 8 neighbours of the interior pixel at `position`.
 #[cube]
-fn neighbours_set(mask: &Array<f32>, width: u32, position: u32) -> f32 {
+fn neighbours_set(mask: &[f32], width: u32, position: u32) -> f32 {
     let above = position - width;
     let below = position + width;
 
@@ -191,7 +184,7 @@ fn neighbours_set(mask: &Array<f32>, width: u32, position: u32) -> f32 {
 
 /// Passes 2 and 4, clearing interior pixels with fewer than `strength` set neighbours.
 #[cube(launch_unchecked)]
-fn erode_kernel(source: &Array<f32>, destination: &mut Array<f32>, width: u32, rows: u32, strength: f32) {
+fn erode_kernel(source: &[f32], destination: &mut [f32], width: u32, rows: u32, strength: f32) {
     if ABSOLUTE_POS >= destination.len() {
         terminate!();
     }
@@ -212,7 +205,7 @@ fn erode_kernel(source: &Array<f32>, destination: &mut Array<f32>, width: u32, r
 
 /// Pass 3, setting interior pixels with at least `strength` set neighbours.
 #[cube(launch_unchecked)]
-fn dilate_kernel(source: &Array<f32>, destination: &mut Array<f32>, width: u32, rows: u32, strength: f32) {
+fn dilate_kernel(source: &[f32], destination: &mut [f32], width: u32, rows: u32, strength: f32) {
     if ABSOLUTE_POS >= destination.len() {
         terminate!();
     }
@@ -233,7 +226,7 @@ fn dilate_kernel(source: &Array<f32>, destination: &mut Array<f32>, width: u32, 
 
 /// Pass 5, the final edge mask `E`, closing gaps of up to 3 pixels in a row and dropping lone pixels.
 #[cube(launch_unchecked)]
-fn remove_small_gaps_kernel(source: &Array<f32>, destination: &mut Array<f32>, width: u32, rows: u32) {
+fn remove_small_gaps_kernel(source: &[f32], destination: &mut [f32], width: u32, rows: u32) {
     if ABSOLUTE_POS >= destination.len() {
         terminate!();
     }
@@ -274,8 +267,8 @@ fn remove_small_gaps_kernel(source: &Array<f32>, destination: &mut Array<f32>, w
 }
 
 /// Launches pass 1, writing `E0` into the `edges` scratch.
-pub(super) fn edge_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn edge_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -288,10 +281,10 @@ pub(super) fn edge_mask<R: Runtime>(
     // `FieldPass::new` checked. Each unit writes only its own mask pixel and reads field rows within one
     // of its own, at columns within one of its own, only for interior pixels.
     unsafe {
-        let input = pass.input.array::<R>();
-        let mask = pass.field_array::<R>(FieldBuffer::Edges);
+        let input = pass.input.array();
+        let mask = pass.field_array(FieldBuffer::Edges);
 
-        edge_mask_kernel::launch_unchecked::<R>(
+        edge_mask_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -310,8 +303,8 @@ pub(super) fn edge_mask<R: Runtime>(
 }
 
 /// Launches passes 2 and 4, eroding the mask in `edges` into `working`.
-pub(super) fn erode<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn erode(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -323,10 +316,10 @@ pub(super) fn erode<R: Runtime>(
     // Safety: `edges` and `working` each hold `width * rows` values, as `FieldPass::new` checked. Each unit
     // writes only its own pixel and reads its 8 neighbours only for interior pixels.
     unsafe {
-        let source = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.field_array::<R>(FieldBuffer::Working);
+        let source = pass.field_array(FieldBuffer::Edges);
+        let destination = pass.field_array(FieldBuffer::Working);
 
-        erode_kernel::launch_unchecked::<R>(
+        erode_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -340,8 +333,8 @@ pub(super) fn erode<R: Runtime>(
 }
 
 /// Launches pass 3, dilating the mask in `working` into `edges`.
-pub(super) fn dilate<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn dilate(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -353,10 +346,10 @@ pub(super) fn dilate<R: Runtime>(
     // Safety: `working` and `edges` each hold `width * rows` values, as `FieldPass::new` checked. Each unit
     // writes only its own pixel and reads its 8 neighbours only for interior pixels.
     unsafe {
-        let source = pass.field_array::<R>(FieldBuffer::Working);
-        let destination = pass.field_array::<R>(FieldBuffer::Edges);
+        let source = pass.field_array(FieldBuffer::Working);
+        let destination = pass.field_array(FieldBuffer::Edges);
 
-        dilate_kernel::launch_unchecked::<R>(
+        dilate_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -370,11 +363,7 @@ pub(super) fn dilate<R: Runtime>(
 }
 
 /// Launches pass 5, closing the small gaps of the mask in `working` into `edges`.
-pub(super) fn remove_small_gaps<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    pass: &FieldPass<'_>,
-) {
+pub(super) fn remove_small_gaps(client: &Client, dispatch: &impl Dispatch, pass: &FieldPass<'_>) {
     let samples = pass.field_samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -382,10 +371,10 @@ pub(super) fn remove_small_gaps<R: Runtime>(
     // Safety: `working` and `edges` each hold `width * rows` values, as `FieldPass::new` checked. Each unit
     // writes only its own pixel and reads 3 columns either side only when they lie inside its row.
     unsafe {
-        let source = pass.field_array::<R>(FieldBuffer::Working);
-        let destination = pass.field_array::<R>(FieldBuffer::Edges);
+        let source = pass.field_array(FieldBuffer::Working);
+        let destination = pass.field_array(FieldBuffer::Edges);
 
-        remove_small_gaps_kernel::launch_unchecked::<R>(
+        remove_small_gaps_kernel::launch_unchecked(
             client,
             cubes,
             unit,

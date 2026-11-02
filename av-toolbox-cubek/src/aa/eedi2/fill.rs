@@ -186,7 +186,7 @@ impl Backing {
     }
 
     /// Starts gathering a new run from `column`.
-    fn start(&mut self, source: &Array<f32>, edges: &Array<f32>, column: u32) {
+    fn start(&mut self, source: &[f32], edges: &[f32], column: u32) {
         self.supported = self.exists;
         self.lowest = self.peak;
         self.highest = 0.0;
@@ -194,7 +194,7 @@ impl Backing {
     }
 
     /// Adds `column`, read only while the row still backs the run.
-    fn take(&mut self, source: &Array<f32>, edges: &Array<f32>, column: u32) {
+    fn take(&mut self, source: &[f32], edges: &[f32], column: u32) {
         if self.supported {
             let value = source[(self.row * self.width + column) as usize];
             let on_edge = touches_edge(edges, self.width, self.row, column);
@@ -245,7 +245,7 @@ struct FillScale {
 /// Each pixel steps from the direction before the run toward the one after it, never reaching the latter.
 #[cube]
 fn fill_run(
-    destination: &mut Array<f32>,
+    destination: &mut [f32],
     row_start: u32,
     run: &Run,
     above: &Backing,
@@ -303,9 +303,9 @@ fn fill_run(
 /// `reduce_quarter` is `2^(6 - bits)`, which turns a floor multiplication into a right shift by `bits - 6`.
 #[cube(launch_unchecked)]
 fn fill_gaps_kernel(
-    source: &Array<f32>,
-    edges: &Array<f32>,
-    destination: &mut Array<f32>,
+    source: &[f32],
+    edges: &[f32],
+    destination: &mut [f32],
     width: u32,
     gap_rows: u32,
     peak: f32,
@@ -376,8 +376,8 @@ fn fill_gaps_kernel(
 }
 
 /// Launches a fill, from the gap map in `source` into `destination`, with one unit per gap row.
-pub(super) fn fill_gaps<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn fill_gaps(
+    client: &Client,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
     source: GapBuffer,
@@ -393,11 +393,11 @@ pub(super) fn fill_gaps<R: Runtime>(
     // either side only when they exist, the edge mask rows either side of each gap row it reads, and only
     // columns inside the row.
     unsafe {
-        let source = pass.gap_array::<R>(source);
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.gap_array::<R>(destination);
+        let source = pass.gap_array(source);
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let destination = pass.gap_array(destination);
 
-        fill_gaps_kernel::launch_unchecked::<R>(
+        fill_gaps_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -417,12 +417,7 @@ pub(super) fn fill_gaps<R: Runtime>(
 /// `FILLROUND` for each case, as a fill computes it for a run of `length` bounded by `difference`.
 #[cfg(any(test, feature = "test-support"))]
 #[cube(launch_unchecked)]
-fn fill_round_kernel(
-    differences: &Array<f32>,
-    lengths: &Array<f32>,
-    steps: &Array<f32>,
-    results: &mut Array<f32>,
-) {
+fn fill_round_kernel(differences: &[f32], lengths: &[f32], steps: &[f32], results: &mut [f32]) {
     if ABSOLUTE_POS >= results.len() {
         terminate!();
     }
@@ -451,8 +446,8 @@ fn fill_round_kernel(
 /// Every `|difference|` must be below `2^16`, every `length` between 2 and 65535, and every `step` below its
 /// `length`.
 #[cfg(any(test, feature = "test-support"))]
-pub fn eedi2_fill_round<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn eedi2_fill_round(
+    client: &Client,
     dispatch: &impl Dispatch,
     differences: &[i32],
     lengths: &[u32],
@@ -497,13 +492,13 @@ pub fn eedi2_fill_round<R: Runtime>(
     // Safety: the four buffers were created above with `cases` f32 values each. Each unit reads and writes
     // only its own case, and the checks above keep the long division finite.
     unsafe {
-        let differences = ArrayArg::from_raw_parts(difference_handle, cases);
-        let lengths = ArrayArg::from_raw_parts(length_handle, cases);
-        let steps = ArrayArg::from_raw_parts(step_handle, cases);
+        let differences = BufferArg::from_raw_parts(difference_handle, cases);
+        let lengths = BufferArg::from_raw_parts(length_handle, cases);
+        let steps = BufferArg::from_raw_parts(step_handle, cases);
         let owned = results.clone();
-        let outputs = ArrayArg::from_raw_parts(owned, cases);
+        let outputs = BufferArg::from_raw_parts(owned, cases);
 
-        fill_round_kernel::launch_unchecked::<R>(client, cubes, unit, differences, lengths, steps, outputs);
+        fill_round_kernel::launch_unchecked(client, cubes, unit, differences, lengths, steps, outputs);
     }
 
     results

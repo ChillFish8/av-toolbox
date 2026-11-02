@@ -1,4 +1,4 @@
-use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
+use cubecl::prelude::{Client, CubeElement};
 
 use super::network::conv0_sample_bytes;
 use crate::artcnn::{Maps, Network, run_region};
@@ -140,8 +140,8 @@ pub(crate) fn haloed_scratch(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn artcnn<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn artcnn(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     path: BodyPath,
@@ -164,8 +164,8 @@ pub fn artcnn<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-fn run_tiles<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_tiles(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     path: BodyPath,
@@ -240,8 +240,8 @@ fn run_tiles<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn warm_up<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn warm_up(
+    client: &Client,
     dispatch: &impl Dispatch,
     network: &Network,
     path: BodyPath,

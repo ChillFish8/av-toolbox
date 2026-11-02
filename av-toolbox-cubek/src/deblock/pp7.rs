@@ -149,11 +149,11 @@ pub struct ThresholdTable {
 }
 
 impl ThresholdTable {
-    fn values<R: Runtime>(&self) -> ArrayArg<R> {
+    fn values(&self) -> BufferArg {
         let handle = self.values.clone();
 
         // Safety: the buffer was made from exactly 16 i32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, 16) }
+        unsafe { BufferArg::from_raw_parts(handle, 16) }
     }
 }
 
@@ -162,11 +162,7 @@ impl ThresholdTable {
 /// # Panics
 ///
 /// Panics when `qp` is not between 1 and 63.
-pub fn upload_thresholds<R: Runtime>(
-    client: &ComputeClient<R>,
-    qp: f64,
-    samples: MatrixSamples,
-) -> ThresholdTable {
+pub fn upload_thresholds(client: &Client, qp: f64, samples: MatrixSamples) -> ThresholdTable {
     let in_range = (MIN_QP..=MAX_QP).contains(&qp);
     assert!(in_range, "a pp7 qp must be between 1 and 63, not {qp}");
 
@@ -212,9 +208,9 @@ fn extended(position: i32, length: i32, aligned: i32) -> i32 {
 ///
 /// Float samples are scaled into 8-bit units as they load.
 #[cube]
-fn load_tile<E: CubePrimitive, S: Numeric>(
-    input: &Array<E>,
-    tile: &mut SharedMemory<S>,
+fn load_tile<E: Scalar, S: Numeric>(
+    input: &[E],
+    tile: &mut Shared<[S]>,
     left: u32,
     top: u32,
     extent: &Extent,
@@ -253,7 +249,7 @@ struct Bands<T: Numeric> {
 /// Folds `taps` about their centre and runs the folded four through the H.264 core transform, as
 /// butterflies.
 #[cube]
-fn transformed<T: Numeric>(taps: &Array<T>) -> Bands<T> {
+fn transformed<T: Numeric>(taps: &[T]) -> Bands<T> {
     let centre = taps[3] + taps[3];
     let near = taps[2] + taps[4];
     let middle = taps[1] + taps[5];
@@ -275,7 +271,7 @@ fn transformed<T: Numeric>(taps: &Array<T>) -> Bands<T> {
 ///
 /// Each of the square's columns is transformed down first, then each row of the results across.
 #[cube]
-fn coefficients<T: Numeric>(tile: &SharedMemory<T>, found: &mut Array<T>) {
+fn coefficients<T: Numeric>(tile: &Shared<[T]>, found: &mut [T]) {
     let mut taps = Array::<T>::new(7usize);
     let mut down = Array::<T>::new(28usize);
 
@@ -287,7 +283,7 @@ fn coefficients<T: Numeric>(tile: &SharedMemory<T>, found: &mut Array<T>) {
             taps[row] = tile[slot as usize];
         }
 
-        let bands = transformed::<T>(&taps);
+        let bands = transformed::<T>(taps.as_slice());
         down[comptime!(column * 4)] = bands.zero;
         down[comptime!(column * 4 + 1)] = bands.one;
         down[comptime!(column * 4 + 2)] = bands.two;
@@ -301,7 +297,7 @@ fn coefficients<T: Numeric>(tile: &SharedMemory<T>, found: &mut Array<T>) {
             taps[column] = down[comptime!(column * 4 + band)];
         }
 
-        let bands = transformed::<T>(&taps);
+        let bands = transformed::<T>(taps.as_slice());
         found[comptime!(band * 4)] = bands.zero;
         found[comptime!(band * 4 + 1)] = bands.one;
         found[comptime!(band * 4 + 2)] = bands.two;
@@ -373,8 +369,8 @@ fn kept_float(value: f32, threshold: f32, #[comptime] mode: u32) -> f32 {
 /// `wide` sums the weighted coefficients in 64 bits, which samples deeper than 8 bits need.
 #[cube]
 fn integer_output(
-    found: &Array<i32>,
-    thresholds: &Array<i32>,
+    found: &[i32],
+    thresholds: &[i32],
     peak: i32,
     #[comptime] mode: u32,
     #[comptime] wide: bool,
@@ -390,7 +386,7 @@ fn integer_output(
 
 /// The weighted sum of `found` in 64 bits, rounded half up out of the weights' fraction.
 #[cube]
-fn wide_sum(found: &Array<i32>, thresholds: &Array<i32>, #[comptime] mode: u32) -> i32 {
+fn wide_sum(found: &[i32], thresholds: &[i32], #[comptime] mode: u32) -> i32 {
     let mut total = i64::cast_from(found[0]) * i64::cast_from(WEIGHTS[0][0]);
 
     #[unroll]
@@ -411,7 +407,7 @@ fn wide_sum(found: &Array<i32>, thresholds: &Array<i32>, #[comptime] mode: u32) 
 ///
 /// It holds 8-bit samples, whose sum stays below `2^30`.
 #[cube]
-fn narrow_sum(found: &Array<i32>, thresholds: &Array<i32>, #[comptime] mode: u32) -> i32 {
+fn narrow_sum(found: &[i32], thresholds: &[i32], #[comptime] mode: u32) -> i32 {
     let mut total = found[0] * WEIGHTS[0][0];
 
     #[unroll]
@@ -428,7 +424,7 @@ fn narrow_sum(found: &Array<i32>, thresholds: &Array<i32>, #[comptime] mode: u32
 ///
 /// Each weighted coefficient is rounded to f32 before it is added, in order.
 #[cube]
-fn float_output(found: &Array<f32>, thresholds: &Array<i32>, opaque_zero: u32, #[comptime] mode: u32) -> f32 {
+fn float_output(found: &[f32], thresholds: &[i32], opaque_zero: u32, #[comptime] mode: u32) -> f32 {
     let dc_weight = comptime!(WEIGHTS[0][0] as f32);
     let mut total = rounded_product(found[0], dc_weight, opaque_zero);
 
@@ -447,10 +443,10 @@ fn float_output(found: &Array<f32>, thresholds: &Array<i32>, opaque_zero: u32, #
 ///
 /// Every unit loads its share of the tile's input square and waits for the rest, so none leaves early.
 #[cube(launch_unchecked)]
-fn pp7_integer_kernel<E: CubePrimitive>(
-    input: &Array<E>,
-    output: &mut Array<E>,
-    thresholds: &Array<i32>,
+fn pp7_integer_kernel<E: Scalar>(
+    input: &[E],
+    output: &mut [E],
+    thresholds: &[i32],
     width: u32,
     height: u32,
     aligned_width: u32,
@@ -459,7 +455,7 @@ fn pp7_integer_kernel<E: CubePrimitive>(
     #[comptime] mode: u32,
     #[comptime] wide: bool,
 ) {
-    let mut tile = SharedMemory::<i32>::new(comptime!(LOADED_SAMPLES as usize));
+    let mut tile = Shared::<[i32]>::new_slice(comptime!(LOADED_SAMPLES as usize));
     let left = CUBE_POS_X * TILE;
     let top = CUBE_POS_Y * TILE;
     let extent = Extent {
@@ -477,9 +473,9 @@ fn pp7_integer_kernel<E: CubePrimitive>(
 
     if x < width && y < height {
         let mut found = Array::<i32>::new(16usize);
-        coefficients::<i32>(&tile, &mut found);
+        coefficients::<i32>(&tile, found.as_mut_slice());
 
-        let value = integer_output(&found, thresholds, peak, mode, wide);
+        let value = integer_output(found.as_slice(), thresholds, peak, mode, wide);
         let index = (y * width + x) as usize;
         output[index] = E::cast_from(value);
     }
@@ -490,9 +486,9 @@ fn pp7_integer_kernel<E: CubePrimitive>(
 /// Every unit loads its share of the tile's input square and waits for the rest, so none leaves early.
 #[cube(launch_unchecked)]
 fn pp7_float_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    thresholds: &Array<i32>,
+    input: &[f32],
+    output: &mut [f32],
+    thresholds: &[i32],
     width: u32,
     height: u32,
     aligned_width: u32,
@@ -500,7 +496,7 @@ fn pp7_float_kernel(
     opaque_zero: u32,
     #[comptime] mode: u32,
 ) {
-    let mut tile = SharedMemory::<f32>::new(comptime!(LOADED_SAMPLES as usize));
+    let mut tile = Shared::<[f32]>::new_slice(comptime!(LOADED_SAMPLES as usize));
     let left = CUBE_POS_X * TILE;
     let top = CUBE_POS_Y * TILE;
     let extent = Extent {
@@ -518,9 +514,9 @@ fn pp7_float_kernel(
 
     if x < width && y < height {
         let mut found = Array::<f32>::new(16usize);
-        coefficients::<f32>(&tile, &mut found);
+        coefficients::<f32>(&tile, found.as_mut_slice());
 
-        let value = float_output(&found, thresholds, opaque_zero, mode);
+        let value = float_output(found.as_slice(), thresholds, opaque_zero, mode);
         let index = (y * width + x) as usize;
         output[index] = value;
     }
@@ -537,8 +533,8 @@ fn pp7_float_kernel(
 /// when both are given the same handle, when `aligned_size` is smaller than the plane or a side of it is past
 /// `i32::MAX / 2`, when the plane needs more cubes along a side than every device allows, or when `table` was
 /// made for other samples.
-pub fn pp7_plane<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn pp7_plane(
+    client: &Client,
     planes: Pp7Planes<'_>,
     aligned_size: (u32, u32),
     table: &ThresholdTable,
@@ -588,9 +584,9 @@ pub fn pp7_plane<R: Runtime>(
     );
 
     let cubes = CubeCount::Static(tiles_across, tiles_down, 1);
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
-    let values = table.values::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
+    let values = table.values();
     let unit = CubeDim::new_2d(TILE, TILE);
     let code = mode.code();
 
@@ -602,7 +598,7 @@ pub fn pp7_plane<R: Runtime>(
             // arrays hold as `width * height` u8 samples, as `DevicePlane::new` requires. The table holds the
             // 16 thresholds read. 8-bit sums fit in 32 bits.
             unsafe {
-                pp7_integer_kernel::launch_unchecked::<u8, R>(
+                pp7_integer_kernel::launch_unchecked::<u8>(
                     client,
                     cubes,
                     unit,
@@ -622,7 +618,7 @@ pub fn pp7_plane<R: Runtime>(
         MatrixSamples::U16 { .. } => {
             // Safety: as for 8-bit samples, for arrays of `width * height` u16 samples, summed in 64 bits.
             unsafe {
-                pp7_integer_kernel::launch_unchecked::<u16, R>(
+                pp7_integer_kernel::launch_unchecked::<u16>(
                     client,
                     cubes,
                     unit,
@@ -642,7 +638,7 @@ pub fn pp7_plane<R: Runtime>(
         MatrixSamples::F32 => {
             // Safety: as for 8-bit samples, for arrays of `width * height` f32 values.
             unsafe {
-                pp7_float_kernel::launch_unchecked::<R>(
+                pp7_float_kernel::launch_unchecked(
                     client,
                     cubes,
                     unit,

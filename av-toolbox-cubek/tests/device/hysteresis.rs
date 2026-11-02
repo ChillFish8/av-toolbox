@@ -1,7 +1,6 @@
 use av_toolbox_cubek::hysteresis::{HysteresisPlanes, hysteresis};
 use av_toolbox_cubek::testing::reference_hysteresis;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::neighbourhood::busy;
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -23,7 +22,7 @@ struct Hysteresis {
 impl BuildTask for Hysteresis {
     type Output = Hysteresised;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

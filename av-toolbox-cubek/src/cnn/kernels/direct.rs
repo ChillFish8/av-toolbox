@@ -302,6 +302,7 @@ impl DirectShape {
 
 /// The plane's place in the workgroup's grid of planes.
 #[derive(CubeType, Clone, Copy)]
+#[expand(derive(Clone, Copy))]
 struct PlaneSpot {
     /// The scalar index of the plane's scratch tile in shared memory, in groups of four.
     scratch: u32,
@@ -334,8 +335,8 @@ fn plane_spot(#[comptime] shape: DirectShape) -> PlaneSpot {
 /// zero afterwards, so the loads need no branch.
 #[cube]
 fn load_block(
-    input: &Array<Load>,
-    block: &mut SharedMemory<Load>,
+    input: &[Load],
+    block: &mut Shared<[Load]>,
     block_x: u32,
     block_y: u32,
     width: u32,
@@ -390,8 +391,8 @@ fn load_block(
 /// Stages tap `tap`'s weights for the workgroup's output channels into `taps` at `buffer`.
 #[cube]
 fn stage_tap(
-    weights: &Array<Load>,
-    taps: &mut SharedMemory<Load>,
+    weights: &[Load],
+    taps: &mut Shared<[Load]>,
     buffer: u32,
     tap: u32,
     first_channel: u32,
@@ -426,8 +427,8 @@ pub(super) fn fragment<E: Scalar>(
 /// the layer has no bias.
 #[cube]
 fn start_accumulators(
-    bias: &Array<Quad>,
-    scratch: &mut SharedMemory<Sums>,
+    bias: &[Quad],
+    scratch: &mut Shared<[Sums]>,
     spot: PlaneSpot,
     first_channel: u32,
     #[comptime] shape: DirectShape,
@@ -468,13 +469,15 @@ fn start_accumulators(
 
             #[unroll]
             for pixel_tile in 0..pixel_tiles {
-                let accumulator = accumulators.index(comptime!(pixel_tile * channel_tiles + channel_tile));
-                cmma::load_with_layout(accumulator, &tile, TILE, cmma::MatrixLayout::RowMajor);
+                let accumulator =
+                    accumulators.index_mut(comptime!(pixel_tile * channel_tiles + channel_tile));
+                cmma::load_with_layout(accumulator, tile, TILE, cmma::MatrixLayout::RowMajor);
             }
         } else {
             #[unroll]
             for pixel_tile in 0..pixel_tiles {
-                let accumulator = accumulators.index(comptime!(pixel_tile * channel_tiles + channel_tile));
+                let accumulator =
+                    accumulators.index_mut(comptime!(pixel_tile * channel_tiles + channel_tile));
                 cmma::fill(accumulator, 0.0);
             }
         }
@@ -491,12 +494,12 @@ fn start_accumulators(
 /// to the write.
 #[cube(launch_unchecked)]
 fn direct_kernel(
-    input: &Array<Load>,
-    weights: &Array<Load>,
-    bias: &Array<Quad>,
-    residual: &Array<Quad>,
-    skip: &Array<Quad>,
-    output: &mut Array<Quad>,
+    input: &[Load],
+    weights: &[Load],
+    bias: &[Quad],
+    residual: &[Quad],
+    skip: &[Quad],
+    output: &mut [Quad],
     width: u32,
     height: u32,
     #[comptime] shape: DirectShape,
@@ -506,10 +509,10 @@ fn direct_kernel(
     let first_channel = CUBE_POS_Z * comptime!(shape.channels);
     let spot = plane_spot(shape);
 
-    let mut block = SharedMemory::<Load>::new(comptime!(shape.block_loads() as usize));
-    let mut taps = SharedMemory::<Load>::new(comptime!(shape.staged_loads() as usize));
+    let mut block = Shared::<[Load]>::new_slice(comptime!(shape.block_loads() as usize));
+    let mut taps = Shared::<[Load]>::new_slice(comptime!(shape.staged_loads() as usize));
     let mut scratch =
-        SharedMemory::<Sums>::new(comptime!((shape.planes() * TILE_VALUES / WRITE_WIDTH) as usize));
+        Shared::<[Sums]>::new_slice(comptime!((shape.planes() * TILE_VALUES / WRITE_WIDTH) as usize));
 
     load_block(input, &mut block, block_x, block_y, width, height, 0, shape);
     // Every plane reads samples another plane loaded.
@@ -578,9 +581,9 @@ fn direct_kernel(
 /// The chunk's first input channel is `first_channel_in`.
 #[cube]
 fn multiply_taps(
-    weights: &Array<Load>,
-    block: &SharedMemory<Load>,
-    taps: &mut SharedMemory<Load>,
+    weights: &[Load],
+    block: &Shared<[Load]>,
+    taps: &mut Shared<[Load]>,
     accumulators: &Sequence<cmma::Matrix<f32>>,
     spot: PlaneSpot,
     first_channel: u32,
@@ -627,32 +630,32 @@ fn multiply_taps(
                 let start = ((block_row * bordered_columns + block_column) * stride + chunk as u32 * TILE)
                     / LOAD_WIDTH;
                 let rows = block.slice(start as usize, (start + fragment_loads) as usize);
-                let pixels = fragment(cmma::MatrixIdent::A, cmma::MatrixLayout::RowMajor);
-                cmma::load(&pixels, &rows, stride);
+                let mut pixels = fragment(cmma::MatrixIdent::A, cmma::MatrixLayout::RowMajor);
+                cmma::load(&mut pixels, rows, stride);
                 lhs.push(pixels);
             }
 
             #[unroll]
             for channel_tile in 0..channel_tiles {
                 let channel = (spot.first_channel_tile + channel_tile as u32) * TILE;
-                let rhs = fragment(cmma::MatrixIdent::B, cmma::MatrixLayout::ColMajor);
+                let mut rhs = fragment(cmma::MatrixIdent::B, cmma::MatrixLayout::ColMajor);
 
                 if comptime!(shape.weights == WeightStaging::Global) {
                     let tap_start = ((first_channel + channel) * TAPS + tap) * features + first_channel_in;
                     let start = (tap_start + chunk as u32 * TILE) / LOAD_WIDTH;
                     let columns = weights.slice(start as usize, (start + global_loads) as usize);
-                    cmma::load(&rhs, &columns, features * TAPS);
+                    cmma::load(&mut rhs, columns, features * TAPS);
                 } else {
                     let start = buffer + (channel * stride + chunk as u32 * TILE) / LOAD_WIDTH;
                     let columns = taps.slice(start as usize, (start + fragment_loads) as usize);
-                    cmma::load(&rhs, &columns, stride);
+                    cmma::load(&mut rhs, columns, stride);
                 }
 
                 #[unroll]
                 for pixel_tile in 0..pixel_tiles {
                     let accumulator =
                         accumulators.index(comptime!(pixel_tile * channel_tiles + channel_tile));
-                    cmma::execute::<f16, f16, f32, f32>(
+                    cmma::execute::<f16, f16, f32, f32, cmma::Plane>(
                         lhs.index(pixel_tile),
                         &rhs,
                         accumulator,
@@ -671,10 +674,10 @@ fn multiply_taps(
 #[cube]
 fn write_out(
     accumulators: &Sequence<cmma::Matrix<f32>>,
-    scratch: &mut SharedMemory<Sums>,
-    residual: &Array<Quad>,
-    skip: &Array<Quad>,
-    output: &mut Array<Quad>,
+    scratch: &mut Shared<[Sums]>,
+    residual: &[Quad],
+    skip: &[Quad],
+    output: &mut [Quad],
     spot: PlaneSpot,
     block_x: u32,
     block_y: u32,
@@ -707,8 +710,8 @@ fn write_out(
             // A plane may hold several subgroups that each computed the same accumulator, so only the
             // first stores it. The condition is uniform within each subgroup.
             if UNIT_POS_X < PLANE_DIM {
-                let mut tile_slice = scratch.slice_mut(start, start + tile_quads as usize);
-                cmma::store(&mut tile_slice, accumulator, TILE, cmma::MatrixLayout::RowMajor);
+                let tile_slice = scratch.slice_mut(start, start + tile_quads as usize);
+                cmma::store(tile_slice, accumulator, TILE, cmma::MatrixLayout::RowMajor);
             }
 
             sync_cube();
@@ -745,8 +748,8 @@ fn write_out(
 #[cube]
 pub(super) fn finish_sums(
     sum: Sums,
-    residual: &Array<Quad>,
-    skip: &Array<Quad>,
+    residual: &[Quad],
+    skip: &[Quad],
     position: u32,
     #[comptime] activation: Activation,
     #[comptime] residual_added: bool,
@@ -882,8 +885,8 @@ pub fn direct_variants(properties: &DeviceProperties, features: u32) -> Vec<Dire
 }
 
 /// Runs `convolution` as `variant` describes.
-pub(crate) fn run_direct<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn run_direct(
+    client: &Client,
     variant: DirectVariant,
     convolution: &BodyConvolution<'_>,
 ) -> Result<(), CnnError> {
@@ -940,15 +943,15 @@ pub(crate) fn run_direct<R: Runtime>(
     // - Shared-memory indices stay inside the bordered block, the staged taps and the scratch tiles that
     //   `shape` sizes. Fragments read only the channel halves each sample's load wrote, never its padding.
     unsafe {
-        let input = ArrayArg::from_raw_parts(convolution.input.clone(), map_values / LOAD_WIDTH as usize);
+        let input = BufferArg::from_raw_parts(convolution.input.clone(), map_values / LOAD_WIDTH as usize);
         let weights =
-            ArrayArg::from_raw_parts(convolution.weights.clone(), weight_values / LOAD_WIDTH as usize);
-        let bias = ArrayArg::from_raw_parts(bias.clone(), (features / WRITE_WIDTH) as usize);
-        let residual = ArrayArg::from_raw_parts(residual.clone(), map_values / WRITE_WIDTH as usize);
-        let skip = ArrayArg::from_raw_parts(skip.clone(), map_values / WRITE_WIDTH as usize);
-        let output = ArrayArg::from_raw_parts(convolution.output.clone(), map_values / WRITE_WIDTH as usize);
+            BufferArg::from_raw_parts(convolution.weights.clone(), weight_values / LOAD_WIDTH as usize);
+        let bias = BufferArg::from_raw_parts(bias.clone(), (features / WRITE_WIDTH) as usize);
+        let residual = BufferArg::from_raw_parts(residual.clone(), map_values / WRITE_WIDTH as usize);
+        let skip = BufferArg::from_raw_parts(skip.clone(), map_values / WRITE_WIDTH as usize);
+        let output = BufferArg::from_raw_parts(convolution.output.clone(), map_values / WRITE_WIDTH as usize);
 
-        direct_kernel::launch_unchecked::<R>(
+        direct_kernel::launch_unchecked(
             client, cubes, unit, input, weights, bias, residual, skip, output, width, height, shape,
         );
     }

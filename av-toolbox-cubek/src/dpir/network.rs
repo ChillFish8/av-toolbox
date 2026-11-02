@@ -63,7 +63,7 @@ pub struct Dpir {
 
 impl Dpir {
     /// Uploads `weights` in `precision`'s type.
-    pub fn upload<R: Runtime>(client: &ComputeClient<R>, weights: &Weights, precision: Precision) -> Self {
+    pub fn upload(client: &Client, weights: &Weights, precision: Precision) -> Self {
         let layers = weights.layers();
         let last = layers.len() - 1;
         let head = HeadLayer::upload(client, &layers[0], precision);
@@ -131,7 +131,7 @@ impl Dpir {
     }
 }
 
-fn upload_matrix<R: Runtime>(client: &ComputeClient<R>, values: &[f32], precision: Precision) -> Handle {
+fn upload_matrix(client: &Client, values: &[f32], precision: Precision) -> Handle {
     let bytes = encode(values, precision);
 
     client.create_from_slice(&bytes)
@@ -183,8 +183,8 @@ pub fn column_bytes(precision: Precision, width: u32, height: u32) -> usize {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn run_region<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn run_region(
+    client: &Client,
     dispatch: &impl Dispatch,
     dpir: &Dpir,
     path: BodyPath,
@@ -296,8 +296,8 @@ fn check_maps(
 }
 
 /// One region's forward pass in progress, with the ResBlock convolutions it has run so far.
-struct Pass<'a, R: Runtime, D: Dispatch> {
-    client: &'a ComputeClient<R>,
+struct Pass<'a, D: Dispatch> {
+    client: &'a Client,
     dispatch: &'a D,
     dpir: &'a Dpir,
     path: BodyPath,
@@ -307,7 +307,7 @@ struct Pass<'a, R: Runtime, D: Dispatch> {
     runs: Vec<LayerRun>,
 }
 
-impl<'a, R: Runtime, D: Dispatch> Pass<'a, R, D> {
+impl<'a, D: Dispatch> Pass<'a, D> {
     /// The region the maps of `level` cover.
     fn level_region(&self, level: usize) -> Region {
         Region {

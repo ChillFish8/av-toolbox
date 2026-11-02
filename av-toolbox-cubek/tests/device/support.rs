@@ -21,13 +21,13 @@ impl Dispatch for Sizing {
     }
 }
 
-pub fn upload_f32<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Handle {
+pub fn upload_f32(client: &Client, values: &[f32]) -> Handle {
     let bytes = f32::as_bytes(values);
 
     client.create_from_slice(bytes)
 }
 
-pub fn upload_f16<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Handle {
+pub fn upload_f16(client: &Client, values: &[f32]) -> Handle {
     let bytes: Vec<u8> = values
         .iter()
         .flat_map(|value| half::f16::from_f32(*value).to_le_bytes())
@@ -36,21 +36,21 @@ pub fn upload_f16<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Hand
     client.create_from_slice(&bytes)
 }
 
-pub fn upload_u32<R: Runtime>(client: &ComputeClient<R>, values: &[u32]) -> Handle {
+pub fn upload_u32(client: &Client, values: &[u32]) -> Handle {
     let bytes = u32::as_bytes(values);
 
     client.create_from_slice(bytes)
 }
 
-pub fn upload_u8<R: Runtime>(client: &ComputeClient<R>, values: &[u8]) -> Handle {
+pub fn upload_u8(client: &Client, values: &[u8]) -> Handle {
     client.create_from_slice(values)
 }
 
-pub fn empty<R: Runtime>(client: &ComputeClient<R>, bytes: usize) -> Handle {
+pub fn empty(client: &Client, bytes: usize) -> Handle {
     client.empty(bytes)
 }
 
-pub fn read_f32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<f32> {
+pub fn read_f32(client: &Client, handle: &Handle) -> Vec<f32> {
     let owned = handle.clone();
     let bytes = client
         .read_one(owned)
@@ -59,7 +59,7 @@ pub fn read_f32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<f
     f32::from_bytes(&bytes).to_vec()
 }
 
-pub fn read_f16<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<f32> {
+pub fn read_f16(client: &Client, handle: &Handle) -> Vec<f32> {
     let owned = handle.clone();
     let bytes = client
         .read_one(owned)
@@ -72,7 +72,7 @@ pub fn read_f16<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<f
         .collect()
 }
 
-pub fn read_u32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u32> {
+pub fn read_u32(client: &Client, handle: &Handle) -> Vec<u32> {
     let owned = handle.clone();
     let bytes = client
         .read_one(owned)
@@ -81,7 +81,7 @@ pub fn read_u32<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u
     u32::from_bytes(&bytes).to_vec()
 }
 
-pub fn read_u8<R: Runtime>(client: &ComputeClient<R>, handle: &Handle) -> Vec<u8> {
+pub fn read_u8(client: &Client, handle: &Handle) -> Vec<u8> {
     let owned = handle.clone();
     let bytes = client
         .read_one(owned)

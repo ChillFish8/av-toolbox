@@ -44,13 +44,13 @@ const TWO_BELOW: u32 = 4;
 /// A row outside the field loads as 0 and is never read.
 #[cube]
 fn load_windows(
-    input: &Array<f32>,
+    input: &[f32],
     width: u32,
     offset: u32,
     rows: u32,
     row: u32,
     column: u32,
-    windows: &mut Array<f32>,
+    windows: &mut [f32],
 ) {
     for slot in 0..5u32 {
         let exists = row + slot >= 2 && row + slot < rows + 2;
@@ -70,11 +70,11 @@ fn load_windows(
 /// shifted by `shift` columns.
 #[cube]
 fn window_difference(
-    input: &Array<f32>,
+    input: &[f32],
     width: u32,
     offset: u32,
     column: u32,
-    windows: &Array<f32>,
+    windows: &[f32],
     slot: u32,
     second: u32,
     shift: i32,
@@ -95,7 +95,7 @@ fn window_difference(
 
 /// Whether any of the 3 mask pixels of `row` centred on `column` is set.
 #[cube]
-fn any_edge(edges: &Array<f32>, width: u32, row: u32, column: i32) -> bool {
+fn any_edge(edges: &[f32], width: u32, row: u32, column: i32) -> bool {
     let centre = row * width + column as u32;
     let before = edges[(centre - 1) as usize] == 1.0;
     let here = edges[centre as usize] == 1.0;
@@ -134,7 +134,7 @@ impl Best {
 
 /// Appends the direction `best` found, if any, to the first `length` slots of `found`.
 #[cube]
-fn push_found(found: &mut Array<f32>, length: u32, best: &Best) -> u32 {
+fn push_found(found: &mut [f32], length: u32, best: &Best) -> u32 {
     let mut new_length = length;
 
     if best.found {
@@ -147,7 +147,7 @@ fn push_found(found: &mut Array<f32>, length: u32, best: &Best) -> u32 {
 
 /// The direction in whole pixels the found winners agree on, or 0 when fewer than two agree.
 #[cube]
-fn agreed_direction(found: &Array<f32>, length: u32) -> i32 {
+fn agreed_direction(found: &[f32], length: u32) -> i32 {
     let mut result = 0i32;
 
     if length > 1 {
@@ -195,8 +195,8 @@ struct SearchLimits {
 /// Pass 6's direction at one pixel, searching every shift within `maxd` that stays inside the row.
 #[cube]
 fn raw_direction(
-    input: &Array<f32>,
-    edges: &Array<f32>,
+    input: &[f32],
+    edges: &[f32],
     width: u32,
     rows: u32,
     offset: u32,
@@ -222,7 +222,7 @@ fn raw_direction(
     let mut best_e = Best::starting_at(start_b);
 
     let mut windows = Array::<f32>::new(15usize);
-    load_windows(input, width, offset, rows, row, column, &mut windows);
+    load_windows(input, width, offset, rows, row, column, windows.as_mut_slice());
 
     let span = (2 * reach + 1) as u32;
     for step in 0..span {
@@ -232,11 +232,46 @@ fn raw_direction(
         let edge_below = row + 2 == rows || any_edge(edges, width, row + 1, signed_column - shift);
 
         if edge_above && edge_below {
-            let own_to_below =
-                window_difference(input, width, offset, column, &windows, OWN, row + 1, -shift);
-            let own_to_above = window_difference(input, width, offset, column, &windows, OWN, row - 1, shift);
-            let above_to_own = window_difference(input, width, offset, column, &windows, ABOVE, row, -shift);
-            let below_to_own = window_difference(input, width, offset, column, &windows, BELOW, row, shift);
+            let own_to_below = window_difference(
+                input,
+                width,
+                offset,
+                column,
+                windows.as_slice(),
+                OWN,
+                row + 1,
+                -shift,
+            );
+            let own_to_above = window_difference(
+                input,
+                width,
+                offset,
+                column,
+                windows.as_slice(),
+                OWN,
+                row - 1,
+                shift,
+            );
+            let above_to_own = window_difference(
+                input,
+                width,
+                offset,
+                column,
+                windows.as_slice(),
+                ABOVE,
+                row,
+                -shift,
+            );
+            let below_to_own = window_difference(
+                input,
+                width,
+                offset,
+                column,
+                windows.as_slice(),
+                BELOW,
+                row,
+                shift,
+            );
             let cost = own_to_below + own_to_above + above_to_own + below_to_own;
             let mut cost_d = own_to_above + below_to_own;
             let mut cost_e = own_to_below + above_to_own;
@@ -244,10 +279,26 @@ fn raw_direction(
 
             if row > 1 {
                 let two_above = row - 2;
-                let two_above_to_above =
-                    window_difference(input, width, offset, column, &windows, TWO_ABOVE, row - 1, -shift);
-                let above_to_two_above =
-                    window_difference(input, width, offset, column, &windows, ABOVE, two_above, shift);
+                let two_above_to_above = window_difference(
+                    input,
+                    width,
+                    offset,
+                    column,
+                    windows.as_slice(),
+                    TWO_ABOVE,
+                    row - 1,
+                    -shift,
+                );
+                let above_to_two_above = window_difference(
+                    input,
+                    width,
+                    offset,
+                    column,
+                    windows.as_slice(),
+                    ABOVE,
+                    two_above,
+                    shift,
+                );
                 let cost_a = cost + two_above_to_above + above_to_two_above;
                 cost_d += above_to_two_above;
                 cost_e += two_above_to_above;
@@ -256,10 +307,26 @@ fn raw_direction(
 
             if row + 2 < rows {
                 let two_below = row + 2;
-                let two_below_to_below =
-                    window_difference(input, width, offset, column, &windows, TWO_BELOW, row + 1, shift);
-                let below_to_two_below =
-                    window_difference(input, width, offset, column, &windows, BELOW, two_below, -shift);
+                let two_below_to_below = window_difference(
+                    input,
+                    width,
+                    offset,
+                    column,
+                    windows.as_slice(),
+                    TWO_BELOW,
+                    row + 1,
+                    shift,
+                );
+                let below_to_two_below = window_difference(
+                    input,
+                    width,
+                    offset,
+                    column,
+                    windows.as_slice(),
+                    BELOW,
+                    two_below,
+                    -shift,
+                );
                 let cost_c = cost + two_below_to_below + below_to_two_below;
                 cost_d += two_below_to_below;
                 cost_e += below_to_two_below;
@@ -272,13 +339,13 @@ fn raw_direction(
     }
 
     let mut found = Array::<f32>::new(5usize);
-    let mut length = push_found(&mut found, 0u32, &best_a);
-    length = push_found(&mut found, length, &best_b);
-    length = push_found(&mut found, length, &best_c);
-    length = push_found(&mut found, length, &best_d);
-    length = push_found(&mut found, length, &best_e);
+    let mut length = push_found(found.as_mut_slice(), 0u32, &best_a);
+    length = push_found(found.as_mut_slice(), length, &best_b);
+    length = push_found(found.as_mut_slice(), length, &best_c);
+    length = push_found(found.as_mut_slice(), length, &best_d);
+    length = push_found(found.as_mut_slice(), length, &best_e);
 
-    agreed_direction(&found, length)
+    agreed_direction(found.as_slice(), length)
 }
 
 /// Pass 6, the raw direction `D0` of every edge pixel with an edge beside it, and `peak` elsewhere.
@@ -286,9 +353,9 @@ fn raw_direction(
 /// A direction of `d` pixels is written as `neutral + d * four_unit`.
 #[cube(launch_unchecked)]
 fn raw_directions_kernel(
-    input: &Array<f32>,
-    edges: &Array<f32>,
-    directions: &mut Array<f32>,
+    input: &[f32],
+    edges: &[f32],
+    directions: &mut [f32],
     width: u32,
     rows: u32,
     offset: u32,
@@ -327,9 +394,9 @@ fn raw_directions_kernel(
 /// Pass 7, `D1`, which keeps an edge pixel's direction only where at least 4 of its block agree.
 #[cube(launch_unchecked)]
 fn filter_directions_kernel(
-    source: &Array<f32>,
-    edges: &Array<f32>,
-    destination: &mut Array<f32>,
+    source: &[f32],
+    edges: &[f32],
+    destination: &mut [f32],
     width: u32,
     rows: u32,
     peak: f32,
@@ -360,9 +427,9 @@ fn filter_directions_kernel(
             column,
             peak,
             true,
-            &mut values,
+            values.as_mut_slice(),
         );
-        value = filter_vote(&values, length, centre, &scale);
+        value = filter_vote(values.as_slice(), length, centre, &scale);
     }
 
     destination[ABSOLUTE_POS] = value;
@@ -371,9 +438,9 @@ fn filter_directions_kernel(
 /// Pass 8, `D2`, which gives an edge pixel with no direction one where at least 5 neighbours agree.
 #[cube(launch_unchecked)]
 fn expand_directions_kernel(
-    source: &Array<f32>,
-    edges: &Array<f32>,
-    destination: &mut Array<f32>,
+    source: &[f32],
+    edges: &[f32],
+    destination: &mut [f32],
     width: u32,
     rows: u32,
     peak: f32,
@@ -404,9 +471,9 @@ fn expand_directions_kernel(
             column,
             peak,
             false,
-            &mut values,
+            values.as_mut_slice(),
         );
-        value = expand_vote(&values, length, &scale);
+        value = expand_vote(values.as_slice(), length, &scale);
     }
 
     destination[ABSOLUTE_POS] = value;
@@ -422,7 +489,7 @@ struct Line {
 
 /// Whether column `column` of row `other` breaks the line a direction at row `row` claims.
 #[cube]
-fn is_broken(directions: &Array<f32>, width: u32, other: u32, row: u32, column: u32, line: &Line) -> bool {
+fn is_broken(directions: &[f32], width: u32, other: u32, row: u32, column: u32, line: &Line) -> bool {
     let other_value = directions[(other * width + column) as usize];
     let own_value = directions[(row * width + column) as usize];
     let other_far = f32::abs(other_value - line.value) > line.lim && other_value != line.peak;
@@ -435,7 +502,7 @@ fn is_broken(directions: &Array<f32>, width: u32, other: u32, row: u32, column: 
 /// Whether any column of row `other` between `first` and `last` breaks the line.
 #[cube]
 fn any_broken(
-    directions: &Array<f32>,
+    directions: &[f32],
     width: u32,
     other: u32,
     row: u32,
@@ -462,9 +529,9 @@ fn any_broken(
 /// `reduce` is `2^(8 - bits)`, which turns a floor multiplication into a right shift by `bits - 8`.
 #[cube(launch_unchecked)]
 fn clean_directions_kernel(
-    source: &Array<f32>,
-    edges: &Array<f32>,
-    destination: &mut Array<f32>,
+    source: &[f32],
+    edges: &[f32],
+    destination: &mut [f32],
     width: u32,
     rows: u32,
     peak: f32,
@@ -524,7 +591,7 @@ fn clean_directions_kernel(
 
 /// Whether gap pixel `column` of gap row `gap` touches the edge mask above or below it.
 #[cube]
-pub(super) fn touches_edge(edges: &Array<f32>, width: u32, gap: u32, column: u32) -> bool {
+pub(super) fn touches_edge(edges: &[f32], width: u32, gap: u32, column: u32) -> bool {
     let above = gap * width + column;
     let below = above + width;
 
@@ -549,7 +616,7 @@ fn agrees(first: f32, second: f32, second_missing: bool, lim: f32, peak: f32) ->
 ///
 /// The third agreement test compares the right direction above with the left one below, as the plugin does.
 #[cube]
-fn gap_direction(directions: &Array<f32>, width: u32, gap: u32, column: u32, scale: &MapScale) -> f32 {
+fn gap_direction(directions: &[f32], width: u32, gap: u32, column: u32, scale: &MapScale) -> f32 {
     let peak = scale.peak;
     let above = gap * width + column;
     let below = above + width;
@@ -561,16 +628,16 @@ fn gap_direction(directions: &Array<f32>, width: u32, gap: u32, column: u32, sca
     let below_right = directions[(below + 1) as usize];
 
     let mut values = Array::<f32>::new(6usize);
-    let mut length = push_present(&mut values, 0u32, above_left, peak);
-    length = push_present(&mut values, length, above_centre, peak);
-    length = push_present(&mut values, length, above_right, peak);
-    length = push_present(&mut values, length, below_left, peak);
-    length = push_present(&mut values, length, below_centre, peak);
-    length = push_present(&mut values, length, below_right, peak);
+    let mut length = push_present(values.as_mut_slice(), 0u32, above_left, peak);
+    length = push_present(values.as_mut_slice(), length, above_centre, peak);
+    length = push_present(values.as_mut_slice(), length, above_right, peak);
+    length = push_present(values.as_mut_slice(), length, below_left, peak);
+    length = push_present(values.as_mut_slice(), length, below_centre, peak);
+    length = push_present(values.as_mut_slice(), length, below_right, peak);
 
     let mut result = peak;
     if length >= 3 {
-        let vote = consensus(&values, length, scale);
+        let vote = consensus(values.as_slice(), length, scale);
         let left_agrees = agrees(above_left, below_left, below_left == peak, vote.lim, peak);
         let centre_agrees = agrees(above_centre, below_centre, below_centre == peak, vote.lim, peak);
         let right_agrees = agrees(above_right, below_left, below_right == peak, vote.lim, peak);
@@ -588,9 +655,9 @@ fn gap_direction(directions: &Array<f32>, width: u32, gap: u32, column: u32, sca
 /// Pass 10, the gap directions `X0` from the cleaned field directions, `peak` where none agree.
 #[cube(launch_unchecked)]
 fn gap_directions_kernel(
-    directions: &Array<f32>,
-    edges: &Array<f32>,
-    gaps: &mut Array<f32>,
+    directions: &[f32],
+    edges: &[f32],
+    gaps: &mut [f32],
     width: u32,
     peak: f32,
     neutral: f32,
@@ -640,9 +707,9 @@ fn gap_rows_around(gap: u32, gap_rows: u32) -> GapRows {
 /// Pass 11, `X1`, the gap filter `filter2x`, using only the gap rows that exist.
 #[cube(launch_unchecked)]
 fn filter_gaps_kernel(
-    source: &Array<f32>,
-    edges: &Array<f32>,
-    destination: &mut Array<f32>,
+    source: &[f32],
+    edges: &[f32],
+    destination: &mut [f32],
     width: u32,
     gap_rows: u32,
     peak: f32,
@@ -674,9 +741,9 @@ fn filter_gaps_kernel(
             column,
             peak,
             true,
-            &mut values,
+            values.as_mut_slice(),
         );
-        value = filter_vote(&values, length, centre, &scale);
+        value = filter_vote(values.as_slice(), length, centre, &scale);
     }
 
     destination[ABSOLUTE_POS] = value;
@@ -685,9 +752,9 @@ fn filter_gaps_kernel(
 /// Pass 12, `X2`, the gap expansion `expand2x`, using only the gap rows that exist.
 #[cube(launch_unchecked)]
 fn expand_gaps_kernel(
-    source: &Array<f32>,
-    edges: &Array<f32>,
-    destination: &mut Array<f32>,
+    source: &[f32],
+    edges: &[f32],
+    destination: &mut [f32],
     width: u32,
     gap_rows: u32,
     peak: f32,
@@ -719,17 +786,17 @@ fn expand_gaps_kernel(
             column,
             peak,
             false,
-            &mut values,
+            values.as_mut_slice(),
         );
-        value = expand_vote(&values, length, &scale);
+        value = expand_vote(values.as_slice(), length, &scale);
     }
 
     destination[ABSOLUTE_POS] = value;
 }
 
 /// Launches pass 6, reading the final mask in `edges` and writing `D0` into `working`.
-pub(super) fn raw_directions<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn raw_directions(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -744,11 +811,11 @@ pub(super) fn raw_directions<R: Runtime>(
     // within two of its own, only for interior pixels, and its search reach is clamped so every column it
     // reads stays inside the row.
     unsafe {
-        let input = pass.input.array::<R>();
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let directions = pass.field_array::<R>(FieldBuffer::Working);
+        let input = pass.input.array();
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let directions = pass.field_array(FieldBuffer::Working);
 
-        raw_directions_kernel::launch_unchecked::<R>(
+        raw_directions_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -769,8 +836,8 @@ pub(super) fn raw_directions<R: Runtime>(
 }
 
 /// Launches pass 7, filtering `D0` in `working` into `D1` in `directions`.
-pub(super) fn filter_directions<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn filter_directions(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -782,11 +849,11 @@ pub(super) fn filter_directions<R: Runtime>(
     // Safety: `working`, `edges` and `directions` each hold `width * rows` values, as `FieldPass::new`
     // checked. Each unit writes only its own pixel and reads its 3 by 3 block only for interior pixels.
     unsafe {
-        let source = pass.field_array::<R>(FieldBuffer::Working);
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.field_array::<R>(FieldBuffer::Directions);
+        let source = pass.field_array(FieldBuffer::Working);
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let destination = pass.field_array(FieldBuffer::Directions);
 
-        filter_directions_kernel::launch_unchecked::<R>(
+        filter_directions_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -804,8 +871,8 @@ pub(super) fn filter_directions<R: Runtime>(
 }
 
 /// Launches pass 8, expanding `D1` in `directions` into `D2` in `working`.
-pub(super) fn expand_directions<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn expand_directions(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -817,11 +884,11 @@ pub(super) fn expand_directions<R: Runtime>(
     // Safety: `directions`, `edges` and `working` each hold `width * rows` values, as `FieldPass::new`
     // checked. Each unit writes only its own pixel and reads its 3 by 3 block only for interior pixels.
     unsafe {
-        let source = pass.field_array::<R>(FieldBuffer::Directions);
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.field_array::<R>(FieldBuffer::Working);
+        let source = pass.field_array(FieldBuffer::Directions);
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let destination = pass.field_array(FieldBuffer::Working);
 
-        expand_directions_kernel::launch_unchecked::<R>(
+        expand_directions_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -839,8 +906,8 @@ pub(super) fn expand_directions<R: Runtime>(
 }
 
 /// Launches pass 9, cleaning `D2` in `working` into `D3` in `directions`.
-pub(super) fn clean_directions<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn clean_directions(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -853,11 +920,11 @@ pub(super) fn clean_directions<R: Runtime>(
     // checked. Each unit writes only its own pixel. It reads the rows above and below only for interior
     // pixels, at columns clamped into the row.
     unsafe {
-        let source = pass.field_array::<R>(FieldBuffer::Working);
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.field_array::<R>(FieldBuffer::Directions);
+        let source = pass.field_array(FieldBuffer::Working);
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let destination = pass.field_array(FieldBuffer::Directions);
 
-        clean_directions_kernel::launch_unchecked::<R>(
+        clean_directions_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -875,8 +942,8 @@ pub(super) fn clean_directions<R: Runtime>(
 }
 
 /// Launches pass 10, writing `X0` into `working` from `D3` in `directions`.
-pub(super) fn gap_directions<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn gap_directions(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -889,11 +956,11 @@ pub(super) fn gap_directions<R: Runtime>(
     // `width * (rows - 1)`, as `FieldPass::new` checked. Each unit writes only its own gap pixel and reads
     // field rows `gap` and `gap + 1`, at columns within one of its own only when those lie inside the row.
     unsafe {
-        let directions = pass.field_array::<R>(FieldBuffer::Directions);
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let gaps = pass.gap_array::<R>(GapBuffer::Working);
+        let directions = pass.field_array(FieldBuffer::Directions);
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let gaps = pass.gap_array(GapBuffer::Working);
 
-        gap_directions_kernel::launch_unchecked::<R>(
+        gap_directions_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -910,8 +977,8 @@ pub(super) fn gap_directions<R: Runtime>(
 }
 
 /// Launches `filter2x`, filtering the gap map in `source` into `destination`.
-pub(super) fn filter_gaps<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn filter_gaps(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -928,11 +995,11 @@ pub(super) fn filter_gaps<R: Runtime>(
     // as `FieldPass::new` checked. Each unit writes only its own gap pixel and reads only the gap rows
     // around it that exist, at columns within one of its own only when those lie inside the row.
     unsafe {
-        let source = pass.gap_array::<R>(source);
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.gap_array::<R>(destination);
+        let source = pass.gap_array(source);
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let destination = pass.gap_array(destination);
 
-        filter_gaps_kernel::launch_unchecked::<R>(
+        filter_gaps_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -950,8 +1017,8 @@ pub(super) fn filter_gaps<R: Runtime>(
 }
 
 /// Launches `expand2x`, expanding the gap map in `source` into `destination`.
-pub(super) fn expand_gaps<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(super) fn expand_gaps(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -968,11 +1035,11 @@ pub(super) fn expand_gaps<R: Runtime>(
     // as `FieldPass::new` checked. Each unit writes only its own gap pixel and reads only the gap rows
     // around it that exist, at columns within one of its own only when those lie inside the row.
     unsafe {
-        let source = pass.gap_array::<R>(source);
-        let edges = pass.field_array::<R>(FieldBuffer::Edges);
-        let destination = pass.gap_array::<R>(destination);
+        let source = pass.gap_array(source);
+        let edges = pass.field_array(FieldBuffer::Edges);
+        let destination = pass.gap_array(destination);
 
-        expand_gaps_kernel::launch_unchecked::<R>(
+        expand_gaps_kernel::launch_unchecked(
             client,
             cubes,
             unit,

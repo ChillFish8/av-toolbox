@@ -1,12 +1,10 @@
-use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use cubecl::ir::DeviceProperties;
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use cubecl::tune::{
     AutotuneKey,
     AutotuneOutput,
@@ -48,10 +46,7 @@ const FNV_PRIME: u64 = 0x0100_0000_01b3;
 static TUNER: LocalTuner<TuneKey, String> = LocalTuner::new("av-toolbox-cnn-body-convolution");
 
 /// The plan each kernel choice runs by, per runtime, device limits, Winograd offer and width.
-static PLANS: LazyLock<Mutex<HashMap<PlanKey, SharedPlan>>> = LazyLock::new(Mutex::default);
-
-/// A [Plan] for any runtime.
-type SharedPlan = Arc<dyn Any + Send + Sync>;
+static PLANS: LazyLock<Mutex<HashMap<PlanKey, Arc<Plan>>>> = LazyLock::new(Mutex::default);
 
 /// How many samples a body convolution covers, in buckets coarse enough that nearby frame sizes share one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -164,18 +159,18 @@ pub struct TunedRun {
 }
 
 /// The inputs of a tuned body convolution, at any lifetime.
-struct BodyInputs<R>(PhantomData<fn() -> R>);
+struct BodyInputs;
 
-impl<R: Runtime> TuneInputs for BodyInputs<R> {
-    type At<'a> = TuneInput<'a, R>;
+impl TuneInputs for BodyInputs {
+    type At<'a> = TuneInput<'a>;
 }
 
 /// One body convolution handed to the tuner, counting how many times a candidate runs it.
 ///
 /// Outside the benchmarks, a candidate that fails to launch leaves its error in `failure` and reports a run,
 /// since CubeCL panics when the candidate it chose gives an error.
-struct TuneInput<'a, R: Runtime> {
-    client: ComputeClient<R>,
+struct TuneInput<'a> {
+    client: Client,
     convolution: BodyConvolution<'a>,
     epilogue: Epilogue,
     executions: &'a AtomicU32,
@@ -183,7 +178,7 @@ struct TuneInput<'a, R: Runtime> {
     failure: &'a Mutex<Option<String>>,
 }
 
-impl<R: Runtime> Clone for TuneInput<'_, R> {
+impl Clone for TuneInput<'_> {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
@@ -205,13 +200,13 @@ struct PrimedInputs {
     candidates: Vec<Candidate>,
 }
 
-impl<R: Runtime> InputGenerator<TuneKey, BodyInputs<R>> for PrimedInputs {
+impl InputGenerator<TuneKey, BodyInputs> for PrimedInputs {
     // The inputs are named through the projection so the lifetime binds as the trait's does.
     fn generate<'a>(
         &self,
         _key: &TuneKey,
-        inputs: &<BodyInputs<R> as TuneInputs>::At<'a>,
-    ) -> <BodyInputs<R> as TuneInputs>::At<'a> {
+        inputs: &<BodyInputs as TuneInputs>::At<'a>,
+    ) -> <BodyInputs as TuneInputs>::At<'a> {
         for candidate in self.candidates.iter().copied() {
             inputs.executions.fetch_add(1, Ordering::Relaxed);
 
@@ -230,7 +225,7 @@ impl<R: Runtime> InputGenerator<TuneKey, BodyInputs<R>> for PrimedInputs {
     }
 }
 
-fn tune_key<R: Runtime>(input: &TuneInput<'_, R>) -> TuneKey {
+fn tune_key(input: &TuneInput<'_>) -> TuneKey {
     let plane_width = input.client.properties().hardware.plane_size_max;
 
     TuneKey::of(&input.convolution, input.epilogue, plane_width)
@@ -240,7 +235,7 @@ fn tune_key<R: Runtime>(input: &TuneInput<'_, R>) -> TuneKey {
 ///
 /// A failure is an error while benchmarking, which the tuner skips. Otherwise it is left in the input's
 /// failure slot.
-fn run_tunable<R: Runtime>(input: TuneInput<'_, R>, candidate: Candidate) -> Result<LayerRun, String> {
+fn run_tunable(input: TuneInput<'_>, candidate: Candidate) -> Result<LayerRun, String> {
     input.executions.fetch_add(1, Ordering::Relaxed);
 
     let launched = launch_candidate(&input.client, candidate, &input.convolution);
@@ -260,22 +255,20 @@ fn run_tunable<R: Runtime>(input: TuneInput<'_, R>, candidate: Candidate) -> Res
     Ok(LayerRun::of_candidate(candidate, false))
 }
 
-fn tunable<R: Runtime>(candidate: Candidate) -> Tunable<TuneKey, BodyInputs<R>, LayerRun> {
+fn tunable(candidate: Candidate) -> Tunable<TuneKey, BodyInputs, LayerRun> {
     let name = candidate.name();
 
-    Tunable::new(&name, move |input: TuneInput<'_, R>| {
-        run_tunable(input, candidate)
-    })
+    Tunable::new(&name, move |input: TuneInput<'_>| run_tunable(input, candidate))
 }
 
-fn tunable_set<R: Runtime>(candidates: &[Candidate]) -> TunableSet<TuneKey, BodyInputs<R>, LayerRun> {
+fn tunable_set(candidates: &[Candidate]) -> TunableSet<TuneKey, BodyInputs, LayerRun> {
     let primed = PrimedInputs {
         candidates: candidates.to_vec(),
     };
-    let mut set = TunableSet::new(tune_key::<R>, primed);
+    let mut set = TunableSet::new(tune_key, primed);
 
     for candidate in candidates.iter().copied() {
-        let entry = tunable::<R>(candidate);
+        let entry = tunable(candidate);
         set = set.with(entry);
     }
 
@@ -287,8 +280,8 @@ fn tunable_set<R: Runtime>(candidates: &[Candidate]) -> TunableSet<TuneKey, Body
 /// The device is named by its runtime and the limits its candidates are chosen by. The list's
 /// fingerprint keeps each version of a list in its own file. CubeCL keeps one tuning a key when it loads a
 /// file, so tunings of an older list sharing a file make it tune that key again.
-fn tuner_id<R: Runtime>(client: &ComputeClient<R>, label: &str, fingerprint: &str) -> String {
-    let runtime = R::name(client);
+fn tuner_id(client: &Client, label: &str, fingerprint: &str) -> String {
+    let runtime = client.name();
     let hardware = &client.properties().hardware;
 
     format!(
@@ -367,7 +360,6 @@ pub fn fixed_candidate(properties: &DeviceProperties, features: u32) -> Candidat
 /// offered, the width and the kernel choice.
 #[derive(PartialEq, Eq, Hash)]
 struct PlanKey {
-    runtime: TypeId,
     runtime_name: &'static str,
     plane_size_min: u32,
     plane_size_max: u32,
@@ -380,12 +372,11 @@ struct PlanKey {
 }
 
 impl PlanKey {
-    fn of<R: Runtime>(client: &ComputeClient<R>, kernels: &Kernels, winograd: bool, features: u32) -> Self {
+    fn of(client: &Client, kernels: &Kernels, winograd: bool, features: u32) -> Self {
         let hardware = &client.properties().hardware;
 
         Self {
-            runtime: TypeId::of::<R>(),
-            runtime_name: R::name(client),
+            runtime_name: client.name(),
             plane_size_min: hardware.plane_size_min,
             plane_size_max: hardware.plane_size_max,
             shared_bytes: hardware.max_shared_memory_size,
@@ -399,7 +390,7 @@ impl PlanKey {
 }
 
 /// How a kernel choice runs on one device and map width.
-enum Plan<R: Runtime> {
+enum Plan {
     /// No candidate can run, for the reasons given.
     Refused(String),
     /// One candidate runs without tuning. `winograd` is whether the list it came from holds a Winograd
@@ -409,7 +400,7 @@ enum Plan<R: Runtime> {
     /// Winograd variant.
     Tuned {
         id: String,
-        set: Arc<TunableSet<TuneKey, BodyInputs<R>, LayerRun>>,
+        set: Arc<TunableSet<TuneKey, BodyInputs, LayerRun>>,
         winograd: bool,
     },
 }
@@ -467,12 +458,7 @@ pub(super) fn choose(properties: &DeviceProperties, candidates: &[Candidate], fe
 }
 
 /// The plan for `candidates`, tuned under `label`, on maps of `features` channels.
-fn plan_among<R: Runtime>(
-    client: &ComputeClient<R>,
-    label: &str,
-    candidates: &[Candidate],
-    features: u32,
-) -> Plan<R> {
+fn plan_among(client: &Client, label: &str, candidates: &[Candidate], features: u32) -> Plan {
     let properties = client.properties();
     let winograd = candidates
         .iter()
@@ -486,7 +472,7 @@ fn plan_among<R: Runtime>(
         Choice::Tuned => {
             let fingerprint = list_fingerprint(candidates);
             let id = tuner_id(client, label, &fingerprint);
-            let set = tunable_set::<R>(candidates);
+            let set = tunable_set(candidates);
             let shared_set = Arc::new(set);
 
             Plan::Tuned {
@@ -498,12 +484,7 @@ fn plan_among<R: Runtime>(
     }
 }
 
-fn make_plan<R: Runtime>(
-    client: &ComputeClient<R>,
-    kernels: &Kernels,
-    winograd: bool,
-    features: u32,
-) -> Plan<R> {
+fn make_plan(client: &Client, kernels: &Kernels, winograd: bool, features: u32) -> Plan {
     let properties = client.properties();
 
     match kernels {
@@ -531,17 +512,12 @@ fn make_plan<R: Runtime>(
 
 /// The plan `kernels` runs by on the client's device for maps of `features` channels, worked out on its first
 /// use. `winograd` is whether the Winograd candidates are offered.
-fn plan_for<R: Runtime>(
-    client: &ComputeClient<R>,
-    kernels: &Kernels,
-    winograd: bool,
-    features: u32,
-) -> Arc<Plan<R>> {
+fn plan_for(client: &Client, kernels: &Kernels, winograd: bool, features: u32) -> Arc<Plan> {
     let key = PlanKey::of(client, kernels, winograd, features);
     let mut plans = PLANS.lock().unwrap_or_else(PoisonError::into_inner);
 
     let known = plans.get(&key).cloned();
-    if let Some(plan) = known.and_then(|shared| shared.downcast::<Plan<R>>().ok()) {
+    if let Some(plan) = known {
         return plan;
     }
 
@@ -552,8 +528,8 @@ fn plan_for<R: Runtime>(
     plan
 }
 
-fn run_once<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_once(
+    client: &Client,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
 ) -> Result<TunedRun, CnnError> {
@@ -567,10 +543,10 @@ fn run_once<R: Runtime>(
 /// seen.
 ///
 /// Gives an error when the chosen candidate fails to launch.
-fn run_tuner<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_tuner(
+    client: &Client,
     id: &String,
-    set: &Arc<TunableSet<TuneKey, BodyInputs<R>, LayerRun>>,
+    set: &Arc<TunableSet<TuneKey, BodyInputs, LayerRun>>,
     convolution: &BodyConvolution<'_>,
     epilogue: Epilogue,
 ) -> Result<TunedRun, CnnError> {
@@ -612,8 +588,8 @@ fn offering_winograd(tuned: TunedRun, winograd: bool) -> TunedRun {
 /// Runs `convolution`, which applies `epilogue`, with the candidate `kernels` chooses.
 ///
 /// Gives an error when no candidate can run it, or when the chosen one fails to launch.
-pub fn run_tuned<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn run_tuned(
+    client: &Client,
     kernels: &Kernels,
     convolution: &BodyConvolution<'_>,
     epilogue: Epilogue,

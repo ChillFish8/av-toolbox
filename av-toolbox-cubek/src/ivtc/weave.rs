@@ -5,13 +5,7 @@ use cubecl::prelude::*;
 use crate::{DevicePlane, Dispatch, assert_plane};
 
 #[cube(launch_unchecked)]
-fn weave_kernel(
-    matching: &Array<f32>,
-    other: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    matching_parity: u32,
-) {
+fn weave_kernel(matching: &[f32], other: &[f32], output: &mut [f32], width: u32, matching_parity: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -33,12 +27,7 @@ pub struct WeavePlanes<'a> {
 
 /// Builds `planes.output` from the rows of parity `matching_parity` of `planes.matching` and the other
 /// rows of `planes.other`.
-pub fn weave<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: WeavePlanes<'_>,
-    matching_parity: u32,
-) {
+pub fn weave(client: &Client, dispatch: &impl Dispatch, planes: WeavePlanes<'_>, matching_parity: u32) {
     let width = planes.output.width();
     let height = planes.output.height();
     assert_plane(&planes.matching, width, height, "matching");
@@ -48,13 +37,13 @@ pub fn weave<R: Runtime>(
     let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let matching = planes.matching.array::<R>();
-    let other = planes.other.array::<R>();
-    let output = planes.output.array::<R>();
+    let matching = planes.matching.array();
+    let other = planes.other.array();
+    let output = planes.output.array();
 
     // Safety: all three planes hold `samples` f32 values, and each unit reads and writes only its own sample.
     unsafe {
-        weave_kernel::launch_unchecked::<R>(
+        weave_kernel::launch_unchecked(
             client,
             cubes,
             unit,

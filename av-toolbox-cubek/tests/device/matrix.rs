@@ -18,7 +18,6 @@ use av_toolbox_cubek::testing::{
     reference_matrix,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_u8, upload_u8};
 
@@ -33,7 +32,7 @@ struct Convert {
 impl BuildTask for Convert {
     type Output = [Vec<u8>; 3];
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let affine = self.conversion.affine();

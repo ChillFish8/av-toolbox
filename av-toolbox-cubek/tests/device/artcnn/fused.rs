@@ -10,7 +10,6 @@ use av_toolbox_cubek::artcnn::{
     convolve_with_blueprint,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 use cubecl::server::Handle;
 
 use super::body::{r8f64, supports};
@@ -55,12 +54,12 @@ struct FusedOutputs {
 impl BuildTask for FusedLayer {
     type Output = FusedOutputs;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
-        let eligible = forced_eligible(client);
         let precision = Precision::F16;
         let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
+        let eligible = forced_eligible(client, network.features());
         let map_bytes = self.maps.len() * precision.bytes();
 
         let input = upload_maps(client, &self.maps, precision);

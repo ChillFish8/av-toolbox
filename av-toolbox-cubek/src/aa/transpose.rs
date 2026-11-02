@@ -39,8 +39,8 @@ pub(super) fn tile_shape() -> CubeDim {
 /// writes run along the output's rows. Only samples inside the plane are written.
 #[cube]
 pub(super) fn write_turned_tile(
-    tile: &SharedMemory<f32>,
-    output: &mut Array<f32>,
+    tile: &Shared<[f32]>,
+    output: &mut [f32],
     first_column: u32,
     first_row: u32,
     width: u32,
@@ -61,7 +61,7 @@ pub(super) fn write_turned_tile(
 }
 
 #[cube(launch_unchecked)]
-fn transpose_kernel(input: &Array<f32>, output: &mut Array<f32>, input_width: u32, input_height: u32) {
+fn transpose_kernel(input: &[f32], output: &mut [f32], input_width: u32, input_height: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -75,8 +75,8 @@ fn transpose_kernel(input: &Array<f32>, output: &mut Array<f32>, input_width: u3
 /// The transpose of one `TILE` square, staged through shared memory so both the reads and the writes
 /// run along rows.
 #[cube(launch_unchecked)]
-fn tiled_transpose_kernel(input: &Array<f32>, output: &mut Array<f32>, input_width: u32, input_height: u32) {
-    let mut tile = SharedMemory::<f32>::new(comptime!((TILE * TILE_STRIDE) as usize));
+fn tiled_transpose_kernel(input: &[f32], output: &mut [f32], input_width: u32, input_height: u32) {
+    let mut tile = Shared::<[f32]>::new_slice(comptime!((TILE * TILE_STRIDE) as usize));
     let first_column = CUBE_POS_X * TILE;
     let first_row = CUBE_POS_Y * TILE;
     let column = first_column + UNIT_POS_X;
@@ -99,12 +99,7 @@ fn tiled_transpose_kernel(input: &Array<f32>, output: &mut Array<f32>, input_wid
 /// Swaps the axes of `input`, so `output[x][y] = input[y][x]`.
 ///
 /// The output is `input.height()` wide and `input.width()` tall.
-pub fn transpose<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    input: DevicePlane<'_>,
-    output: DevicePlane<'_>,
-) {
+pub fn transpose(client: &Client, dispatch: &impl Dispatch, input: DevicePlane<'_>, output: DevicePlane<'_>) {
     let input_width = input.width();
     let input_height = input.height();
 
@@ -124,14 +119,14 @@ pub fn transpose<R: Runtime>(
         return;
     };
 
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let unit = tile_shape();
 
     // Safety: the output holds its own samples, and each tile reads and writes only the positions its
     // guards place inside the asserted input and output sizes.
     unsafe {
-        tiled_transpose_kernel::launch_unchecked::<R>(
+        tiled_transpose_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -144,8 +139,8 @@ pub fn transpose<R: Runtime>(
 }
 
 /// Launches one unit per output sample, for a plane too large for one tile per cube.
-fn transpose_per_sample<R: Runtime>(
-    client: &ComputeClient<R>,
+fn transpose_per_sample(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -153,15 +148,15 @@ fn transpose_per_sample<R: Runtime>(
     let input_width = input.width();
     let input_height = input.height();
     let samples = output.samples();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the output holds its own samples, and every read lands inside the input because the
     // asserted sizes make each output position map to an input position.
     unsafe {
-        transpose_kernel::launch_unchecked::<R>(
+        transpose_kernel::launch_unchecked(
             client,
             cubes,
             unit,

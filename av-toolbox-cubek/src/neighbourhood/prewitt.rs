@@ -6,7 +6,7 @@ use super::{NeighbourPlanes, read};
 use crate::Dispatch;
 
 #[cube(launch_unchecked)]
-fn prewitt_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, peak: f32) {
+fn prewitt_kernel(input: &[f32], output: &mut [f32], width: u32, height: u32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -43,22 +43,17 @@ fn prewitt_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, heigh
 /// Writes havsfunc's `AvsPrewitt` edge strength, the largest absolute response of four compass kernels.
 ///
 /// Each response is clamped to `peak`, as the integer convolution it mirrors is.
-pub fn prewitt<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: NeighbourPlanes<'_>,
-    peak: f32,
-) {
+pub fn prewitt(client: &Client, dispatch: &impl Dispatch, planes: NeighbourPlanes<'_>, peak: f32) {
     let width = planes.input.width();
     let height = planes.input.height();
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `samples` f32 values, and every read is reflected inside the plane.
     unsafe {
-        prewitt_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, peak);
+        prewitt_kernel::launch_unchecked(client, cubes, unit, input, output, width, height, peak);
     }
 }

@@ -75,7 +75,7 @@ const FIRST_INDEX: i32 = -20;
 const INDEXES: usize = 41;
 
 #[cube(launch)]
-fn mirror_kernel(output: &mut Array<u32>, first: i32, length: i32) {
+fn mirror_kernel(output: &mut [u32], first: i32, length: i32) {
     if ABSOLUTE_POS < output.len() {
         let index = first + ABSOLUTE_POS as i32;
         let folded = mirror(index, length);
@@ -91,14 +91,14 @@ struct Mirror {
 impl BuildTask for Mirror {
     type Output = Vec<u32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let output = empty(client, INDEXES * size_of::<u32>());
 
         // Safety: the output holds one u32 an index.
-        let output_array = unsafe { ArrayArg::from_raw_parts(output.clone(), INDEXES) };
+        let output_array = unsafe { BufferArg::from_raw_parts(output.clone(), INDEXES) };
 
-        mirror_kernel::launch::<R>(
+        mirror_kernel::launch(
             client,
             CubeCount::Static(1, 1, 1),
             CubeDim::new_1d(64),
@@ -214,7 +214,7 @@ struct Head {
 impl BuildTask for Head {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let layer = HeadLayer::upload(client, &self.layer, self.precision);
@@ -410,7 +410,7 @@ pub(super) struct Down {
 impl BuildTask for Down {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = self.precision;
@@ -490,7 +490,7 @@ pub(super) struct Up {
 impl BuildTask for Up {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = self.precision;
@@ -559,7 +559,7 @@ struct Add {
 impl BuildTask for Add {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = self.precision;
@@ -624,7 +624,7 @@ struct TailOutputs {
 impl BuildTask for Tail {
     type Output = TailOutputs;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = self.precision;
@@ -678,8 +678,8 @@ impl BuildTask for Tail {
 }
 
 /// Runs `tail` again with the inferred blueprint, beside the run already in `forced`.
-fn rerun_inferred<R: Runtime>(
-    client: &ComputeClient<R>,
+fn rerun_inferred(
+    client: &Client,
     tail: &PaddedLastLayer,
     input: &Handle,
     region: Region,
@@ -697,7 +697,7 @@ fn rerun_inferred<R: Runtime>(
 
     let forced_values = read_f32(client, forced);
     let inferred_values = read_f32(client, &inferred);
-    let eligible = forced_eligible(client);
+    let eligible = forced_eligible(client, 16);
 
     BlueprintRuns {
         forced: forced_values,
@@ -891,7 +891,7 @@ struct TailScratches {
 impl BuildTask for TailPaths {
     type Output = TailScratches;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = self.precision;

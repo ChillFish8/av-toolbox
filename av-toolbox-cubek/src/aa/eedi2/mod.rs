@@ -208,7 +208,7 @@ fn assert_plane_size(handle: &Handle, bytes: usize, name: &str) {
 
 /// Field row `row` at `column`, read from plane row `2 * row + offset`.
 #[cube]
-pub(super) fn field_sample(input: &Array<f32>, width: u32, offset: u32, row: u32, column: u32) -> f32 {
+pub(super) fn field_sample(input: &[f32], width: u32, offset: u32, row: u32, column: u32) -> f32 {
     let plane_row = 2 * row + offset;
     let index = plane_row * width + column;
 
@@ -299,7 +299,7 @@ impl<'a> FieldPass<'a> {
     }
 
     /// The field buffer `buffer` as a kernel argument.
-    fn field_array<R: Runtime>(&self, buffer: FieldBuffer) -> ArrayArg<R> {
+    fn field_array(&self, buffer: FieldBuffer) -> BufferArg {
         let handle = match buffer {
             FieldBuffer::Edges => self.scratch.edges,
             FieldBuffer::Working => self.scratch.working,
@@ -310,11 +310,11 @@ impl<'a> FieldPass<'a> {
         let samples = self.field_samples();
 
         // Safety: `new` checked that `edges`, `working` and `directions` each hold a field.
-        unsafe { ArrayArg::from_raw_parts(owned, samples) }
+        unsafe { BufferArg::from_raw_parts(owned, samples) }
     }
 
     /// The gap buffer `buffer` as a kernel argument.
-    fn gap_array<R: Runtime>(&self, buffer: GapBuffer) -> ArrayArg<R> {
+    fn gap_array(&self, buffer: GapBuffer) -> BufferArg {
         let handle = match buffer {
             GapBuffer::Working => self.scratch.working,
             GapBuffer::Directions => self.scratch.directions,
@@ -327,13 +327,13 @@ impl<'a> FieldPass<'a> {
         let samples = self.gap_samples();
 
         // Safety: `new` checked that every scratch buffer holds at least a gap map.
-        unsafe { ArrayArg::from_raw_parts(owned, samples) }
+        unsafe { BufferArg::from_raw_parts(owned, samples) }
     }
 }
 
 /// Launches EEDI2's pass `number` over `pass`.
-fn run_pass<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_pass(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -391,8 +391,8 @@ fn run_pass<R: Runtime>(
 }
 
 /// Runs EEDI2's passes 1 to `last_pass` over `pass`, in order.
-pub(crate) fn run_passes<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn run_passes(
+    client: &Client,
     dispatch: &impl Dispatch,
     pass: &FieldPass<'_>,
     settings: &Eedi2Settings,
@@ -407,8 +407,8 @@ pub(crate) fn run_passes<R: Runtime>(
 ///
 /// The planes hold integer code values and must be distinct buffers of the same size. The row with no kept
 /// row on one side copies its kept neighbour.
-pub fn eedi2_field<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn eedi2_field(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -467,8 +467,8 @@ pub enum Eedi2Stage {
 /// The field keeps the rows of parity `offset`. A field stage fills `height / 2` rows of the buffer and a
 /// gap stage one row fewer, each `width` values wide.
 #[cfg(any(test, feature = "test-support"))]
-pub fn eedi2_passes_through<'a, R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn eedi2_passes_through<'a>(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'a>,
     scratch: Eedi2Scratch<'a>,

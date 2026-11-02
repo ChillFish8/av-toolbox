@@ -8,7 +8,7 @@ mod winograd;
 mod tests;
 
 use cubecl::ir::DeviceProperties;
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use cubecl::server::Handle;
 
 use self::add::add_maps;
@@ -231,8 +231,8 @@ fn winograd_name(variant: &WinogradVariant) -> String {
 ///
 /// Gives an error if the candidate cannot run on the device or with this convolution's shape.
 #[cfg(any(test, feature = "test-support"))]
-pub fn run_candidate<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn run_candidate(
+    client: &Client,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
 ) -> Result<(), CnnError> {
@@ -244,8 +244,8 @@ pub fn run_candidate<R: Runtime>(
 /// Runs `convolution` with `candidate`, giving whether the forced blueprint ran.
 ///
 /// Gives an error if the candidate cannot run on the device or with this convolution's shape.
-pub(crate) fn launch_candidate<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn launch_candidate(
+    client: &Client,
     candidate: Candidate,
     convolution: &BodyConvolution<'_>,
 ) -> Result<bool, CnnError> {
@@ -266,10 +266,7 @@ pub(crate) fn launch_candidate<R: Runtime>(
     }
 }
 
-fn run_fused_cubek<R: Runtime>(
-    client: &ComputeClient<R>,
-    convolution: &BodyConvolution<'_>,
-) -> Result<bool, CnnError> {
+fn run_fused_cubek(client: &Client, convolution: &BodyConvolution<'_>) -> Result<bool, CnnError> {
     let features = convolution.features as usize;
     let operands = Operands::body(convolution.weights, convolution.bias, features, Precision::F16);
     let region = convolution.region();

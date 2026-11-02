@@ -1,13 +1,14 @@
 use std::marker::PhantomData;
 
-use cubecl::prelude::barrier::BarrierExpand;
+use cubecl::prelude::barrier::Barrier;
 // `#[cube]` expands into calls on traits the prelude carries, so it is imported whole rather than by name.
 use cubecl::prelude::*;
 use cubecl::std::tensor::launch::ViewArg;
 use cubecl::std::tensor::layout::chain::{Chain, ChainLaunch};
 use cubecl::std::tensor::{
     View,
-    ViewExpand,
+    ViewMut,
+    ViewMutExpand,
     ViewOperations,
     ViewOperationsExpand,
     ViewOperationsMut,
@@ -23,9 +24,9 @@ use cubek_convolution::components::global::layout::{
 use cubek_convolution::forward::args::{ConcreteArgs, ConcreteInputsFactory, ConcreteOutputFactory};
 use cubek_convolution::routines::Routine as ConvolutionRoutine;
 use cubek_convolution::routines::simple::SimpleSyncCyclicConv;
-use cubek_matmul::components::global::memory::GlobalLayoutConfig;
-use cubek_matmul::definition::{AvailableVectorSizes, Blueprint, MatmulElems, MatmulSetupError};
-use cubek_matmul::launch::{
+use cubek_matmul::definition::{AccumulatorOperand, AvailableVectorSizes, MatmulElems, MatmulSetupError};
+use cubek_matmul::multi_level::BatchMatmulRoutine;
+use cubek_matmul::multi_level::args::{
     Acc,
     AccSize,
     BatchedCoords,
@@ -38,8 +39,10 @@ use cubek_matmul::launch::{
     TensorInputs,
     TensorOutput,
 };
-use cubek_matmul::routines::simple::SimpleArgs;
-use cubek_matmul::routines::{BlueprintStrategy, Routine};
+use cubek_matmul::multi_level::components::global::memory::GlobalLayoutConfig;
+use cubek_matmul::multi_level::definition::Blueprint;
+use cubek_matmul::multi_level::routines::batch::simple::SimpleArgs;
+use cubek_matmul::routine::BlueprintStrategy;
 use cubek_std::MatrixLayout;
 
 use crate::cnn::convolution::{BoundConvolution, convolution_failed};
@@ -91,7 +94,7 @@ impl Epilogue for WithoutActivation {
 #[cube]
 fn fuse<T: CubePrimitive>(
     value: T,
-    residual: ComptimeOption<View<T, BatchedCoords>>,
+    residual: ComptimeOption<View<'_, T, BatchedCoords>>,
     position: BatchedCoords,
     #[comptime] activation: Activation,
 ) -> T {
@@ -125,91 +128,115 @@ fn fuse<T: CubePrimitive>(
 /// Reads, the shape and the bounds are the output's. It has no linear slices or tensor maps, and panics while
 /// expanding a kernel that asks for them.
 #[expect(dead_code, reason = "a kernel only ever holds its expanded form")]
-struct FusedView<T: CubePrimitive> {
-    _value: PhantomData<T>,
+struct FusedView<'a, T: CubePrimitive> {
+    _value: PhantomData<&'a T>,
 }
 
-#[derive(Clone)]
-struct FusedViewExpand<T: CubePrimitive> {
-    out: ViewExpand<T, BatchedCoords, ReadWrite>,
-    residual: ComptimeOptionExpand<View<T, BatchedCoords>>,
+#[derive(Clone, Copy)]
+struct FusedViewExpand<'a, T: CubePrimitive> {
+    out: ViewMutExpand<'a, T, BatchedCoords>,
+    residual: ComptimeOptionExpand<View<'a, T, BatchedCoords>>,
     activation: Activation,
 }
 
-impl<T: CubePrimitive> CubeType for FusedView<T> {
-    type ExpandType = FusedViewExpand<T>;
+impl<'a, T: CubePrimitive> CubeType for FusedView<'a, T> {
+    type ExpandType = FusedViewExpand<'a, T>;
 }
 
-impl<T: CubePrimitive> IntoMut for FusedViewExpand<T> {
-    fn into_mut(self, _scope: &mut Scope) -> Self {
+impl<'a, T: CubePrimitive> IntoExpand for FusedViewExpand<'a, T> {
+    type Expand = Self;
+
+    fn into_expand(self, _scope: &Scope) -> Self::Expand {
         self
     }
 }
 
-impl<T: CubePrimitive> CubeDebug for FusedViewExpand<T> {}
-
-impl<T: CubePrimitive> Vectorized for FusedView<T> {}
-
-impl<T: CubePrimitive> VectorizedExpand for FusedViewExpand<T> {
-    fn vector_size(&self) -> VectorSize {
-        self.out.vector_size()
+impl<'a, T: CubePrimitive> ExpandTypeClone for FusedViewExpand<'a, T> {
+    fn clone_unchecked(&self) -> Self {
+        *self
     }
 }
 
-impl<T: CubePrimitive> ViewOperations<T, BatchedCoords> for FusedView<T> {}
+impl<'a, T: CubePrimitive> IntoMut for FusedViewExpand<'a, T> {
+    fn into_mut(self, _scope: &Scope) -> Self {
+        self
+    }
+}
 
-impl<T: CubePrimitive> ViewOperationsExpand<T, BatchedCoords> for FusedViewExpand<T> {
+impl<'a, T: CubePrimitive> CubeDebug for FusedViewExpand<'a, T> {}
+
+impl<'a, T: CubePrimitive> AsRefExpand for FusedViewExpand<'a, T> {
+    fn __expand_ref_method(&self, _scope: &Scope) -> &Self {
+        self
+    }
+}
+
+impl<'a, T: CubePrimitive> AsMutExpand for FusedViewExpand<'a, T> {
+    fn __expand_ref_mut_method(&mut self, _scope: &Scope) -> &mut Self {
+        self
+    }
+}
+
+impl<'a, T: CubePrimitive> Vectorized for FusedView<'a, T> {}
+
+impl<'a, T: CubePrimitive> VectorizedExpand for FusedViewExpand<'a, T> {
+    fn __expand_vector_size_method(&self, scope: &Scope) -> VectorSize {
+        self.out.__expand_vector_size_method(scope)
+    }
+}
+
+impl<'a, T: CubePrimitive> ViewOperations<T, BatchedCoords> for FusedView<'a, T> {}
+
+impl<'a, T: CubePrimitive> ViewOperationsExpand<T, BatchedCoords> for FusedViewExpand<'a, T> {
     fn __expand_read_method(
         &self,
-        scope: &mut Scope,
+        scope: &Scope,
         position: <BatchedCoords as CubeType>::ExpandType,
     ) -> <T as CubeType>::ExpandType {
-        self.out.clone().__expand_read_method(scope, position)
+        self.out.__expand_read_method(scope, position)
     }
 
     fn __expand_read_checked_method(
         &self,
-        scope: &mut Scope,
+        scope: &Scope,
         position: <BatchedCoords as CubeType>::ExpandType,
     ) -> <T as CubeType>::ExpandType {
-        self.out.clone().__expand_read_checked_method(scope, position)
+        self.out.__expand_read_checked_method(scope, position)
     }
 
     fn __expand_read_masked_method(
         &self,
-        scope: &mut Scope,
+        scope: &Scope,
         position: <BatchedCoords as CubeType>::ExpandType,
         value: <T as CubeType>::ExpandType,
     ) -> <T as CubeType>::ExpandType {
-        self.out
-            .clone()
-            .__expand_read_masked_method(scope, position, value)
+        self.out.__expand_read_masked_method(scope, position, value)
     }
 
     fn __expand_read_unchecked_method(
         &self,
-        scope: &mut Scope,
+        scope: &Scope,
         position: <BatchedCoords as CubeType>::ExpandType,
     ) -> <T as CubeType>::ExpandType {
-        self.out.clone().__expand_read_unchecked_method(scope, position)
+        self.out.__expand_read_unchecked_method(scope, position)
     }
 
-    fn __expand_to_linear_slice_method(
+    fn __expand_as_linear_slice_method(
         &self,
-        _scope: &mut Scope,
+        _scope: &Scope,
         _position: <BatchedCoords as CubeType>::ExpandType,
         _end: <BatchedCoords as CubeType>::ExpandType,
-    ) -> SliceExpand<T, ReadOnly> {
+    ) -> &SliceExpand<T> {
         panic!("the fused output view has no linear slices")
     }
 
-    fn __expand_shape_method(&self, scope: &mut Scope) -> <BatchedCoords as CubeType>::ExpandType {
+    fn __expand_shape_method(&self, scope: &Scope) -> <BatchedCoords as CubeType>::ExpandType {
         self.out.__expand_shape_method(scope)
     }
 
     fn __expand_is_in_bounds_method(
         &self,
-        scope: &mut Scope,
+        scope: &Scope,
         position: <BatchedCoords as CubeType>::ExpandType,
     ) -> NativeExpand<bool> {
         self.out.__expand_is_in_bounds_method(scope, position)
@@ -217,57 +244,53 @@ impl<T: CubePrimitive> ViewOperationsExpand<T, BatchedCoords> for FusedViewExpan
 
     fn __expand_tensor_map_load_method(
         &self,
-        _scope: &mut Scope,
-        _barrier: BarrierExpand,
-        _shared_memory: SliceExpand<T, ReadWrite>,
+        _scope: &Scope,
+        _barrier: &NativeExpand<Barrier>,
+        _shared_memory: &mut SliceExpand<T>,
         _position: <BatchedCoords as CubeType>::ExpandType,
     ) {
         panic!("the fused output view has no tensor map")
     }
 }
 
-impl<T: CubePrimitive> ViewOperationsMut<T, BatchedCoords> for FusedView<T> {}
+impl<'a, T: CubePrimitive> ViewOperationsMut<T, BatchedCoords> for FusedView<'a, T> {}
 
-impl<T: CubePrimitive> ViewOperationsMutExpand<T, BatchedCoords> for FusedViewExpand<T> {
+impl<'a, T: CubePrimitive> ViewOperationsMutExpand<T, BatchedCoords> for FusedViewExpand<'a, T> {
     fn __expand_write_method(
         &self,
-        scope: &mut Scope,
+        scope: &Scope,
         position: <BatchedCoords as CubeType>::ExpandType,
         value: <T as CubeType>::ExpandType,
     ) {
-        let residual = self.residual.clone();
-        let fused = fuse::expand::<T>(scope, value, residual, position.clone(), self.activation);
+        let fused = fuse::expand::<T>(scope, value, self.residual, position, self.activation);
 
-        self.out.clone().__expand_write_method(scope, position, fused);
+        self.out.__expand_write_method(scope, position, fused);
     }
 
     fn __expand_write_checked_method(
         &self,
-        scope: &mut Scope,
+        scope: &Scope,
         position: <BatchedCoords as CubeType>::ExpandType,
         value: <T as CubeType>::ExpandType,
     ) {
-        let residual = self.residual.clone();
-        let fused = fuse::expand::<T>(scope, value, residual, position.clone(), self.activation);
+        let fused = fuse::expand::<T>(scope, value, self.residual, position, self.activation);
 
-        self.out
-            .clone()
-            .__expand_write_checked_method(scope, position, fused);
+        self.out.__expand_write_checked_method(scope, position, fused);
     }
 
-    fn __expand_to_linear_slice_mut_method(
+    fn __expand_as_linear_slice_mut_method(
         &self,
-        _scope: &mut Scope,
+        _scope: &Scope,
         _position: <BatchedCoords as CubeType>::ExpandType,
         _end: <BatchedCoords as CubeType>::ExpandType,
-    ) -> SliceExpand<T, ReadWrite> {
+    ) -> &mut SliceExpand<T> {
         panic!("the fused output view has no linear slices")
     }
 
     fn __expand_tensor_map_store_method(
         &self,
-        _scope: &mut Scope,
-        _shared_memory: SliceExpand<T, ReadOnly>,
+        _scope: &Scope,
+        _shared_memory: &SliceExpand<T>,
         _position: <BatchedCoords as CubeType>::ExpandType,
     ) {
         panic!("the fused output view has no tensor map")
@@ -277,36 +300,37 @@ impl<T: CubePrimitive> ViewOperationsMutExpand<T, BatchedCoords> for FusedViewEx
 /// Wraps `_out` in a [FusedView] applying `E` and adding `_residual`, if there is one.
 ///
 /// It only runs inside a kernel, where it expands through [fused_view::expand].
-fn fused_view<T: CubePrimitive, E: Epilogue>(
-    _out: View<T, BatchedCoords, ReadWrite>,
-    _residual: ComptimeOption<View<T, BatchedCoords>>,
-) -> View<T, BatchedCoords, ReadWrite> {
+fn fused_view<'a, T: CubePrimitive, E: Epilogue>(
+    _out: ViewMut<'a, T, BatchedCoords>,
+    _residual: ComptimeOption<View<'a, T, BatchedCoords>>,
+) -> ViewMut<'a, T, BatchedCoords> {
     cubecl::unexpanded!()
 }
 
 mod fused_view {
     use super::*;
 
-    pub(super) fn expand<T: CubePrimitive, E: Epilogue>(
-        _scope: &mut Scope,
-        out: ViewExpand<T, BatchedCoords, ReadWrite>,
-        residual: ComptimeOptionExpand<View<T, BatchedCoords>>,
-    ) -> ViewExpand<T, BatchedCoords, ReadWrite> {
+    pub(super) fn expand<'a, T: CubePrimitive, E: Epilogue>(
+        scope: &Scope,
+        out: ViewMutExpand<'a, T, BatchedCoords>,
+        residual: ComptimeOptionExpand<View<'a, T, BatchedCoords>>,
+    ) -> ViewMutExpand<'a, T, BatchedCoords> {
         let fused = FusedViewExpand {
             out,
             residual,
             activation: E::ACTIVATION,
         };
 
-        ViewExpand::new_mut(fused)
+        ViewMutExpand::new(scope, fused)
     }
 }
 
 /// cubek's own inputs, with the residual the write-out adds.
-#[derive(CubeLaunch, CubeType, Clone, Copy)]
+#[derive(CubeLaunch, CubeType, Clone)]
+#[expand(derive(Clone))]
 struct FusedInputs<Lhs: CubePrimitive, Rhs: CubePrimitive, Acc: CubePrimitive> {
     tensors: TensorInputs<Lhs, Rhs, Acc>,
-    residual: ComptimeOption<View<Acc, BatchedCoords>>,
+    residual: ComptimeOption<View<'static, Acc, BatchedCoords>>,
 }
 
 /// Matmul arguments that read as cubek's own tensor arguments, and write through a [FusedView] applying `E`.
@@ -322,7 +346,7 @@ impl<E: Epilogue> MatmulArgs for FusedArgs<E> {
     type Config = RuntimeArgs;
     type State<Lhs: CubePrimitive, Rhs: CubePrimitive, EO: CubePrimitive> = (
         (TensorInputs<Lhs, Rhs, EO>, TensorOutput<EO>, RuntimeArgs),
-        ComptimeOption<View<EO, BatchedCoords>>,
+        ComptimeOption<View<'static, EO, BatchedCoords>>,
     );
 
     fn init_state<Lhs: CubePrimitive, Rhs: CubePrimitive, EO: CubePrimitive>(
@@ -347,7 +371,7 @@ impl<E: Epilogue> MatmulArgs for FusedArgs<E> {
 
     fn view_lhs<Lhs: CubePrimitive, Rhs: CubePrimitive, EO: CubePrimitive>(
         state: &Self::State<Lhs, Rhs, EO>,
-    ) -> View<Lhs, BatchedCoords> {
+    ) -> View<'_, Lhs, BatchedCoords> {
         TensorArgs::<RuntimeArgs>::view_lhs::<Lhs, Rhs, EO>(&state.0)
     }
 
@@ -360,7 +384,7 @@ impl<E: Epilogue> MatmulArgs for FusedArgs<E> {
 
     fn view_rhs<Lhs: CubePrimitive, Rhs: CubePrimitive, EO: CubePrimitive>(
         state: &Self::State<Lhs, Rhs, EO>,
-    ) -> View<Rhs, BatchedCoords> {
+    ) -> View<'_, Rhs, BatchedCoords> {
         TensorArgs::<RuntimeArgs>::view_rhs::<Lhs, Rhs, EO>(&state.0)
     }
 
@@ -373,7 +397,7 @@ impl<E: Epilogue> MatmulArgs for FusedArgs<E> {
 
     fn view_acc<Lhs: CubePrimitive, Rhs: CubePrimitive, EO: CubePrimitive>(
         state: &Self::State<Lhs, Rhs, EO>,
-    ) -> ComptimeOption<View<EO, BatchedCoords>> {
+    ) -> ComptimeOption<View<'_, EO, BatchedCoords>> {
         TensorArgs::<RuntimeArgs>::view_acc::<Lhs, Rhs, EO>(&state.0)
     }
 
@@ -385,11 +409,13 @@ impl<E: Epilogue> MatmulArgs for FusedArgs<E> {
     }
 
     fn view_out<Lhs: CubePrimitive, Rhs: CubePrimitive, EO: CubePrimitive>(
-        state: &mut Self::State<Lhs, Rhs, EO>,
-    ) -> View<EO, BatchedCoords, ReadWrite> {
-        let out = TensorArgs::<RuntimeArgs>::view_out::<Lhs, Rhs, EO>(&mut state.0);
+        state: &Self::State<Lhs, Rhs, EO>,
+    ) -> ViewMut<'_, EO, BatchedCoords> {
+        let out = TensorArgs::<RuntimeArgs>::view_out::<Lhs, Rhs, EO>(&state.0);
+        // Shortens the residual view's lifetime to the output's.
+        let residual = state.1.map(|view| view);
 
-        fused_view::<EO, E>(out, state.1)
+        fused_view::<EO, E>(out, residual)
     }
 
     fn batch_out<Lhs: CubePrimitive, Rhs: CubePrimitive, EO: CubePrimitive>(
@@ -410,26 +436,26 @@ impl<E: Epilogue> MatmulArgs for FusedArgs<E> {
 /// value is written.
 ///
 /// `residual` must be laid out as the output is.
-pub(crate) fn launch_fused<R: Runtime>(
-    client: &ComputeClient<R>,
-    bound: BoundConvolution<R>,
-    residual: Option<TensorBinding<R>>,
+pub(crate) fn launch_fused(
+    client: &Client,
+    bound: BoundConvolution,
+    residual: Option<TensorBinding>,
     activation: Activation,
 ) -> Result<(), CnnError> {
     match activation {
-        Activation::Silu => launch_with::<R, WithSilu>(client, bound, residual),
-        Activation::Relu => launch_with::<R, WithRelu>(client, bound, residual),
-        Activation::None => launch_with::<R, WithoutActivation>(client, bound, residual),
+        Activation::Silu => launch_with::<WithSilu>(client, bound, residual),
+        Activation::Relu => launch_with::<WithRelu>(client, bound, residual),
+        Activation::None => launch_with::<WithoutActivation>(client, bound, residual),
     }
 }
 
 /// The same as [launch_fused], with the epilogue as a type.
 ///
 /// The preparation is `cubek-convolution`'s own forward launch, which binds no residual.
-fn launch_with<R: Runtime, E: Epilogue>(
-    client: &ComputeClient<R>,
-    bound: BoundConvolution<R>,
-    residual: Option<TensorBinding<R>>,
+fn launch_with<E: Epilogue>(
+    client: &Client,
+    bound: BoundConvolution,
+    residual: Option<TensorBinding>,
 ) -> Result<(), CnnError> {
     let BoundConvolution {
         problem,
@@ -456,13 +482,18 @@ fn launch_with<R: Runtime, E: Epilogue>(
     let routine_sizes = SimpleSyncCyclicConv::filter_vector_sizes(filtered);
     let vector_sizes = routine_sizes.pick_max().map_err(matmul_failed)?;
 
+    let accumulator = match bias {
+        Some(_) => AccumulatorOperand::Present,
+        None => AccumulatorOperand::Absent,
+    };
     let strategy: BlueprintStrategy<RuntimeArgs, FusedRoutine> = match blueprint {
         Some(forced) => BlueprintStrategy::Forced(forced.matmul().clone()),
         None => BlueprintStrategy::Inferred(SimpleArgs::default()),
     };
-    let matmul_problem = problem.as_matmul_problem();
-    let device_settings = <FusedRoutine as Routine<RuntimeArgs>>::device_settings(client, vector_sizes);
-    let expand_info = <FusedRoutine as Routine<RuntimeArgs>>::expand_blueprint(
+    let matmul_problem = problem.as_matmul_problem(accumulator);
+    let device_settings =
+        <FusedRoutine as BatchMatmulRoutine<RuntimeArgs>>::device_settings(client, vector_sizes);
+    let expand_info = <FusedRoutine as BatchMatmulRoutine<RuntimeArgs>>::expand_blueprint(
         &matmul_problem,
         &device_settings,
         &strategy,
@@ -472,9 +503,12 @@ fn launch_with<R: Runtime, E: Epilogue>(
     let problem = <TensorArgs<RuntimeArgs> as ConcreteArgs<FusedRoutine>>::adjust_problem(
         client, problem, blueprint, &dtypes,
     );
-    let adjusted_problem = problem.as_matmul_problem();
-    let launch_info =
-        <FusedRoutine as Routine<RuntimeArgs>>::prepare(&adjusted_problem, &device_settings, expand_info);
+    let adjusted_problem = problem.as_matmul_problem(accumulator);
+    let launch_info = <FusedRoutine as BatchMatmulRoutine<RuntimeArgs>>::prepare(
+        &adjusted_problem,
+        &device_settings,
+        expand_info,
+    );
     let launch_info = launch_info.map_err(matmul_failed)?;
     let blueprint = &launch_info.blueprint;
 
@@ -492,7 +526,7 @@ fn launch_with<R: Runtime, E: Epilogue>(
     });
     let inputs = FusedInputsLaunch::new(tensors, residual_view.into());
 
-    let launched = cubek_matmul::launch::launch_kernel::<FusedArgs<E>, R, FusedRoutine>(
+    let launched = cubek_matmul::multi_level::launch_kernel::<FusedArgs<E>, FusedRoutine>(
         client,
         inputs,
         output_arg,

@@ -43,7 +43,6 @@ use av_toolbox_cubek::testing::{
     vfm_matched_frames,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 use cubecl::server::Handle;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, read_u32, upload_f32, upload_u32};
@@ -71,7 +70,7 @@ struct Weave {
 impl BuildTask for Weave {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let bytes = self.matching.len() * size_of::<f32>();
@@ -155,7 +154,7 @@ struct Differences {
 impl BuildTask for Differences {
     type Output = Vec<u32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let segment_count = segments(self.width);
@@ -251,8 +250,8 @@ struct CombAndCount {
 }
 
 /// Builds the comb mask of one plane of a weave into `mask`, handing back the uploaded plane.
-fn device_comb_mask<R: Runtime>(
-    build: &BuildContext<R>,
+fn device_comb_mask(
+    build: &BuildContext,
     input: &[f32],
     mask: &Handle,
     size: (u32, u32),
@@ -275,7 +274,7 @@ fn device_comb_mask<R: Runtime>(
 impl BuildTask for CombAndCount {
     type Output = (Vec<Masks>, Vec<u32>);
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let luma_size = (LUMA_WIDTH, LUMA_HEIGHT);
@@ -461,7 +460,7 @@ struct FieldCompares {
 }
 
 /// Uploads one plane's frames and launches its field compare, handing back every buffer it uses.
-fn launch_compare<R: Runtime>(build: &BuildContext<R>, compare: &ComparePlane) -> [Handle; 6] {
+fn launch_compare(build: &BuildContext, compare: &ComparePlane) -> [Handle; 6] {
     let client = build.client();
     let sizing = Sizing(build.frame_context());
     let (width, height) = (compare.width, compare.height);
@@ -493,7 +492,7 @@ fn launch_compare<R: Runtime>(build: &BuildContext<R>, compare: &ComparePlane) -
 impl BuildTask for FieldCompares {
     type Output = Vec<CompareOutput>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let launched: Vec<[Handle; 6]> = self
             .planes
@@ -681,7 +680,7 @@ struct ChromaMarking {
 impl BuildTask for ChromaMarking {
     type Output = Vec<u8>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let chroma_width = LUMA_WIDTH >> self.shift_x;
@@ -771,7 +770,7 @@ struct CombMasks {
 impl BuildTask for CombMasks {
     type Output = Vec<Vec<u8>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
 
         let mut launched = Vec::new();
@@ -910,7 +909,7 @@ struct DecimateCells {
 impl BuildTask for DecimateCells {
     type Output = DecimateMetric;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let (luma_width, luma_height) = self.dims[0];

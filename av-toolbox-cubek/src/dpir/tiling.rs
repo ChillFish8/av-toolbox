@@ -1,4 +1,4 @@
-use cubecl::prelude::{ComputeClient, CubeElement, Runtime};
+use cubecl::prelude::{Client, CubeElement};
 
 use super::network::ALIGNMENT;
 use crate::cnn::{BodyPath, CnnError, LayerRun, Precision, tiles};
@@ -148,8 +148,8 @@ pub fn tile_sizes(precision: Precision, path: BodyPath, width: u32, height: u32,
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn deblock<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn deblock(
+    client: &Client,
     dispatch: &impl Dispatch,
     dpir: &Dpir,
     path: BodyPath,
@@ -246,8 +246,8 @@ fn outputs_are_apart(planes: &DpirPlanes<'_>) -> bool {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn warm_up<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn warm_up(
+    client: &Client,
     dispatch: &impl Dispatch,
     dpir: &Dpir,
     path: BodyPath,

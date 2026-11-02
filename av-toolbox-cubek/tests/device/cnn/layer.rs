@@ -17,7 +17,6 @@ use av_toolbox_cubek::cnn::{
     run_tuned,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 use half::f16;
 
 use crate::artcnn::{read_maps, synced, upload_maps, wavy_maps};
@@ -54,7 +53,7 @@ struct ReadBack {
 impl BuildTask for Uploaded {
     type Output = ReadBack;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let weights = exact_weights(self.features);
         let bias_values = exact_bias(self.features);
@@ -148,7 +147,7 @@ struct ShortUpload {
 impl BuildTask for ShortUpload {
     type Output = ();
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let mut weights = exact_weights(16);
         let mut bias = exact_bias(16);
@@ -183,7 +182,7 @@ struct Padded {
 impl BuildTask for Padded {
     type Output = (Vec<f32>, Vec<f32>);
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let count = (self.out_channels * 9 * 16) as usize;
         let weights = vec![0.5f32; count];
@@ -237,7 +236,7 @@ struct TunedAfterWinograd;
 impl BuildTask for TunedAfterWinograd {
     type Output = Option<(LayerRun, LayerRun)>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         if !offers_cmma_16(client) {
             return None;
@@ -298,7 +297,7 @@ struct ShortHandle {
 impl BuildTask for ShortHandle {
     type Output = ();
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let precision = Precision::F32;
         let features = 16;

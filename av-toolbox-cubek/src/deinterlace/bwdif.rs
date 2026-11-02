@@ -52,13 +52,13 @@ fn index_at(width: u32, x: u32, y: u32, offset: i32) -> usize {
 )]
 #[cube(launch_unchecked)]
 fn bwdif_kernel(
-    previous: &Array<f32>,
-    current: &Array<f32>,
-    next: &Array<f32>,
-    earlier: &Array<f32>,
-    later: &Array<f32>,
-    spatial: &Array<f32>,
-    output: &mut Array<f32>,
+    previous: &[f32],
+    current: &[f32],
+    next: &[f32],
+    earlier: &[f32],
+    later: &[f32],
+    spatial: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     rebuilt: u32,
@@ -170,12 +170,7 @@ fn bwdif_kernel(
 ///
 /// A rebuilt sample blends a spatial prediction with the same sample of the neighbouring fields, clamped by
 /// how much the area moves. The prediction is bwdif's cubic down the column, or `planes.spatial` when given.
-pub fn bwdif_field<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: BwdifPlanes<'_>,
-    field: BwdifField,
-) {
+pub fn bwdif_field(client: &Client, dispatch: &impl Dispatch, planes: BwdifPlanes<'_>, field: BwdifField) {
     let width = planes.output.width();
     let height = planes.output.height();
 
@@ -208,13 +203,13 @@ pub fn bwdif_field<R: Runtime>(
     let spatial = planes.spatial.unwrap_or(planes.current);
 
     let samples = planes.output.samples();
-    let previous_array = planes.previous.array::<R>();
-    let current_array = planes.current.array::<R>();
-    let next_array = planes.next.array::<R>();
-    let earlier_array = earlier.array::<R>();
-    let later_array = later.array::<R>();
-    let spatial_array = spatial.array::<R>();
-    let output_array = planes.output.array::<R>();
+    let previous_array = planes.previous.array();
+    let current_array = planes.current.array();
+    let next_array = planes.next.array();
+    let earlier_array = earlier.array();
+    let later_array = later.array();
+    let spatial_array = spatial.array();
+    let output_array = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
@@ -222,7 +217,7 @@ pub fn bwdif_field<R: Runtime>(
     // row class has those rows, and mirrors the rows next to it at the plane's edges, so every read stays
     // inside the plane.
     unsafe {
-        bwdif_kernel::launch_unchecked::<R>(
+        bwdif_kernel::launch_unchecked(
             client,
             cubes,
             unit,

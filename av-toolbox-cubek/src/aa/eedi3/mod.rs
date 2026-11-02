@@ -274,7 +274,7 @@ pub(super) fn reflect(index: i32, length: u32) -> u32 {
 /// The sample at `column` of the plane row starting at `row_start`, reflecting the column once past the
 /// plane's side.
 #[cube]
-pub(super) fn sample_at(input: &Array<f32>, row_start: u32, column: i32, width: u32) -> i32 {
+pub(super) fn sample_at(input: &[f32], row_start: u32, column: i32, width: u32) -> i32 {
     let inside = reflect(column, width);
 
     input[(row_start + inside) as usize] as i32
@@ -380,41 +380,41 @@ impl<'a> FieldPass<'a> {
     }
 
     /// The rebuilt rows scratch as a kernel argument.
-    fn rebuilt_array<R: Runtime>(&self) -> ArrayArg<R> {
+    fn rebuilt_array(&self) -> BufferArg {
         let owned = self.scratch.rebuilt.clone();
         let samples = self.rebuilt_samples();
 
         // Safety: `new` checked that `rebuilt` holds an f32 value per rebuilt sample.
-        unsafe { ArrayArg::from_raw_parts(owned, samples) }
+        unsafe { BufferArg::from_raw_parts(owned, samples) }
     }
 
     /// The directions scratch as a kernel argument.
-    fn directions_array<R: Runtime>(&self) -> ArrayArg<R> {
+    fn directions_array(&self) -> BufferArg {
         let owned = self.scratch.directions.clone();
         let samples = self.rebuilt_samples();
 
         // Safety: `new` checked that `directions` holds an `i32` per rebuilt sample.
-        unsafe { ArrayArg::from_raw_parts(owned, samples) }
+        unsafe { BufferArg::from_raw_parts(owned, samples) }
     }
 
     /// The backpointers scratch as a kernel argument.
-    fn backpointers_array<R: Runtime>(&self) -> ArrayArg<R> {
+    fn backpointers_array(&self) -> BufferArg {
         let owned = self.scratch.backpointers.clone();
         let words = self.rows as usize * self.span() as usize * self.groups() as usize;
 
         // Safety: `new` checked that `backpointers` holds a `u32` per word of every rebuilt row.
-        unsafe { ArrayArg::from_raw_parts(owned, words) }
+        unsafe { BufferArg::from_raw_parts(owned, words) }
     }
 
     /// The lenders scratch as a kernel argument.
-    fn lenders_array<R: Runtime>(&self) -> ArrayArg<R> {
+    fn lenders_array(&self) -> BufferArg {
         let owned = self.scratch.lenders.clone();
         let rows = self.rows as usize;
         let values = 3 * rows + rows * self.active_words() as usize;
 
         // Safety: `new` checked that `lenders` holds three `i32` values per rebuilt row, then a word of
         // active bits per 32 columns of every rebuilt row.
-        unsafe { ArrayArg::from_raw_parts(owned, values) }
+        unsafe { BufferArg::from_raw_parts(owned, values) }
     }
 
     /// The mask plane, or the input standing in for it when the pass has none.
@@ -435,7 +435,7 @@ pub enum Eedi3Check {
 }
 
 /// The widest plane the persistent check runs on, an eighth of the device's shared memory in samples.
-pub fn eedi3_check_capacity<R: Runtime>(client: &ComputeClient<R>) -> u32 {
+pub fn eedi3_check_capacity(client: &Client) -> u32 {
     let shared_bytes = client.properties().hardware.max_shared_memory_size;
     let samples = shared_bytes / (2 * size_of::<f32>());
 
@@ -443,11 +443,7 @@ pub fn eedi3_check_capacity<R: Runtime>(client: &ComputeClient<R>) -> u32 {
 }
 
 /// The check a field pass `width` samples wide runs under `settings` on `client`'s device.
-pub fn eedi3_planned_check<R: Runtime>(
-    client: &ComputeClient<R>,
-    settings: &Eedi3Settings,
-    width: u32,
-) -> Eedi3Check {
+pub fn eedi3_planned_check(client: &Client, settings: &Eedi3Settings, width: u32) -> Eedi3Check {
     let capacity = eedi3_check_capacity(client);
 
     chosen_check(settings, width, capacity)
@@ -475,8 +471,8 @@ fn chosen_check(settings: &Eedi3Settings, width: u32, capacity: u32) -> Eedi3Che
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn eedi3_field<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn eedi3_field(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -498,8 +494,8 @@ pub fn eedi3_field<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the pass"
 )]
-pub fn eedi3_field_with_check_capacity<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn eedi3_field_with_check_capacity(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -558,8 +554,8 @@ fn assert_separate(scratch: &Eedi3Scratch<'_>, other: &Eedi3Scratch<'_>) {
 ///
 /// Each pass takes its own output and scratch, which must not share a buffer. When the persistent check
 /// runs, the two passes share one launch of it.
-pub fn eedi3_fields<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn eedi3_fields(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     outputs: [DevicePlane<'_>; 2],
@@ -580,8 +576,8 @@ pub fn eedi3_fields<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the passes"
 )]
-pub fn eedi3_fields_with_check_capacity<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn eedi3_fields_with_check_capacity(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     outputs: [DevicePlane<'_>; 2],
@@ -596,7 +592,7 @@ pub fn eedi3_fields_with_check_capacity<R: Runtime>(
 }
 
 /// Runs the steps of `pass` before the reliability check, ending with its rebuilt rows interpolated.
-fn rebuild_field<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, pass: &FieldPass<'_>) {
+fn rebuild_field(client: &Client, dispatch: &impl Dispatch, pass: &FieldPass<'_>) {
     if pass.mclip.is_some() {
         mask::mark_active_edges(client, pass);
         mask::find_lenders(client, pass);
@@ -612,8 +608,8 @@ fn rebuild_field<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch
 /// When they are checked and at most `capacity` wide, one launch checks them all. Otherwise each pass runs
 /// to its end before the next starts, which keeps the device busy through the per-row check's many small
 /// launches.
-fn run_fields<R: Runtime>(
-    client: &ComputeClient<R>,
+fn run_fields(
+    client: &Client,
     dispatch: &impl Dispatch,
     passes: &[FieldPass<'_>],
     capacity: u32,

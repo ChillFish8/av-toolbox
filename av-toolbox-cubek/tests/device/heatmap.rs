@@ -2,7 +2,6 @@ use av_toolbox_cubek::heatmap::{FLOOR, Heatmap, HeatmapPlanes, PaintLayout, Pain
 use av_toolbox_cubek::matrix::{Coefficients, MatrixSamples, SampleRange, scaling};
 use av_toolbox_cubek::testing::{decode_samples, encode_samples, reference_heatmap};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_u8, seeded_plane, upload_f32, upload_u8};
 
@@ -20,7 +19,7 @@ struct Paint {
 impl BuildTask for Paint {
     type Output = [Vec<u8>; 3];
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let (width, height) = (self.width, self.height);

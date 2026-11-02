@@ -2,7 +2,7 @@
 use cubecl::prelude::*;
 use cubecl::server::{Handle, ServerError};
 use cubek_matmul::definition::MatmulElems;
-use cubek_matmul::launch::Strategy as MatmulStrategy;
+use cubek_matmul::multi_level::Strategy as MatmulStrategy;
 use cubek_std::InputBinding;
 
 use super::kernels::{BodyConvolution, Candidate, Epilogue, Kernels, run_tuned, takes_tuner};
@@ -63,10 +63,10 @@ pub enum Activation {
 
 #[cube(launch_unchecked)]
 fn epilogue_kernel<F: Float>(
-    values: &mut Array<F>,
-    bias: &Array<F>,
-    residual: &Array<F>,
-    skip: &Array<F>,
+    values: &mut [F],
+    bias: &[F],
+    residual: &[F],
+    skip: &[F],
     features: u32,
     add_bias: u32,
     silu: u32,
@@ -109,8 +109,8 @@ fn epilogue_kernel<F: Float>(
 ///
 /// The maps hold `samples` samples of the layer's features, and are updated in place.
 #[cfg(any(test, feature = "test-support"))]
-pub fn epilogue<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn epilogue(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     values: &Handle,
@@ -131,8 +131,8 @@ pub fn epilogue<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub(crate) fn run_epilogue<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn run_epilogue(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     values: &Handle,
@@ -183,13 +183,13 @@ pub(crate) fn run_epilogue<R: Runtime>(
     // bias, when there is one, `F`. Without a residual, a skip or a bias, the values are bound in its place
     // and never read through it.
     unsafe {
-        let values_array = ArrayArg::from_raw_parts(values.clone(), units);
-        let bias = ArrayArg::from_raw_parts(bias_handle.clone(), features as usize);
-        let residual_array = ArrayArg::from_raw_parts(residual_handle.clone(), units);
-        let skip_array = ArrayArg::from_raw_parts(skip_handle.clone(), units);
+        let values_array = BufferArg::from_raw_parts(values.clone(), units);
+        let bias = BufferArg::from_raw_parts(bias_handle.clone(), features as usize);
+        let residual_array = BufferArg::from_raw_parts(residual_handle.clone(), units);
+        let skip_array = BufferArg::from_raw_parts(skip_handle.clone(), units);
 
         match layer.precision {
-            Precision::F16 => epilogue_kernel::launch_unchecked::<half::f16, R>(
+            Precision::F16 => epilogue_kernel::launch_unchecked::<half::f16>(
                 client,
                 cubes,
                 unit,
@@ -204,7 +204,7 @@ pub(crate) fn run_epilogue<R: Runtime>(
                 add_residual,
                 add_skip,
             ),
-            Precision::F32 => epilogue_kernel::launch_unchecked::<f32, R>(
+            Precision::F32 => epilogue_kernel::launch_unchecked::<f32>(
                 client,
                 cubes,
                 unit,
@@ -224,7 +224,7 @@ pub(crate) fn run_epilogue<R: Runtime>(
 }
 
 #[cube(launch_unchecked)]
-fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32, width: u32, channels: u32) {
+fn im2col_kernel<F: Float>(input: &[F], columns: &mut [F], height: u32, width: u32, channels: u32) {
     if ABSOLUTE_POS >= columns.len() {
         terminate!();
     }
@@ -259,8 +259,8 @@ fn im2col_kernel<F: Float>(input: &Array<F>, columns: &mut Array<F>, height: u32
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the launch"
 )]
-pub(crate) fn convolve<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn convolve(
+    client: &Client,
     dispatch: &impl Dispatch,
     path: BodyPath,
     layer: &ConvLayer,
@@ -286,11 +286,11 @@ pub(crate) fn convolve<R: Runtime>(
             );
 
             match layer.precision {
-                Precision::F16 => convolve_by_columns::<R, half::f16>(
-                    client, dispatch, layer, input, output, columns, region,
-                )?,
+                Precision::F16 => {
+                    convolve_by_columns::<half::f16>(client, dispatch, layer, input, output, columns, region)?
+                },
                 Precision::F32 => {
-                    convolve_by_columns::<R, f32>(client, dispatch, layer, input, output, columns, region)?
+                    convolve_by_columns::<f32>(client, dispatch, layer, input, output, columns, region)?
                 },
             }
 
@@ -305,8 +305,8 @@ pub(crate) fn convolve<R: Runtime>(
 /// With `allow_forced` the convolution picks its blueprint as a forward pass does, and otherwise it keeps
 /// the inferred blueprint.
 #[cfg(any(test, feature = "test-support"))]
-pub fn convolve_with_blueprint<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn convolve_with_blueprint(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     input: &Handle,
@@ -330,8 +330,8 @@ pub fn convolve_with_blueprint<R: Runtime>(
 /// Convolves the NHWC maps of `region` in `input` with `layer`'s `F -> F` weights on cooperative-matrix
 /// tiles, into `output` without the bias. Gives whether the forced blueprint ran.
 #[cfg(any(test, feature = "test-support"))]
-pub fn convolve_without_bias<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn convolve_without_bias(
+    client: &Client,
     layer: &ConvLayer,
     input: &Handle,
     output: &Handle,
@@ -375,8 +375,8 @@ pub(crate) fn body_operands(layer: &ConvLayer, with_bias: bool) -> Operands<'_> 
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
 )]
-fn convolve_fused<R: Runtime>(
-    client: &ComputeClient<R>,
+fn convolve_fused(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     input: &Handle,
@@ -468,8 +468,8 @@ pub struct Finish<'a> {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
 )]
-pub(crate) fn body_layer<R: Runtime>(
-    client: &ComputeClient<R>,
+pub(crate) fn body_layer(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     path: BodyPath,
@@ -517,8 +517,8 @@ pub struct LayerMaps<'a> {
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
 )]
-pub fn run_layer<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn run_layer(
+    client: &Client,
     dispatch: &impl Dispatch,
     kernels: &Kernels,
     path: BodyPath,
@@ -555,8 +555,8 @@ pub fn run_layer<R: Runtime>(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the layer"
 )]
-pub fn body_layer_with_blueprint<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn body_layer_with_blueprint(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     path: BodyPath,
@@ -592,8 +592,8 @@ pub fn body_layer_with_blueprint<R: Runtime>(
 
 /// Applies `finish` to `layer`'s maps of `region` in `output` in a separate pass, adding the bias first if
 /// `add_bias` is set.
-fn finish_separately<R: Runtime>(
-    client: &ComputeClient<R>,
+fn finish_separately(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     output: &Handle,
@@ -616,8 +616,8 @@ fn finish_separately<R: Runtime>(
     );
 }
 
-fn convolve_by_columns<R: Runtime, F: Float>(
-    client: &ComputeClient<R>,
+fn convolve_by_columns<F: Float>(
+    client: &Client,
     dispatch: &impl Dispatch,
     layer: &ConvLayer,
     input: &Handle,
@@ -641,15 +641,15 @@ fn convolve_by_columns<R: Runtime, F: Float>(
         "the weights are smaller than the layer's"
     );
 
-    let dtype = F::as_type_native_unchecked().storage_type();
+    let dtype = F::elem_type_native();
     let cubes = dispatch.cube_count(column_values);
     let unit = dispatch.cube_dim();
 
     // Safety: the input holds the region's samples times `F` values, and the columns nine times that.
     unsafe {
-        let input_array = ArrayArg::from_raw_parts(input.clone(), samples * features);
-        let columns_array = ArrayArg::from_raw_parts(columns.clone(), column_values);
-        im2col_kernel::launch_unchecked::<F, R>(
+        let input_array = BufferArg::from_raw_parts(input.clone(), samples * features);
+        let columns_array = BufferArg::from_raw_parts(columns.clone(), column_values);
+        im2col_kernel::launch_unchecked::<F>(
             client,
             cubes,
             unit,
@@ -668,19 +668,20 @@ fn convolve_by_columns<R: Runtime, F: Float>(
     let out_shape = [samples, features];
     let out_strides = contiguous(&out_shape);
     // Safety: the columns hold `samples x 9F` values contiguously, as `convolve` checks.
-    let lhs_tensor = unsafe { tensor::<R>(columns, &lhs_shape, &lhs_strides) };
+    let lhs_tensor = unsafe { tensor(columns, &lhs_shape, &lhs_strides) };
     // Safety: the weights hold `F x 9F` values, as just asserted, so reads at strides `1, 9F` stay inside
     // them.
-    let rhs_tensor = unsafe { tensor::<R>(&layer.weights, &rhs_shape, &rhs_strides) };
+    let rhs_tensor = unsafe { tensor(&layer.weights, &rhs_shape, &rhs_strides) };
     // Safety: the output holds `samples x F` values contiguously, as `convolve` checks.
-    let out_tensor = unsafe { tensor::<R>(output, &out_shape, &out_strides) };
+    let out_tensor = unsafe { tensor(output, &out_shape, &out_strides) };
     let lhs = InputBinding::new(lhs_tensor, dtype);
     let rhs = InputBinding::new(rhs_tensor, dtype);
     let globals = uniform_globals(dtype);
     let mut dtypes = MatmulElems::from_globals(&globals);
     // `DoubleUnit` gives wrong results when the depth of `9 * F` is 8 more than a multiple of 16.
     let strategy = MatmulStrategy::SimpleUnit(Default::default());
-    let launched = cubek_matmul::launch::launch_ref(&strategy, client, lhs, rhs, out_tensor, &mut dtypes);
+    let launched =
+        cubek_matmul::launch::launch_ref(&strategy.into(), client, lhs, rhs, out_tensor, &mut dtypes);
 
     launched.map_err(matmul_failed)
 }

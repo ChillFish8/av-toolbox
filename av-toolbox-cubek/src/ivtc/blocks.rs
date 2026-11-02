@@ -24,9 +24,9 @@ pub fn half_block_grid(width: u32, height: u32, half: HalfBlocks) -> (u32, u32) 
 
 #[cube(launch_unchecked)]
 fn half_block_differences_kernel(
-    previous: &Array<f32>,
-    current: &Array<f32>,
-    cells: &mut Array<u32>,
+    previous: &[f32],
+    current: &[f32],
+    cells: &mut [u32],
     width: u32,
     height: u32,
     half_x: u32,
@@ -72,8 +72,8 @@ pub struct BlockPlanes<'a> {
 /// Sums `|previous - current|` over every half block of one plane, the way VDecimate's `calcMetric` does.
 ///
 /// `across` is how many cells the luma grid has in each row. A cell past this plane's own grid is set to 0.
-pub fn half_block_differences<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn half_block_differences(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: BlockPlanes<'_>,
     half: HalfBlocks,
@@ -104,14 +104,14 @@ pub fn half_block_differences<R: Runtime>(
 
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
-    let previous = planes.previous.array::<R>();
-    let current = planes.current.array::<R>();
-    let cells = planes.cells.array::<R>();
+    let previous = planes.previous.array();
+    let current = planes.current.array();
+    let cells = planes.cells.array();
 
     // Safety: both planes hold `width * height` f32 values, each unit reads only the samples of its own
     // half block clamped to the plane, and writes only its own cell.
     unsafe {
-        half_block_differences_kernel::launch_unchecked::<R>(
+        half_block_differences_kernel::launch_unchecked(
             client, cubes, unit, previous, current, cells, width, height, half.x, half.y, across,
         );
     }

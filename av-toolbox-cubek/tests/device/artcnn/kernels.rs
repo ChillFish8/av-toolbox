@@ -25,7 +25,6 @@ use av_toolbox_cubek::artcnn::{
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 use cubecl::server::Handle;
 
 use super::body::{CandidateForward, Forward, largest_error, r8f64};
@@ -117,7 +116,7 @@ pub(super) struct CandidateOutputs {
 impl BuildTask for CandidateLayer {
     type Output = Option<CandidateOutputs>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         if !offers_cmma_16(client) {
             return None;
@@ -437,7 +436,7 @@ struct Offered {
 impl BuildTask for Offered {
     type Output = Vec<DirectVariant>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let properties = build.client().properties();
 
         direct_variants(properties, self.features)
@@ -451,7 +450,7 @@ struct Eligible;
 impl BuildTask for Eligible {
     type Output = bool;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let plane_width = offered_plane_width(client.properties());
 
@@ -489,7 +488,7 @@ struct OfferedCandidates {
 impl BuildTask for OfferedCandidates {
     type Output = Vec<Candidate>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let properties = build.client().properties();
 
         offered_candidates(properties, self.features, None)

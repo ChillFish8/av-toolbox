@@ -7,7 +7,7 @@ use crate::aa::row_launch;
 
 /// 1 when `column` lies inside the row and its mask sample is set, 0 otherwise.
 #[cube]
-fn mask_set(mclip: &Array<f32>, row_start: u32, column: i32, width: u32) -> u32 {
+fn mask_set(mclip: &[f32], row_start: u32, column: i32, width: u32) -> u32 {
     let mut set = 0u32;
     if column >= 0 && column < width as i32 {
         let value = mclip[(row_start + column as u32) as usize];
@@ -31,7 +31,7 @@ pub(super) struct ActiveWindow {
 impl ActiveWindow {
     /// A window holding the `count` columns from `first`.
     pub(super) fn new(
-        mclip: &Array<f32>,
+        mclip: &[f32],
         row_start: u32,
         first: i32,
         count: u32,
@@ -53,7 +53,7 @@ impl ActiveWindow {
     /// column it now surrounds is active.
     pub(super) fn slide(
         &mut self,
-        mclip: &Array<f32>,
+        mclip: &[f32],
         row_start: u32,
         entering: i32,
         leaving: i32,
@@ -74,7 +74,7 @@ impl ActiveWindow {
 
 /// The first column up to `last` whose mask sample is set, or `last + 1` when there is none.
 #[cube]
-fn first_set_column(mclip: &Array<f32>, row_start: u32, last: u32, width: u32) -> u32 {
+fn first_set_column(mclip: &[f32], row_start: u32, last: u32, width: u32) -> u32 {
     let mut column = 0u32;
     let mut found = false;
     while !found && column <= last {
@@ -100,8 +100,8 @@ const SECOND_ACTIVE: i32 = 2;
 /// columns 0 to `mdis + 1`.
 #[cube(launch_unchecked)]
 fn edge_flags_kernel(
-    mclip: &Array<f32>,
-    lenders: &mut Array<i32>,
+    mclip: &[f32],
+    lenders: &mut [i32],
     width: u32,
     first_rebuilt: u32,
     rows: u32,
@@ -133,7 +133,7 @@ fn edge_flags_kernel(
 /// It reads the edge flags of the rows above. A row whose column 0 is active has column 1 active too, so
 /// the search stops at the first row lending column 0.
 #[cube(launch_unchecked)]
-fn lenders_kernel(lenders: &mut Array<i32>, rows: u32) {
+fn lenders_kernel(lenders: &mut [i32], rows: u32) {
     let field_row = ABSOLUTE_POS as u32;
     if field_row >= rows {
         terminate!();
@@ -161,7 +161,7 @@ fn lenders_kernel(lenders: &mut Array<i32>, rows: u32) {
 }
 
 /// Launches the edge flags over every rebuilt row, writing the first part of the lenders scratch.
-pub(super) fn mark_active_edges<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>) {
+pub(super) fn mark_active_edges(client: &Client, pass: &FieldPass<'_>) {
     let (cubes, unit) = row_launch(pass.rows);
     let mask = pass.mask_plane();
 
@@ -169,10 +169,10 @@ pub(super) fn mark_active_edges<R: Runtime>(client: &ComputeClient<R>, pass: &Fi
     // row, as `FieldPass::new` checked. Each unit writes only its own row's flags, and reads the mask only
     // inside its own row.
     unsafe {
-        let mclip = mask.array::<R>();
-        let lenders = pass.lenders_array::<R>();
+        let mclip = mask.array();
+        let lenders = pass.lenders_array();
 
-        edge_flags_kernel::launch_unchecked::<R>(
+        edge_flags_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -187,15 +187,15 @@ pub(super) fn mark_active_edges<R: Runtime>(client: &ComputeClient<R>, pass: &Fi
 }
 
 /// Launches the lenders search over every rebuilt row, reading the edge flags and writing the lenders.
-pub(super) fn find_lenders<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>) {
+pub(super) fn find_lenders(client: &Client, pass: &FieldPass<'_>) {
     let (cubes, unit) = row_launch(pass.rows);
 
     // Safety: `lenders` holds three `i32` values per rebuilt row, as `FieldPass::new` checked. Each unit
     // reads the flags the previous launch wrote for the rows above its own, and writes only its own row's
     // two lenders, after every flag.
     unsafe {
-        let lenders = pass.lenders_array::<R>();
+        let lenders = pass.lenders_array();
 
-        lenders_kernel::launch_unchecked::<R>(client, cubes, unit, lenders, pass.rows);
+        lenders_kernel::launch_unchecked(client, cubes, unit, lenders, pass.rows);
     }
 }

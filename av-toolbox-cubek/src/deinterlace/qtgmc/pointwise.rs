@@ -72,10 +72,10 @@ pub fn sharpness_strength(sharpness: f32, tr1: u32, tr2: u32) -> f32 {
 
 #[cube(launch_unchecked)]
 fn search_kernel(
-    blur: &Array<f32>,
-    repaired: &Array<f32>,
-    bob: &Array<f32>,
-    output: &mut Array<f32>,
+    blur: &[f32],
+    repaired: &[f32],
+    bob: &[f32],
+    output: &mut [f32],
     tolerance: f32,
     near: f32,
     far: f32,
@@ -102,13 +102,7 @@ fn search_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn resharpen_kernel(
-    input: &Array<f32>,
-    blurred: &Array<f32>,
-    output: &mut Array<f32>,
-    strength: f32,
-    peak: f32,
-) {
+fn resharpen_kernel(input: &[f32], blurred: &[f32], output: &mut [f32], strength: f32, peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -120,7 +114,7 @@ fn resharpen_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn midpoint_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32) {
+fn midpoint_kernel(input: &[f32], output: &mut [f32], width: u32, height: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -143,7 +137,7 @@ fn midpoint_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, heig
 }
 
 #[cube(launch_unchecked)]
-fn subtract_kernel(input: &Array<f32>, blurred: &Array<f32>, output: &mut Array<f32>, peak: f32) {
+fn subtract_kernel(input: &[f32], blurred: &[f32], output: &mut [f32], peak: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -152,7 +146,7 @@ fn subtract_kernel(input: &Array<f32>, blurred: &Array<f32>, output: &mut Array<
 }
 
 #[cube(launch_unchecked)]
-fn clamp_kernel(input: &Array<f32>, upper: &Array<f32>, lower: &Array<f32>, output: &mut Array<f32>) {
+fn clamp_kernel(input: &[f32], upper: &[f32], lower: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -163,7 +157,7 @@ fn clamp_kernel(input: &Array<f32>, upper: &Array<f32>, lower: &Array<f32>, outp
 }
 
 #[cube(launch_unchecked)]
-fn merge_kernel(first: &Array<f32>, second: &Array<f32>, output: &mut Array<f32>, weight: f32) {
+fn merge_kernel(first: &[f32], second: &[f32], output: &mut [f32], weight: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -186,8 +180,8 @@ pub(crate) fn search_levels(bits: u32) -> (f32, f32, f32) {
 ///
 /// `blur` is the smoothed clip already merged with `repaired`. It is nudged toward `bob` where they are
 /// far apart and averaged with it where they are close.
-pub fn search_clip<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn search_clip(
+    client: &Client,
     dispatch: &impl Dispatch,
     blur: DevicePlane<'_>,
     repaired: DevicePlane<'_>,
@@ -207,15 +201,15 @@ pub fn search_clip<R: Runtime>(
     let (tolerance, far, near) = search_levels(bits);
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let blur_array = blur.array::<R>();
-    let repaired_array = repaired.array::<R>();
-    let bob_array = bob.array::<R>();
-    let output_array = output.array::<R>();
+    let blur_array = blur.array();
+    let repaired_array = repaired.array();
+    let bob_array = bob.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        search_kernel::launch_unchecked::<R>(
+        search_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -232,8 +226,8 @@ pub fn search_clip<R: Runtime>(
 }
 
 /// `x + (x − blurred) × strength`, clamped to the code values of `bits` deep samples.
-pub fn resharpen<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn resharpen(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     blurred: DevicePlane<'_>,
@@ -251,14 +245,14 @@ pub fn resharpen<R: Runtime>(
     let peak = ((1u32 << bits) - 1) as f32;
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let input_array = input.array::<R>();
-    let blurred_array = blurred.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let blurred_array = blurred.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        resharpen_kernel::launch_unchecked::<R>(
+        resharpen_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -276,8 +270,8 @@ pub fn resharpen<R: Runtime>(
 ///
 /// `vmax` and `vmin` are the largest and smallest of a sample and the samples above and below it. The
 /// rounding is how `std.Merge` stores the midpoint, and sharpening amplifies it.
-pub fn vertical_midpoint<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn vertical_midpoint(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -288,19 +282,19 @@ pub fn vertical_midpoint<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
 
     // Safety: both planes hold `width` by `height` f32 samples, and every row read is clamped inside
     // the plane.
     unsafe {
-        midpoint_kernel::launch_unchecked::<R>(client, cubes, unit, input_array, output_array, width, height);
+        midpoint_kernel::launch_unchecked(client, cubes, unit, input_array, output_array, width, height);
     }
 }
 
 /// `x − blurred`, the back-blend's final subtraction, clamped to the code values of `bits` deep samples.
-pub fn subtract<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn subtract(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     blurred: DevicePlane<'_>,
@@ -317,14 +311,14 @@ pub fn subtract<R: Runtime>(
     let peak = ((1u32 << bits) - 1) as f32;
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let input_array = input.array::<R>();
-    let blurred_array = blurred.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let blurred_array = blurred.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        subtract_kernel::launch_unchecked::<R>(
+        subtract_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -337,8 +331,8 @@ pub fn subtract<R: Runtime>(
 }
 
 /// Clamps `input` between `lower` and `upper`, with `lower` winning where they cross.
-pub fn clamp_between<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn clamp_between(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     upper: DevicePlane<'_>,
@@ -353,15 +347,15 @@ pub fn clamp_between<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let input_array = input.array::<R>();
-    let upper_array = upper.array::<R>();
-    let lower_array = lower.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let upper_array = upper.array();
+    let lower_array = lower.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        clamp_kernel::launch_unchecked::<R>(
+        clamp_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -374,8 +368,8 @@ pub fn clamp_between<R: Runtime>(
 }
 
 /// `first × (1 − weight) + second × weight`.
-pub fn merge<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn merge(
+    client: &Client,
     dispatch: &impl Dispatch,
     first: DevicePlane<'_>,
     second: DevicePlane<'_>,
@@ -389,14 +383,14 @@ pub fn merge<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let first_array = first.array::<R>();
-    let second_array = second.array::<R>();
-    let output_array = output.array::<R>();
+    let first_array = first.array();
+    let second_array = second.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        merge_kernel::launch_unchecked::<R>(
+        merge_kernel::launch_unchecked(
             client,
             cubes,
             unit,

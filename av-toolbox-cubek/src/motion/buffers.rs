@@ -13,7 +13,7 @@ pub struct FieldBuffers {
 }
 
 impl FieldBuffers {
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, grid: &BlockGrid) -> Self {
+    pub fn new(client: &Client, grid: &BlockGrid) -> Self {
         let bytes = grid.blocks() * size_of::<f32>();
 
         Self {
@@ -54,7 +54,7 @@ pub struct SceneFlags {
 }
 
 impl SceneFlags {
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, count: u32) -> Self {
+    pub fn new(client: &Client, count: u32) -> Self {
         let bytes = count as usize * size_of::<u32>();
 
         Self {

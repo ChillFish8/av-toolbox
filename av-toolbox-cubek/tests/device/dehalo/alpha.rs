@@ -10,7 +10,6 @@ use av_toolbox_cubek::dehalo::alpha::{
     strength_sample,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::{pairwise_max, pairwise_min, ranged_plane, share_unsaturated, six_planes};
 use crate::neighbourhood::busy;
@@ -44,7 +43,7 @@ struct HaloMask {
 impl BuildTask for HaloMask {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -140,7 +139,7 @@ struct Clamp {
 impl BuildTask for Clamp {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -195,7 +194,7 @@ struct Strength {
 impl BuildTask for Strength {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

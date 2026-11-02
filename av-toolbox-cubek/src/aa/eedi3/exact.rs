@@ -174,12 +174,7 @@ pub(super) fn mul_exact(left: f32, right: f32) -> f32 {
 ///
 /// Every value must be finite.
 #[cfg(any(test, feature = "test-support"))]
-pub fn eedi3_mul_exact<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    left: &[f32],
-    right: &[f32],
-) -> Vec<f32> {
+pub fn eedi3_mul_exact(client: &Client, dispatch: &impl Dispatch, left: &[f32], right: &[f32]) -> Vec<f32> {
     let cases = left.len();
 
     assert_eq!(right.len(), cases, "every left value needs a right value");
@@ -205,19 +200,12 @@ pub fn eedi3_mul_exact<R: Runtime>(
     // Safety: the three buffers were created above with `cases` f32 values each, and each unit reads and
     // writes only its own case.
     unsafe {
-        let left_values = ArrayArg::from_raw_parts(left_handle, cases);
-        let right_values = ArrayArg::from_raw_parts(right_handle, cases);
+        let left_values = BufferArg::from_raw_parts(left_handle, cases);
+        let right_values = BufferArg::from_raw_parts(right_handle, cases);
         let owned = products.clone();
-        let product_values = ArrayArg::from_raw_parts(owned, cases);
+        let product_values = BufferArg::from_raw_parts(owned, cases);
 
-        mul_exact_kernel::launch_unchecked::<R>(
-            client,
-            cubes,
-            unit,
-            left_values,
-            right_values,
-            product_values,
-        );
+        mul_exact_kernel::launch_unchecked(client, cubes, unit, left_values, right_values, product_values);
     }
 
     let bytes = client
@@ -230,7 +218,7 @@ pub fn eedi3_mul_exact<R: Runtime>(
 /// One exact product per case.
 #[cfg(any(test, feature = "test-support"))]
 #[cube(launch_unchecked)]
-fn mul_exact_kernel(left: &Array<f32>, right: &Array<f32>, products: &mut Array<f32>) {
+fn mul_exact_kernel(left: &[f32], right: &[f32], products: &mut [f32]) {
     if ABSOLUTE_POS >= products.len() {
         terminate!();
     }

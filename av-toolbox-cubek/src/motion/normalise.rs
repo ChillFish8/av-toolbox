@@ -7,8 +7,8 @@ use crate::{DevicePlane, Dispatch};
 /// Stretches the TV range of one sample to between 0 and 1, scaled by `256 / 255`.
 #[cube(launch_unchecked)]
 fn normalise_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    output: &mut [f32],
     black: f32,
     inverse_range: f32,
     stretch: f32,
@@ -30,8 +30,8 @@ fn normalise_kernel(
 /// `input` holds code values of `bits` bits as f32. Values under black or over white clamp to the ends.
 /// The ends are scaled by `256 / 255`, so white is a little over 1. It multiplies by the reciprocal of the
 /// range, as devices divide with different rounding, so white can sit an ulp off `256 / 255`.
-pub fn normalise<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn normalise(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -51,12 +51,12 @@ pub fn normalise<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let input_array = input.array::<R>();
-    let output_array = output.array::<R>();
+    let input_array = input.array();
+    let output_array = output.array();
 
     // Safety: both planes hold `width` by `height` f32 samples, and each unit writes only its own sample.
     unsafe {
-        normalise_kernel::launch_unchecked::<R>(
+        normalise_kernel::launch_unchecked(
             client,
             cubes,
             unit,

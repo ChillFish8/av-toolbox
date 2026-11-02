@@ -58,14 +58,14 @@ pub(crate) fn assert_flag(flag: &SceneFlag<'_>) {
 /// counts down to one in shared memory.
 #[cube(launch_unchecked)]
 fn scene_flag_kernel(
-    sads: &Sequence<Array<f32>>,
-    flags: &mut Array<u32>,
+    sads: &Sequence<Box<[f32]>>,
+    flags: &mut [u32],
     threshold: f32,
     #[comptime] count: u32,
     #[comptime] blocks: u32,
     #[comptime] thscd2: u32,
 ) {
-    let mut partial = SharedMemory::<u32>::new(comptime!(REDUCE_UNITS as usize));
+    let mut partial = Shared::<[u32]>::new_slice(comptime!(REDUCE_UNITS as usize));
 
     #[unroll]
     for field in 0..count {
@@ -112,8 +112,8 @@ fn scene_flag_kernel(
 /// `flags` is a plane of `u32`, `fields.len()` wide and 1 high. A field is a scene change when more than
 /// `rule.thscd2` of every 255 blocks have a SAD above `rule.thscd1`. There must be at least one field,
 /// all on one grid.
-pub fn scene_change_flags<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn scene_change_flags(
+    client: &Client,
     fields: &[MotionField<'_>],
     flags: DevicePlane<'_>,
     rule: SceneChange,
@@ -134,23 +134,23 @@ pub fn scene_change_flags<R: Runtime>(
     );
     crate::assert_plane(&flags, fields.len() as u32, 1, "flags");
 
-    let mut sads = SequenceArg::<R, Array<f32>>::new();
+    let mut sads = SequenceArg::<Box<[f32]>>::new();
     for field in fields {
         assert_field(field);
         assert_eq!(field.grid, grid, "the fields' grids differ");
 
-        sads.push(field.planes.sads.array::<R>());
+        sads.push(field.planes.sads.array());
     }
 
     let threshold = rule.threshold(grid.blksize);
     let cubes = CubeCount::Static(fields.len() as u32, 1, 1);
     let unit = CubeDim::new_1d(REDUCE_UNITS);
-    let flag_array = flags.array::<R>();
+    let flag_array = flags.array();
 
     // Safety: every SADs plane holds a SAD for each block of `grid`, `flags` holds a flag for each field,
     // and each cube writes only its own field's flag.
     unsafe {
-        scene_flag_kernel::launch_unchecked::<R>(
+        scene_flag_kernel::launch_unchecked(
             client,
             cubes,
             unit,

@@ -6,7 +6,8 @@ mod tiling;
 mod tune;
 mod winograd;
 
-use av_toolbox_cubek::artcnn::{Precision, offers_cmma_16};
+use av_toolbox_cubek::artcnn::{Precision, Region, offers_cmma_16};
+use av_toolbox_cubek::cnn::{forced_shared_bytes, takes_forced_blueprint};
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
@@ -18,19 +19,19 @@ use crate::support::{read_f16, read_f32, upload_f16, upload_f32};
 /// Waits for the device and fails the test if a kernel did not compile.
 ///
 /// Reads after a failed launch hand back stale memory.
-pub fn synced<R: Runtime>(client: &ComputeClient<R>) {
+pub fn synced(client: &Client) {
     let finished = cubecl::future::block_on(client.sync());
     finished.expect("every kernel compiled and ran");
 }
 
-pub fn upload_maps<R: Runtime>(client: &ComputeClient<R>, values: &[f32], precision: Precision) -> Handle {
+pub fn upload_maps(client: &Client, values: &[f32], precision: Precision) -> Handle {
     match precision {
         Precision::F16 => upload_f16(client, values),
         Precision::F32 => upload_f32(client, values),
     }
 }
 
-pub fn read_maps<R: Runtime>(client: &ComputeClient<R>, handle: &Handle, precision: Precision) -> Vec<f32> {
+pub fn read_maps(client: &Client, handle: &Handle, precision: Precision) -> Vec<f32> {
     match precision {
         Precision::F16 => read_f16(client, handle),
         Precision::F32 => read_f32(client, handle),
@@ -52,12 +53,29 @@ pub fn textured(width: u32, height: u32) -> Vec<f32> {
     plane
 }
 
-/// Whether the device takes the forced blueprint on a large f16 region.
-pub fn forced_eligible<R: Runtime>(client: &ComputeClient<R>) -> bool {
-    let plane_size_max = client.properties().hardware.plane_size_max;
+/// Whether the device takes the forced blueprint on a large f16 region of maps `features` wide.
+///
+/// That needs 64 lanes per plane, a 16x16x16 cooperative matrix and room for the blueprint's shared memory.
+/// The library's own answer is asserted against that condition, so the two cannot drift apart.
+pub fn forced_eligible(client: &Client, features: u32) -> bool {
+    let hardware = &client.properties().hardware;
     let offers_matrix = offers_cmma_16(client);
+    let fits = forced_shared_bytes(features as usize) <= hardware.max_shared_memory_size;
+    let expected = hardware.plane_size_max == 64 && offers_matrix && fits;
+    let region = Region {
+        x: 0,
+        y: 0,
+        width: 256,
+        height: 256,
+    };
 
-    plane_size_max == 64 && offers_matrix
+    let taken = takes_forced_blueprint(client, features, Precision::F16, region);
+    assert_eq!(
+        taken, expected,
+        "the library and the device conditions disagree at {features} features"
+    );
+
+    expected
 }
 
 /// `values` map values between -2 and 2, varying from each value to the next.

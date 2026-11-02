@@ -56,9 +56,9 @@ pub fn tr0_taps(tr0: u32) -> Vec<(i32, f32)> {
 
 #[cube(launch_unchecked)]
 fn weighted_sum_kernel(
-    planes: &Sequence<Array<f32>>,
+    planes: &Sequence<Box<[f32]>>,
     weights: &Sequence<f32>,
-    output: &mut Array<f32>,
+    output: &mut [f32],
     #[comptime] count: u32,
 ) {
     if ABSOLUTE_POS >= output.len() {
@@ -79,8 +79,8 @@ fn weighted_sum_kernel(
 /// Writes `Σ weights[i] × planes[i]` into `output`.
 ///
 /// The same plane may appear more than once, to weigh it again.
-pub fn weighted_sum<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn weighted_sum(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: &[DevicePlane<'_>],
     weights: &[f32],
@@ -103,23 +103,23 @@ pub fn weighted_sum<R: Runtime>(
     let height = output.height();
     assert_plane(&output, width, height, "output");
 
-    let mut plane_args = SequenceArg::<R, Array<f32>>::new();
-    let mut weight_args = SequenceArg::<R, f32>::new();
+    let mut plane_args = SequenceArg::<Box<[f32]>>::new();
+    let mut weight_args = SequenceArg::<f32>::new();
     for (plane, weight) in planes.iter().zip(weights) {
         assert_plane(plane, width, height, "plane");
 
-        plane_args.push(plane.array::<R>());
+        plane_args.push(plane.array());
         weight_args.push(*weight);
     }
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let output_array = output.array::<R>();
+    let output_array = output.array();
 
     // Safety: every plane and the output hold `width` by `height` f32 samples, and each unit reads and
     // writes only its own sample.
     unsafe {
-        weighted_sum_kernel::launch_unchecked::<R>(
+        weighted_sum_kernel::launch_unchecked(
             client,
             cubes,
             unit,

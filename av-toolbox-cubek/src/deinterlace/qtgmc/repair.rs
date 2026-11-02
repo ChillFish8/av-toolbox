@@ -6,12 +6,7 @@ use crate::blur::{self, FilterPlanes, Storage};
 use crate::{DevicePlane, Dispatch, Edge, assert_plane};
 
 #[cube(launch_unchecked)]
-fn repair_blend_kernel(
-    original: &Array<f32>,
-    rebuilt: &Array<f32>,
-    mask: &Array<f32>,
-    output: &mut Array<f32>,
-) {
+fn repair_blend_kernel(original: &[f32], rebuilt: &[f32], mask: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -24,8 +19,8 @@ fn repair_blend_kernel(
 /// `(above + 2 × centre + below) / 4`, the border clamped.
 ///
 /// This is `std.Convolution(matrix=[1, 2, 1], mode='v')` without its rounding.
-pub fn vertical_blur<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn vertical_blur(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     output: DevicePlane<'_>,
@@ -36,8 +31,8 @@ pub fn vertical_blur<R: Runtime>(
 }
 
 /// `original + (rebuilt − original) × mask`.
-pub fn repair_blend<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn repair_blend(
+    client: &Client,
     dispatch: &impl Dispatch,
     original: DevicePlane<'_>,
     rebuilt: DevicePlane<'_>,
@@ -52,15 +47,15 @@ pub fn repair_blend<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let original_array = original.array::<R>();
-    let rebuilt_array = rebuilt.array::<R>();
-    let mask_array = mask.array::<R>();
-    let output_array = output.array::<R>();
+    let original_array = original.array();
+    let rebuilt_array = rebuilt.array();
+    let mask_array = mask.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        repair_blend_kernel::launch_unchecked::<R>(
+        repair_blend_kernel::launch_unchecked(
             client,
             cubes,
             unit,

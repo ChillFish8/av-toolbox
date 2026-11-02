@@ -38,7 +38,7 @@ pub fn median_of_three_sample(source: f32, blurred: f32, median: f32) -> f32 {
 }
 
 #[cube(launch_unchecked)]
-fn pick_kernel(input: &Array<f32>, blurred: &Array<f32>, median: &Array<f32>, output: &mut Array<f32>) {
+fn pick_kernel(input: &[f32], blurred: &[f32], median: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -75,7 +75,7 @@ impl BinomialChain {
     /// Builds the chain for `radius`, which is 1, 2 or 3.
     ///
     /// It panics when `radius` is outside 1..=3.
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, radius: u32) -> Self {
+    pub fn new(client: &Client, radius: u32) -> Self {
         let separable = match radius {
             1 => None,
             2 => Some(Separable::new(client, &RADIUS_2_WEIGHTS)),
@@ -91,12 +91,7 @@ impl BinomialChain {
     }
 
     /// Blurs `planes.input` into `planes.output`, both f32.
-    pub fn apply<R: Runtime>(
-        &self,
-        client: &ComputeClient<R>,
-        dispatch: &impl Dispatch,
-        planes: NeighbourPlanes<'_>,
-    ) {
+    pub fn apply(&self, client: &Client, dispatch: &impl Dispatch, planes: NeighbourPlanes<'_>) {
         let Some(separable) = &self.separable else {
             smooth(client, dispatch, planes, Smooth::Binomial);
             return;
@@ -114,12 +109,7 @@ impl BinomialChain {
 ///
 /// `blur` sets the radius and runs into `blurred`. The median runs over the same radius, into
 /// `median`.
-pub fn min_blur<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: MinBlurPlanes<'_>,
-    blur: &BinomialChain,
-) {
+pub fn min_blur(client: &Client, dispatch: &impl Dispatch, planes: MinBlurPlanes<'_>, blur: &BinomialChain) {
     let blur_planes = NeighbourPlanes {
         input: planes.input,
         output: planes.blurred,
@@ -143,8 +133,8 @@ pub fn min_blur<R: Runtime>(
 }
 
 /// Writes the median of `first`, `second` and `third` at each sample.
-pub fn median_of_three<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn median_of_three(
+    client: &Client,
     dispatch: &impl Dispatch,
     first: DevicePlane<'_>,
     second: DevicePlane<'_>,
@@ -160,16 +150,16 @@ pub fn median_of_three<R: Runtime>(
     assert_plane(&output, width, height, "output");
 
     let samples = output.samples();
-    let first_array = first.array::<R>();
-    let second_array = second.array::<R>();
-    let third_array = third.array::<R>();
-    let output_array = output.array::<R>();
+    let first_array = first.array();
+    let second_array = second.array();
+    let third_array = third.array();
+    let output_array = output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the asserted sizes make every plane hold `samples` f32 values.
     unsafe {
-        pick_kernel::launch_unchecked::<R>(
+        pick_kernel::launch_unchecked(
             client,
             cubes,
             unit,

@@ -71,9 +71,9 @@ fn range_weight(diff: f32, cutoff: f32, sigma_r: f32, peak: f32) -> f32 {
 
 #[cube(launch_unchecked)]
 fn bilateral_kernel(
-    input: &Array<f32>,
-    reference: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    reference: &[f32],
+    output: &mut [f32],
     width: u32,
     height: u32,
     count: u32,
@@ -150,8 +150,8 @@ pub struct BilateralSettings {
 
 /// Averages `planes.input`, weighing each sample by its distance and by how far `planes.reference`
 /// differs from the centre's, following vszip's truncated bilateral.
-pub fn bilateral<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn bilateral(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: BilateralPlanes<'_>,
     settings: BilateralSettings,
@@ -161,15 +161,15 @@ pub fn bilateral<R: Runtime>(
     let width = planes.output.width();
     let height = planes.output.height();
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let reference = planes.reference.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let reference = planes.reference.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values, and every read clamps into the plane.
     unsafe {
-        bilateral_kernel::launch_unchecked::<R>(
+        bilateral_kernel::launch_unchecked(
             client,
             cubes,
             unit,

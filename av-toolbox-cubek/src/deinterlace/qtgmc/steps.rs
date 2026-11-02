@@ -40,8 +40,8 @@ pub struct SearchPlanes<'a> {
 }
 
 /// Builds the clip motion is searched on from `repaired` and the `bob`.
-pub fn search_clip_from_repaired<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn search_clip_from_repaired(
+    client: &Client,
     dispatch: &impl Dispatch,
     tables: &QtgmcTables,
     planes: SearchPlanes<'_>,
@@ -66,8 +66,8 @@ pub fn search_clip_from_repaired<R: Runtime>(
 }
 
 /// Resharpens `input` as SMode 2 does, by `strength`.
-pub fn smode2_resharpen<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn smode2_resharpen(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     scratch: StepScratch<'_>,
@@ -101,8 +101,8 @@ pub struct BackBlendPlanes<'a> {
 }
 
 /// Removes the blur of what sharpening added to luma from `sharpened`.
-pub fn back_blend<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn back_blend(
+    client: &Client,
     dispatch: &impl Dispatch,
     tables: &QtgmcTables,
     planes: BackBlendPlanes<'_>,

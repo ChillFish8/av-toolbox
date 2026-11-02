@@ -1,6 +1,5 @@
 use av_toolbox_cubek::dehalo::yahr::{YahrPlanes, yahr_combine};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::signed_planes;
 use crate::neighbourhood::busy;
@@ -17,7 +16,7 @@ struct YahrCombine {
 impl BuildTask for YahrCombine {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

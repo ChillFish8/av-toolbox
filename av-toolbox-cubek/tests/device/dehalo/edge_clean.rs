@@ -8,7 +8,6 @@ use av_toolbox_cubek::dehalo::edge_clean::{
 };
 use av_toolbox_cubek::dehalo::fine::RampPlanes;
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::signed_planes;
 use crate::neighbourhood::busy;
@@ -27,7 +26,7 @@ struct ThresholdMask {
 impl BuildTask for ThresholdMask {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -108,7 +107,7 @@ struct Levels {
 impl BuildTask for Levels {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -187,7 +186,7 @@ struct OffsetDifference {
 impl BuildTask for OffsetDifference {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

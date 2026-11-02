@@ -2,7 +2,6 @@ use av_toolbox_cubek::deband::{DebandParams, DebandPlanes, deband};
 use av_toolbox_cubek::depth::{Element, Source};
 use av_toolbox_cubek::testing::{reference_deband, reference_deband_codes};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, to_bytes, upload_u8};
 
@@ -29,7 +28,7 @@ fn source_bytes(values: &[u16], source: Source) -> Vec<u8> {
 impl BuildTask for Deband {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

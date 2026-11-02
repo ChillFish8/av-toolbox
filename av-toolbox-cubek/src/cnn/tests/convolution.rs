@@ -1,28 +1,31 @@
 use std::collections::BTreeSet;
 
 use cubecl::features::MmaConfig;
-use cubecl::ir::{AddressType, StorageType};
-use cubecl::prelude::CubePrimitive;
+use cubecl::ir::{AddressType, ElemType};
+use cubecl::prelude::Scalar;
 use cubek_convolution::components::{ConvolutionProblem, Dimensionality};
 use cubek_convolution::definition::ConvBlueprint;
-use cubek_matmul::components::stage::PartitionBuffering;
-use cubek_matmul::components::tile::TileMatmulKind;
 use cubek_matmul::definition::MatmulGlobalElems;
-use cubek_std::SwizzleModes;
+use cubek_matmul::multi_level::components::stage::PartitionBuffering;
+use cubek_matmul::multi_level::components::tile::TileMatmulKind;
+use cubek_matmul::multi_level::stage::SwizzleModes;
 use cubek_std::cube_count::{CubeCountStrategy, GlobalOrder};
 
 use crate::cnn::Region;
 use crate::cnn::convolution::{convolution_problem, forced_blueprint, offers_cmma_16_in};
 
+/// A shared memory limit no forced blueprint exceeds.
+const ROOMY: usize = 1 << 20;
+
 /// A 3x3 convolution from 64 channels to `out_channels` over a region `width` by `height`, on f16 maps.
 fn half_problem(width: u32, height: u32, out_channels: usize) -> ConvolutionProblem {
-    let half_type = half::f16::as_type_native_unchecked().storage_type();
+    let half_type = half::f16::elem_type_native();
 
     typed_problem(width, height, out_channels, half_type)
 }
 
 /// A 3x3 convolution from 64 channels to `out_channels` over a region `width` by `height`, on `dtype` maps.
-fn typed_problem(width: u32, height: u32, out_channels: usize, dtype: StorageType) -> ConvolutionProblem {
+fn typed_problem(width: u32, height: u32, out_channels: usize, dtype: ElemType) -> ConvolutionProblem {
     let region = Region {
         x: 0,
         y: 0,
@@ -42,7 +45,7 @@ fn typed_problem(width: u32, height: u32, out_channels: usize, dtype: StorageTyp
 fn the_forced_blueprint_tiles_a_large_region_four_by_four_by_two() {
     let problem = half_problem(128, 64, 64);
 
-    let forced = forced_blueprint(&problem, 64, true);
+    let forced = forced_blueprint(&problem, 64, true, ROOMY);
 
     let Some(ConvBlueprint::Forward(blueprint)) = forced else {
         panic!("a forward blueprint is forced at 8192 samples, not {forced:?}");
@@ -72,7 +75,7 @@ fn the_forced_blueprint_tiles_a_large_region_four_by_four_by_two() {
 fn the_forced_blueprint_needs_64_lanes_per_plane() {
     let problem = half_problem(128, 64, 64);
 
-    let forced = forced_blueprint(&problem, 32, true);
+    let forced = forced_blueprint(&problem, 32, true, ROOMY);
 
     assert_eq!(forced, None);
 }
@@ -81,7 +84,7 @@ fn the_forced_blueprint_needs_64_lanes_per_plane() {
 fn the_forced_blueprint_needs_a_16_by_16_by_16_cooperative_matrix() {
     let problem = half_problem(128, 64, 64);
 
-    let forced = forced_blueprint(&problem, 64, false);
+    let forced = forced_blueprint(&problem, 64, false, ROOMY);
 
     assert_eq!(forced, None);
 }
@@ -90,7 +93,7 @@ fn the_forced_blueprint_needs_a_16_by_16_by_16_cooperative_matrix() {
 fn the_forced_blueprint_needs_8192_samples() {
     let problem = half_problem(8191, 1, 64);
 
-    let forced = forced_blueprint(&problem, 64, true);
+    let forced = forced_blueprint(&problem, 64, true, ROOMY);
 
     assert_eq!(forced, None);
 }
@@ -99,24 +102,24 @@ fn the_forced_blueprint_needs_8192_samples() {
 fn the_forced_blueprint_needs_a_multiple_of_16_channels() {
     let problem = half_problem(128, 64, 24);
 
-    let forced = forced_blueprint(&problem, 64, true);
+    let forced = forced_blueprint(&problem, 64, true, ROOMY);
 
     assert_eq!(forced, None);
 }
 
 #[test]
 fn the_forced_blueprint_needs_f16_operands() {
-    let float_type = f32::as_type_native_unchecked().storage_type();
+    let float_type = f32::elem_type_native();
     let problem = typed_problem(128, 64, 64, float_type);
 
-    let forced = forced_blueprint(&problem, 64, true);
+    let forced = forced_blueprint(&problem, 64, true, ROOMY);
 
     assert_eq!(forced, None);
 }
 
 /// A 16x16x16 cooperative matrix on f16 operands, accumulating in `accumulator`.
-fn half_matrix(accumulator: StorageType) -> MmaConfig {
-    let half_type = half::f16::as_type_native_unchecked().storage_type();
+fn half_matrix(accumulator: ElemType) -> MmaConfig {
+    let half_type = half::f16::elem_type_native();
 
     MmaConfig {
         a_type: half_type,
@@ -130,7 +133,7 @@ fn half_matrix(accumulator: StorageType) -> MmaConfig {
 
 #[test]
 fn an_f16_accumulator_alone_does_not_offer_the_forced_matrix() {
-    let half_type = half::f16::as_type_native_unchecked().storage_type();
+    let half_type = half::f16::elem_type_native();
     let config = half_matrix(half_type);
     let configs = BTreeSet::from([config]);
 
@@ -139,7 +142,7 @@ fn an_f16_accumulator_alone_does_not_offer_the_forced_matrix() {
 
 #[test]
 fn an_f32_accumulator_offers_the_forced_matrix() {
-    let float_type = f32::as_type_native_unchecked().storage_type();
+    let float_type = f32::elem_type_native();
     let config = half_matrix(float_type);
     let configs = BTreeSet::from([config]);
 
@@ -151,7 +154,7 @@ fn the_forced_blueprint_is_only_given_up_to_the_measured_widths() {
     for (out_channels, forced) in [(64, true), (96, true), (128, false), (256, false), (512, false)] {
         let problem = half_problem(128, 64, out_channels);
 
-        let blueprint = forced_blueprint(&problem, 64, true);
+        let blueprint = forced_blueprint(&problem, 64, true, ROOMY);
 
         assert_eq!(
             blueprint.is_some(),
@@ -159,4 +162,26 @@ fn the_forced_blueprint_is_only_given_up_to_the_measured_widths() {
             "forced blueprint at {out_channels} channels"
         );
     }
+}
+
+#[test]
+fn the_forced_blueprint_is_not_given_where_its_bias_stage_overflows_shared_memory() {
+    let problem = half_problem(128, 64, 96);
+
+    let tight = forced_blueprint(&problem, 64, true, 65536);
+    let enough = forced_blueprint(&problem, 64, true, 124928);
+
+    assert_eq!(tight, None);
+    assert!(enough.is_some());
+}
+
+#[test]
+fn the_forced_blueprint_at_64_channels_fits_exactly_its_shared_memory() {
+    let problem = half_problem(128, 64, 64);
+
+    let one_short = forced_blueprint(&problem, 64, true, 90111);
+    let exact = forced_blueprint(&problem, 64, true, 90112);
+
+    assert_eq!(one_short, None);
+    assert!(exact.is_some());
 }

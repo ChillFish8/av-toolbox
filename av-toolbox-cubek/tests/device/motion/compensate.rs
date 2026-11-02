@@ -99,7 +99,7 @@ pub(crate) struct CompensateRun {
 impl BuildTask for CompensateRun {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
 

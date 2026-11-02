@@ -37,6 +37,7 @@ const WARM_UP_SIGMAS: f32 = 6.0;
 
 /// A complex number, the state and coefficients of one wave's recursion.
 #[derive(CubeType, CubeLaunch, Clone, Copy)]
+#[expand(derive(Clone, Copy))]
 struct Complex {
     real: f32,
     imaginary: f32,
@@ -47,6 +48,7 @@ struct Complex {
 /// Each wave's state steps as `state = pole * state + sample`. A causal output weighs the states by
 /// the `ahead` weights and an anti-causal one by the `behind` weights.
 #[derive(CubeType, CubeLaunch, Clone, Copy)]
+#[expand(derive(Clone, Copy))]
 struct Recursion {
     first_pole: Complex,
     second_pole: Complex,
@@ -91,7 +93,7 @@ impl HostComplex {
         }
     }
 
-    fn launch<R: Runtime>(self) -> ComplexLaunch<R> {
+    fn launch(self) -> ComplexLaunch {
         ComplexLaunch::new(self.real as f32, self.imaginary as f32)
     }
 }
@@ -99,7 +101,7 @@ impl HostComplex {
 /// The recursion for a gaussian of `sigma`, scaled so its whole discrete kernel sums to 1.
 ///
 /// The total is taken over the poles as rounded to f32, so it holds for the recursion the device runs.
-fn recursion<R: Runtime>(sigma: f32) -> RecursionLaunch<R> {
+fn recursion(sigma: f32) -> RecursionLaunch {
     let sigma = f64::from(sigma);
     let one = HostComplex {
         real: 1.0,
@@ -176,8 +178,8 @@ fn weigh(state: Complex, weight: Complex) -> f32 {
 /// otherwise.
 #[cube]
 fn load_batch<F: Float>(
-    input: &Array<F>,
-    samples: &mut Array<f32>,
+    input: &[F],
+    samples: &mut [f32],
     line: u32,
     first_position: i32,
     line_length: u32,
@@ -208,8 +210,8 @@ fn load_batch<F: Float>(
 /// segment on.
 #[cube]
 fn run_ahead<F: Float>(
-    input: &Array<F>,
-    totals: &mut SharedMemory<f32>,
+    input: &[F],
+    totals: &mut Shared<[f32]>,
     recursion: Recursion,
     line: u32,
     start: u32,
@@ -236,7 +238,7 @@ fn run_ahead<F: Float>(
         let first_position = (start + batch * BATCH) as i32 - warm_up as i32;
         load_batch(
             input,
-            &mut samples,
+            samples.as_mut_slice(),
             line,
             first_position,
             line_length,
@@ -257,7 +259,7 @@ fn run_ahead<F: Float>(
         let first_position = start + batch * BATCH;
         load_batch(
             input,
-            &mut samples,
+            samples.as_mut_slice(),
             line,
             first_position as i32,
             line_length,
@@ -283,8 +285,8 @@ fn run_ahead<F: Float>(
 /// the segment back.
 #[cube]
 fn run_behind<F: Float>(
-    input: &Array<F>,
-    totals: &mut SharedMemory<f32>,
+    input: &[F],
+    totals: &mut Shared<[f32]>,
     recursion: Recursion,
     line: u32,
     start: u32,
@@ -312,7 +314,7 @@ fn run_behind<F: Float>(
         let first_position = past_end + warm_up - (batch + 1) * BATCH;
         load_batch(
             input,
-            &mut samples,
+            samples.as_mut_slice(),
             line,
             first_position as i32,
             line_length,
@@ -334,7 +336,7 @@ fn run_behind<F: Float>(
         let first_position = start + first_local;
         load_batch(
             input,
-            &mut samples,
+            samples.as_mut_slice(),
             line,
             first_position as i32,
             line_length,
@@ -364,8 +366,8 @@ fn run_behind<F: Float>(
 /// so neighbouring units write neighbouring samples.
 #[cube(launch_unchecked)]
 fn recurse_lines<F: Float>(
-    input: &Array<F>,
-    output: &mut Array<F>,
+    input: &[F],
+    output: &mut [F],
     recursion: Recursion,
     width: u32,
     height: u32,
@@ -379,8 +381,8 @@ fn recurse_lines<F: Float>(
     let start = CUBE_POS_Y * SEGMENT;
     let output_count = min(SEGMENT, line_length - start);
     let batches = output_count.div_ceil(BATCH);
-    let mut ahead = SharedMemory::<f32>::new(comptime!((SEGMENT * STRIDE) as usize));
-    let mut behind = SharedMemory::<f32>::new(comptime!((SEGMENT * STRIDE) as usize));
+    let mut ahead = Shared::<[f32]>::new_slice(comptime!((SEGMENT * STRIDE) as usize));
+    let mut behind = Shared::<[f32]>::new_slice(comptime!((SEGMENT * STRIDE) as usize));
 
     if UNIT_POS_Y == 0 {
         run_ahead(
@@ -459,13 +461,7 @@ pub(super) fn wide_cubes(width: u32, height: u32) -> Option<(CubeCount, CubeCoun
 /// Each pass runs Deriche's recursive gaussian along every line, extended past its ends as `edge`
 /// says. Its cost grows with `sigma` through each segment's warm-up. It panics when the plane needs
 /// more cubes than [wide_cubes](crate::blur::wide::wide_cubes) allows.
-pub(super) fn blur_wide<R: Runtime>(
-    client: &ComputeClient<R>,
-    planes: BlurPlanes<'_>,
-    sigma: f32,
-    edge: Edge,
-    storage: Storage,
-) {
+pub(super) fn blur_wide(client: &Client, planes: BlurPlanes<'_>, sigma: f32, edge: Edge, storage: Storage) {
     let width = planes.output.width();
     let height = planes.output.height();
     let cubes = wide_cubes(width, height);
@@ -475,15 +471,15 @@ pub(super) fn blur_wide<R: Runtime>(
     let warm_up = reach.div_ceil(BATCH) * BATCH;
     let clamp = edge == Edge::Clamp;
 
-    let row_recursion = recursion::<R>(sigma);
-    let input = planes.input.array::<R>();
-    let scratch = planes.scratch.array::<R>();
+    let row_recursion = recursion(sigma);
+    let input = planes.input.array();
+    let scratch = planes.scratch.array();
 
     // Safety: every plane holds `width * height` values of `storage`, every read is folded into
     // its line, units past the last line read the last line and every write is guarded to the plane.
     unsafe {
         match storage {
-            Storage::F32 => recurse_lines::launch_unchecked::<f32, R>(
+            Storage::F32 => recurse_lines::launch_unchecked::<f32>(
                 client,
                 row_cubes,
                 shape,
@@ -496,7 +492,7 @@ pub(super) fn blur_wide<R: Runtime>(
                 true,
                 clamp,
             ),
-            Storage::F16 => recurse_lines::launch_unchecked::<half::f16, R>(
+            Storage::F16 => recurse_lines::launch_unchecked::<half::f16>(
                 client,
                 row_cubes,
                 shape,
@@ -512,15 +508,15 @@ pub(super) fn blur_wide<R: Runtime>(
         }
     }
 
-    let column_recursion = recursion::<R>(sigma);
-    let scratch = planes.scratch.array::<R>();
-    let output = planes.output.array::<R>();
+    let column_recursion = recursion(sigma);
+    let scratch = planes.scratch.array();
+    let output = planes.output.array();
 
     // Safety: every plane holds `width * height` values of `storage`, every read is folded into
     // its line, units past the last line read the last line and every write is guarded to the plane.
     unsafe {
         match storage {
-            Storage::F32 => recurse_lines::launch_unchecked::<f32, R>(
+            Storage::F32 => recurse_lines::launch_unchecked::<f32>(
                 client,
                 column_cubes,
                 shape,
@@ -533,7 +529,7 @@ pub(super) fn blur_wide<R: Runtime>(
                 false,
                 clamp,
             ),
-            Storage::F16 => recurse_lines::launch_unchecked::<half::f16, R>(
+            Storage::F16 => recurse_lines::launch_unchecked::<half::f16>(
                 client,
                 column_cubes,
                 shape,

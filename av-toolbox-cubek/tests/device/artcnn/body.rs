@@ -21,7 +21,6 @@ use av_toolbox_cubek::artcnn::{
 };
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask, ElementType};
-use cubecl::prelude::Runtime;
 use half::f16;
 
 use super::{BlueprintRuns, forced_eligible, read_maps, synced, textured, upload_maps, wavy_maps};
@@ -48,7 +47,7 @@ struct Supported {
 impl BuildTask for Supported {
     type Output = bool;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let capabilities = build.capabilities();
         let operands = match self.precision {
             Precision::F16 => ElementType::F16,
@@ -100,7 +99,7 @@ pub(super) struct Forward {
 impl BuildTask for Forward {
     type Output = Result<Vec<f32>, CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         run_forward(self, build, None, None)
     }
 }
@@ -114,7 +113,7 @@ pub(super) struct CandidateForward {
 impl BuildTask for CandidateForward {
     type Output = Result<Vec<f32>, CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         run_forward(self.forward, build, None, Some(self.candidate))
     }
 }
@@ -130,7 +129,7 @@ pub(super) struct ModelForward {
 impl BuildTask for ModelForward {
     type Output = Result<(Vec<f32>, Vec<LayerRun>), CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let model = Some(self.model);
 
         run_forward_as(self.forward, build, None, self.candidate, model)
@@ -146,16 +145,16 @@ struct ForwardWithConv0 {
 impl BuildTask for ForwardWithConv0 {
     type Output = Result<Vec<f32>, CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         run_forward(self.forward, build, Some(self.conv0_bytes), None)
     }
 }
 
 /// Runs `task`, with `conv0` holding `conv0_bytes` if given and otherwise what the scratch sizes ask for, and
 /// every body convolution run by `candidate` if given.
-fn run_forward<R: Runtime>(
+fn run_forward(
     task: Forward,
-    build: &BuildContext<R>,
+    build: &BuildContext,
     conv0_bytes: Option<usize>,
     candidate: Option<Candidate>,
 ) -> Result<Vec<f32>, CnnError> {
@@ -166,9 +165,9 @@ fn run_forward<R: Runtime>(
 
 /// The same as [run_forward] with the weights uploaded as `model` if given, giving how each body layer ran
 /// beside the output.
-fn run_forward_as<R: Runtime>(
+fn run_forward_as(
     task: Forward,
-    build: &BuildContext<R>,
+    build: &BuildContext,
     conv0_bytes: Option<usize>,
     candidate: Option<Candidate>,
     model: Option<Model>,
@@ -440,7 +439,7 @@ struct OneLayer {
 impl BuildTask for OneLayer {
     type Output = LayerRun;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = Precision::F16;
@@ -583,12 +582,12 @@ struct Blueprints {
 impl BuildTask for Blueprints {
     type Output = BlueprintRuns;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
-        let eligible = forced_eligible(client);
         let precision = Precision::F16;
         let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
+        let eligible = forced_eligible(client, network.features());
         let map_bytes = self.maps.len() * precision.bytes();
 
         let input = upload_maps(client, &self.maps, precision);
@@ -675,7 +674,7 @@ struct BiasOutputs {
 impl BuildTask for BiasPlacement {
     type Output = BiasOutputs;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = Precision::F16;

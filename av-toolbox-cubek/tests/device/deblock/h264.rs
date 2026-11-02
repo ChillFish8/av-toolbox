@@ -149,7 +149,7 @@ fn layout_planes(padded: &[(u32, u32)], thresholds: &[Thresholds]) -> Vec<Layout
 impl BuildTask for Deblock {
     type Output = Vec<Vec<u8>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let layout_planes = layout_planes(&self.padded, &self.thresholds);
         let layout = upload_layout(client, &layout_planes);

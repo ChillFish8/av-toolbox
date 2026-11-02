@@ -136,7 +136,7 @@ fn blend(first: u32, second: u32, weight: u32) -> u32 {
 
 /// The mask byte of block `block`, how many of the thresholds its SAD reaches.
 #[cube]
-fn block_byte(sads: &Array<f32>, thresholds: &Array<f32>, block: u32) -> u32 {
+fn block_byte(sads: &[f32], thresholds: &[f32], block: u32) -> u32 {
     let sad = sads[block as usize];
 
     let mut count = 0u32;
@@ -158,12 +158,12 @@ fn block_byte(sads: &Array<f32>, thresholds: &Array<f32>, block: u32) -> u32 {
 )]
 #[cube(launch_unchecked)]
 fn sad_mask_kernel(
-    sads: &Array<f32>,
-    thresholds: &Array<f32>,
-    across_table: &Array<u32>,
-    down_table: &Array<u32>,
-    flags: &Array<u32>,
-    output: &mut Array<f32>,
+    sads: &[f32],
+    thresholds: &[f32],
+    across_table: &[u32],
+    down_table: &[u32],
+    flags: &[u32],
+    output: &mut [f32],
     flag_index: u32,
     width: u32,
     across: u32,
@@ -216,12 +216,7 @@ pub struct SadMaskTables {
 
 impl SadMaskTables {
     /// The tables for masks of `width` by `height` from fields on `grid`, at `ml`.
-    pub fn new<R: Runtime>(
-        client: &ComputeClient<R>,
-        grid: &BlockGrid,
-        ml: f32,
-        (width, height): (u32, u32),
-    ) -> Self {
+    pub fn new(client: &Client, grid: &BlockGrid, ml: f32, (width, height): (u32, u32)) -> Self {
         assert!(
             ml > 0.0 && ml.is_finite(),
             "ml is {ml}, expected a positive value"
@@ -262,8 +257,8 @@ impl SadMaskTables {
 /// `ByteNorm` makes it with the `ml` of `tables`, and the bytes are resized to the area the blocks cover as
 /// `SimpleResize` does, in fixed point. Columns and rows past the covered area repeat its last column and
 /// row, and a byte is stored as its value times `1 / 255`.
-pub fn sad_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn sad_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     field: &MotionField<'_>,
     flag: SceneFlag<'_>,
@@ -288,18 +283,18 @@ pub fn sad_mask<R: Runtime>(
 
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let sads = field.planes.sads.array::<R>();
-    let threshold_array = threshold_plane.array::<R>();
-    let across_array = across_plane.array::<R>();
-    let down_array = down_plane.array::<R>();
-    let flags = flag.flags.array::<R>();
-    let output_array = output.array::<R>();
+    let sads = field.planes.sads.array();
+    let threshold_array = threshold_plane.array();
+    let across_array = across_plane.array();
+    let down_array = down_plane.array();
+    let flags = flag.flags.array();
+    let output_array = output.array();
 
     // Safety: the SADs hold a SAD for each block of `grid`, the tables hold a pair for each column and row
     // of `output` whose blocks lie inside the grid, there are 255 thresholds, the flag index is inside its
     // plane, and each unit writes only its own sample.
     unsafe {
-        sad_mask_kernel::launch_unchecked::<R>(
+        sad_mask_kernel::launch_unchecked(
             client,
             cubes,
             unit,

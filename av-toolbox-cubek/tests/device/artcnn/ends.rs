@@ -19,7 +19,6 @@ use av_toolbox_cubek::testing::{
     synthetic_weights,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 use half::f16;
 
 use super::body::supports;
@@ -86,7 +85,7 @@ struct FirstLayer {
 impl BuildTask for FirstLayer {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -198,7 +197,7 @@ struct LastLayer {
 impl BuildTask for LastLayer {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -370,7 +369,7 @@ struct Epilogue {
 impl BuildTask for Epilogue {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);
@@ -526,7 +525,7 @@ struct LastLayerOutputs {
 impl BuildTask for PaddedAgainstDirect {
     type Output = LastLayerOutputs;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let precision = Precision::F16;
@@ -712,9 +711,9 @@ struct PaddedBlueprints {
 impl BuildTask for PaddedBlueprints {
     type Output = BlueprintRuns;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
-        let eligible = forced_eligible(client);
+        let eligible = forced_eligible(client, 16);
         let precision = Precision::F16;
         let network = Network::upload(client, &self.weights, precision).expect("the weights are valid");
         let scratch_bytes = self.region.samples() as usize * 16 * size_of::<f32>();

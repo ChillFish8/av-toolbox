@@ -1,5 +1,5 @@
-use cubecl::backtrace::BackTrace;
 use cubecl::server::ServerError;
+use cubecl_environment::backtrace::BackTrace;
 use half::f16;
 
 use super::tiling::haloed_scratch;

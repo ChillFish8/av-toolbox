@@ -1,7 +1,6 @@
 use av_toolbox_cubek::deinterlace::qtgmc::{GaussTables, blur_and_spread};
 use av_toolbox_cubek::testing::{assert_plane_within, reference_blur_and_spread};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, seeded_plane, upload_f32};
 
@@ -26,7 +25,7 @@ struct SpreadRun {
 impl BuildTask for SpreadRun {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
 

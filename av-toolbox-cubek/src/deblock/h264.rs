@@ -203,12 +203,12 @@ impl DeblockLayout {
         self.samples() * WORD_BYTES
     }
 
-    fn values<R: Runtime>(&self) -> ArrayArg<R> {
+    fn values(&self) -> BufferArg {
         let handle = self.values.clone();
         let count = self.regions.len() * REGION_VALUES;
 
         // Safety: the buffer was made from exactly `REGION_VALUES` u32 values for each region.
-        unsafe { ArrayArg::from_raw_parts(handle, count) }
+        unsafe { BufferArg::from_raw_parts(handle, count) }
     }
 }
 
@@ -216,7 +216,7 @@ impl DeblockLayout {
 /// against.
 ///
 /// Every padded side must be a whole number of 4 sample blocks. Two planes may hold the same input.
-pub fn upload_layout<R: Runtime>(client: &ComputeClient<R>, planes: &[LayoutPlane]) -> DeblockLayout {
+pub fn upload_layout(client: &Client, planes: &[LayoutPlane]) -> DeblockLayout {
     assert!(!planes.is_empty(), "a deblocking layout needs at least one plane");
 
     for plane in planes {
@@ -275,28 +275,28 @@ struct FloatLimits {
 }
 
 #[cube]
-fn load_integer(samples: &Array<Atomic<u32>>, index: usize) -> i32 {
+fn load_integer(samples: &[Atomic<u32>], index: usize) -> i32 {
     let word = samples[index].load();
 
     i32::cast_from(word)
 }
 
 #[cube]
-fn store_integer(samples: &Array<Atomic<u32>>, index: usize, value: i32) {
+fn store_integer(samples: &[Atomic<u32>], index: usize, value: i32) {
     let word = u32::cast_from(value);
 
     samples[index].store(word);
 }
 
 #[cube]
-fn load_float(samples: &Array<Atomic<u32>>, index: usize) -> f32 {
+fn load_float(samples: &[Atomic<u32>], index: usize) -> f32 {
     let word = samples[index].load();
 
     f32::reinterpret(word)
 }
 
 #[cube]
-fn store_float(samples: &Array<Atomic<u32>>, index: usize, value: f32) {
+fn store_float(samples: &[Atomic<u32>], index: usize, value: f32) {
     let word = u32::reinterpret(value);
 
     samples[index].store(word);
@@ -304,7 +304,7 @@ fn store_float(samples: &Array<Atomic<u32>>, index: usize, value: f32) {
 
 /// The scratch word for `value`, its bits for a float and its value for an integer.
 #[cube]
-fn to_word<E: CubePrimitive>(value: E, #[comptime] float: bool) -> u32 {
+fn to_word<E: Scalar>(value: E, #[comptime] float: bool) -> u32 {
     if float {
         u32::reinterpret(value)
     } else {
@@ -314,7 +314,7 @@ fn to_word<E: CubePrimitive>(value: E, #[comptime] float: bool) -> u32 {
 
 /// The sample `word` holds, the inverse of [to_word].
 #[cube]
-fn from_word<E: CubePrimitive>(word: u32, #[comptime] float: bool) -> E {
+fn from_word<E: Scalar>(word: u32, #[comptime] float: bool) -> E {
     if float {
         E::reinterpret(word)
     } else {
@@ -325,7 +325,7 @@ fn from_word<E: CubePrimitive>(word: u32, #[comptime] float: bool) -> E {
 /// Filters the line of integer samples whose first sample past the edge is `first_after`, its taps `stride`
 /// apart.
 #[cube]
-fn filter_integer_line(samples: &Array<Atomic<u32>>, first_after: u32, stride: u32, limits: &IntegerLimits) {
+fn filter_integer_line(samples: &[Atomic<u32>], first_after: u32, stride: u32, limits: &IntegerLimits) {
     let p0_index = (first_after - stride) as usize;
     let p1_index = (first_after - 2 * stride) as usize;
     let p2_index = (first_after - 3 * stride) as usize;
@@ -383,7 +383,7 @@ fn filter_integer_line(samples: &Array<Atomic<u32>>, first_after: u32, stride: u
 ///
 /// Nothing is rounded or clamped to a range.
 #[cube]
-fn filter_float_line(samples: &Array<Atomic<u32>>, first_after: u32, stride: u32, limits: &FloatLimits) {
+fn filter_float_line(samples: &[Atomic<u32>], first_after: u32, stride: u32, limits: &FloatLimits) {
     let p0_index = (first_after - stride) as usize;
     let p1_index = (first_after - 2 * stride) as usize;
     let p2_index = (first_after - 3 * stride) as usize;
@@ -434,7 +434,7 @@ fn filter_float_line(samples: &Array<Atomic<u32>>, first_after: u32, stride: u32
 
 #[cube]
 fn filter_line(
-    samples: &Array<Atomic<u32>>,
+    samples: &[Atomic<u32>],
     first_after: u32,
     stride: u32,
     integer_limits: &IntegerLimits,
@@ -457,12 +457,7 @@ fn filter_line(
 /// The waves of a cube pass samples to each other through the scratch, so every access to it is atomic. A
 /// barrier makes atomic writes visible to every wave of a cube, but not plain ones.
 #[cube(launch_unchecked)]
-fn wavefront_kernel(
-    samples: &mut Array<Atomic<u32>>,
-    layout: &Array<u32>,
-    peak: f32,
-    #[comptime] float: bool,
-) {
+fn wavefront_kernel(samples: &mut [Atomic<u32>], layout: &[u32], peak: f32, #[comptime] float: bool) {
     let entry = CUBE_POS * REGION_VALUES;
     let offset = layout[entry];
     let width = layout[entry + 1];
@@ -500,7 +495,14 @@ fn wavefront_kernel(
                 let x = (column * 4 + top_line % 4) as u32;
                 let y = (row * 4) as u32;
                 let first_after = offset + y * width + x;
-                filter_line(samples, first_after, width, &integer_limits, &float_limits, float);
+                filter_line(
+                    &*samples,
+                    first_after,
+                    width,
+                    &integer_limits,
+                    &float_limits,
+                    float,
+                );
             }
 
             top_line += units;
@@ -517,7 +519,14 @@ fn wavefront_kernel(
                 let x = (column * 4) as u32;
                 let y = (row * 4 + left_line % 4) as u32;
                 let first_after = offset + y * width + x;
-                filter_line(samples, first_after, 1u32, &integer_limits, &float_limits, float);
+                filter_line(
+                    &*samples,
+                    first_after,
+                    1u32,
+                    &integer_limits,
+                    &float_limits,
+                    float,
+                );
             }
 
             left_line += units;
@@ -528,9 +537,9 @@ fn wavefront_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn pad_kernel<E: CubePrimitive>(
-    input: &Array<E>,
-    samples: &mut Array<Atomic<u32>>,
+fn pad_kernel<E: Scalar>(
+    input: &[E],
+    samples: &mut [Atomic<u32>],
     input_width: u32,
     input_height: u32,
     offset: u32,
@@ -555,9 +564,9 @@ fn pad_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-fn crop_kernel<E: CubePrimitive>(
-    samples: &Array<Atomic<u32>>,
-    output: &mut Array<E>,
+fn crop_kernel<E: Scalar>(
+    samples: &[Atomic<u32>],
+    output: &mut [E],
     offset: u32,
     padded_width: u32,
     output_width: u32,
@@ -621,8 +630,8 @@ fn assert_fits(planes: DeblockPlanes<'_>, layout: &DeblockLayout) {
 /// # Panics
 ///
 /// Panics when any plane's thresholds were not made for `samples` by the `thresholds` function.
-pub fn deblock<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn deblock(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DeblockPlanes<'_>,
     scratch: &Handle,
@@ -644,14 +653,14 @@ pub fn deblock<R: Runtime>(
     assert_holds(scratch, bytes, "deblocking scratch");
 
     match samples {
-        MatrixSamples::U8 => launch::<u8, R>(client, dispatch, planes, scratch, layout, peak, false),
-        MatrixSamples::U16 { .. } => launch::<u16, R>(client, dispatch, planes, scratch, layout, peak, false),
-        MatrixSamples::F32 => launch::<f32, R>(client, dispatch, planes, scratch, layout, peak, true),
+        MatrixSamples::U8 => launch::<u8>(client, dispatch, planes, scratch, layout, peak, false),
+        MatrixSamples::U16 { .. } => launch::<u16>(client, dispatch, planes, scratch, layout, peak, false),
+        MatrixSamples::F32 => launch::<f32>(client, dispatch, planes, scratch, layout, peak, true),
     }
 }
 
-fn launch<E: CubePrimitive, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch<E: Scalar>(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DeblockPlanes<'_>,
     scratch: &Handle,
@@ -663,19 +672,19 @@ fn launch<E: CubePrimitive, R: Runtime>(
 
     let inputs = planes.inputs.iter().zip(&layout.regions);
     for (input, region) in inputs {
-        launch_pad::<E, R>(client, dispatch, *input, scratch, total, *region, float);
+        launch_pad::<E>(client, dispatch, *input, scratch, total, *region, float);
     }
 
-    launch_wavefront::<R>(client, dispatch, scratch, layout, peak, float);
+    launch_wavefront(client, dispatch, scratch, layout, peak, float);
 
     let outputs = planes.outputs.iter().zip(&layout.regions);
     for (output, region) in outputs {
-        launch_crop::<E, R>(client, dispatch, scratch, total, *region, *output, float);
+        launch_crop::<E>(client, dispatch, scratch, total, *region, *output, float);
     }
 }
 
-fn launch_pad<E: CubePrimitive, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_pad<E: Scalar>(
+    client: &Client,
     dispatch: &impl Dispatch,
     input: DevicePlane<'_>,
     scratch: &Handle,
@@ -683,11 +692,11 @@ fn launch_pad<E: CubePrimitive, R: Runtime>(
     region: PlaneRegion,
     float: bool,
 ) {
-    let input_array = input.array::<R>();
+    let input_array = input.array();
     let handle = scratch.clone();
 
     // Safety: `deblock` checked the scratch holds `total` words.
-    let scratch_array = unsafe { ArrayArg::from_raw_parts(handle, total) };
+    let scratch_array = unsafe { BufferArg::from_raw_parts(handle, total) };
     let samples = region.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -695,7 +704,7 @@ fn launch_pad<E: CubePrimitive, R: Runtime>(
     // Safety: every write lands in the region, which the layout placed inside the scratch, and every read is
     // mirrored into the input, which holds `width * height` samples of `E` as `DevicePlane::new` requires.
     unsafe {
-        pad_kernel::launch_unchecked::<E, R>(
+        pad_kernel::launch_unchecked::<E>(
             client,
             cubes,
             unit,
@@ -711,8 +720,8 @@ fn launch_pad<E: CubePrimitive, R: Runtime>(
     }
 }
 
-fn launch_wavefront<R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_wavefront(
+    client: &Client,
     dispatch: &impl Dispatch,
     scratch: &Handle,
     layout: &DeblockLayout,
@@ -723,8 +732,8 @@ fn launch_wavefront<R: Runtime>(
     let handle = scratch.clone();
 
     // Safety: `deblock` checked the scratch holds `total` words.
-    let samples = unsafe { ArrayArg::from_raw_parts(handle, total) };
-    let regions = layout.values::<R>();
+    let samples = unsafe { BufferArg::from_raw_parts(handle, total) };
+    let regions = layout.values();
     let planes = layout.regions.len() as u32;
     let cubes = CubeCount::Static(planes, 1, 1);
     let unit = dispatch.cube_dim();
@@ -732,12 +741,12 @@ fn launch_wavefront<R: Runtime>(
     // Safety: cube `k` reads region `k`, and every tap of every line it filters lies inside that region,
     // since a region is whole 4 by 4 blocks and only edges with three samples on each side are filtered.
     unsafe {
-        wavefront_kernel::launch_unchecked::<R>(client, cubes, unit, samples, regions, peak, float);
+        wavefront_kernel::launch_unchecked(client, cubes, unit, samples, regions, peak, float);
     }
 }
 
-fn launch_crop<E: CubePrimitive, R: Runtime>(
-    client: &ComputeClient<R>,
+fn launch_crop<E: Scalar>(
+    client: &Client,
     dispatch: &impl Dispatch,
     scratch: &Handle,
     total: usize,
@@ -748,8 +757,8 @@ fn launch_crop<E: CubePrimitive, R: Runtime>(
     let handle = scratch.clone();
 
     // Safety: `deblock` checked the scratch holds `total` words.
-    let scratch_array = unsafe { ArrayArg::from_raw_parts(handle, total) };
-    let output_array = output.array::<R>();
+    let scratch_array = unsafe { BufferArg::from_raw_parts(handle, total) };
+    let output_array = output.array();
     let samples = output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -757,7 +766,7 @@ fn launch_crop<E: CubePrimitive, R: Runtime>(
     // Safety: `deblock` checked the output fits inside its region, so every read lands in the region, and the
     // output holds `width * height` samples of `E` as `DevicePlane::new` requires.
     unsafe {
-        crop_kernel::launch_unchecked::<E, R>(
+        crop_kernel::launch_unchecked::<E>(
             client,
             cubes,
             unit,

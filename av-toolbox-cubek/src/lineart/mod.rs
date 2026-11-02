@@ -37,7 +37,7 @@ pub struct MergePlanes<'a> {
 /// A weight of 0 or `weight_peak` gives a share of exactly 0 or 1, so those weights hand back the
 /// input or the filtered value exactly.
 #[cube(launch_unchecked)]
-fn merge_kernel(input: &Array<f32>, filtered: &mut Array<f32>, weight: &Array<f32>, weight_peak: f32) {
+fn merge_kernel(input: &[f32], filtered: &mut [f32], weight: &[f32], weight_peak: f32) {
     if ABSOLUTE_POS >= filtered.len() {
         terminate!();
     }
@@ -52,13 +52,7 @@ fn merge_kernel(input: &Array<f32>, filtered: &mut Array<f32>, weight: &Array<f3
 /// Holds `filtered` to `0..=peak`, then mixes the two planes as `input * (1 - share) + filtered * share`,
 /// with `share = weight / weight_peak`.
 #[cube(launch_unchecked)]
-fn clamped_merge_kernel(
-    input: &Array<f32>,
-    filtered: &mut Array<f32>,
-    weight: &Array<f32>,
-    weight_peak: f32,
-    peak: f32,
-) {
+fn clamped_merge_kernel(input: &[f32], filtered: &mut [f32], weight: &[f32], weight_peak: f32, peak: f32) {
     if ABSOLUTE_POS >= filtered.len() {
         terminate!();
     }
@@ -73,22 +67,17 @@ fn clamped_merge_kernel(
 }
 
 /// Writes `input + (filtered - input) * weight / weight_peak` into `filtered`.
-pub fn merge<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: MergePlanes<'_>,
-    weight_peak: f32,
-) {
+pub fn merge(client: &Client, dispatch: &impl Dispatch, planes: MergePlanes<'_>, weight_peak: f32) {
     let samples = planes.filtered.samples();
-    let input = planes.input.array::<R>();
-    let filtered = planes.filtered.array::<R>();
-    let weight = planes.weight.array::<R>();
+    let input = planes.input.array();
+    let filtered = planes.filtered.array();
+    let weight = planes.weight.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        merge_kernel::launch_unchecked::<R>(client, cubes, unit, input, filtered, weight, weight_peak);
+        merge_kernel::launch_unchecked(client, cubes, unit, input, filtered, weight, weight_peak);
     }
 }
 
@@ -96,23 +85,23 @@ pub fn merge<R: Runtime>(
 ///
 /// Holding `filtered` to the sample range first means a partial weight lands between the input and
 /// the filtered plane as it would be stored.
-pub fn clamped_merge<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn clamped_merge(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: MergePlanes<'_>,
     weight_peak: f32,
     peak: f32,
 ) {
     let samples = planes.filtered.samples();
-    let input = planes.input.array::<R>();
-    let filtered = planes.filtered.array::<R>();
-    let weight = planes.weight.array::<R>();
+    let input = planes.input.array();
+    let filtered = planes.filtered.array();
+    let weight = planes.weight.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        clamped_merge_kernel::launch_unchecked::<R>(
+        clamped_merge_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -126,11 +115,7 @@ pub fn clamped_merge<R: Runtime>(
 }
 
 /// The vertical `1 2 1` blur over 4, reading past the top and bottom through `reflect`.
-pub fn vertical_121<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: NeighbourPlanes<'_>,
-) {
+pub fn vertical_121(client: &Client, dispatch: &impl Dispatch, planes: NeighbourPlanes<'_>) {
     let filter_planes = FilterPlanes {
         input: planes.input,
         output: planes.output,
@@ -161,7 +146,7 @@ pub struct VinversePlanes<'a> {
 
 /// The sample of `input` at `column` and `row`, reading past the top and bottom through reflect.
 #[cube]
-fn column_sample(input: &Array<f32>, width: u32, height: u32, column: u32, row: i32) -> f32 {
+fn column_sample(input: &[f32], width: u32, height: u32, column: u32, row: i32) -> f32 {
     let folded = fold(row, height, false);
 
     input[(folded * width + column) as usize]
@@ -198,7 +183,7 @@ fn without_comb(value: f32, comb: f32, comb_blurred: f32) -> f32 {
 /// The comb and its vertical `1 2 1` are worked out from the 5 samples around each row. Each row's
 /// sample and comb are found once and slide down the run.
 #[cube]
-fn sbr_run(input: &Array<f32>, sbr: &mut Array<f32>, width: u32, height: u32, column: u32, first_row: u32) {
+fn sbr_run(input: &[f32], sbr: &mut [f32], width: u32, height: u32, column: u32, first_row: u32) {
     let first = first_row as i32;
     let two_above = column_sample(input, width, height, column, first - 2);
     let one_above = column_sample(input, width, height, column, first - 1);
@@ -230,7 +215,7 @@ fn sbr_run(input: &Array<f32>, sbr: &mut Array<f32>, width: u32, height: u32, co
 ///
 /// Each cube walks the tiles its grid position lands on.
 #[cube(launch_unchecked)]
-fn sbr_kernel(input: &Array<f32>, sbr: &mut Array<f32>, width: u32, height: u32) {
+fn sbr_kernel(input: &[f32], sbr: &mut [f32], width: u32, height: u32) {
     let mut tile_down = CUBE_POS_Y;
     while tile_down * TILE_HEIGHT < height {
         let first_row = tile_down * TILE_HEIGHT + UNIT_POS_Y * OUTPUTS_DOWN;
@@ -250,7 +235,7 @@ fn sbr_kernel(input: &Array<f32>, sbr: &mut Array<f32>, width: u32, height: u32)
 }
 
 /// Writes `input` into `sbr` with part of its comb taken off, in one launch.
-fn remove_comb<R: Runtime>(client: &ComputeClient<R>, input: DevicePlane<'_>, sbr: DevicePlane<'_>) {
+fn remove_comb(client: &Client, input: DevicePlane<'_>, sbr: DevicePlane<'_>) {
     let width = sbr.width();
     let height = sbr.height();
     let bytes = size_of::<f32>();
@@ -259,23 +244,23 @@ fn remove_comb<R: Runtime>(client: &ComputeClient<R>, input: DevicePlane<'_>, sb
 
     let cubes = fixed_cubes(width, height);
     let unit = CubeDim::new_2d(UNITS_ACROSS, UNITS_DOWN);
-    let input = input.array::<R>();
-    let sbr = sbr.array::<R>();
+    let input = input.array();
+    let sbr = sbr.array();
 
     // Safety: both planes hold `width * height` f32 values, every read is folded into the plane and
     // every write is guarded to it.
     unsafe {
-        sbr_kernel::launch_unchecked::<R>(client, cubes, unit, input, sbr, width, height);
+        sbr_kernel::launch_unchecked(client, cubes, unit, input, sbr, width, height);
     }
 }
 
 /// Adds the contra-sharpening step onto `sbr` and limits the result to `limit` around `input`.
 #[cube(launch_unchecked)]
 fn vinverse_kernel(
-    input: &Array<f32>,
-    sbr: &Array<f32>,
-    sbr_blurred: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    sbr: &[f32],
+    sbr_blurred: &[f32],
+    output: &mut [f32],
     contra_str: f32,
     scl: f32,
     limit: f32,
@@ -310,8 +295,8 @@ fn vinverse_kernel(
 /// The comb is the part of `input` that a vertical `1 2 1` blur removes. The part of that comb a
 /// second blur removes is taken off, unless it points against the comb. A contra-sharpening step
 /// then restores detail the first step flattened.
-pub fn vinverse<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn vinverse(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: VinversePlanes<'_>,
     params: &VinverseParams,
@@ -327,15 +312,15 @@ pub fn vinverse<R: Runtime>(
     let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let input = planes.input.array::<R>();
-    let sbr = planes.sbr.array::<R>();
-    let sbr_blurred = planes.blurred.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let sbr = planes.sbr.array();
+    let sbr_blurred = planes.blurred.array();
+    let output = planes.output.array();
     let limit = params.amnt.unwrap_or(f32::MAX);
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        vinverse_kernel::launch_unchecked::<R>(
+        vinverse_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -388,7 +373,7 @@ pub struct DarkenPlanes<'a> {
 
 /// Holds each sample's expansion to `limit` above the sample.
 #[cube(launch_unchecked)]
-fn limit_kernel(input: &Array<f32>, maxed: &Array<f32>, limited: &mut Array<f32>, limit: f32) {
+fn limit_kernel(input: &[f32], maxed: &[f32], limited: &mut [f32], limit: f32) {
     if ABSOLUTE_POS >= limited.len() {
         terminate!();
     }
@@ -399,10 +384,10 @@ fn limit_kernel(input: &Array<f32>, maxed: &Array<f32>, limited: &mut Array<f32>
 /// Deepens the samples that sit below their closing, and writes how far each one sits below it.
 #[cube(launch_unchecked)]
 fn darken_kernel(
-    input: &Array<f32>,
-    closed: &Array<f32>,
-    sharp: &mut Array<f32>,
-    diff: &mut Array<f32>,
+    input: &[f32],
+    closed: &[f32],
+    sharp: &mut [f32],
+    diff: &mut [f32],
     cap: f32,
     thr: f32,
     s: f32,
@@ -429,7 +414,7 @@ fn darken_kernel(
 
 /// Turns the darkest difference around a sample into how much of the sharp result it keeps.
 #[cube(launch_unchecked)]
-fn line_weight_kernel(lines: &mut Array<f32>, n: f32, t: f32, peak: f32) {
+fn line_weight_kernel(lines: &mut [f32], n: f32, t: f32, peak: f32) {
     if ABSOLUTE_POS >= lines.len() {
         terminate!();
     }
@@ -441,12 +426,12 @@ fn line_weight_kernel(lines: &mut Array<f32>, n: f32, t: f32, peak: f32) {
 
 /// Pulls the expanded plane in by the depth of each line.
 #[cube(launch_unchecked)]
-fn thin_kernel(maxed: &mut Array<f32>, diff: &Array<f32>, s: f32, n: f32) {
+fn thin_kernel(maxed: &mut [f32], diff: &[f32], s: f32, n: f32) {
     if ABSOLUTE_POS >= maxed.len() {
         terminate!();
     }
 
-    maxed[ABSOLUTE_POS] = maxed[ABSOLUTE_POS] + (diff[ABSOLUTE_POS] - n) * (s + 1.0);
+    maxed[ABSOLUTE_POS] += (diff[ABSOLUTE_POS] - n) * (s + 1.0);
 }
 
 /// Darkens the thin lines of `input` the way vs-jetpack's fast_line_darken does, writing `output`.
@@ -455,8 +440,8 @@ fn thin_kernel(maxed: &mut Array<f32>, diff: &Array<f32>, s: f32, n: f32) {
 /// above it. Lines are deepened by `s` times how far they sit below their closing. When `t` is above
 /// 0, lines are also thinned, in the areas where the darkest difference around them says a line is
 /// present.
-pub fn darken<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn darken(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: DarkenPlanes<'_>,
     settings: &DarkenSettings,
@@ -470,13 +455,13 @@ pub fn darken<R: Runtime>(
     let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let input = planes.input.array::<R>();
-    let maxed = planes.maxed.array::<R>();
-    let limited = planes.limited.array::<R>();
+    let input = planes.input.array();
+    let maxed = planes.maxed.array();
+    let limited = planes.limited.array();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        limit_kernel::launch_unchecked::<R>(client, cubes, unit, input, maxed, limited, settings.limit);
+        limit_kernel::launch_unchecked(client, cubes, unit, input, maxed, limited, settings.limit);
     }
 
     let shrink = NeighbourPlanes {
@@ -486,14 +471,14 @@ pub fn darken<R: Runtime>(
     extreme(client, dispatch, shrink, Extreme::Minimum, Shape::Square);
 
     let cubes = dispatch.cube_count(samples);
-    let input = planes.input.array::<R>();
-    let closed = planes.closed.array::<R>();
-    let sharp = planes.output.array::<R>();
-    let diff = planes.diff.array::<R>();
+    let input = planes.input.array();
+    let closed = planes.closed.array();
+    let sharp = planes.output.array();
+    let diff = planes.diff.array();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        darken_kernel::launch_unchecked::<R>(
+        darken_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -520,11 +505,11 @@ pub fn darken<R: Runtime>(
     extreme(client, dispatch, darkest, Extreme::Minimum, Shape::Square);
 
     let cubes = dispatch.cube_count(samples);
-    let lines = planes.lines.array::<R>();
+    let lines = planes.lines.array();
 
     // Safety: the plane holds `samples` f32 values.
     unsafe {
-        line_weight_kernel::launch_unchecked::<R>(
+        line_weight_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -542,12 +527,12 @@ pub fn darken<R: Runtime>(
     smooth(client, dispatch, spread, Smooth::Box);
 
     let cubes = dispatch.cube_count(samples);
-    let maxed = planes.maxed.array::<R>();
-    let diff = planes.diff.array::<R>();
+    let maxed = planes.maxed.array();
+    let diff = planes.diff.array();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        thin_kernel::launch_unchecked::<R>(client, cubes, unit, maxed, diff, settings.s, settings.n);
+        thin_kernel::launch_unchecked(client, cubes, unit, maxed, diff, settings.s, settings.n);
     }
 
     let mix = MergePlanes {
@@ -605,10 +590,10 @@ pub struct ToonFinishPlanes<'a> {
 /// Writes how far each sample sits below its closing, held to `peak - n`, and that map shifted by `n`.
 #[cube(launch_unchecked)]
 fn toon_difference_kernel(
-    input: &Array<f32>,
-    closed: &Array<f32>,
-    diff: &mut Array<f32>,
-    shifted: &mut Array<f32>,
+    input: &[f32],
+    closed: &[f32],
+    diff: &mut [f32],
+    shifted: &mut [f32],
     n: f32,
     peak: f32,
 ) {
@@ -625,7 +610,7 @@ fn toon_difference_kernel(
 
 /// Holds the darkness to what the warp left of it.
 #[cube(launch_unchecked)]
-fn toon_limit_kernel(diff: &mut Array<f32>, warped: &Array<f32>, n: f32) {
+fn toon_limit_kernel(diff: &mut [f32], warped: &[f32], n: f32) {
     if ABSOLUTE_POS >= diff.len() {
         terminate!();
     }
@@ -636,10 +621,10 @@ fn toon_limit_kernel(diff: &mut Array<f32>, warped: &Array<f32>, n: f32) {
 /// Deepens each sample by its darkness, scaled by how dark the line around it is.
 #[cube(launch_unchecked)]
 fn toon_kernel(
-    input: &Array<f32>,
-    diff: &Array<f32>,
-    widest: &Array<f32>,
-    output: &mut Array<f32>,
+    input: &[f32],
+    diff: &[f32],
+    widest: &[f32],
+    output: &mut [f32],
     l: f32,
     u: f32,
     strength: f32,
@@ -665,8 +650,8 @@ fn toon_kernel(
 ///
 /// The closing is the plane grown then shrunk by one sample. The darkness is how far a sample
 /// sits below it, held to `peak - n` so the shifted map stays inside the sample range.
-pub fn toon_difference<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn toon_difference(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: ToonDifferencePlanes<'_>,
     settings: &ToonSettings,
@@ -686,14 +671,14 @@ pub fn toon_difference<R: Runtime>(
     let samples = planes.diff.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let input = planes.input.array::<R>();
-    let closed = planes.closed.array::<R>();
-    let diff = planes.diff.array::<R>();
-    let shifted = planes.shifted.array::<R>();
+    let input = planes.input.array();
+    let closed = planes.closed.array();
+    let diff = planes.diff.array();
+    let shifted = planes.shifted.array();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        toon_difference_kernel::launch_unchecked::<R>(
+        toon_difference_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -712,8 +697,8 @@ pub fn toon_difference<R: Runtime>(
 /// The darkness is held to what the warp left of it. Where the largest darkness around a sample is
 /// at most `l` nothing changes, from `u` up the whole darkness is taken off, and between the two a
 /// share of it is, growing evenly. That is scaled by `strength` and taken off the input.
-pub fn toon_finish<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn toon_finish(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: ToonFinishPlanes<'_>,
     settings: &ToonSettings,
@@ -721,12 +706,12 @@ pub fn toon_finish<R: Runtime>(
     let samples = planes.output.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let diff = planes.diff.array::<R>();
-    let warped = planes.warped.array::<R>();
+    let diff = planes.diff.array();
+    let warped = planes.warped.array();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        toon_limit_kernel::launch_unchecked::<R>(client, cubes.clone(), unit, diff, warped, settings.n);
+        toon_limit_kernel::launch_unchecked(client, cubes.clone(), unit, diff, warped, settings.n);
     }
 
     let spread = NeighbourPlanes {
@@ -735,14 +720,14 @@ pub fn toon_finish<R: Runtime>(
     };
     extreme(client, dispatch, spread, Extreme::Maximum, Shape::Square);
 
-    let input = planes.input.array::<R>();
-    let diff = planes.diff.array::<R>();
-    let widest = planes.widest.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let diff = planes.diff.array();
+    let widest = planes.widest.array();
+    let output = planes.output.array();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        toon_kernel::launch_unchecked::<R>(
+        toon_kernel::launch_unchecked(
             client,
             cubes,
             unit,

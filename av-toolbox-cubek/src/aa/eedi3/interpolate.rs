@@ -23,9 +23,9 @@ use crate::aa::row_launch;
 /// bits once for as long as the walk stays on it.
 #[cube(launch_unchecked)]
 fn backtrack_kernel(
-    backpointers: &Array<u32>,
-    lenders: &Array<i32>,
-    directions: &mut Array<i32>,
+    backpointers: &[u32],
+    lenders: &[i32],
+    directions: &mut [i32],
     width: u32,
     groups: u32,
     active_words: u32,
@@ -105,9 +105,9 @@ pub(super) fn clamped_sixteenth(numerator: i32, peak: u32) -> i32 {
 /// would leave the row.
 #[cube(launch_unchecked)]
 fn interpolate_kernel(
-    input: &Array<f32>,
-    directions: &Array<i32>,
-    rebuilt: &mut Array<f32>,
+    input: &[f32],
+    directions: &[i32],
+    rebuilt: &mut [f32],
     width: u32,
     height: u32,
     first_rebuilt: u32,
@@ -145,7 +145,7 @@ fn interpolate_kernel(
 }
 
 /// Launches the backtrack over every rebuilt row, writing the directions.
-pub(super) fn backtrack<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<'_>) {
+pub(super) fn backtrack(client: &Client, pass: &FieldPass<'_>) {
     let (cubes, unit) = row_launch(pass.rows);
     let masked = pass.mclip.is_some();
 
@@ -154,13 +154,13 @@ pub(super) fn backtrack<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<
     // rebuilt row, as `FieldPass::new` checked. Each unit owns one rebuilt row, the only row it reads and
     // writes, and keeps the direction it follows between `-mdis` and `mdis`.
     unsafe {
-        let backpointers = pass.backpointers_array::<R>();
-        let lenders = pass.lenders_array::<R>();
-        let directions = pass.directions_array::<R>();
+        let backpointers = pass.backpointers_array();
+        let lenders = pass.lenders_array();
+        let directions = pass.directions_array();
         let groups = pass.groups();
         let active_words = pass.active_words();
 
-        backtrack_kernel::launch_unchecked::<R>(
+        backtrack_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -178,11 +178,7 @@ pub(super) fn backtrack<R: Runtime>(client: &ComputeClient<R>, pass: &FieldPass<
 }
 
 /// Launches the interpolation of every rebuilt sample into the rebuilt rows scratch.
-pub(super) fn interpolate<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    pass: &FieldPass<'_>,
-) {
+pub(super) fn interpolate(client: &Client, dispatch: &impl Dispatch, pass: &FieldPass<'_>) {
     let samples = pass.rebuilt_samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
@@ -191,11 +187,11 @@ pub(super) fn interpolate<R: Runtime>(
     // rebuilt sample, as `FieldPass::new` checked. Each unit writes only its own rebuilt sample, and every
     // read of the input reflects and clamps into the plane.
     unsafe {
-        let input = pass.input.array::<R>();
-        let directions = pass.directions_array::<R>();
-        let rebuilt = pass.rebuilt_array::<R>();
+        let input = pass.input.array();
+        let directions = pass.directions_array();
+        let rebuilt = pass.rebuilt_array();
 
-        interpolate_kernel::launch_unchecked::<R>(
+        interpolate_kernel::launch_unchecked(
             client,
             cubes,
             unit,

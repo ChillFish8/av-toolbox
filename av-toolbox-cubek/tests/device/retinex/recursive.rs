@@ -1,7 +1,6 @@
 use av_toolbox_cubek::retinex::{RecursiveGaussian, RecursivePlanes, recursive_gaussian};
 use av_toolbox_cubek::testing::{reference_recursive_gaussian, reference_recursive_gaussian_cascade};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::neighbourhood::busy;
 use crate::support::{Sizing, assert_close, backend, empty, plane, read_f32, upload_f32};
@@ -19,7 +18,7 @@ struct Recursive {
 impl BuildTask for Recursive {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

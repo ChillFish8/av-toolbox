@@ -15,7 +15,7 @@ use av_toolbox_cubek::dpir::{
 };
 use av_toolbox_cubek::testing::dpir::{reference_dpir, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::{ComputeClient, Runtime};
+use cubecl::prelude::Client;
 use cubecl::server::Handle;
 
 use super::network::{body_path, widened};
@@ -48,7 +48,7 @@ struct Scratch {
 }
 
 impl Scratch {
-    fn allocate<R: Runtime>(client: &ComputeClient<R>, sizes: ScratchSizes) -> Self {
+    fn allocate(client: &Client, sizes: ScratchSizes) -> Self {
         let levels = sizes
             .level_bytes
             .iter()
@@ -104,7 +104,7 @@ pub(super) struct Deblocked<'a> {
 impl BuildTask for Deblocked<'_> {
     type Output = Result<(Vec<Vec<f32>>, Vec<LayerRun>), CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let dpir = Dpir::upload(client, self.weights, self.precision);
@@ -210,7 +210,7 @@ struct WarmUp<'a> {
 impl BuildTask for WarmUp<'_> {
     type Output = Result<Vec<LayerRun>, CnnError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let dpir = Dpir::upload(client, self.weights, self.precision);

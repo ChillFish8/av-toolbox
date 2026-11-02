@@ -166,13 +166,13 @@ pub struct HaloPlanes<'a> {
 
 #[cube(launch_unchecked)]
 fn halo_mask_kernel(
-    clip: &Array<f32>,
-    halos: &Array<f32>,
-    clip_max: &Array<f32>,
-    clip_min: &Array<f32>,
-    halo_max: &Array<f32>,
-    halo_min: &Array<f32>,
-    output: &mut Array<f32>,
+    clip: &[f32],
+    halos: &[f32],
+    clip_max: &[f32],
+    clip_min: &[f32],
+    halo_max: &[f32],
+    halo_min: &[f32],
+    output: &mut [f32],
     full: f32,
     low: f32,
     offset: f32,
@@ -196,27 +196,27 @@ fn halo_mask_kernel(
 }
 
 /// Writes `lets`, the halo-free estimate moved toward the clip where the clip holds real detail.
-pub fn blend_halo_mask<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn blend_halo_mask(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: HaloPlanes<'_>,
     params: &AlphaParams,
 ) {
     let constants = HaloConstants::new(params);
     let samples = planes.output.samples();
-    let clip = planes.clip.array::<R>();
-    let halos = planes.halos.array::<R>();
-    let clip_max = planes.clip_max.array::<R>();
-    let clip_min = planes.clip_min.array::<R>();
-    let halo_max = planes.halo_max.array::<R>();
-    let halo_min = planes.halo_min.array::<R>();
-    let output = planes.output.array::<R>();
+    let clip = planes.clip.array();
+    let halos = planes.halos.array();
+    let clip_max = planes.clip_max.array();
+    let clip_min = planes.clip_min.array();
+    let halo_max = planes.halo_max.array();
+    let halo_min = planes.halo_min.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        halo_mask_kernel::launch_unchecked::<R>(
+        halo_mask_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -247,7 +247,7 @@ pub struct ClampPlanes<'a> {
 }
 
 #[cube(launch_unchecked)]
-fn clamp_kernel(clip: &Array<f32>, highest: &Array<f32>, lowest: &Array<f32>, output: &mut Array<f32>) {
+fn clamp_kernel(clip: &[f32], highest: &[f32], lowest: &[f32], output: &mut [f32]) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -258,22 +258,18 @@ fn clamp_kernel(clip: &Array<f32>, highest: &Array<f32>, lowest: &Array<f32>, ou
 }
 
 /// Writes `max(min(clip, highest), lowest)` at each sample.
-pub fn clamp_between<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: ClampPlanes<'_>,
-) {
+pub fn clamp_between(client: &Client, dispatch: &impl Dispatch, planes: ClampPlanes<'_>) {
     let samples = planes.output.samples();
-    let clip = planes.clip.array::<R>();
-    let highest = planes.highest.array::<R>();
-    let lowest = planes.lowest.array::<R>();
-    let output = planes.output.array::<R>();
+    let clip = planes.clip.array();
+    let highest = planes.highest.array();
+    let lowest = planes.lowest.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        clamp_kernel::launch_unchecked::<R>(client, cubes, unit, clip, highest, lowest, output);
+        clamp_kernel::launch_unchecked(client, cubes, unit, clip, highest, lowest, output);
     }
 }
 
@@ -287,9 +283,9 @@ pub struct StrengthPlanes<'a> {
 
 #[cube(launch_unchecked)]
 fn strength_kernel(
-    clip: &Array<f32>,
-    remove: &Array<f32>,
-    output: &mut Array<f32>,
+    clip: &[f32],
+    remove: &[f32],
+    output: &mut [f32],
     darkstr: f32,
     brightstr: f32,
     peak: f32,
@@ -312,23 +308,23 @@ fn strength_kernel(
 }
 
 /// Pulls the clip toward `remove` by `darkstr` or `brightstr`, clamped to `0..=peak`.
-pub fn apply_strength<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn apply_strength(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: StrengthPlanes<'_>,
     params: &AlphaParams,
 ) {
     let peak = params.peak();
     let samples = planes.output.samples();
-    let clip = planes.clip.array::<R>();
-    let remove = planes.remove.array::<R>();
-    let output = planes.output.array::<R>();
+    let clip = planes.clip.array();
+    let remove = planes.remove.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values.
     unsafe {
-        strength_kernel::launch_unchecked::<R>(
+        strength_kernel::launch_unchecked(
             client,
             cubes,
             unit,

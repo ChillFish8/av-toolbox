@@ -25,13 +25,7 @@ pub(crate) struct DevicePyramid {
 }
 
 impl DevicePyramid {
-    pub(crate) fn upload<R: Runtime>(
-        client: &ComputeClient<R>,
-        luma: &[f32],
-        width: u32,
-        height: u32,
-        levels: u32,
-    ) -> Self {
+    pub(crate) fn upload(client: &Client, luma: &[f32], width: u32, height: u32, levels: u32) -> Self {
         let mut buffers = vec![(upload_f32(client, luma), width, height)];
         for level in 1..levels {
             let (level_width, level_height) = level_dims(width, height, level);
@@ -52,7 +46,7 @@ impl DevicePyramid {
         Pyramid { levels }
     }
 
-    pub(crate) fn read<R: Runtime>(&self, client: &ComputeClient<R>) -> Vec<Vec<f32>> {
+    pub(crate) fn read(&self, client: &Client) -> Vec<Vec<f32>> {
         self.levels
             .iter()
             .map(|(handle, _, _)| read_f32(client, handle))
@@ -61,11 +55,7 @@ impl DevicePyramid {
 }
 
 /// The field in `buffers` as the CPU reference lays it out, its confidence empty unless `scored`.
-pub(crate) fn read_field<R: Runtime>(
-    client: &ComputeClient<R>,
-    buffers: &FieldBuffers,
-    scored: bool,
-) -> ReferenceField {
+pub(crate) fn read_field(client: &Client, buffers: &FieldBuffers, scored: bool) -> ReferenceField {
     let planes = buffers.field(1, scored).planes;
     let vector_bytes = client
         .read_one(planes.vectors.handle().clone())

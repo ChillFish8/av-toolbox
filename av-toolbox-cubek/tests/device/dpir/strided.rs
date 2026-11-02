@@ -2,7 +2,6 @@ use av_toolbox_cubek::cnn::{Precision, Stride, StridedLayer, StridedVariant, run
 use av_toolbox_cubek::dpir::{LayerKind, WeightLayer};
 use av_toolbox_cubek::testing::dpir::{reference_down, reference_up};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::layers::{Down, Up, assert_matches, bound, stored_layer, weight_layer};
 use crate::artcnn::{as_stored, f16_step, read_maps, signed_values, synced, upload_maps};
@@ -25,7 +24,7 @@ struct Strided {
 impl BuildTask for Strided {
     type Output = Option<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let properties = client.properties();
         let channels = self.layer.in_channels;
@@ -164,7 +163,7 @@ struct InputIsOutput;
 impl BuildTask for InputIsOutput {
     type Output = ();
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let channels = 64;
         // The buffers are checked before the device, so any variant reaches the check.

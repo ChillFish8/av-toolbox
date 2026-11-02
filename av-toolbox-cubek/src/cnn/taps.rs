@@ -12,8 +12,8 @@ use cubecl::prelude::*;
 )]
 pub(crate) fn add_taps<F: Float>(
     sum: f32,
-    input: &Array<F>,
-    weights: &Array<F>,
+    input: &[F],
+    weights: &[F],
     column: i32,
     row: i32,
     region_width: u32,

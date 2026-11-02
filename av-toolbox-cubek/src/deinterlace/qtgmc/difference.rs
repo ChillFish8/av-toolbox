@@ -6,13 +6,7 @@ use super::assert_bits;
 use crate::{DevicePlane, Dispatch, assert_plane};
 
 #[cube(launch_unchecked)]
-fn difference_kernel(
-    first: &Array<f32>,
-    second: &Array<f32>,
-    output: &mut Array<f32>,
-    lowest: f32,
-    highest: f32,
-) {
+fn difference_kernel(first: &[f32], second: &[f32], output: &mut [f32], lowest: f32, highest: f32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -25,8 +19,8 @@ fn difference_kernel(
 /// `first − second` clamped to `−(peak + 1) / 2..=(peak − 1) / 2`, as `std.MakeDiff` stores it.
 ///
 /// `peak` is the largest code value of `bits` deep samples, and `bits` is between 8 and 16.
-pub fn clamped_difference<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn clamped_difference(
+    client: &Client,
     dispatch: &impl Dispatch,
     first: DevicePlane<'_>,
     second: DevicePlane<'_>,
@@ -44,14 +38,14 @@ pub fn clamped_difference<R: Runtime>(
     let peak = ((1u32 << bits) - 1) as f32;
     let cubes = dispatch.cube_count(output.samples());
     let unit = dispatch.cube_dim();
-    let first_array = first.array::<R>();
-    let second_array = second.array::<R>();
-    let output_array = output.array::<R>();
+    let first_array = first.array();
+    let second_array = second.array();
+    let output_array = output.array();
 
     // Safety: every plane holds `width` by `height` f32 samples, and each unit reads and writes only its
     // own sample.
     unsafe {
-        difference_kernel::launch_unchecked::<R>(
+        difference_kernel::launch_unchecked(
             client,
             cubes,
             unit,

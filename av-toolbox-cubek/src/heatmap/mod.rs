@@ -214,7 +214,7 @@ impl Heatmap {
     /// A painting of clips `height` rows tall, with its palette already on the device.
     ///
     /// When the painting smooths, its gaussian is put on the device too.
-    pub fn new<R: Runtime>(client: &ComputeClient<R>, painting: Painting, height: u32) -> Self {
+    pub fn new(client: &Client, painting: Painting, height: u32) -> Self {
         let gaussian = painting.smooth.then(|| {
             let sigma = sigma_for(height);
             Gaussian::new(client, sigma)
@@ -239,11 +239,11 @@ impl Heatmap {
         matches!(shading, Shading::Overlay { .. })
     }
 
-    fn palette<R: Runtime>(&self) -> ArrayArg<R> {
+    fn palette(&self) -> BufferArg {
         let handle = self.palette.clone();
 
         // Safety: the palette buffer was made from exactly `PALETTE_VALUES` f32 values.
-        unsafe { ArrayArg::from_raw_parts(handle, PALETTE_VALUES) }
+        unsafe { BufferArg::from_raw_parts(handle, PALETTE_VALUES) }
     }
 
     /// Paints `planes.map` over `planes.picture` into `planes.output`.
@@ -251,12 +251,7 @@ impl Heatmap {
     /// When the painting smooths, the map is blurred into `planes.smoothed` first and painted from
     /// there. Otherwise the map is painted as it is. Integer outputs are rounded to nearest and
     /// clamped to their depth.
-    pub fn apply<R: Runtime>(
-        &self,
-        client: &ComputeClient<R>,
-        dispatch: &impl Dispatch,
-        planes: HeatmapPlanes<'_>,
-    ) {
+    pub fn apply(&self, client: &Client, dispatch: &impl Dispatch, planes: HeatmapPlanes<'_>) {
         let width = planes.map.width();
         let height = planes.map.height();
         assert_eq!(
@@ -277,16 +272,16 @@ impl Heatmap {
         let values = self.map_values(client, dispatch, &planes);
 
         match self.painting.samples {
-            MatrixSamples::U8 => self.launch::<u8, R>(client, dispatch, planes, values),
-            MatrixSamples::U16 { .. } => self.launch::<u16, R>(client, dispatch, planes, values),
-            MatrixSamples::F32 => self.launch::<f32, R>(client, dispatch, planes, values),
+            MatrixSamples::U8 => self.launch::<u8>(client, dispatch, planes, values),
+            MatrixSamples::U16 { .. } => self.launch::<u16>(client, dispatch, planes, values),
+            MatrixSamples::F32 => self.launch::<f32>(client, dispatch, planes, values),
         }
     }
 
     /// The plane the painting reads its map values from, blurring the map into it when smoothing.
-    fn map_values<'a, R: Runtime>(
+    fn map_values<'a>(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: &HeatmapPlanes<'a>,
     ) -> DevicePlane<'a> {
@@ -352,9 +347,9 @@ impl Heatmap {
         }
     }
 
-    fn launch<E: CubePrimitive, R: Runtime>(
+    fn launch<E: Scalar>(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: HeatmapPlanes<'_>,
         values: DevicePlane<'_>,
@@ -362,30 +357,30 @@ impl Heatmap {
         let encoding = Encoding::new(&self.painting);
 
         match self.painting.layout {
-            PaintLayout::Rgb => self.launch_rgb::<E, R>(client, dispatch, planes, values, encoding),
+            PaintLayout::Rgb => self.launch_rgb::<E>(client, dispatch, planes, values, encoding),
             PaintLayout::Yuv {
                 width_shift,
                 height_shift,
             } => {
                 let shifts = (width_shift, height_shift);
-                self.launch_luma::<E, R>(client, dispatch, planes, values, encoding);
-                self.launch_chroma::<E, R>(client, dispatch, planes, values, encoding, shifts);
+                self.launch_luma::<E>(client, dispatch, planes, values, encoding);
+                self.launch_chroma::<E>(client, dispatch, planes, values, encoding, shifts);
             },
         }
     }
 
-    fn launch_rgb<E: CubePrimitive, R: Runtime>(
+    fn launch_rgb<E: Scalar>(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: HeatmapPlanes<'_>,
         values: DevicePlane<'_>,
         encoding: Encoding,
     ) {
-        let [red, green, blue] = planes.picture.map(|plane| plane.array::<R>());
-        let [red_out, green_out, blue_out] = planes.output.map(|plane| plane.array::<R>());
-        let values_array = values.array::<R>();
-        let palette = self.palette::<R>();
+        let [red, green, blue] = planes.picture.map(|plane| plane.array());
+        let [red_out, green_out, blue_out] = planes.output.map(|plane| plane.array());
+        let values_array = values.array();
+        let palette = self.palette();
         let samples = values.samples();
         let cubes = dispatch.cube_count(samples);
         let unit = dispatch.cube_dim();
@@ -394,7 +389,7 @@ impl Heatmap {
         // Safety: every plane holds `width * height` samples, checked by `apply`, and the palette
         // holds its `PALETTE_VALUES` values.
         unsafe {
-            paint_rgb::launch_unchecked::<E, R>(
+            paint_rgb::launch_unchecked::<E>(
                 client,
                 cubes,
                 unit,
@@ -417,19 +412,19 @@ impl Heatmap {
         }
     }
 
-    fn launch_luma<E: CubePrimitive, R: Runtime>(
+    fn launch_luma<E: Scalar>(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: HeatmapPlanes<'_>,
         values: DevicePlane<'_>,
         encoding: Encoding,
     ) {
         let (weight_red, weight_blue) = self.painting.coefficients.weights();
-        let luma = planes.picture[0].array::<R>();
-        let values_array = values.array::<R>();
-        let palette = self.palette::<R>();
-        let luma_out = planes.output[0].array::<R>();
+        let luma = planes.picture[0].array();
+        let values_array = values.array();
+        let palette = self.palette();
+        let luma_out = planes.output[0].array();
         let samples = values.samples();
         let cubes = dispatch.cube_count(samples);
         let unit = dispatch.cube_dim();
@@ -438,7 +433,7 @@ impl Heatmap {
         // Safety: the luma, map value and luma output planes hold `width * height` samples, checked
         // by `apply`, and the palette holds its `PALETTE_VALUES` values.
         unsafe {
-            paint_luma::launch_unchecked::<E, R>(
+            paint_luma::launch_unchecked::<E>(
                 client,
                 cubes,
                 unit,
@@ -459,9 +454,9 @@ impl Heatmap {
         }
     }
 
-    fn launch_chroma<E: CubePrimitive, R: Runtime>(
+    fn launch_chroma<E: Scalar>(
         &self,
-        client: &ComputeClient<R>,
+        client: &Client,
         dispatch: &impl Dispatch,
         planes: HeatmapPlanes<'_>,
         values: DevicePlane<'_>,
@@ -473,11 +468,11 @@ impl Heatmap {
         let width = values.width();
         let height = values.height();
         let chroma_width = planes.output[1].width();
-        let luma = planes.picture[0].array::<R>();
-        let values_array = values.array::<R>();
-        let palette = self.palette::<R>();
-        let blue_out = planes.output[1].array::<R>();
-        let red_out = planes.output[2].array::<R>();
+        let luma = planes.picture[0].array();
+        let values_array = values.array();
+        let palette = self.palette();
+        let blue_out = planes.output[1].array();
+        let red_out = planes.output[2].array();
         let samples = planes.output[1].samples();
         let cubes = dispatch.cube_count(samples);
         let unit = dispatch.cube_dim();
@@ -487,7 +482,7 @@ impl Heatmap {
         // outputs hold `chroma_width` by the shifted height, checked by `apply`. Every pixel read
         // is clipped to the frame, and the palette holds its `PALETTE_VALUES` values.
         unsafe {
-            paint_chroma::launch_unchecked::<E, R>(
+            paint_chroma::launch_unchecked::<E>(
                 client,
                 cubes,
                 unit,
@@ -539,7 +534,7 @@ fn normalised(code: f32, offset: f32, scale: f32) -> f32 {
 /// `overlays` picks how the palette is read, as an overlay shading or as a multiply shading.
 #[cube]
 fn colour_channel(
-    palette: &Array<f32>,
+    palette: &[f32],
     channel: u32,
     grey: f32,
     strength: f32,
@@ -554,7 +549,7 @@ fn colour_channel(
 
 /// One channel of the palette's colour mixed over a pixel of brightness `grey` at `strength`.
 #[cube]
-fn overlaid_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32) -> f32 {
+fn overlaid_channel(palette: &[f32], channel: u32, grey: f32, strength: f32) -> f32 {
     let cover = palette[OPACITY as usize] * strength;
 
     grey * (1.0 - cover) + palette[channel as usize] * cover
@@ -562,7 +557,7 @@ fn overlaid_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32
 
 /// One channel of the palette's ramp at `strength`, times a pixel of brightness `grey`.
 #[cube]
-fn multiplied_channel(palette: &Array<f32>, channel: u32, grey: f32, strength: f32) -> f32 {
+fn multiplied_channel(palette: &[f32], channel: u32, grey: f32, strength: f32) -> f32 {
     let brightness = palette[BASE as usize] + palette[GAIN as usize] * grey;
     let mut from = palette[(MIDDLE_STOP + channel) as usize];
     let mut to = palette[(LAST_STOP + channel) as usize];
@@ -597,7 +592,7 @@ fn encoded(value: f32, offset: f32, scale: f32, largest: f32, #[comptime] rounds
 fn painted_yuv(
     luma_code: f32,
     value: f32,
-    palette: &Array<f32>,
+    palette: &[f32],
     scale: f32,
     floor: f32,
     luma_offset: f32,
@@ -621,15 +616,15 @@ fn painted_yuv(
 }
 
 #[cube(launch_unchecked)]
-fn paint_rgb<E: CubePrimitive>(
-    red: &Array<E>,
-    green: &Array<E>,
-    blue: &Array<E>,
-    values: &Array<f32>,
-    palette: &Array<f32>,
-    red_out: &mut Array<E>,
-    green_out: &mut Array<E>,
-    blue_out: &mut Array<E>,
+fn paint_rgb<E: Scalar>(
+    red: &[E],
+    green: &[E],
+    blue: &[E],
+    values: &[f32],
+    palette: &[f32],
+    red_out: &mut [E],
+    green_out: &mut [E],
+    blue_out: &mut [E],
     scale: f32,
     floor: f32,
     offset: f32,
@@ -664,11 +659,11 @@ fn paint_rgb<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-fn paint_luma<E: CubePrimitive>(
-    luma: &Array<E>,
-    values: &Array<f32>,
-    palette: &Array<f32>,
-    luma_out: &mut Array<E>,
+fn paint_luma<E: Scalar>(
+    luma: &[E],
+    values: &[f32],
+    palette: &[f32],
+    luma_out: &mut [E],
     scale: f32,
     floor: f32,
     luma_offset: f32,
@@ -703,12 +698,12 @@ fn paint_luma<E: CubePrimitive>(
 
 /// Writes each chroma sample as the average chroma of the painted pixels it covers inside the frame.
 #[cube(launch_unchecked)]
-fn paint_chroma<E: CubePrimitive>(
-    luma: &Array<E>,
-    values: &Array<f32>,
-    palette: &Array<f32>,
-    blue_out: &mut Array<E>,
-    red_out: &mut Array<E>,
+fn paint_chroma<E: Scalar>(
+    luma: &[E],
+    values: &[f32],
+    palette: &[f32],
+    blue_out: &mut [E],
+    red_out: &mut [E],
     width: u32,
     height: u32,
     chroma_width: u32,

@@ -1,7 +1,6 @@
 use av_toolbox_cubek::histogram::{BINS, PercentilePlanes, percentile};
 use av_toolbox_cubek::reduce::{ReducePlanes, extremes, scratch_len};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
 
@@ -13,7 +12,7 @@ struct Percentile {
 impl BuildTask for Percentile {
     type Output = f32;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame_context = build.frame_context();
         let sizing = Sizing(frame_context);

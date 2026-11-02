@@ -7,7 +7,6 @@ use av_toolbox_cubek::testing::{
     reference_vertical_blur,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 
 use super::{DEVICE_TOLERANCE, FIXTURE_TOLERANCE, assert_fixture_within, codes, peak};
 use crate::support::{Sizing, backend, empty, plane, read_f32, upload_f32};
@@ -27,7 +26,7 @@ struct BlurRun {
 impl BuildTask for BlurRun {
     type Output = Vec<Vec<f32>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
 
@@ -108,7 +107,7 @@ struct BlendRun {
 impl BuildTask for BlendRun {
     type Output = Vec<f32>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let width = self.original.len() as u32;

@@ -5,7 +5,7 @@ use cubecl::prelude::*;
 use crate::{DevicePlane, Dispatch, assert_plane};
 
 #[cube(launch_unchecked)]
-fn clear_u32_kernel(values: &mut Array<u32>) {
+fn clear_u32_kernel(values: &mut [u32]) {
     if ABSOLUTE_POS >= values.len() {
         terminate!();
     }
@@ -14,14 +14,14 @@ fn clear_u32_kernel(values: &mut Array<u32>) {
 }
 
 #[cube]
-pub(super) fn tap(input: &Array<f32>, width: u32, x: u32, y: u32) -> i32 {
+pub(super) fn tap(input: &[f32], width: u32, x: u32, y: u32) -> i32 {
     let index = (y * width + x) as usize;
     i32::cast_from(input[index])
 }
 
 /// Whether sample (`x`, `y`) is combed, the way `calcMI` marks it.
 #[cube]
-fn combed_at(input: &Array<f32>, width: u32, height: u32, x: u32, y: u32, cthresh: i32) -> bool {
+fn combed_at(input: &[f32], width: u32, height: u32, x: u32, y: u32, cthresh: i32) -> bool {
     let cthresh6 = cthresh * 6;
     let last = height - 1;
     let here = tap(input, width, x, y);
@@ -74,7 +74,7 @@ fn combed_at(input: &Array<f32>, width: u32, height: u32, x: u32, y: u32, cthres
 }
 
 #[cube(launch_unchecked)]
-fn comb_mask_kernel(input: &Array<f32>, mask: &mut Array<u32>, width: u32, height: u32, cthresh: i32) {
+fn comb_mask_kernel(input: &[f32], mask: &mut [u32], width: u32, height: u32, cthresh: i32) {
     if ABSOLUTE_POS >= mask.len() {
         terminate!();
     }
@@ -97,10 +97,10 @@ fn comb_mask_kernel(input: &Array<f32>, mask: &mut Array<u32>, width: u32, heigh
 
 /// Whether sample (`x`, `y`) of `mask` is set along with at least one of its 8 neighbours.
 #[cube]
-fn clustered(mask: &Array<u32>, width: u32, x: u32, y: u32) -> bool {
+fn clustered(mask: &[u32], width: u32, x: u32, y: u32) -> bool {
     let centre = mask[(y * width + x) as usize] == 255u32;
 
-    let mut set_count: u32 = 0u32;
+    let mut set_count = 0u32;
     for row_offset in 0..3u32 {
         for column_offset in 0..3u32 {
             let row = y + row_offset - 1u32;
@@ -118,7 +118,7 @@ fn clustered(mask: &Array<u32>, width: u32, x: u32, y: u32) -> bool {
 }
 
 #[cube]
-fn mark(luma: &mut Array<u32>, luma_width: u32, row: u32, column: u32, shift_x: u32) {
+fn mark(luma: &mut [u32], luma_width: u32, row: u32, column: u32, shift_x: u32) {
     let start = row * luma_width + column;
     luma[start as usize] = 255u32;
     if shift_x > 0 {
@@ -132,9 +132,9 @@ fn mark(luma: &mut Array<u32>, luma_width: u32, row: u32, column: u32, shift_x: 
     reason = "each argument is a distinct input of the launch"
 )]
 fn chroma_into_luma_kernel(
-    u: &Array<u32>,
-    v: &Array<u32>,
-    luma: &mut Array<u32>,
+    u: &[u32],
+    v: &[u32],
+    luma: &mut [u32],
     chroma_width: u32,
     chroma_height: u32,
     luma_width: u32,
@@ -172,8 +172,8 @@ fn chroma_into_luma_kernel(
 
 #[cube(launch_unchecked)]
 fn block_counts_kernel(
-    mask: &Array<u32>,
-    counts: &mut Array<Atomic<u32>>,
+    mask: &[u32],
+    counts: &mut [Atomic<u32>],
     width: u32,
     height: u32,
     block_x: u32,
@@ -208,7 +208,7 @@ fn block_counts_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn max_count_kernel(counts: &Array<u32>, results: &mut Array<Atomic<u32>>, slot: u32) {
+fn max_count_kernel(counts: &[u32], results: &mut [Atomic<u32>], slot: u32) {
     if ABSOLUTE_POS >= counts.len() {
         terminate!();
     }
@@ -216,15 +216,15 @@ fn max_count_kernel(counts: &Array<u32>, results: &mut Array<Atomic<u32>>, slot:
     results[slot as usize].fetch_max(counts[ABSOLUTE_POS]);
 }
 
-pub(super) fn clear<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, plane: DevicePlane<'_>) {
-    let values = plane.array::<R>();
+pub(super) fn clear(client: &Client, dispatch: &impl Dispatch, plane: DevicePlane<'_>) {
+    let values = plane.array();
     let samples = plane.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: the plane holds `samples` u32 values and the kernel writes nothing past them.
     unsafe {
-        clear_u32_kernel::launch_unchecked::<R>(client, cubes, unit, values);
+        clear_u32_kernel::launch_unchecked(client, cubes, unit, values);
     }
 }
 
@@ -238,12 +238,7 @@ pub struct CombPlanes<'a> {
 ///
 /// `cthresh` is already scaled to the input's bit depth. A negative `cthresh` marks every sample. The plane
 /// must be at least 4 rows tall.
-pub fn comb_mask<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: CombPlanes<'_>,
-    cthresh: i32,
-) {
+pub fn comb_mask(client: &Client, dispatch: &impl Dispatch, planes: CombPlanes<'_>, cthresh: i32) {
     let width = planes.input.width();
     let height = planes.input.height();
     assert!(height >= 4, "the comb mask needs 4 rows, the plane has {height}");
@@ -253,13 +248,13 @@ pub fn comb_mask<R: Runtime>(
     let samples = planes.mask.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let input = planes.input.array::<R>();
-    let mask = planes.mask.array::<R>();
+    let input = planes.input.array();
+    let mask = planes.mask.array();
 
     // Safety: both planes hold `samples` values, every tap stays inside the plane's 4 or more rows, and each
     // unit writes only its own sample.
     unsafe {
-        comb_mask_kernel::launch_unchecked::<R>(client, cubes, unit, input, mask, width, height, cthresh);
+        comb_mask_kernel::launch_unchecked(client, cubes, unit, input, mask, width, height, cthresh);
     }
 }
 
@@ -274,8 +269,8 @@ pub struct ChromaMasks<'a> {
 ///
 /// `shift_x` and `shift_y` are the chroma subsampling, so the chroma planes are the luma plane shifted down
 /// by them. Chroma samples on the plane's edge are never tested, though they still count as neighbours.
-pub fn chroma_into_luma<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn chroma_into_luma(
+    client: &Client,
     dispatch: &impl Dispatch,
     masks: ChromaMasks<'_>,
     shift_x: u32,
@@ -297,15 +292,15 @@ pub fn chroma_into_luma<R: Runtime>(
     let samples = masks.u.samples();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
-    let u = masks.u.array::<R>();
-    let v = masks.v.array::<R>();
-    let luma = masks.luma.array::<R>();
+    let u = masks.u.array();
+    let v = masks.v.array();
+    let luma = masks.luma.array();
 
     // Safety: both chroma masks hold `samples` values and only units inside their edge read neighbours. The
     // luma rows and columns marked stay inside the luma mask the chroma subsamples. Units that mark one luma
     // sample all write 255.
     unsafe {
-        chroma_into_luma_kernel::launch_unchecked::<R>(
+        chroma_into_luma_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -352,7 +347,7 @@ pub struct MicPlanes<'a> {
 }
 
 /// Zeroes every slot of `results`.
-pub fn clear_mics<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatch, results: DevicePlane<'_>) {
+pub fn clear_mics(client: &Client, dispatch: &impl Dispatch, results: DevicePlane<'_>) {
     clear(client, dispatch, results);
 }
 
@@ -361,13 +356,7 @@ pub fn clear_mics<R: Runtime>(client: &ComputeClient<R>, dispatch: &impl Dispatc
 /// The mic is the highest count of samples in any block of four offset grids whose mask is set on their own
 /// row and the rows above and below. Each side of a block must be a power of 2. `results[slot]` must be
 /// cleared first, with [clear_mics].
-pub fn mic<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: MicPlanes<'_>,
-    blocks: MicBlocks,
-    slot: u32,
-) {
+pub fn mic(client: &Client, dispatch: &impl Dispatch, planes: MicPlanes<'_>, blocks: MicBlocks, slot: u32) {
     let width = planes.mask.width();
     let height = planes.mask.height();
     assert!(height >= 3, "a mic needs 3 rows, the mask has {height}");
@@ -397,24 +386,24 @@ pub fn mic<R: Runtime>(
     let cubes = dispatch.cube_count(units);
     let unit = dispatch.cube_dim();
     let across = blocks_across(width, blocks);
-    let mask = planes.mask.array::<R>();
-    let counts = planes.counts.array::<R>();
+    let mask = planes.mask.array();
+    let counts = planes.counts.array();
 
     // Safety: each unit reads its own mask sample and the ones above and below inside the plane, and adds
     // into counts of blocks that hold its sample, which `mic_count_len` sizes.
     unsafe {
-        block_counts_kernel::launch_unchecked::<R>(
+        block_counts_kernel::launch_unchecked(
             client, cubes, unit, mask, counts, width, height, blocks.x, blocks.y, across,
         );
     }
 
     let cubes = dispatch.cube_count(count_len);
     let unit = dispatch.cube_dim();
-    let counts = planes.counts.array::<R>();
-    let results = planes.results.array::<R>();
+    let counts = planes.counts.array();
+    let results = planes.results.array();
 
     // Safety: each unit reads its own count, and `slot` is inside the results.
     unsafe {
-        max_count_kernel::launch_unchecked::<R>(client, cubes, unit, counts, results, slot);
+        max_count_kernel::launch_unchecked(client, cubes, unit, counts, results, slot);
     }
 }

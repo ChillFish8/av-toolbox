@@ -17,7 +17,6 @@ use av_toolbox_cubek::cnn::{
 };
 use av_toolbox_cubek::testing::{reference_layer, synthetic_layer};
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::Runtime;
 use half::f16;
 
 use crate::artcnn::{edged_maps, f16_step, read_maps, region, supported_runs, synced, upload_maps};
@@ -112,7 +111,7 @@ fn widen(values: &[f32]) -> Vec<f64> {
 impl BuildTask for WideLayer {
     type Output = WideOutputs;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let sizing = Sizing(build.frame_context());
         let frame = region(self.width, self.height);
@@ -360,7 +359,7 @@ struct Offered {
 impl BuildTask for Offered {
     type Output = Option<Vec<Candidate>>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         if !offers_cmma_16(client) {
             return None;
@@ -443,7 +442,7 @@ struct SkipIsOutput;
 impl BuildTask for SkipIsOutput {
     type Output = ();
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let frame = region(4, 4);
         let synthetic = synthetic_layer(64, true, 64);

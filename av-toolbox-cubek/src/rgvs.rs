@@ -120,7 +120,7 @@ pub struct RemoveGrainPlanes<'a> {
 
 /// The value in `slot` of the 3x3 window at `x`, `y`, counting row by row from the top left.
 #[cube]
-fn window_value(values: &Array<f32>, width: u32, x: u32, y: u32, slot: u32) -> f32 {
+fn window_value(values: &[f32], width: u32, x: u32, y: u32, slot: u32) -> f32 {
     let row = y + slot / 3 - 1;
     let column = x + slot % 3 - 1;
     let index = row * width + column;
@@ -130,7 +130,7 @@ fn window_value(values: &Array<f32>, width: u32, x: u32, y: u32, slot: u32) -> f
 
 /// The value in `slot` of the 3x3 window at `x`, `y`, reading past the edge through `reflect`.
 #[cube]
-fn reflected_window_value(values: &Array<f32>, width: u32, height: u32, x: u32, y: u32, slot: u32) -> f32 {
+fn reflected_window_value(values: &[f32], width: u32, height: u32, x: u32, y: u32, slot: u32) -> f32 {
     let row = reflect((y + slot / 3) as i32 - 1, height as i32);
     let column = reflect((x + slot % 3) as i32 - 1, width as i32);
     let index = row as u32 * width + column as u32;
@@ -152,17 +152,17 @@ fn pair_reach(mi: f32, ma: f32, value: f32) -> f32 {
 ///
 /// The centre only counts when `with_centre` is set.
 #[cube]
-fn window_rank(values: &Array<f32>, width: u32, x: u32, y: u32, rank: u32, with_centre: bool) -> f32 {
+fn window_rank(values: &[f32], width: u32, x: u32, y: u32, rank: u32, with_centre: bool) -> f32 {
     let mut chosen = 0.0f32;
-    let mut found: u32 = 0u32;
+    let mut found = 0u32;
 
     for candidate_slot in 0..9u32 {
         let candidate_counts = with_centre || candidate_slot != 4u32;
 
         if candidate_counts {
             let candidate = window_value(values, width, x, y, candidate_slot);
-            let mut below: u32 = 0u32;
-            let mut equal: u32 = 0u32;
+            let mut below = 0u32;
+            let mut equal = 0u32;
 
             for other_slot in 0..9u32 {
                 let other_counts = with_centre || other_slot != 4u32;
@@ -189,14 +189,7 @@ fn window_rank(values: &Array<f32>, width: u32, x: u32, y: u32, rank: u32, with_
 }
 
 #[cube(launch_unchecked)]
-fn repair_kernel(
-    clip: &Array<f32>,
-    reference: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    height: u32,
-    mode: u32,
-) {
+fn repair_kernel(clip: &[f32], reference: &[f32], output: &mut [f32], width: u32, height: u32, mode: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -287,14 +280,7 @@ fn repair_kernel(
 }
 
 #[cube(launch_unchecked)]
-fn remove_grain_kernel(
-    input: &Array<f32>,
-    output: &mut Array<f32>,
-    width: u32,
-    height: u32,
-    mode: u32,
-    border: u32,
-) {
+fn remove_grain_kernel(input: &[f32], output: &mut [f32], width: u32, height: u32, mode: u32, border: u32) {
     if ABSOLUTE_POS >= output.len() {
         terminate!();
     }
@@ -398,7 +384,7 @@ fn remove_grain_kernel(
 /// The first `width` units take the top row and the next `width` the bottom row. The rest alternate
 /// between the first and last column of each row between them.
 #[cube(launch_unchecked)]
-fn copy_border_kernel(input: &Array<f32>, output: &mut Array<f32>, width: u32, height: u32, ring: u32) {
+fn copy_border_kernel(input: &[f32], output: &mut [f32], width: u32, height: u32, ring: u32) {
     let position = ABSOLUTE_POS as u32;
     if position >= ring {
         terminate!();
@@ -431,24 +417,19 @@ fn ring_samples(width: u32, height: u32) -> u32 {
 /// Repairs `clip` from `reference` with RemoveGrain's `mode`.
 ///
 /// The first and last row and column of the clip are copied unchanged, as rgvs does.
-pub fn repair<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: RepairPlanes<'_>,
-    mode: RepairMode,
-) {
+pub fn repair(client: &Client, dispatch: &impl Dispatch, planes: RepairPlanes<'_>, mode: RepairMode) {
     let width = planes.clip.width();
     let height = planes.clip.height();
     let samples = planes.output.samples();
-    let clip = planes.clip.array::<R>();
-    let reference = planes.reference.array::<R>();
-    let output = planes.output.array::<R>();
+    let clip = planes.clip.array();
+    let reference = planes.reference.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: every plane holds `samples` f32 values, and only inner samples read neighbours.
     unsafe {
-        repair_kernel::launch_unchecked::<R>(
+        repair_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -468,8 +449,8 @@ pub fn repair<R: Runtime>(
 /// the plane are copied unchanged, as rgvs does. With
 /// [GrainBorder::Reflect], they are filtered too, reading past
 /// the edge through [reflect](fn@crate::reflect).
-pub fn remove_grain<R: Runtime>(
-    client: &ComputeClient<R>,
+pub fn remove_grain(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RemoveGrainPlanes<'_>,
     mode: RemoveGrainMode,
@@ -483,15 +464,15 @@ pub fn remove_grain<R: Runtime>(
     let width = planes.input.width();
     let height = planes.input.height();
     let samples = planes.output.samples();
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(samples);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `samples` f32 values, and with `GrainBorder::Copy` only inner
     // samples read neighbours. `GrainBorder::Reflect` reads every neighbour through `reflect`.
     unsafe {
-        remove_grain_kernel::launch_unchecked::<R>(
+        remove_grain_kernel::launch_unchecked(
             client,
             cubes,
             unit,
@@ -506,8 +487,8 @@ pub fn remove_grain<R: Runtime>(
 }
 
 /// RemoveGrain's mode 11, the 3x3 binomial blur, with its border kept as `border` says.
-fn remove_grain_eleven<R: Runtime>(
-    client: &ComputeClient<R>,
+fn remove_grain_eleven(
+    client: &Client,
     dispatch: &impl Dispatch,
     planes: RemoveGrainPlanes<'_>,
     border: GrainBorder,
@@ -532,22 +513,18 @@ fn remove_grain_eleven<R: Runtime>(
 }
 
 /// Copies the first and last row and column of `planes.input` into `planes.output`.
-fn copy_border<R: Runtime>(
-    client: &ComputeClient<R>,
-    dispatch: &impl Dispatch,
-    planes: RemoveGrainPlanes<'_>,
-) {
+fn copy_border(client: &Client, dispatch: &impl Dispatch, planes: RemoveGrainPlanes<'_>) {
     let width = planes.input.width();
     let height = planes.input.height();
     let ring = ring_samples(width, height);
-    let input = planes.input.array::<R>();
-    let output = planes.output.array::<R>();
+    let input = planes.input.array();
+    let output = planes.output.array();
     let cubes = dispatch.cube_count(ring as usize);
     let unit = dispatch.cube_dim();
 
     // Safety: both planes hold `width` by `height` f32 values, and every unit writes one sample of
     // the plane's outer ring.
     unsafe {
-        copy_border_kernel::launch_unchecked::<R>(client, cubes, unit, input, output, width, height, ring);
+        copy_border_kernel::launch_unchecked(client, cubes, unit, input, output, width, height, ring);
     }
 }

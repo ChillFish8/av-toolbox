@@ -14,7 +14,6 @@ use av_toolbox_cubek::testing::{
     reference_pp7_plane,
 };
 use av_toolbox_gpu::{BuildContext, BuildTask};
-use cubecl::prelude::*;
 
 use crate::support::{backend, plane, read_u8, upload_u8};
 
@@ -45,7 +44,7 @@ struct Deblock {
 impl BuildTask for Deblock {
     type Output = Vec<u8>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let table = upload_thresholds(client, self.qp, self.table_samples);
         let input = upload_u8(client, &self.input);

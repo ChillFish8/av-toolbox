@@ -21,7 +21,6 @@ use av_toolbox_cubek::artcnn::{
 use av_toolbox_cubek::testing::{reference_artcnn, synthetic_weights};
 use av_toolbox_gpu::{BuildContext, BuildTask};
 use av_toolbox_models::Store;
-use cubecl::prelude::Runtime;
 use half::f16;
 
 use super::body::{Forward, ModelForward, f16_step, largest_error, r8f64, supports};
@@ -63,7 +62,7 @@ struct Offered {
 impl BuildTask for Offered {
     type Output = Vec<WinogradVariant>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let properties = build.client().properties();
 
         winograd_variants(properties, self.features)
@@ -297,7 +296,7 @@ struct OfferedForModel {
 impl BuildTask for OfferedForModel {
     type Output = Vec<Candidate>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let properties = build.client().properties();
         let features = self.model.features();
 
@@ -400,7 +399,7 @@ struct HoldsTransformed {
 impl BuildTask for HoldsTransformed {
     type Output = Result<(bool, bool), WeightsError>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         let precision = Precision::F16;
         let network = match self.model {
@@ -464,7 +463,7 @@ struct TransformedInput {
 impl BuildTask for TransformedInput {
     type Output = Option<(Vec<f32>, Vec<f32>)>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         if !offers_cmma_16(client) {
             return None;
@@ -592,7 +591,7 @@ struct TunedTwice;
 impl BuildTask for TunedTwice {
     type Output = Option<(TunedRun, Result<TunedRun, CnnError>)>;
 
-    fn run<R: Runtime>(self, build: &BuildContext<R>) -> Self::Output {
+    fn run(self, build: &BuildContext) -> Self::Output {
         let client = build.client();
         if !offers_cmma_16(client) {
             return None;
