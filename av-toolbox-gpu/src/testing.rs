@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
@@ -6,6 +8,8 @@ use cubecl::bytes::Bytes;
 use cubecl::config::cache::CacheConfig;
 use cubecl::config::{CubeClRuntimeConfig, RuntimeConfig};
 use cubecl::device::DeviceId;
+#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+use cubecl::prelude::Client;
 use cubecl::server::Handle;
 use cubecl_common::device::ServiceId;
 use cubecl_environment::stream::StreamId;
@@ -220,7 +224,73 @@ pub fn test_device() -> Device {
     TUNE_CACHE.call_once(install_test_tune_cache);
 
     let value = std::env::var("AVTB_DEVICE").ok();
-    device_from_value(value.as_deref())
+    let device = device_from_value(value.as_deref());
+
+    #[cfg(feature = "rocm")]
+    drain_at_exit(device);
+
+    device
+}
+
+/// The ROCm test device's client, synced by [drain_exit_client] when the process exits.
+#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+static EXIT_CLIENT: OnceLock<Client> = OnceLock::new();
+
+#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+}
+
+/// Waits for the ROCm device thread to finish its queued tasks when the process exits.
+///
+/// The HIP runtime tears itself down at exit, and a device thread still running a test's queued
+/// tasks then crashes inside it. This hook registers after the runtime has loaded, so it runs
+/// before that teardown.
+#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+fn drain_at_exit(device: Device) {
+    if crate::default_accelerators().first() != Some(&Accelerator::Rocm) {
+        return;
+    }
+
+    if EXIT_CLIENT.get().is_some() {
+        return;
+    }
+
+    let Some(client) = crate::probe::probe_client(Accelerator::Rocm, device) else {
+        return;
+    };
+
+    // Only the call that stores the client registers the hook, so it is registered once.
+    if EXIT_CLIENT.set(client).is_err() {
+        return;
+    }
+
+    // Safety: `drain_exit_client` takes no arguments, never unwinds, and stays valid for the
+    // life of the process.
+    let failed = unsafe { atexit(drain_exit_client) };
+    if failed != 0 {
+        tracing::warn!("cannot drain the test device at exit");
+    }
+}
+
+/// Syncs the ROCm test device's client on a new thread.
+///
+/// The exiting thread may already have dropped its thread locals, which the client needs.
+#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+extern "C" fn drain_exit_client() {
+    let Some(client) = EXIT_CLIENT.get() else {
+        return;
+    };
+
+    let name = String::from("test-device-exit");
+    let spawned = std::thread::Builder::new().name(name).spawn(|| {
+        let synced = client.sync();
+        let _ = cubecl::future::block_on(synced);
+    });
+
+    if let Ok(handle) = spawned {
+        let _ = handle.join();
+    }
 }
 
 /// Points CubeCL's environment inside the workspace's target directory, leaving a config that is

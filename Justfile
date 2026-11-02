@@ -1,6 +1,9 @@
 # Backend the tests build against. Set AVTB_TEST_BACKEND=metal on macOS.
 test_backend := env("AVTB_TEST_BACKEND", "vulkan")
 
+# ROCm crashes under more test processes than this.
+test_threads := if test_backend == "rocm" { "8" } else { "num-cpus" }
+
 # Crates that forward the backend and gpu-tests features.
 backend_crates := (
     "av-toolbox-gpu av-toolbox-core av-toolbox-graph av-toolbox-runtime"
@@ -43,7 +46,7 @@ clippy *ARGS:
 
 # Every test, accelerator and doc tests included.
 test:
-    cargo nextest run --cargo-profile test-release --workspace --features {{device_features}}
+    cargo nextest run --cargo-profile test-release --test-threads {{test_threads}} --workspace --features {{device_features}}
     cargo test --doc --profile test-release --workspace --features {{device_features}}
     cargo check --workspace --features av-toolbox-gpu/{{test_backend}}
 
