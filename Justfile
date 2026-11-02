@@ -70,13 +70,18 @@ test-fast:
 
 # Lints every backend including test code, and checks the illegal feature sets are refused.
 check-backends:
+    #!/usr/bin/env bash
+    set -eu
     cargo clippy -p av-toolbox-gpu --features vulkan,gpu-tests --all-targets -- -D warnings
-    cargo clippy -p av-toolbox-gpu --features metal,gpu-tests --all-targets -- -D warnings
     cargo clippy -p av-toolbox-gpu --features cuda,gpu-tests --all-targets -- -D warnings
     cargo clippy -p av-toolbox-gpu --features rocm,gpu-tests --all-targets -- -D warnings
     cargo clippy -p av-toolbox-gpu --features cuda,rocm,vulkan,gpu-tests --all-targets -- -D warnings
     cargo check -p av-toolbox-gpu 2>&1 | grep -q "at least one accelerator backend"
-    cargo check -p av-toolbox-gpu --features vulkan,metal 2>&1 | grep -q "cannot both be enabled"
+    if [ "{{os()}}" = "macos" ]; then
+        cargo clippy -p av-toolbox-gpu --features metal,gpu-tests --all-targets -- -D warnings
+    else
+        cargo check -p av-toolbox-gpu --features metal 2>&1 | grep -q "needs an Apple target"
+    fi
 
 # Fetches the vendored BestSource and libp2p sources at their pinned commits.
 submodules:

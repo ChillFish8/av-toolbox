@@ -55,7 +55,7 @@ impl BuildContext {
 
     /// A context that leaves each thread on its own stream and never flushes, so work handed
     /// between threads can run out of order.
-    #[cfg(all(test, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    #[cfg(all(test, feature = "gpu-tests", feature = "vulkan", not(feature = "metal")))]
     pub(crate) fn unordered(
         accelerator: Accelerator,
         device: Device,
@@ -152,7 +152,8 @@ pub struct Backend {
 /// The selector naming the device a client opened on `selected` runs on.
 ///
 /// CUDA and ROCm number their devices from zero, so their default is the first one. A wgpu
-/// default is asked of the adapters the backend lists.
+/// default is asked of the adapters the backend lists, and a Metal one of the GPUs Metal counts.
+/// A device no selector can name stays [Device::Default].
 fn resolved_selector(selector: Device, selected: &cubecl::Device, overridden: Option<Device>) -> Device {
     if selector != Device::Default {
         return selector;
@@ -160,7 +161,13 @@ fn resolved_selector(selector: Device, selected: &cubecl::Device, overridden: Op
 
     match selected {
         cubecl::Device::Wgpu(wgpu_device) => resolve::wgpu_default(wgpu_device.backend, overridden),
-        _ => Device::Discrete { index: 0 },
+        cubecl::Device::Cuda(_) | cubecl::Device::Hip(_) => Device::Discrete { index: 0 },
+        #[cfg(feature = "metal")]
+        cubecl::Device::Metal(_) => {
+            let gpus = resolve::MetalGpus::count();
+            gpus.default_selector()
+        },
+        _ => Device::Default,
     }
 }
 

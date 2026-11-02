@@ -236,6 +236,7 @@ fn reader_sees_the_second_write(context: &BuildContext) -> bool {
 /// How the context under test keeps work across threads in order.
 #[derive(Copy, Clone)]
 enum WorkOrder {
+    #[cfg(all(feature = "vulkan", not(feature = "metal")))]
     Unordered,
     Policy(StreamPolicy),
 }
@@ -266,6 +267,7 @@ fn stale_reads(ordering: WorkOrder, hazard: Hazard) -> usize {
     let client = opened.expect("the backend should open");
 
     let context = match ordering {
+        #[cfg(all(feature = "vulkan", not(feature = "metal")))]
         WorkOrder::Unordered => BuildContext::unordered(TEST_ACCELERATOR, selector, cubecl_device, client),
         WorkOrder::Policy(policy) => {
             BuildContext::with_policy(TEST_ACCELERATOR, selector, cubecl_device, client, policy)
@@ -277,6 +279,7 @@ fn stale_reads(ordering: WorkOrder, hazard: Hazard) -> usize {
         .count()
 }
 
+#[cfg(all(feature = "vulkan", not(feature = "metal")))]
 #[test]
 fn without_a_policy_a_handed_off_buffer_is_read_stale() {
     let stale = stale_reads(WorkOrder::Unordered, Hazard::WriteThenRead);
@@ -303,6 +306,7 @@ fn flushing_at_hand_off_reads_a_handed_off_buffer_after_its_write() {
     assert_eq!(stale, 0, "{stale} of {HAND_OFFS} hand-offs read stale data");
 }
 
+#[cfg(all(feature = "vulkan", not(feature = "metal")))]
 #[test]
 fn without_a_step_flush_a_fanned_out_buffer_is_reused_before_its_read() {
     let ordering = WorkOrder::Policy(StreamPolicy::FlushAtHandOff);

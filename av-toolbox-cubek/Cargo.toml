@@ -23,7 +23,7 @@ cubecl-environment = { workspace = true }
 
 [features]
 vulkan = ["cubecl/vulkan", "av-toolbox-gpu/vulkan"]
-metal = ["cubecl/metal", "av-toolbox-gpu/metal"]
+metal = ["cubecl/metal-native", "av-toolbox-gpu/metal"]
 cuda = ["cubecl/cuda", "av-toolbox-gpu/cuda"]
 rocm = ["cubecl/hip", "av-toolbox-gpu/rocm"]
 gpu-tests = ["av-toolbox-gpu/gpu-tests"]

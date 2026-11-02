@@ -26,12 +26,12 @@ use crate::{
     default_accelerators,
 };
 
-/// The wgpu-backed accelerator this build tests against.
+/// The accelerator this build tests against.
 ///
 /// Which one it is follows the enabled backend feature, so the same tests run against Vulkan on a
-/// Linux machine and against Metal on a macOS one. The two features are mutually exclusive, so it
-/// is never defined twice. A build with neither does not define it at all.
-#[cfg(all(test, feature = "vulkan"))]
+/// Linux machine and against Metal on a macOS one. A build with both tests Metal, since only an
+/// Apple target can enable it. A build with neither does not define it at all.
+#[cfg(all(test, feature = "vulkan", not(feature = "metal")))]
 pub(crate) const TEST_ACCELERATOR: crate::Accelerator = crate::Accelerator::Vulkan;
 
 #[cfg(all(test, feature = "metal"))]

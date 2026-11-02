@@ -5,10 +5,12 @@ use std::str::FromStr;
 use cubecl::device::AmdDevice;
 #[cfg(feature = "cuda")]
 use cubecl::device::CudaDevice;
-#[cfg(any(feature = "vulkan", feature = "metal"))]
+#[cfg(feature = "vulkan")]
 use cubecl::device::{WgpuBackend, WgpuDevice, WgpuDeviceKind};
 
 use crate::Accelerator;
+#[cfg(feature = "metal")]
+use crate::resolve::{MetalGpus, MetalRefusal};
 
 /// Where to run the compute.
 ///
@@ -21,10 +23,12 @@ pub enum Device {
     #[default]
     Default,
     /// Discrete GPU at ordinal `index`.
+    ///
+    /// On Metal the index counts the discrete GPUs first and the integrated ones after.
     Discrete { index: usize },
-    /// Integrated GPU at ordinal `index`. wgpu only.
+    /// Integrated GPU at ordinal `index`. Vulkan only.
     Integrated { index: usize },
-    /// Virtual GPU at ordinal `index`. wgpu only.
+    /// Virtual GPU at ordinal `index`. Vulkan only.
     Virtual { index: usize },
     /// The software device, such as lavapipe under Vulkan.
     Cpu,
@@ -39,6 +43,22 @@ pub enum DeviceError {
         accelerator: Accelerator,
         supported: &'static str,
     },
+    #[error(
+        "device '{device}' is not on this machine, the {accelerator} backend sees {available} {noun}",
+        noun = gpu_noun(*.available)
+    )]
+    Missing {
+        device: Device,
+        accelerator: Accelerator,
+        available: usize,
+    },
+}
+
+fn gpu_noun(count: usize) -> &'static str {
+    match count {
+        1 => "GPU",
+        _ => "GPUs",
+    }
 }
 
 /// A device selector that could not be read.
@@ -116,7 +136,8 @@ impl fmt::Display for Device {
 impl Device {
     /// The CubeCL device this selector names on `accelerator`.
     ///
-    /// No driver is asked, so whether the device exists is only known once a client opens on it.
+    /// Only Metal asks the driver, to count its GPUs. On every other backend whether the device
+    /// exists is only known once a client opens on it.
     pub fn to_cubecl(self, accelerator: Accelerator) -> Result<cubecl::Device, DeviceError> {
         match accelerator {
             #[cfg(feature = "cuda")]
@@ -139,9 +160,12 @@ impl Device {
             },
             #[cfg(feature = "metal")]
             Accelerator::Metal => {
-                let kind = self.wgpu_kind();
-                let metal_device = WgpuDevice::new(kind).on(WgpuBackend::Metal);
-                Ok(cubecl::Device::Wgpu(metal_device))
+                let gpus = MetalGpus::count();
+
+                match gpus.device(self) {
+                    Ok(metal_device) => Ok(cubecl::Device::Metal(metal_device)),
+                    Err(refusal) => Err(self.metal_error(refusal)),
+                }
             },
             // docs.rs widens the `Accelerator` variants behind `cfg(docsrs)` so they all appear in
             // the rendered enum, even when the matching backend feature is off. This arm keeps the
@@ -165,7 +189,25 @@ impl Device {
         }
     }
 
-    #[cfg(any(feature = "vulkan", feature = "metal"))]
+    #[cfg(feature = "metal")]
+    fn metal_error(self, refusal: MetalRefusal) -> DeviceError {
+        let accelerator = Accelerator::Metal;
+
+        match refusal {
+            MetalRefusal::UnsupportedKind => DeviceError::Unsupported {
+                device: self,
+                accelerator,
+                supported: "default or discrete[:N]",
+            },
+            MetalRefusal::PastTheEnd { available } => DeviceError::Missing {
+                device: self,
+                accelerator,
+                available,
+            },
+        }
+    }
+
+    #[cfg(feature = "vulkan")]
     fn wgpu_kind(self) -> WgpuDeviceKind {
         match self {
             Self::Default => WgpuDeviceKind::DefaultDevice,
@@ -297,6 +339,62 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("virtual:1"), "{message}");
         assert!(message.contains("rocm"), "{message}");
+    }
+
+    #[test]
+    fn a_missing_device_names_how_many_gpus_the_backend_sees() {
+        let accelerator = crate::default_accelerators()[0];
+        let one = DeviceError::Missing {
+            device: Device::Discrete { index: 1 },
+            accelerator,
+            available: 1,
+        };
+        let two = DeviceError::Missing {
+            device: Device::Discrete { index: 2 },
+            accelerator,
+            available: 2,
+        };
+
+        let one_message = one.to_string();
+        let two_message = two.to_string();
+
+        assert_eq!(
+            one_message,
+            format!("device 'discrete:1' is not on this machine, the {accelerator} backend sees 1 GPU"),
+        );
+        assert!(two_message.ends_with("sees 2 GPUs"), "{two_message}");
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn every_selector_metal_can_name_maps_onto_a_metal_device() {
+        use cubecl::device::MetalDevice;
+
+        let gpus = MetalGpus::count();
+
+        let default = Device::Default.to_cubecl(Accelerator::Metal).expect("should map");
+        assert_eq!(default, cubecl::Device::Metal(MetalDevice::DefaultDevice));
+
+        for selector in gpus.selectors() {
+            let mapped = selector
+                .to_cubecl(Accelerator::Metal)
+                .expect("a listed gpu should map");
+            let expected = gpus.device(selector).expect("a listed gpu should resolve");
+            assert_eq!(mapped, cubecl::Device::Metal(expected), "{selector}");
+        }
+
+        let past_the_end = Device::Discrete { index: gpus.total() };
+        let error = past_the_end
+            .to_cubecl(Accelerator::Metal)
+            .expect_err("should refuse");
+        assert!(matches!(error, DeviceError::Missing { .. }), "{error}");
+
+        let error = Device::Cpu
+            .to_cubecl(Accelerator::Metal)
+            .expect_err("should refuse");
+        let message = error.to_string();
+        assert!(message.contains("cpu"), "{message}");
+        assert!(message.contains("metal"), "{message}");
     }
 
     #[cfg(feature = "vulkan")]

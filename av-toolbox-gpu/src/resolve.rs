@@ -1,3 +1,5 @@
+#[cfg(any(feature = "metal", test))]
+use cubecl::device::MetalDevice;
 use cubecl::device::{WgpuBackend, WgpuDevice, WgpuDeviceKind};
 
 use crate::Device;
@@ -110,6 +112,90 @@ fn rank(kind: &WgpuDeviceKind) -> u8 {
         WgpuDeviceKind::Cpu => 4,
         _ => 2,
     }
+}
+
+/// How many GPUs of each kind the native Metal runtime sees.
+///
+/// A selector index counts the discrete GPUs first and the integrated ones after, so `discrete:0`
+/// is the first GPU on every Mac.
+#[cfg(any(feature = "metal", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MetalGpus {
+    pub(crate) discrete: usize,
+    pub(crate) integrated: usize,
+}
+
+/// Why a selector names no Metal GPU.
+#[cfg(any(feature = "metal", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MetalRefusal {
+    /// Metal names its GPUs only by `default` and `discrete[:N]`.
+    UnsupportedKind,
+    /// The index is past the last of the `available` GPUs.
+    PastTheEnd { available: usize },
+}
+
+#[cfg(any(feature = "metal", test))]
+impl MetalGpus {
+    /// Counts the GPUs Metal lists on this machine.
+    #[cfg(feature = "metal")]
+    pub(crate) fn count() -> Self {
+        let discrete = count_metal_gpus(MetalDevice::DiscreteGpu(0));
+        let integrated = count_metal_gpus(MetalDevice::IntegratedGpu(0));
+
+        Self { discrete, integrated }
+    }
+
+    pub(crate) fn total(self) -> usize {
+        self.discrete + self.integrated
+    }
+
+    /// The selector of every GPU, in the order they are counted.
+    pub(crate) fn selectors(self) -> Vec<Device> {
+        (0..self.total())
+            .map(|index| Device::Discrete { index })
+            .collect()
+    }
+
+    /// The Metal device `selector` names.
+    pub(crate) fn device(self, selector: Device) -> Result<MetalDevice, MetalRefusal> {
+        match selector {
+            Device::Default => Ok(MetalDevice::DefaultDevice),
+            Device::Discrete { index } if index < self.discrete => Ok(MetalDevice::DiscreteGpu(index)),
+            Device::Discrete { index } if index < self.total() => {
+                let integrated_index = index - self.discrete;
+                Ok(MetalDevice::IntegratedGpu(integrated_index))
+            },
+            Device::Discrete { .. } => Err(MetalRefusal::PastTheEnd {
+                available: self.total(),
+            }),
+            Device::Integrated { .. } | Device::Virtual { .. } | Device::Cpu => {
+                Err(MetalRefusal::UnsupportedKind)
+            },
+        }
+    }
+
+    /// The selector naming the GPU Metal picks as its default.
+    ///
+    /// This is the right label in the usual case, where Metal's default is the first GPU counted.
+    /// With no GPU listed there is nothing to name, so it stays [Device::Default].
+    pub(crate) fn default_selector(self) -> Device {
+        if self.total() == 0 {
+            return Device::Default;
+        }
+
+        Device::Discrete { index: 0 }
+    }
+}
+
+/// How many Metal GPUs share the kind of `first`.
+#[cfg(feature = "metal")]
+fn count_metal_gpus(first: MetalDevice) -> usize {
+    let device = cubecl::Device::Metal(first);
+    let device_id = device.to_id();
+    let listed = cubecl::Device::enumerate(device_id);
+
+    listed.len()
 }
 
 #[cfg(test)]

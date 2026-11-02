@@ -46,8 +46,6 @@ mod tests {
         assert_eq!(found, Some(TEST_ACCELERATOR));
     }
 
-    /// Every selector maps onto some wgpu device, so what fails here is opening a client for
-    /// hardware that is not present, not the conversion.
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
     #[test]
     fn a_device_the_backend_does_not_have_is_not_chosen() {

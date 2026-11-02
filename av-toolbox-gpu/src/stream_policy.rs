@@ -8,7 +8,8 @@ use crate::Accelerator;
 pub enum StreamPolicy {
     /// Every thread queues on one shared stream, so work is submitted in the order it was queued.
     ///
-    /// Vulkan and Metal use this, since their streams all feed one GPU queue anyway.
+    /// Vulkan and Metal use this. Vulkan's streams all feed one GPU queue anyway, and Metal keeps
+    /// its work safely ordered on one command queue.
     SharedStream,
     /// Each thread keeps its own stream and submits it before a buffer it used goes to another
     /// thread.

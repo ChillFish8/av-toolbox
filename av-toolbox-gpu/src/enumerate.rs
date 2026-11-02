@@ -1,4 +1,6 @@
 use crate::probe::probe_client;
+#[cfg(feature = "metal")]
+use crate::resolve::MetalGpus;
 use crate::resolve::wgpu_selector;
 use crate::{Accelerator, Device};
 
@@ -53,7 +55,14 @@ pub fn enumerate_devices(accelerators: &[Accelerator]) -> Vec<BackendDevices> {
 /// Every device `accelerator` lists that [Device] is able to name.
 ///
 /// The backend is asked once per kind of device. A kind the backend cannot express is skipped.
+/// Metal names every GPU by its index, so it lists one selector per GPU it counts.
 fn listed_devices(accelerator: Accelerator) -> Vec<Device> {
+    #[cfg(feature = "metal")]
+    if accelerator == Accelerator::Metal {
+        let gpus = MetalGpus::count();
+        return gpus.selectors();
+    }
+
     let mut listed = Vec::new();
 
     for probe in KIND_PROBES {

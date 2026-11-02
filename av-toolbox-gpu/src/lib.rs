@@ -14,8 +14,8 @@
 #[cfg(not(any(feature = "cuda", feature = "rocm", feature = "vulkan", feature = "metal")))]
 compile_error!("av-toolbox-gpu needs at least one accelerator backend enabled: cuda, rocm, vulkan or metal");
 
-#[cfg(all(feature = "vulkan", feature = "metal"))]
-compile_error!("the vulkan and metal backends cannot both be enabled, pick one");
+#[cfg(all(feature = "metal", not(target_vendor = "apple")))]
+compile_error!("the `metal` feature needs an Apple target, such as `aarch64-apple-darwin`");
 
 mod accelerator;
 mod backend;

@@ -23,7 +23,7 @@ tempfile = { workspace = true }
 
 [features]
 vulkan = ["cubecl/vulkan"]
-metal = ["cubecl/metal"]
+metal = ["cubecl/metal-native"]
 cuda = ["cubecl/cuda"]
 rocm = ["cubecl/hip"]
 # Tests that need a real device. Not enabled in CI, which has no accelerator.
