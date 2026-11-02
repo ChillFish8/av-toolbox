@@ -21,8 +21,8 @@ static CLAIMED: LazyLock<Mutex<HashSet<u128>>> = LazyLock::new(|| Mutex::new(Has
 
 /// The kernel cache generation these stamps describe.
 ///
-/// CubeCL keeps its compiled kernels under a directory named for its own version, so a dependency
-/// bump leaves them cold. A stamp from an older generation must not be read as covering a newer
+/// CubeCL keeps its compiled kernels in its environment database, which a dependency bump can
+/// leave cold. A stamp from an older generation must not be read as covering a newer
 /// one, so bump this whenever the CubeCL dependency changes.
 const STAMP_GENERATION: &str = "cubecl-0.11";
 

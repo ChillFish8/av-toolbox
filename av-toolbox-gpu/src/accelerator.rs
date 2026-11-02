@@ -21,7 +21,7 @@ pub enum Accelerator {
     Vulkan,
     /// Runs kernels through CubeCL's native Metal runtime.
     ///
-    /// This is the only option on Apple Silicon.
+    /// Apple GPUs only, and needs Metal 3.
     #[cfg(any(feature = "metal", docsrs))]
     #[cfg_attr(docsrs, doc(cfg(feature = "metal")))]
     Metal,

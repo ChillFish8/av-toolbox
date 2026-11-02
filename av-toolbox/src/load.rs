@@ -256,6 +256,8 @@ fn device_mismatch(profile_device: &str, opened: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use av_toolbox_gpu::default_accelerators;
+
     use super::*;
 
     #[test]
@@ -272,8 +274,13 @@ mod tests {
 
     #[test]
     fn a_profile_naming_the_default_device_matches_any() {
-        assert!(names_the_default("vulkan default", Accelerator::Vulkan));
-        assert!(!names_the_default("vulkan discrete:0", Accelerator::Vulkan));
+        let accelerator = default_accelerators()[0];
+
+        assert!(names_the_default(&format!("{accelerator} default"), accelerator));
+        assert!(!names_the_default(
+            &format!("{accelerator} discrete:0"),
+            accelerator
+        ));
     }
 
     #[test]

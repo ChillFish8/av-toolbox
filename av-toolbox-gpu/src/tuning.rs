@@ -1,6 +1,6 @@
 use strum_macros::{Display, EnumString};
 
-/// How kernels pick between their candidate versions.
+/// How the av-denoise stages pick between their candidate kernels.
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, EnumString, Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum Tuning {

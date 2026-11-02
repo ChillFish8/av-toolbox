@@ -3,8 +3,17 @@ use std::path::PathBuf;
 
 use av_toolbox_core::StageKind;
 use av_toolbox_gpu::{Accelerator, Device, Tuning, default_accelerators};
+use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 use codespan_reporting::term::termcolor::ColorChoice;
+
+fn parse_tuning(value: String) -> Result<Tuning, String> {
+    value.parse::<Tuning>().map_err(|error| error.to_string())
+}
+
+fn tuning_parser() -> impl TypedValueParser<Value = Tuning> {
+    PossibleValuesParser::new(["auto", "cached", "off"]).try_map(parse_tuning)
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -32,7 +41,9 @@ pub(crate) struct Args {
     ///
     /// `default` lets the backend pick.
     ///
-    /// `discrete[:N]` picks the Nth discrete GPU (default 0). Works on CUDA, ROCm, and Vulkan.
+    /// `discrete[:N]` picks the Nth discrete GPU (default 0). Works on CUDA, ROCm, Vulkan and Metal.
+    /// Metal counts discrete GPUs first and then integrated ones, so on Apple Silicon `discrete:0`
+    /// is the built-in GPU.
     ///
     /// `integrated[:N]` picks the Nth integrated GPU. Vulkan only.
     ///
@@ -43,14 +54,20 @@ pub(crate) struct Args {
     #[arg(short, long, env = "AVTB_DEVICE", default_value = "default", global = true)]
     pub(crate) device: Device,
 
-    /// How kernels pick between their candidate versions.
+    /// How the av-denoise stages pick between their candidate kernels.
     ///
     /// `auto` times the candidates of any kernel without a stored result and stores the fastest.
     ///
     /// `cached` uses stored results only, and a kernel without one runs its baseline.
     ///
     /// `off` always runs the baseline.
-    #[arg(long, env = "AVTB_TUNE", default_value = "cached", global = true)]
+    #[arg(
+        long,
+        env = "AVTB_TUNE",
+        default_value = "cached",
+        value_parser = tuning_parser(),
+        global = true
+    )]
     pub(crate) tune: Tuning,
 
     /// When to colour diagnostics.

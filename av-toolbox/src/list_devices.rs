@@ -104,7 +104,13 @@ fn sort_key(device: &Device) -> (u8, usize) {
 
 #[cfg(test)]
 mod tests {
+    use av_toolbox_gpu::default_accelerators;
+
     use super::*;
+
+    fn any_accelerator() -> Accelerator {
+        default_accelerators()[0]
+    }
 
     fn backend(accelerator: Accelerator, devices: Vec<Device>) -> BackendDevices {
         BackendDevices {
@@ -120,16 +126,18 @@ mod tests {
     #[test]
     fn rows_merge_backends_offering_the_same_device() {
         let reported = vec![
-            backend(Accelerator::Vulkan, vec![Device::Discrete { index: 0 }]),
-            backend(Accelerator::Vulkan, vec![Device::Discrete { index: 0 }]),
+            backend(any_accelerator(), vec![Device::Discrete { index: 0 }]),
+            backend(any_accelerator(), vec![Device::Discrete { index: 0 }]),
         ];
+
+        let name = any_accelerator().to_string();
 
         let rows = build_rows(&reported);
         assert_eq!(
             rows,
             vec![
-                ("default".to_string(), vec!["vulkan".to_string()]),
-                ("discrete:0".to_string(), vec!["vulkan".to_string()]),
+                ("default".to_string(), vec![name.clone()]),
+                ("discrete:0".to_string(), vec![name]),
             ],
         );
     }
@@ -137,7 +145,7 @@ mod tests {
     #[test]
     fn rows_are_sorted_by_kind_then_ordinal() {
         let reported = vec![backend(
-            Accelerator::Vulkan,
+            any_accelerator(),
             vec![
                 Device::Cpu,
                 Device::Discrete { index: 1 },
@@ -159,7 +167,7 @@ mod tests {
     #[test]
     fn a_backend_that_did_not_start_contributes_no_rows() {
         let reported = vec![BackendDevices {
-            accelerator: Accelerator::Vulkan,
+            accelerator: any_accelerator(),
             available: false,
             devices: Vec::new(),
         }];
@@ -169,7 +177,7 @@ mod tests {
 
     #[test]
     fn the_table_opens_with_a_blank_line() {
-        let reported = vec![backend(Accelerator::Vulkan, vec![Device::Cpu])];
+        let reported = vec![backend(any_accelerator(), vec![Device::Cpu])];
 
         assert!(
             format_table(&reported).starts_with('\n'),
@@ -179,29 +187,27 @@ mod tests {
 
     #[test]
     fn table_pads_the_device_column() {
-        let reported = vec![backend(
-            Accelerator::Vulkan,
-            vec![Device::Integrated { index: 0 }],
-        )];
+        let reported = vec![backend(any_accelerator(), vec![Device::Integrated { index: 0 }])];
 
-        assert_eq!(
-            format_table(&reported),
-            "\nDEVICE        BACKENDS\ndefault       vulkan\nintegrated:0  vulkan\n",
-        );
+        let name = any_accelerator();
+        let expected = format!("\nDEVICE        BACKENDS\ndefault       {name}\nintegrated:0  {name}\n");
+
+        assert_eq!(format_table(&reported), expected);
     }
 
     #[test]
     fn table_names_backends_that_did_not_start() {
         let reported = vec![BackendDevices {
-            accelerator: Accelerator::Vulkan,
+            accelerator: any_accelerator(),
             available: false,
             devices: Vec::new(),
         }];
 
-        assert_eq!(
-            format_table(&reported),
-            "\nNo usable devices found.\n\nEnabled but unavailable on this machine: vulkan\n",
-        );
+        let name = any_accelerator();
+        let expected =
+            format!("\nNo usable devices found.\n\nEnabled but unavailable on this machine: {name}\n");
+
+        assert_eq!(format_table(&reported), expected);
     }
 
     #[test]

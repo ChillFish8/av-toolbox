@@ -49,8 +49,7 @@ COPY --from=builder /build/target/release/av-toolbox /app/av-toolbox
 COPY --from=builder /build/LICENSE /app/LICENSE
 COPY --from=builder /build/THIRD-PARTY-LICENSES /app/THIRD-PARTY-LICENSES
 
-# The JIT compiles through hiprtc at runtime, and /dev/kfd and /dev/dri come from the host, so this only proves the
-# binary's own libraries resolve.
+# The JIT compiles through LLVM with the ROCm device libs, and /dev/kfd and /dev/dri come from the host.
 RUN /app/av-toolbox --help > /dev/null
 
 # Fails if the binary still loads FFmpeg or its codecs from the system.
