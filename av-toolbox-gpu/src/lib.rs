@@ -26,6 +26,8 @@ mod context;
 mod device;
 mod enumerate;
 mod frame;
+#[cfg(feature = "cuda")]
+mod libdevice;
 mod memory;
 mod meta;
 mod negotiate;

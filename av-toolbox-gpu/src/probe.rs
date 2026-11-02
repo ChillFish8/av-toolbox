@@ -46,6 +46,10 @@ pub(crate) fn supported_device<T>(converted: Result<T, DeviceError>) -> Option<T
 /// missing driver into "this backend is not available here", which is what makes one binary
 /// with several backends enabled usable on a machine that has only one of them.
 ///
+/// CUDA kernels compile through LLVM, which links `libdevice.10.bc` from a CUDA toolkit. Without
+/// that file every kernel fails mid-pipeline, so a missing file reports the backend as not
+/// available here, before the driver is touched.
+///
 /// The client is synchronised before it is handed back. CubeCL kernels are fully asynchronous,
 /// so a successful `sync` is what proves the backend works and no test kernel is needed.
 pub(crate) fn open_client(
@@ -53,6 +57,11 @@ pub(crate) fn open_client(
     selector: Device,
     device: &cubecl::Device,
 ) -> Option<Client> {
+    #[cfg(feature = "cuda")]
+    if accelerator == Accelerator::Cuda && !crate::libdevice::libdevice_available() {
+        return None;
+    }
+
     let mut probed = PROBED.lock().unwrap_or_else(|error| error.into_inner());
 
     let opened = quiet_panics(|| {
