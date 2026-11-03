@@ -4,6 +4,7 @@
 //! Sources that bring video into the pipeline
 //!
 //! - `y4m/stdin` and `y4m/pipe` read a y4m stream.
+//! - `channel/frames` takes frames from the av-toolbox library caller.
 //! - `ffms2/file` decodes a media file.
 //! - `bestsource/file` decodes a media file frame accurately.
 //! - `solid/fill` and `image/file` repeat one frame of a colour or an image.
@@ -12,6 +13,7 @@
 
 #[cfg(feature = "bestsource")]
 mod bestsource;
+mod channel;
 mod constant;
 #[cfg(feature = "ffms2")]
 mod ffms2;
@@ -25,6 +27,7 @@ use av_toolbox_core::{PipelineRegistry, RegistryError};
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_source::<stdin::Stdin>()?;
     registry.register_source::<pipe::Pipe>()?;
+    registry.register_source::<channel::Frames>()?;
     registry.register_source::<constant::Fill>()?;
     registry.register_source::<constant::File>()?;
     registry.register_filter::<constant::SolidLike>()?;
