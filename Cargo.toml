@@ -87,4 +87,4 @@ avtbx-bestsource = { path = "thirdparty/bestsource", version = "0.2.0" }
 avtbx-vship = { path = "thirdparty/vship", version = "0.2.0" }
 
 av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
-av-denoise-core = { version = "=0.6.0-alpha4", default-features = false }
+av-denoise-core = { version = "=0.6.0", default-features = false }
