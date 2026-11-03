@@ -192,7 +192,7 @@ fn plural(count: usize, noun: &str) -> String {
 /// at, so it logs an error naming the transfer instead of the error's own `Display`, which
 /// would otherwise leak the node's internal id. A node id nothing in the run names at all falls
 /// back to the error's own `Display`.
-pub fn run_error(
+pub(crate) fn run_error(
     writer: &mut dyn WriteColor,
     files: &PipelineFiles,
     error: &RunError,

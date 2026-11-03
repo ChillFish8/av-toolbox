@@ -2,8 +2,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use av_toolbox::report;
-use av_toolbox_pipeline::CompiledPipeline;
+use av_toolbox::StreamHandle;
 use av_toolbox_runtime::{Cancel, Progress, RunReport, Settings};
 use indicatif::MultiProgress;
 
@@ -17,26 +16,23 @@ pub(crate) const CANCELLED: u8 = 130;
 pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> ExitCode {
     let mut stderr = args.color.stderr();
 
-    let Some(mut loaded) = load::load(&execute.pipeline, &execute.vars, &mut stderr) else {
+    let Some(mut source) = load::source(&execute.pipeline, &execute.vars, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 
     let mut profile = None;
     if let Some(path) = &execute.profile {
-        let Some(read) = load::apply_profile(path, &mut loaded) else {
+        let specs = source.specs_mut();
+        let Some(read) = load::apply_profile(path, specs) else {
             return ExitCode::FAILURE;
         };
 
         profile = Some(read);
     }
 
-    let Some(registry) = load::registry() else {
+    if !load::builds(&source, &mut stderr) {
         return ExitCode::FAILURE;
-    };
-
-    let Some(pipeline) = load::build(&registry, &loaded.specs, &loaded.files, &mut stderr) else {
-        return ExitCode::FAILURE;
-    };
+    }
 
     let Some(backend) = load::backend(args) else {
         return ExitCode::FAILURE;
@@ -46,35 +42,35 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> E
         load::warn_on_other_device(profile, &backend);
     }
 
-    let Some(compiled) = load::compile(pipeline, &backend, &loaded.files, &mut stderr) else {
+    let Some(mut session) = load::session(source, backend, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 
-    let stall_deadline = av_toolbox::steps::stall_deadline_for(backend.context().tuning());
     let settings = Settings {
         frame_budget: execute.frame_budget,
-        stall_deadline,
         ..Settings::default()
     };
-    let built = compiled.engine(settings);
-    let engine = match built {
-        Ok(engine) => engine,
+    let started = session.start_stream(settings);
+    session.render_warnings(&mut stderr);
+
+    let stream = match started {
+        Ok(stream) => stream,
         Err(error) => {
-            let found = error.into_diagnostics().into_inner();
-            report::diagnostics(&mut stderr, &loaded.files, &found);
+            load::report(&error, &mut stderr);
 
             return ExitCode::FAILURE;
         },
     };
 
-    let cancel = engine.cancel_handle();
+    let handle = stream.into_handle();
+    let cancel = handle.cancel_handle();
     stop_on_interrupt(cancel, bars.clone());
 
-    let progress = engine.progress();
-    let names = sink_names(&compiled, &progress);
+    let progress = handle.progress();
+    let names = sink_names(&handle, &progress);
     let reporter = Reporter::start(execute.progress, bars, progress.clone(), names.clone());
 
-    let finished = engine.run();
+    let finished = handle.join();
 
     if let Some(reporter) = reporter {
         reporter.stop();
@@ -83,8 +79,7 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> E
     match finished {
         Ok(run) => finish(&run, &progress, &names),
         Err(error) => {
-            let stage = error.node().and_then(|node| compiled.stage_of(node));
-            report::run_error(&mut stderr, &loaded.files, &error, stage);
+            load::report(&error, &mut stderr);
 
             ExitCode::FAILURE
         },
@@ -92,11 +87,11 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> E
 }
 
 /// Every sink's name in the order [Progress::sinks](av_toolbox_runtime::Progress::sinks) lists them.
-fn sink_names(compiled: &CompiledPipeline<'_, '_>, progress: &Progress) -> Vec<String> {
+fn sink_names(handle: &StreamHandle, progress: &Progress) -> Vec<String> {
     progress
         .sinks()
         .iter()
-        .map(|sink| match compiled.stage_of(sink.node) {
+        .map(|sink| match handle.stage_of(sink.node) {
             Some(stage) => stage.name.to_string(),
             None => "sink".to_string(),
         })

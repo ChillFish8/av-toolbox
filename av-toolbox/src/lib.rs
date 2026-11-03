@@ -7,6 +7,9 @@
 //! after another. Frames go in through the pipeline's `channel/frames` sources and come back in order
 //! from its `channel/frames` sinks.
 //!
+//! To see a pipeline's diagnostics before any GPU opens, read it as a [PipelineSource] and call
+//! [PipelineSource::check], then open it with [Session::new].
+//!
 //! ```no_run
 //! use std::thread;
 //!
@@ -61,19 +64,23 @@
 mod backend;
 mod error;
 mod input;
+mod plan;
 #[doc(hidden)]
 pub mod report;
 mod session;
+mod source;
 #[doc(hidden)]
 pub mod steps;
 
-pub use av_toolbox_core::{InputFrame, OutputFrame};
+pub use av_toolbox_core::{Granularity, InputFrame, OutputFrame, StageKind};
 pub use av_toolbox_gpu::{Accelerator, Backend, Device, FrameFormat, Tuning};
-pub use av_toolbox_graph::{Diagnostic, NodeId, StageSpec};
+pub use av_toolbox_graph::{Diagnostic, NodeId, NodeRole, StageSpec};
 pub use av_toolbox_pipeline::StageRef;
 pub use av_toolbox_runtime::{Cancel, Progress, RunError, RunReport, Settings};
 
 pub use self::backend::{BackendOptions, open_backend};
 pub use self::error::SessionError;
 pub use self::input::PipelineInput;
+pub use self::plan::PlannedNode;
 pub use self::session::{Session, Stream, StreamHandle};
+pub use self::source::PipelineSource;

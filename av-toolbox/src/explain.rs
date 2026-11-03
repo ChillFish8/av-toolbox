@@ -20,7 +20,7 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
 
     let mut profile = None;
     if let Some(path) = &explain.profile {
-        let Some(read) = load::apply_profile(path, &mut loaded) else {
+        let Some(read) = load::apply_profile(path, &mut loaded.specs) else {
             return ExitCode::FAILURE;
         };
 

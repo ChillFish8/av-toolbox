@@ -1,5 +1,6 @@
 #![cfg(all(unix, feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
 
+use std::path::Path;
 use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -7,6 +8,7 @@ use std::time::{Duration, Instant};
 use av_toolbox::{
     FrameFormat,
     InputFrame,
+    NodeRole,
     OutputFrame,
     PipelineInput,
     RunReport,
@@ -247,6 +249,37 @@ fn logged_chunks(log: &str) -> Vec<u64> {
         .collect()
 }
 
+const GRAIN_PIPELINE: &str = r#"
+[variable.grain]
+type = "path"
+description = "The directory the grain table is written into"
+
+[source.input]
+type = "channel/frames"
+
+[filter.denoise]
+type = "av-denoise/nl4d"
+inputs = ["input"]
+
+[sink.output]
+type = "channel/frames"
+inputs = ["denoise"]
+
+[sink.grain]
+type = "artefacts/files"
+inputs = ["denoise"]
+args.directory = "{{ grain }}"
+args.include = ["grain_table"]
+"#;
+
+/// A session on [GRAIN_PIPELINE] writing its grain table into `grain_path`.
+fn grain_session(grain_path: &Path) -> Session {
+    let grain_text = grain_path.to_str().expect("a utf-8 path");
+    let vars = [("grain".to_owned(), grain_text.to_owned())];
+
+    session_with(GRAIN_PIPELINE, &vars, format_of(192, 128))
+}
+
 /// A channel pipeline denoising with NL4D on `workers` workers.
 fn denoise_pipeline(workers: usize) -> String {
     format!(
@@ -455,33 +488,9 @@ fn a_format_for_an_unknown_stage_is_refused() {
 
 #[test]
 fn an_artefact_sink_still_writes_its_directory() {
-    let pipeline = r#"
-[variable.grain]
-type = "path"
-description = "The directory the grain table is written into"
-
-[source.input]
-type = "channel/frames"
-
-[filter.denoise]
-type = "av-denoise/nl4d"
-inputs = ["input"]
-
-[sink.output]
-type = "channel/frames"
-inputs = ["denoise"]
-
-[sink.grain]
-type = "artefacts/files"
-inputs = ["denoise"]
-args.directory = "{{ grain }}"
-args.include = ["grain_table"]
-"#;
     let directory = tempfile::tempdir().expect("a temp dir");
     let grain_path = directory.path().join("grain");
-    let grain_text = grain_path.to_str().expect("a utf-8 path");
-    let vars = [("grain".to_owned(), grain_text.to_owned())];
-    let mut session = session_with(pipeline, &vars, format_of(192, 128));
+    let mut session = grain_session(&grain_path);
     let frames: Vec<InputFrame> = (0..60).map(grainy_frame).collect();
 
     let finished = round_trip(&mut session, frames);
@@ -492,6 +501,52 @@ args.include = ["grain_table"]
     let table_path = grain_path.join("filter.denoise.grain_table.tbl");
     let table = std::fs::read_to_string(table_path).expect("the table was written");
     assert!(table.starts_with("filmgrn1\n"), "{table}");
+}
+
+#[test]
+fn a_session_discarding_artefacts_writes_none() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let grain_path = directory.path().join("grain");
+    let mut session = grain_session(&grain_path);
+    session.discard_artefacts(true);
+    let frames: Vec<InputFrame> = (0..60).map(grainy_frame).collect();
+
+    let finished = round_trip(&mut session, frames);
+    finished.joined.expect("the run succeeds");
+
+    assert_eq!(finished.frames.len(), 60);
+    let table_path = grain_path.join("filter.denoise.grain_table.tbl");
+    assert!(!table_path.exists());
+}
+
+#[test]
+fn the_plan_gives_every_node_its_width() {
+    let pipeline = denoise_pipeline(2);
+    let mut session = session(&pipeline);
+    let mut stream = session
+        .start_stream(Settings::default())
+        .expect("the stream starts");
+    let sender = stream.take_sender("input").expect("a sender for the source");
+    let handle = stream.into_handle();
+    drop(sender);
+
+    let paths: Vec<&str> = handle.plan().iter().map(|node| node.path.as_str()).collect();
+    let denoise = handle
+        .plan()
+        .iter()
+        .find(|node| node.path == "filter.denoise")
+        .expect("the plan holds the denoiser");
+    let crossings = handle
+        .plan()
+        .iter()
+        .filter(|node| matches!(node.role, NodeRole::Crossing(_)))
+        .count();
+
+    assert_eq!(paths.first(), Some(&"source.input"));
+    assert!(paths.contains(&"sink.output"), "{paths:?}");
+    assert_eq!(denoise.width, 2);
+    assert_eq!(crossings, 2);
+    handle.join().expect("the empty run succeeds");
 }
 
 #[test]

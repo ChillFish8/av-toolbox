@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use av_toolbox::report::{self, PipelineFiles};
-use av_toolbox::{BackendOptions, steps};
+use av_toolbox::{BackendOptions, PipelineInput, PipelineSource, Session, SessionError, steps};
 use av_toolbox_core::PipelineRegistry;
 use av_toolbox_gpu::{Accelerator, Backend, Device};
 use av_toolbox_graph::StageSpec;
@@ -100,34 +100,12 @@ pub(crate) fn compile<'r, 'b>(
     files: &PipelineFiles,
     stderr: &mut dyn WriteColor,
 ) -> Option<CompiledPipeline<'r, 'b>> {
-    compile_pipeline(pipeline, backend, files, stderr, true)
-}
-
-/// The same as [compile], but a pipeline that compiles prints no warnings.
-pub(crate) fn compile_quietly<'r, 'b>(
-    pipeline: Pipeline<'r>,
-    backend: &'b Backend,
-    files: &PipelineFiles,
-    stderr: &mut dyn WriteColor,
-) -> Option<CompiledPipeline<'r, 'b>> {
-    compile_pipeline(pipeline, backend, files, stderr, false)
-}
-
-fn compile_pipeline<'r, 'b>(
-    pipeline: Pipeline<'r>,
-    backend: &'b Backend,
-    files: &PipelineFiles,
-    stderr: &mut dyn WriteColor,
-    show_warnings: bool,
-) -> Option<CompiledPipeline<'r, 'b>> {
     let compiled = steps::compile(pipeline, backend);
 
     match compiled {
         Ok(compiled) => {
-            if show_warnings {
-                let compiled_warnings = compiled.warnings();
-                report::diagnostics(stderr, files, compiled_warnings);
-            }
+            let compiled_warnings = compiled.warnings();
+            report::diagnostics(stderr, files, compiled_warnings);
 
             Some(compiled)
         },
@@ -139,8 +117,70 @@ fn compile_pipeline<'r, 'b>(
     }
 }
 
+/// Reads the pipeline at `path` and every file it calls, or prints why it cannot be.
+pub(crate) fn source(
+    path: &Path,
+    vars: &[(String, String)],
+    stderr: &mut dyn WriteColor,
+) -> Option<PipelineSource> {
+    let input = PipelineInput::File(path.to_path_buf());
+    let read = PipelineSource::read(input, vars);
+
+    match read {
+        Ok(source) => Some(source),
+        Err(error) => {
+            report(&error, stderr);
+
+            None
+        },
+    }
+}
+
+/// Whether the stages as written build without a device, printing why when they do not.
+pub(crate) fn builds(source: &PipelineSource, stderr: &mut dyn WriteColor) -> bool {
+    let built = source.build();
+
+    match built {
+        Ok(_) => true,
+        Err(error) => {
+            report(&error, stderr);
+
+            false
+        },
+    }
+}
+
+/// Opens a session on `source`, or prints why it cannot be opened.
+pub(crate) fn session(
+    source: PipelineSource,
+    backend: Backend,
+    stderr: &mut dyn WriteColor,
+) -> Option<Session> {
+    let opened = Session::new(source, backend, &[]);
+
+    match opened {
+        Ok(session) => Some(session),
+        Err(error) => {
+            report(&error, stderr);
+
+            None
+        },
+    }
+}
+
+/// Prints `error`, drawing it against the TOML when it points into the pipeline's files and logging it otherwise.
+///
+/// Logs under the `av_toolbox::report` target.
+pub(crate) fn report(error: &SessionError, stderr: &mut dyn WriteColor) {
+    if error.points_at_files() {
+        error.render(stderr);
+    } else {
+        tracing::error!(target: "av_toolbox::report", "{error}");
+    }
+}
+
 /// Reads the profile at `path` and applies its worker counts, warning about keys that name no stage.
-pub(crate) fn apply_profile(path: &Path, loaded: &mut Loaded) -> Option<ProfileFile> {
+pub(crate) fn apply_profile(path: &Path, specs: &mut [StageSpec]) -> Option<ProfileFile> {
     let read = file::read(path);
     let profile = match read {
         Ok(profile) => profile,
@@ -151,7 +191,7 @@ pub(crate) fn apply_profile(path: &Path, loaded: &mut Loaded) -> Option<ProfileF
         },
     };
 
-    let unknown = file::apply(&profile.workers, &mut loaded.specs);
+    let unknown = file::apply(&profile.workers, specs);
     for key in unknown {
         tracing::warn!("the profile names {key}, which is not a stage of this pipeline");
     }

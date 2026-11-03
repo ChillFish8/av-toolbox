@@ -147,8 +147,7 @@ struct FramesSink {
 impl FramesSink {
     /// Sends `output` to the caller, waiting while the channel is full.
     ///
-    /// Once the run stops, the frame is dropped and the sink returns quietly, since the caller asked for the
-    /// run to end.
+    /// Once the run stops, the frame is dropped and the sink returns quietly, since the run has ended.
     fn hand_over(&self, frames: &SyncSender<OutputFrame>, output: OutputFrame) -> Result<(), StageError> {
         let mut pending = output;
         let mut wait = FIRST_WAIT;

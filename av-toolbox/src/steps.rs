@@ -26,7 +26,7 @@ fn registry_error(error: RegistryError) -> SessionError {
 /// How long a source may wait for room on its frame budget, `None` for the budget's own default.
 ///
 /// [Tuning::Auto] may tune kernels mid-run, and a source waits on the stage tuning them.
-pub fn stall_deadline_for(tuning: Tuning) -> Option<Duration> {
+pub(crate) fn stall_deadline_for(tuning: Tuning) -> Option<Duration> {
     match tuning {
         Tuning::Auto => Some(TUNING_STALL_DEADLINE),
         Tuning::Cached | Tuning::Off => None,

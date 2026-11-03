@@ -18,11 +18,14 @@ use av_toolbox_gpu::{Backend, FrameFormat, Tuning};
 use av_toolbox_graph::{Diagnostic, DiagnosticCode, NodeId, Span, StageSpec};
 use av_toolbox_pipeline::{CompiledPipeline, StageRef};
 use av_toolbox_runtime::{Cancel, Engine, Progress, RunError, RunReport, Settings};
+use codespan_reporting::term::termcolor::WriteColor;
 use serde_json::{Map, Value};
 
 use crate::error::NamedStage;
-use crate::input::{self, PipelineInput};
-use crate::report::PipelineFiles;
+use crate::input::PipelineInput;
+use crate::plan::{self, PlannedNode};
+use crate::report::{self, PipelineFiles};
+use crate::source::PipelineSource;
 use crate::{SessionError, steps};
 
 /// The stage type of the caller's channel source and sink.
@@ -44,23 +47,22 @@ pub struct Session {
     sources: Vec<(String, FrameFormat)>,
     sinks: Vec<String>,
     warnings: Vec<Diagnostic>,
+    discard_artefacts: bool,
     running: Weak<()>,
 }
 
 impl Session {
-    /// Reads the pipeline and checks that `channels` gives a format for every `channel/frames` source.
-    ///
-    /// `vars` fills the pipeline's variables over any `AVTB_VAR_<NAME>` environment variables.
-    pub fn load(
-        input: PipelineInput,
-        vars: &[(String, String)],
+    /// Opens `source` on `backend`, checking that `channels` gives a format for every `channel/frames` source.
+    pub fn new(
+        source: PipelineSource,
         backend: Backend,
         channels: &[(String, FrameFormat)],
     ) -> Result<Session, SessionError> {
-        let supplied = steps::supplied(vars);
-        let loaded = input::load(&input, &supplied)?;
-        let files = Arc::new(loaded.files);
-        let mut specs = loaded.specs;
+        let PipelineSource {
+            mut specs,
+            files,
+            registry,
+        } = source;
 
         let token = ChannelToken::new();
         let stages = bind_channel_args(&mut specs, &token);
@@ -69,8 +71,6 @@ impl Session {
             Ok(sources) => sources,
             Err(found) => return Err(SessionError::pipeline(files, found)),
         };
-
-        let registry = steps::registry()?;
 
         Ok(Session {
             specs,
@@ -81,8 +81,21 @@ impl Session {
             sources,
             sinks: stages.sinks,
             warnings: Vec::new(),
+            discard_artefacts: false,
             running: Weak::new(),
         })
+    }
+
+    /// Reads the pipeline with [PipelineSource::read](crate::PipelineSource::read) and opens it with
+    /// [Session::new].
+    pub fn load(
+        input: PipelineInput,
+        vars: &[(String, String)],
+        backend: Backend,
+        channels: &[(String, FrameFormat)],
+    ) -> Result<Session, SessionError> {
+        let source = PipelineSource::read(input, vars)?;
+        Session::new(source, backend, channels)
     }
 
     /// The stages the next stream builds, for changing before it starts.
@@ -97,6 +110,16 @@ impl Session {
     /// The warnings the last stream's pipeline raised while it compiled.
     pub fn warnings(&self) -> &[Diagnostic] {
         &self.warnings
+    }
+
+    /// Writes [Session::warnings] to `writer`, drawn against the pipeline's TOML.
+    pub fn render_warnings(&self, writer: &mut dyn WriteColor) {
+        report::diagnostics(writer, &self.files, &self.warnings);
+    }
+
+    /// Sets whether streams started from now on drop the artefacts their stages make instead of writing them.
+    pub fn discard_artefacts(&mut self, discard: bool) {
+        self.discard_artefacts = discard;
     }
 
     /// Builds the pipeline afresh and starts running it on a thread of its own.
@@ -114,8 +137,8 @@ impl Session {
         self.warnings.clear();
 
         let stop = ChannelStop::new();
-        let senders = self.bind_sources(hub, &stop);
-        let receivers = self.bind_sinks(hub, &stop);
+        let senders = bind_sources(hub, &self.token, &self.sources, &stop);
+        let receivers = bind_sinks(hub, &self.token, &self.sinks, &stop);
 
         let started = self.start_engine(settings, stop);
         match started {
@@ -129,28 +152,6 @@ impl Session {
                 Err(error)
             },
         }
-    }
-
-    fn bind_sources(&self, hub: &ChannelHub, stop: &ChannelStop) -> Vec<(String, SyncSender<InputFrame>)> {
-        let mut senders = Vec::new();
-        for (stage, format) in &self.sources {
-            let (sender, receiver) = sync_channel(CHANNEL_DEPTH);
-            hub.bind_source(&self.token, stage, *format, receiver, stop.clone());
-            senders.push((stage.clone(), sender));
-        }
-
-        senders
-    }
-
-    fn bind_sinks(&self, hub: &ChannelHub, stop: &ChannelStop) -> Vec<(String, Receiver<OutputFrame>)> {
-        let mut receivers = Vec::new();
-        for stage in &self.sinks {
-            let (sender, receiver) = sync_channel(CHANNEL_DEPTH);
-            hub.bind_sink(&self.token, stage, sender, stop.clone());
-            receivers.push((stage.clone(), receiver));
-        }
-
-        receivers
     }
 
     /// Builds the engine and runs it on its own thread, with `stop` set once the run stops.
@@ -172,7 +173,7 @@ impl Session {
         self.warnings = compiled.warnings().to_vec();
 
         let engine = compiled.engine(settings);
-        let engine = match engine {
+        let mut engine = match engine {
             Ok(engine) => engine,
             Err(error) => {
                 let found = error.into_diagnostics().into_inner();
@@ -180,15 +181,26 @@ impl Session {
             },
         };
 
+        if self.discard_artefacts {
+            engine = engine.discarding_artefacts();
+        }
+
         let cancel = engine.cancel_handle();
         cancel.on_stop(move || stop.stop());
 
         let stages = named_stages(&compiled);
+        let graph = compiled.graph();
+        let planned = plan::planned_nodes(graph);
         let files = self.files.clone();
         let alive = Arc::new(());
         self.running = Arc::downgrade(&alive);
 
-        StreamHandle::spawn(engine, stages, files, alive)
+        let kept = Kept {
+            stages,
+            planned,
+            files,
+        };
+        StreamHandle::spawn(engine, kept, alive)
     }
 
     fn pipeline_error(&self, found: Vec<Diagnostic>) -> SessionError {
@@ -202,6 +214,58 @@ impl Drop for Session {
         let hub = ChannelHub::process();
         hub.release(&self.token);
     }
+}
+
+/// Builds `source` without a device, with its channel stages bound as [Session::new] binds them.
+pub(crate) fn check_source(
+    source: &PipelineSource,
+    channels: &[(String, FrameFormat)],
+) -> Result<(), SessionError> {
+    let mut specs = source.specs.clone();
+    let token = ChannelToken::new();
+    let stages = bind_channel_args(&mut specs, &token);
+    let matched = match_formats(&stages, channels);
+    if let Err(found) = matched {
+        return Err(source.pipeline_error(found));
+    }
+
+    let built = steps::build(&source.registry, &specs);
+    match built {
+        Ok(_) => Ok(()),
+        Err(found) => Err(source.pipeline_error(found)),
+    }
+}
+
+fn bind_sources(
+    hub: &ChannelHub,
+    token: &ChannelToken,
+    sources: &[(String, FrameFormat)],
+    stop: &ChannelStop,
+) -> Vec<(String, SyncSender<InputFrame>)> {
+    let mut senders = Vec::new();
+    for (stage, format) in sources {
+        let (sender, receiver) = sync_channel(CHANNEL_DEPTH);
+        hub.bind_source(token, stage, *format, receiver, stop.clone());
+        senders.push((stage.clone(), sender));
+    }
+
+    senders
+}
+
+fn bind_sinks(
+    hub: &ChannelHub,
+    token: &ChannelToken,
+    sinks: &[String],
+    stop: &ChannelStop,
+) -> Vec<(String, Receiver<OutputFrame>)> {
+    let mut receivers = Vec::new();
+    for stage in sinks {
+        let (sender, receiver) = sync_channel(CHANNEL_DEPTH);
+        hub.bind_sink(token, stage, sender, stop.clone());
+        receivers.push((stage.clone(), receiver));
+    }
+
+    receivers
 }
 
 /// The `channel/frames` stages of a pipeline, by stage name.
@@ -281,8 +345,9 @@ fn match_formats(
 
 fn missing_format(stage: &str, span: Span) -> Diagnostic {
     let path = format!("source.{stage}");
-    let message =
-        format!("source {stage} reads frames from the library caller, but no frame format was given for it");
+    let message = format!(
+        "source {stage} reads frames handed over by an av-toolbox library caller, so only the library can run it, and no frame format was given for it"
+    );
 
     Diagnostic::error(DiagnosticCode::InvalidArgs, path, span, message)
 }
@@ -366,22 +431,23 @@ impl Stream {
     }
 }
 
+/// What a stream keeps of its compiled pipeline for naming its nodes once the run ends.
+struct Kept {
+    stages: HashMap<NodeId, NamedStage>,
+    planned: Vec<PlannedNode>,
+    files: Arc<PipelineFiles>,
+}
+
 /// The thread a stream runs on.
 pub struct StreamHandle {
     thread: Option<JoinHandle<Finish>>,
     cancel: Arc<Cancel>,
     progress: Progress,
-    stages: HashMap<NodeId, NamedStage>,
-    files: Arc<PipelineFiles>,
+    kept: Kept,
 }
 
 impl StreamHandle {
-    fn spawn(
-        engine: Engine,
-        stages: HashMap<NodeId, NamedStage>,
-        files: Arc<PipelineFiles>,
-        alive: Arc<()>,
-    ) -> Result<Self, SessionError> {
+    fn spawn(engine: Engine, kept: Kept, alive: Arc<()>) -> Result<Self, SessionError> {
         let cancel = engine.cancel_handle();
         let progress = engine.progress();
 
@@ -394,15 +460,14 @@ impl StreamHandle {
             thread: Some(thread),
             cancel,
             progress,
-            stages,
-            files,
+            kept,
         })
     }
 
     /// Stops the run wherever it has got to. [StreamHandle::join] then reports it as cancelled.
     ///
-    /// The channel stages see the stop within a few milliseconds, even while the caller still holds a sender
-    /// or a receiver it no longer drains.
+    /// The channel stages see the stop within [CHANNEL_POLL](av_toolbox_core::CHANNEL_POLL), even while the
+    /// caller still holds a sender or a receiver it no longer drains.
     pub fn cancel(&self) {
         self.cancel.stop();
     }
@@ -419,8 +484,13 @@ impl StreamHandle {
 
     /// The stage behind a node of the run, or `None` for a node no stage stands behind.
     pub fn stage_of(&self, node: NodeId) -> Option<StageRef<'_>> {
-        let stage = self.stages.get(&node)?;
+        let stage = self.kept.stages.get(&node)?;
         Some(stage.as_ref())
+    }
+
+    /// Every node of the run in dependency order, with the width and granularity the plan gave it.
+    pub fn plan(&self) -> &[PlannedNode] {
+        &self.kept.planned
     }
 
     /// Waits for the run to end and reports how it went.
@@ -439,8 +509,8 @@ impl StreamHandle {
 
     fn run_failure(&self, error: RunError) -> SessionError {
         let node = error.node();
-        let stage = node.and_then(|node| self.stages.get(&node)).cloned();
-        let files = self.files.clone();
+        let stage = node.and_then(|node| self.kept.stages.get(&node)).cloned();
+        let files = self.kept.files.clone();
 
         SessionError::run(files, error, stage)
     }

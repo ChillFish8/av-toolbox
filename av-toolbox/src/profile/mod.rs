@@ -11,10 +11,8 @@ use std::io::IsTerminal;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
 
-use av_toolbox::report::PipelineFiles;
-use av_toolbox_core::PipelineRegistry;
+use av_toolbox::PipelineSource;
 use av_toolbox_graph::StageSpec;
 use av_toolbox_runtime::{Profiling, RunReport, Settings};
 use codespan_reporting::term::termcolor::WriteColor;
@@ -42,18 +40,16 @@ struct Outcome {
 pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
     let mut stderr = args.color.stderr();
 
-    let Some(loaded) = load::load(&profile.pipeline, &profile.vars, &mut stderr) else {
+    let Some(mut source) = load::source(&profile.pipeline, &profile.vars, &mut stderr) else {
         return ExitCode::FAILURE;
     };
 
-    let Some(registry) = load::registry() else {
-        return ExitCode::FAILURE;
-    };
+    let mut written = source.specs().to_vec();
+    let registry = source.registry();
+    let discarded = specs::discard_sinks(&mut written, registry);
+    source.specs_mut().clone_from(&written);
 
-    let mut written = loaded.specs.clone();
-    let discarded = specs::discard_sinks(&mut written, &registry);
-
-    if !reads_only_files(&registry, &written, &loaded.files, &mut stderr) {
+    if !reads_only_files(&source, &mut stderr) {
         return ExitCode::FAILURE;
     }
 
@@ -61,15 +57,18 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
+    let Some(mut session) = load::session(source, backend, &mut stderr) else {
+        return ExitCode::FAILURE;
+    };
+    session.discard_artefacts(true);
+
     let interrupt = Interrupt::install();
-    let setup = PassSetup {
-        registry: &registry,
-        backend: &backend,
-        files: &loaded.files,
+    let mut setup = PassSetup {
+        session: &mut session,
         interrupt: &interrupt,
     };
 
-    let profiled = profile_passes(&setup, profile, &written, &mut stderr);
+    let profiled = profile_passes(&mut setup, profile, &written, &mut stderr);
     let outcome = match profiled {
         Ok(outcome) => outcome,
         Err(code) => return code,
@@ -82,6 +81,7 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
         summary::planned_workers(&outcome.baseline.nodes)
     };
 
+    let backend = session.backend();
     let accelerator = backend.accelerator();
     let opened = backend.device();
     let device = file::device_label(accelerator, opened);
@@ -131,14 +131,15 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
 }
 
 /// Builds the pipeline once to refuse a source that reads a live stream, since every pass opens it again.
-fn reads_only_files(
-    registry: &PipelineRegistry,
-    specs: &[StageSpec],
-    files: &PipelineFiles,
-    stderr: &mut dyn WriteColor,
-) -> bool {
-    let Some(pipeline) = load::build(registry, specs, files, stderr) else {
-        return false;
+fn reads_only_files(source: &PipelineSource, stderr: &mut dyn WriteColor) -> bool {
+    let built = source.build();
+    let pipeline = match built {
+        Ok(pipeline) => pipeline,
+        Err(error) => {
+            load::report(&error, stderr);
+
+            return false;
+        },
     };
 
     let live_sources = pipeline.live_sources();
@@ -156,7 +157,7 @@ fn reads_only_files(
 
 /// Runs the measure, baseline and confirm passes, or hands back the exit code a failed one ends with.
 fn profile_passes(
-    setup: &PassSetup<'_>,
+    setup: &mut PassSetup<'_>,
     profile: &ProfileArgs,
     written: &[StageSpec],
     stderr: &mut dyn WriteColor,
@@ -164,8 +165,9 @@ fn profile_passes(
     let sink_inputs = specs::sink_inputs(written);
     let warmup_items = profile.warmup.saturating_mul(sink_inputs);
 
+    let backend = setup.session.backend();
     let profiling = Profiling {
-        sync: setup.backend.device_sync(),
+        sync: backend.device_sync(),
         warmup: profile.warmup,
     };
     tracing::info!(
@@ -174,8 +176,7 @@ fn profile_passes(
         profile.frames
     );
 
-    let stall_deadline = av_toolbox::steps::stall_deadline_for(setup.backend.context().tuning());
-    let measure_settings = pass_settings(profile, warmup_items, stall_deadline, Some(profiling));
+    let measure_settings = pass_settings(profile, warmup_items, Some(profiling));
     let undeclared = specs::undeclared(written);
     let measure_end = run_pass(setup, &undeclared, measure_settings, Warnings::Show, stderr);
     let measured = finished(measure_end, setup.interrupt)?;
@@ -186,7 +187,7 @@ fn profile_passes(
     let mut tuned = model::suggest(&costs, max_workers);
     mark_declared(&mut tuned, written);
 
-    let plain_settings = pass_settings(profile, warmup_items, stall_deadline, None);
+    let plain_settings = pass_settings(profile, warmup_items, None);
     tracing::info!("running the pipeline as written (pass 2 of 3)");
     let baseline_end = run_pass(setup, written, plain_settings.clone(), Warnings::Hide, stderr);
     let baseline = finished(baseline_end, setup.interrupt)?;
@@ -222,7 +223,7 @@ fn mark_declared(widths: &mut [Width], written: &[StageSpec]) {
 
 /// Runs `written` at the `tuned` widths, taking a worker away and trying again each time it fails.
 fn confirm(
-    setup: &PassSetup<'_>,
+    setup: &mut PassSetup<'_>,
     written: &[StageSpec],
     tuned: &mut [Width],
     settings: &Settings,
@@ -300,17 +301,13 @@ fn timed_frames(
     Ok(counted)
 }
 
-fn pass_settings(
-    profile: &ProfileArgs,
-    warmup_items: u64,
-    stall_deadline: Option<Duration>,
-    profiling: Option<Profiling>,
-) -> Settings {
+/// The settings of one pass, leaving the stall deadline for the session to fill from its tuning.
+fn pass_settings(profile: &ProfileArgs, warmup_items: u64, profiling: Option<Profiling>) -> Settings {
     let frame_limit = profile.warmup.saturating_add(profile.frames);
 
     Settings {
         frame_budget: profile.frame_budget,
-        stall_deadline,
+        stall_deadline: None,
         frame_limit: Some(frame_limit),
         warmup: warmup_items,
         profiling,

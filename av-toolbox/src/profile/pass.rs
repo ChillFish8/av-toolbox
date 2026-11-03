@@ -1,11 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use av_toolbox::report::{self, PipelineFiles};
-use av_toolbox_core::{Crossing, Granularity, PipelineRegistry, StageKind};
-use av_toolbox_gpu::Backend;
-use av_toolbox_graph::{CompiledGraph, NodeId, NodeRole, StageSpec};
-use av_toolbox_runtime::{Cancel, Engine, RunReport, Settings};
+use av_toolbox::{PlannedNode, Session};
+use av_toolbox_core::{Crossing, Granularity, StageKind};
+use av_toolbox_graph::{NodeId, NodeRole, StageSpec};
+use av_toolbox_runtime::{Cancel, RunReport, Settings};
 use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::execute::CANCELLED;
@@ -65,9 +64,7 @@ impl Interrupt {
 
 /// What every pass shares.
 pub(super) struct PassSetup<'a> {
-    pub(super) registry: &'a PipelineRegistry,
-    pub(super) backend: &'a Backend,
-    pub(super) files: &'a PipelineFiles,
+    pub(super) session: &'a mut Session,
     pub(super) interrupt: &'a Interrupt,
 }
 
@@ -104,42 +101,38 @@ pub(super) enum Warnings {
     Hide,
 }
 
-/// Builds, compiles and runs `specs` once, printing whatever went wrong.
+/// Runs `specs` once as a stream of the session, printing whatever went wrong.
 pub(super) fn run_pass(
-    setup: &PassSetup<'_>,
+    setup: &mut PassSetup<'_>,
     specs: &[StageSpec],
     settings: Settings,
     warnings: Warnings,
     stderr: &mut dyn WriteColor,
 ) -> PassEnd {
-    let Some(pipeline) = load::build(setup.registry, specs, setup.files, stderr) else {
-        return PassEnd::Failed;
-    };
+    let session = &mut *setup.session;
+    *session.specs_mut() = specs.to_vec();
 
-    let compiled = match warnings {
-        Warnings::Show => load::compile(pipeline, setup.backend, setup.files, stderr),
-        Warnings::Hide => load::compile_quietly(pipeline, setup.backend, setup.files, stderr),
-    };
-    let Some(compiled) = compiled else {
-        return PassEnd::Failed;
-    };
+    let started = session.start_stream(settings);
+    if warnings == Warnings::Show {
+        session.render_warnings(stderr);
+    }
 
-    let built = compiled.engine(settings).map(Engine::discarding_artefacts);
-    let engine = match built {
-        Ok(engine) => engine,
+    let stream = match started {
+        Ok(stream) => stream,
         Err(error) => {
-            let found = error.into_diagnostics().into_inner();
-            report::diagnostics(stderr, setup.files, &found);
+            load::report(&error, stderr);
 
             return PassEnd::Failed;
         },
     };
 
-    let cancel = engine.cancel_handle();
+    let handle = stream.into_handle();
+    let cancel = handle.cancel_handle();
     setup.interrupt.watch(cancel);
 
-    let nodes = node_infos(compiled.graph());
-    let finished = engine.run();
+    let planned = handle.plan();
+    let nodes = node_infos(planned);
+    let finished = handle.join();
     let report = match finished {
         Ok(report) => report,
         Err(error) => {
@@ -147,8 +140,7 @@ pub(super) fn run_pass(
                 return PassEnd::Interrupted;
             }
 
-            let stage = error.node().and_then(|node| compiled.stage_of(node));
-            report::run_error(stderr, setup.files, &error, stage);
+            load::report(&error, stderr);
 
             return PassEnd::Failed;
         },
@@ -161,36 +153,29 @@ pub(super) fn run_pass(
     PassEnd::Finished(Pass { report, nodes })
 }
 
-/// Every node in topological order, named for the report.
-fn node_infos(graph: &CompiledGraph) -> Vec<NodeInfo> {
-    let plan = graph
-        .execution_plan()
-        .expect("a compiled pipeline is always planned");
-
-    let mut infos = Vec::with_capacity(graph.len());
-    for id in graph.order() {
-        let node = graph.node(*id);
-        let planned = plan.node(*id).width();
-        let info = match node.role() {
+/// Every node in dependency order, named for the report.
+fn node_infos(planned: &[PlannedNode]) -> Vec<NodeInfo> {
+    let mut infos = Vec::with_capacity(planned.len());
+    for node in planned {
+        let info = match &node.role {
             NodeRole::Stage | NodeRole::Provider(_) => {
-                let granularity = plan.node(*id).granularity();
-                let sized_kind = matches!(node.kind(), StageKind::Filter | StageKind::Mask);
+                let sized_kind = matches!(node.kind, StageKind::Filter | StageKind::Mask);
 
                 NodeInfo {
-                    id: *id,
-                    key: node.path(),
-                    label: node.path(),
-                    granularity: Some(granularity),
-                    planned,
-                    widenable: sized_kind && granularity != Granularity::Stream,
+                    id: node.id,
+                    key: node.path.clone(),
+                    label: node.path.clone(),
+                    granularity: Some(node.granularity),
+                    planned: node.width,
+                    widenable: sized_kind && node.granularity != Granularity::Stream,
                 }
             },
             NodeRole::Crossing(crossing) => NodeInfo {
-                id: *id,
+                id: node.id,
                 key: String::new(),
-                label: transfer_label(graph, *id, *crossing),
+                label: transfer_label(planned, node, *crossing),
                 granularity: None,
-                planned,
+                planned: node.width,
                 widenable: false,
             },
         };
@@ -202,17 +187,20 @@ fn node_infos(graph: &CompiledGraph) -> Vec<NodeInfo> {
 }
 
 /// Names a transfer after its direction and the stage it feeds, such as `download -> sink.output`.
-fn transfer_label(graph: &CompiledGraph, id: NodeId, crossing: Crossing) -> String {
+fn transfer_label(planned: &[PlannedNode], transfer: &PlannedNode, crossing: Crossing) -> String {
     let direction = match crossing {
         Crossing::Upload => "upload",
         Crossing::Unload => "download",
     };
 
-    let consumers = graph.node(id).consumers();
-    let Some(first) = consumers.first() else {
+    let Some(first) = transfer.consumers.first() else {
         return direction.to_string();
     };
 
-    let fed = graph.node(*first).path();
-    format!("{direction} -> {fed}")
+    let fed = planned.iter().find(|node| node.id == *first);
+    let Some(fed) = fed else {
+        return direction.to_string();
+    };
+
+    format!("{direction} -> {}", fed.path)
 }
