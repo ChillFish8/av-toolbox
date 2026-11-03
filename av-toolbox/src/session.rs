@@ -498,7 +498,8 @@ impl StreamHandle {
 
     /// Waits for the run to end and reports how it went.
     ///
-    /// The run ends once every sender is dropped, or after [StreamHandle::cancel]. A failed run names the stage it failed at.
+    /// The run ends once every sender is dropped, or after [StreamHandle::cancel]. A failed run names the
+    /// stage it failed at.
     pub fn join(mut self) -> Result<RunReport, SessionError> {
         let thread = self.thread.take().expect("a stream is joined once");
         let joined = thread.join();

@@ -26,6 +26,8 @@ mod context;
 mod device;
 mod enumerate;
 mod frame;
+#[cfg_attr(not(test), expect(dead_code, reason = "used once the cache install lands"))]
+mod kernel_cache;
 #[cfg(feature = "cuda")]
 mod libdevice;
 mod memory;
