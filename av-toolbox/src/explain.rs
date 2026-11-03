@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-use av_toolbox::report;
+use av_toolbox::{Retune, report};
 use av_toolbox_pipeline::{LiveSource, Pipeline};
 use codespan_reporting::term::termcolor::WriteColor;
 
@@ -45,7 +45,7 @@ pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
         return draw_structure(&pipeline, explain, &loaded, &mut stderr);
     }
 
-    let Some(backend) = load::backend(args) else {
+    let Some(backend) = load::backend(args, Retune::No) else {
         return ExitCode::FAILURE;
     };
 

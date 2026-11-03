@@ -18,6 +18,7 @@ use av_toolbox_gpu::{
     FrameMeta,
     Plane,
     PlaneBuffer,
+    Retune,
     SampleFormat,
     Tuning,
 };
@@ -284,6 +285,7 @@ pub(crate) struct AvdFilter {
     client: Client,
     device: cubecl::Device,
     mode: Tuning,
+    retune: Retune,
     tuning: TuningConfig,
     format: FrameFormat,
     /// The input's format with F32 samples, which every output frame has.
@@ -327,8 +329,9 @@ impl AvdFilter {
         let client = context.client();
         let device = context.cubecl_device();
         let mode = context.tuning();
+        let retune = context.retune();
         let store = tuning_store();
-        let tuning = tuning_config(mode, store);
+        let tuning = tuning_config(mode, retune, store);
         let built = build_engine(device, client, spec, &tuning);
         let engine = built.map_err(|error| unbuildable(A::STAGE, error))?;
 
@@ -337,6 +340,7 @@ impl AvdFilter {
             client: client.clone(),
             device: device.clone(),
             mode,
+            retune,
             tuning,
             format: input,
             output,
@@ -352,11 +356,11 @@ impl AvdFilter {
         Ok(filter)
     }
 
-    /// How many frames a tuning pass on the spec wants, when the spec has not been tuned yet.
+    /// How many frames a tuning pass on the spec wants, when the spec is untuned or retuned.
     fn planned_prefix(&self) -> Option<usize> {
         let specs = [self.spec];
         let tuned = || is_tuned(&self.device, &self.client, &specs, &self.tuning);
-        let needed = needs_tuning_pass(self.mode, tuned);
+        let needed = needs_tuning_pass(self.mode, self.retune, tuned);
 
         needed.then(|| tuning_prefix(self.spec))
     }
@@ -581,6 +585,7 @@ impl AvdFilter {
             self.spec,
             &tuning_frames,
             &self.tuning,
+            self.retune,
         )
     }
 

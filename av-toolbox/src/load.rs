@@ -3,7 +3,7 @@ use std::path::Path;
 use av_toolbox::report::{self, PipelineFiles};
 use av_toolbox::{BackendOptions, PipelineInput, PipelineSource, Session, SessionError, steps};
 use av_toolbox_core::PipelineRegistry;
-use av_toolbox_gpu::{Accelerator, Backend, Device};
+use av_toolbox_gpu::{Accelerator, Backend, Device, Retune};
 use av_toolbox_graph::StageSpec;
 use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline};
 use codespan_reporting::term::termcolor::WriteColor;
@@ -74,12 +74,13 @@ pub(crate) fn build<'r>(
     }
 }
 
-/// Installs the kernel cache and opens the first backend that starts on the chosen device.
-pub(crate) fn backend(args: &Args) -> Option<Backend> {
+/// Installs the kernel cache and opens the first backend that starts on the chosen device, retuning by `retune`.
+pub(crate) fn backend(args: &Args, retune: Retune) -> Option<Backend> {
     let options = BackendOptions {
         accelerators: args.accelerators.clone(),
         device: args.device,
         tuning: args.tune,
+        retune,
     };
 
     let opened = av_toolbox::open_backend(&options);

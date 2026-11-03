@@ -106,6 +106,7 @@ pub use av_toolbox_gpu::{
     FrameRate,
     Matrix,
     Primaries,
+    Retune,
     SampleFormat,
     Subsampling,
     Transfer,

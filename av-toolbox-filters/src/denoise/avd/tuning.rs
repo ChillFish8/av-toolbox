@@ -18,6 +18,7 @@ use av_denoise_core::tune::{
 use av_denoise_core::{EngineSpec, SearchMode, TuningConfig, TuningMode};
 use av_toolbox_gpu::{
     Client,
+    Retune,
     Tuning,
     compilation_cache_dir,
     merge_compilation_cache,
@@ -33,11 +34,14 @@ const STORE_DIR: &str = "av-denoise-tune";
 static TUNED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The av-denoise tuning settings for `tuning`, keeping results in `store` when given.
-pub(crate) fn tuning_config(tuning: Tuning, store: Option<PathBuf>) -> TuningConfig {
-    let mode = match tuning {
-        Tuning::Auto => TuningMode::Auto,
-        Tuning::Cached => TuningMode::Cached,
-        Tuning::Off => TuningMode::Off,
+///
+/// A retune always tunes, so it takes av-denoise's auto mode whatever `tuning` is.
+pub(crate) fn tuning_config(tuning: Tuning, retune: Retune, store: Option<PathBuf>) -> TuningConfig {
+    let mode = match (retune, tuning) {
+        (Retune::Families | Retune::Exhaustive, _) => TuningMode::Auto,
+        (Retune::No, Tuning::Auto) => TuningMode::Auto,
+        (Retune::No, Tuning::Cached) => TuningMode::Cached,
+        (Retune::No, Tuning::Off) => TuningMode::Off,
     };
 
     TuningConfig {
@@ -82,13 +86,37 @@ pub(crate) fn tuning_store() -> Option<PathBuf> {
 
 /// Whether a stage must tune on its first frames before it builds its engine.
 ///
-/// Only [Tuning::Auto] tunes, so `is_tuned` is asked for nothing else.
-pub(crate) fn needs_tuning_pass(tuning: Tuning, is_tuned: impl FnOnce() -> bool) -> bool {
+/// A retune always does. Otherwise only [Tuning::Auto] tunes, so `is_tuned` is asked for nothing else.
+pub(crate) fn needs_tuning_pass(tuning: Tuning, retune: Retune, is_tuned: impl FnOnce() -> bool) -> bool {
+    if retune != Retune::No {
+        return true;
+    }
+
     if tuning != Tuning::Auto {
         return false;
     }
 
     !is_tuned()
+}
+
+/// What a tuning pass asks av-denoise for under `retune`.
+///
+/// A retune tunes every key again, including those the store already holds.
+pub(crate) fn tune_request(retune: Retune) -> TuneRequest {
+    match retune {
+        Retune::No => TuneRequest {
+            force: false,
+            mode: SearchMode::Families,
+        },
+        Retune::Families => TuneRequest {
+            force: true,
+            mode: SearchMode::Families,
+        },
+        Retune::Exhaustive => TuneRequest {
+            force: true,
+            mode: SearchMode::Exhaustive,
+        },
+    }
 }
 
 /// How many frames a stage on `spec` holds for its tuning pass before its engine sees any.
@@ -105,14 +133,16 @@ pub(crate) fn tuning_prefix(spec: EngineSpec) -> usize {
 
 /// Tunes `spec` on `frames` unless this process already has, or the store holds its result.
 ///
-/// A key is recorded before its pass runs, so a pass that panics is never tried again. The lock
-/// it leaves poisoned is still taken by later passes.
+/// A retune ignores the store, but still tunes a spec only once per process. A key is recorded
+/// before its pass runs, so a pass that panics is never tried again. The lock it leaves poisoned
+/// is still taken by later passes.
 pub(crate) fn tune_once(
     device: &cubecl::Device,
     client: &Client,
     spec: EngineSpec,
     frames: &[TuningFrame],
     config: &TuningConfig,
+    retune: Retune,
 ) -> TuneReport {
     let key = format!("{device:?} {:?} {spec:?}", config.store);
     let mut tuned = TUNED.lock().unwrap_or_else(PoisonError::into_inner);
@@ -122,18 +152,30 @@ pub(crate) fn tune_once(
     }
 
     let specs = [spec];
-    if is_tuned(device, client, &specs, config) {
+    if retune == Retune::No && is_tuned(device, client, &specs, config) {
         return already_tuned();
     }
 
     tuned.push(key);
 
-    let request = TuneRequest {
-        force: false,
-        mode: SearchMode::Families,
-    };
-
+    let request = tune_request(retune);
     tune_frames(device, client, &specs, frames, config, &request)
+}
+
+/// How many tuning passes this process has started.
+#[cfg(feature = "test-support")]
+pub fn tuning_passes() -> usize {
+    let tuned = TUNED.lock().unwrap_or_else(PoisonError::into_inner);
+
+    tuned.len()
+}
+
+/// Forgets every tuning pass this process started, as a fresh process would.
+#[cfg(feature = "test-support")]
+pub fn forget_tuning_passes() {
+    let mut tuned = TUNED.lock().unwrap_or_else(PoisonError::into_inner);
+
+    tuned.clear();
 }
 
 /// Runs a tuning pass through `work` and logs what it did, turning a panic inside it into a skipped pass.
@@ -195,5 +237,11 @@ fn log_report(report: &TuneReport) {
         ),
         TuneOutcome::AlreadyTuned => tracing::info!("using the stored av-denoise tuning results"),
         TuneOutcome::Skipped(reason) => tracing::debug!(%reason, "av-denoise kernel tuning skipped"),
+    }
+
+    if let Some(summary) = &report.summary {
+        tracing::info!(
+            "how the families search and the device table compare with the exhaustive pass\n{summary}"
+        );
     }
 }

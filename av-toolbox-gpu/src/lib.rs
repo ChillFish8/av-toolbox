@@ -136,5 +136,5 @@ pub use self::stack::{CODEGEN_STACK_BYTES, codegen_stack_is_sufficient, raise_co
 pub use self::stream_policy::StreamPolicy;
 #[cfg(any(test, feature = "test-support"))]
 pub use self::testing::{flush_counting_context, test_device, testing_context};
-pub use self::tuning::Tuning;
+pub use self::tuning::{Retune, Tuning};
 pub use self::warmup::WarmUp;

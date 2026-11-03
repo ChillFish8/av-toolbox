@@ -7,6 +7,7 @@ use av_toolbox_gpu::{
     COMPILATION_CACHE_ENV,
     CacheError,
     Device,
+    Retune,
     Tuning,
     codegen_stack_is_sufficient,
     compilation_cache_dir,
@@ -28,6 +29,7 @@ pub struct BackendOptions {
     pub accelerators: Vec<Accelerator>,
     pub device: Device,
     pub tuning: Tuning,
+    pub retune: Retune,
 }
 
 impl Default for BackendOptions {
@@ -36,6 +38,7 @@ impl Default for BackendOptions {
             accelerators: default_accelerators(),
             device: Device::Default,
             tuning: Tuning::Cached,
+            retune: Retune::No,
         }
     }
 }
@@ -53,13 +56,15 @@ pub fn open_backend(options: &BackendOptions) -> Result<Backend, SessionError> {
     warn_if_stack_is_small();
 
     let opened = av_toolbox_pipeline::open_backend(&options.accelerators, options.device, options.tuning);
-    let backend = opened.map_err(backend_error)?;
+    let opened = opened.map_err(backend_error)?;
+    let backend = opened.with_retune(options.retune);
 
     let accelerator = backend.accelerator();
     tracing::info!(
         accelerator = %accelerator,
         device = %options.device,
         tuning = %options.tuning,
+        retune = %options.retune,
         "opened the backend"
     );
 

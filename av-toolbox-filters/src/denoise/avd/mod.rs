@@ -43,6 +43,8 @@ use self::args::engine_spec;
 pub(crate) use self::args::{AvdArgs, Nl4dArgs, NlmeansArgs, NlmeansHqArgs};
 use self::planes::{checked_layout, plane_groups, stage_geometry};
 use self::runner::AvdFilter;
+#[cfg(feature = "test-support")]
+pub use self::tuning::{forget_tuning_passes, tuning_passes};
 use crate::masked::checked_input;
 
 fn not_frames(stage: &str) -> StageError {

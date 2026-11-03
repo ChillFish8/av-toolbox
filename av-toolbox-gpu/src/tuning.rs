@@ -13,6 +13,21 @@ pub enum Tuning {
     Off,
 }
 
+/// Whether the stages that can tune run a fresh tuning pass, ignoring stored results.
+///
+/// A fresh pass saves its results over the stored ones and runs whatever the [Tuning].
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum Retune {
+    /// Keeps stored results.
+    #[default]
+    No,
+    /// Times one candidate from each kernel family, then only the families that look worth it.
+    Families,
+    /// Times every candidate, which takes far longer.
+    Exhaustive,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -33,5 +48,20 @@ mod tests {
         }
 
         assert_eq!(Tuning::default(), Tuning::Cached);
+    }
+
+    #[test]
+    fn every_retune_renders_its_name() {
+        let retunes = [
+            (Retune::No, "no"),
+            (Retune::Families, "families"),
+            (Retune::Exhaustive, "exhaustive"),
+        ];
+
+        for (retune, spelling) in retunes {
+            assert_eq!(retune.to_string(), spelling);
+        }
+
+        assert_eq!(Retune::default(), Retune::No);
     }
 }

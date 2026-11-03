@@ -2,7 +2,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use av_toolbox::StreamHandle;
+use av_toolbox::{Retune, StreamHandle};
 use av_toolbox_runtime::{Cancel, Progress, RunReport, Settings};
 use indicatif::MultiProgress;
 
@@ -34,7 +34,7 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> E
         return ExitCode::FAILURE;
     }
 
-    let Some(backend) = load::backend(args) else {
+    let Some(backend) = load::backend(args, Retune::No) else {
         return ExitCode::FAILURE;
     };
 

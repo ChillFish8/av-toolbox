@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use av_denoise_core::tune::{CachePhase, TuneOutcome, tuning_frame_count};
+use av_denoise_core::tune::{CachePhase, TuneOutcome, TuneRequest, tuning_frame_count};
 use av_denoise_core::{
     ChromaLayout,
     ChromaSiting,
@@ -11,16 +11,18 @@ use av_denoise_core::{
     NlmeansAlgorithm,
     NlmeansOptions,
     SampleFormat,
+    SearchMode,
     TuningConfig,
     TuningMode,
 };
-use av_toolbox_gpu::Tuning;
+use av_toolbox_gpu::{Retune, Tuning};
 
 use crate::denoise::avd::tuning::{
     CacheAction,
     guarded_tuning,
     hook_action,
     needs_tuning_pass,
+    tune_request,
     tuning_config,
     tuning_prefix,
 };
@@ -34,7 +36,7 @@ fn each_tuning_maps_onto_its_av_denoise_mode() {
     ];
 
     for (tuning, mode) in modes {
-        let config = tuning_config(tuning, None);
+        let config = tuning_config(tuning, Retune::No, None);
 
         assert_eq!(config.mode, mode, "{tuning}");
     }
@@ -45,7 +47,7 @@ fn the_store_budget_and_determinism_are_carried_or_defaulted() {
     let store = PathBuf::from("/tmp/avd-tuning");
     let defaults = TuningConfig::default();
 
-    let config = tuning_config(Tuning::Cached, Some(store.clone()));
+    let config = tuning_config(Tuning::Cached, Retune::No, Some(store.clone()));
 
     assert_eq!(config.store, Some(store));
     assert_eq!(config.budget, defaults.budget);
@@ -55,7 +57,7 @@ fn the_store_budget_and_determinism_are_carried_or_defaulted() {
 #[test]
 fn the_tuning_config_carries_the_cache_hook() {
     for tuning in [Tuning::Auto, Tuning::Cached, Tuning::Off] {
-        let config = tuning_config(tuning, None);
+        let config = tuning_config(tuning, Retune::No, None);
 
         assert!(config.cache_hook.is_some(), "{tuning}");
     }
@@ -69,7 +71,7 @@ fn the_hook_routes_each_phase() {
 
 #[test]
 fn tuning_without_a_cache_keeps_results_in_memory() {
-    let config = tuning_config(Tuning::Auto, None);
+    let config = tuning_config(Tuning::Auto, Retune::No, None);
 
     assert_eq!(config.mode, TuningMode::Auto);
     assert_eq!(config.store, None);
@@ -78,7 +80,9 @@ fn tuning_without_a_cache_keeps_results_in_memory() {
 #[test]
 fn only_auto_tuning_asks_whether_the_spec_is_tuned() {
     for tuning in [Tuning::Cached, Tuning::Off] {
-        let needed = needs_tuning_pass(tuning, || panic!("{tuning} asked whether the spec is tuned"));
+        let needed = needs_tuning_pass(tuning, Retune::No, || {
+            panic!("{tuning} asked whether the spec is tuned")
+        });
 
         assert!(!needed, "{tuning}");
     }
@@ -86,8 +90,45 @@ fn only_auto_tuning_asks_whether_the_spec_is_tuned() {
 
 #[test]
 fn auto_tuning_runs_a_pass_only_for_an_untuned_spec() {
-    assert!(needs_tuning_pass(Tuning::Auto, || false));
-    assert!(!needs_tuning_pass(Tuning::Auto, || true));
+    assert!(needs_tuning_pass(Tuning::Auto, Retune::No, || false));
+    assert!(!needs_tuning_pass(Tuning::Auto, Retune::No, || true));
+}
+
+#[test]
+fn a_retune_runs_a_pass_even_for_a_tuned_spec() {
+    for tuning in [Tuning::Auto, Tuning::Cached] {
+        for retune in [Retune::Families, Retune::Exhaustive] {
+            let needed = needs_tuning_pass(tuning, retune, || true);
+
+            assert!(needed, "{tuning} {retune}");
+        }
+    }
+}
+
+#[test]
+fn a_retune_lets_the_tuner_tune_whatever_the_tuning() {
+    for tuning in [Tuning::Auto, Tuning::Cached] {
+        for retune in [Retune::Families, Retune::Exhaustive] {
+            let config = tuning_config(tuning, retune, None);
+
+            assert_eq!(config.mode, TuningMode::Auto, "{tuning} {retune}");
+        }
+    }
+}
+
+#[test]
+fn each_retune_builds_its_request() {
+    let requests = [
+        (Retune::No, false, SearchMode::Families),
+        (Retune::Families, true, SearchMode::Families),
+        (Retune::Exhaustive, true, SearchMode::Exhaustive),
+    ];
+
+    for (retune, force, mode) in requests {
+        let expected = TuneRequest { force, mode };
+
+        assert_eq!(tune_request(retune), expected, "{retune}");
+    }
 }
 
 fn geometry() -> Geometry {

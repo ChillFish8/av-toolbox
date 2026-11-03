@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
-use av_toolbox_gpu::{Backend, Tuning};
+use av_toolbox_gpu::{Backend, Retune, Tuning};
 use av_toolbox_graph::{Diagnostic, StageSpec};
 use av_toolbox_pipeline::{CompiledPipeline, Pipeline, PipelineError, Supplied};
 
@@ -25,11 +25,13 @@ fn registry_error(error: RegistryError) -> SessionError {
 
 /// How long a source may wait for room on its frame budget, `None` for the budget's own default.
 ///
-/// [Tuning::Auto] may tune kernels mid-run, and a source waits on the stage tuning them.
-pub(crate) fn stall_deadline_for(tuning: Tuning) -> Option<Duration> {
-    match tuning {
-        Tuning::Auto => Some(TUNING_STALL_DEADLINE),
-        Tuning::Cached | Tuning::Off => None,
+/// [Tuning::Auto] and a retune may tune kernels mid-run, and a source waits on the stage tuning them.
+/// An exhaustive retune can take far longer than any deadline, so it waits for as long as it takes.
+pub(crate) fn stall_deadline_for(tuning: Tuning, retune: Retune) -> Option<Duration> {
+    match (retune, tuning) {
+        (Retune::Exhaustive, _) => Some(Duration::MAX),
+        (Retune::Families, _) | (Retune::No, Tuning::Auto) => Some(TUNING_STALL_DEADLINE),
+        (Retune::No, Tuning::Cached | Tuning::Off) => None,
     }
 }
 
@@ -81,8 +83,29 @@ mod tests {
 
     #[test]
     fn only_auto_tuning_waits_longer_on_the_frame_budget() {
-        assert_eq!(stall_deadline_for(Tuning::Auto), Some(TUNING_STALL_DEADLINE));
-        assert_eq!(stall_deadline_for(Tuning::Cached), None);
-        assert_eq!(stall_deadline_for(Tuning::Off), None);
+        assert_eq!(
+            stall_deadline_for(Tuning::Auto, Retune::No),
+            Some(TUNING_STALL_DEADLINE)
+        );
+        assert_eq!(stall_deadline_for(Tuning::Cached, Retune::No), None);
+        assert_eq!(stall_deadline_for(Tuning::Off, Retune::No), None);
+    }
+
+    #[test]
+    fn a_retune_waits_as_long_as_auto_tuning() {
+        for tuning in [Tuning::Auto, Tuning::Cached] {
+            let deadline = stall_deadline_for(tuning, Retune::Families);
+
+            assert_eq!(deadline, Some(TUNING_STALL_DEADLINE), "{tuning}");
+        }
+    }
+
+    #[test]
+    fn an_exhaustive_retune_never_gives_up_waiting() {
+        for tuning in [Tuning::Auto, Tuning::Cached] {
+            let deadline = stall_deadline_for(tuning, Retune::Exhaustive);
+
+            assert_eq!(deadline, Some(Duration::MAX), "{tuning}");
+        }
     }
 }

@@ -2,9 +2,10 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use av_toolbox_core::StageKind;
-use av_toolbox_gpu::{Accelerator, Device, Tuning, default_accelerators};
+use av_toolbox_gpu::{Accelerator, Device, Retune, Tuning, default_accelerators};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::error::ErrorKind;
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 
 fn parse_tuning(value: String) -> Result<Tuning, String> {
@@ -186,6 +187,47 @@ pub(crate) struct ProfileArgs {
     /// Where to write the profile, `<pipeline>.profile.toml` in the working directory by default.
     #[arg(long, value_name = "PATH")]
     pub(crate) output: Option<PathBuf>,
+
+    /// Runs a fresh tuning pass for every stage that can tune, saving its results over the stored ones.
+    ///
+    /// Each stage tunes once, on the first frames of the first pass, inside its warmup. Needs `--tune`
+    /// to be `auto` or `cached`.
+    #[arg(long)]
+    pub(crate) retune: bool,
+
+    /// Has `--retune` time every candidate kernel instead of searching by kernel family.
+    ///
+    /// It can find faster kernels, but takes far longer.
+    #[arg(long, requires = "retune")]
+    pub(crate) exhaustive: bool,
+}
+
+impl ProfileArgs {
+    /// The tuning pass `--retune` and `--exhaustive` ask for.
+    pub(crate) fn retune(&self) -> Retune {
+        match (self.retune, self.exhaustive) {
+            (false, _) => Retune::No,
+            (true, false) => Retune::Families,
+            (true, true) => Retune::Exhaustive,
+        }
+    }
+}
+
+/// Refuses `--retune` when `--tune off` leaves nothing to tune, with clap's own usage error.
+///
+/// `--tune` is global, so clap cannot check the pair itself.
+pub(crate) fn checked_retune(args: &Args, profile: &ProfileArgs) -> Result<(), clap::Error> {
+    if !profile.retune || args.tune != Tuning::Off {
+        return Ok(());
+    }
+
+    let mut command = Args::command();
+    let error = command.error(
+        ErrorKind::ArgumentConflict,
+        "the argument '--retune' cannot be used with '--tune off'",
+    );
+
+    Err(error)
 }
 
 /// Reads `NAME=VALUE` into its name and value.
@@ -410,5 +452,75 @@ mod tests {
         let parsed = Args::try_parse_from(["av-toolbox", "--tune", "always", "list-devices"]);
 
         assert!(parsed.is_err());
+    }
+
+    fn parsed_profile(extra: &[&str]) -> Result<Args, clap::Error> {
+        let mut words = vec!["av-toolbox", "profile", "pipeline.toml"];
+        words.extend_from_slice(extra);
+
+        Args::try_parse_from(words)
+    }
+
+    fn profile_args(args: &Args) -> &ProfileArgs {
+        let Command::Profile(profile) = &args.command else {
+            panic!("expected the profile command, got {:?}", args.command);
+        };
+
+        profile
+    }
+
+    #[test]
+    fn a_profile_retunes_nothing_by_default() {
+        let args = parsed_profile(&[]).expect("should parse");
+
+        assert_eq!(profile_args(&args).retune(), Retune::No);
+    }
+
+    #[test]
+    fn retune_and_exhaustive_pick_their_search() {
+        let families = parsed_profile(&["--retune"]).expect("should parse");
+        assert_eq!(profile_args(&families).retune(), Retune::Families);
+
+        let exhaustive = parsed_profile(&["--retune", "--exhaustive"]).expect("should parse");
+        assert_eq!(profile_args(&exhaustive).retune(), Retune::Exhaustive);
+    }
+
+    #[test]
+    fn exhaustive_without_retune_is_refused() {
+        let error = parsed_profile(&["--exhaustive"]).expect_err("exhaustive needs retune");
+
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn retune_is_refused_when_tuning_is_off() {
+        let args = parsed_profile(&["--retune", "--tune", "off"]).expect("should parse");
+
+        let error = checked_retune(&args, profile_args(&args)).expect_err("tuning is off");
+
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        let message = error.to_string();
+        assert!(message.contains("--retune"), "{message}");
+        assert!(message.contains("--tune off"), "{message}");
+    }
+
+    #[test]
+    fn retune_is_allowed_whenever_tuning_is_on() {
+        for spelling in ["auto", "cached"] {
+            let args = parsed_profile(&["--retune", "--tune", spelling]).expect("should parse");
+
+            let checked = checked_retune(&args, profile_args(&args));
+
+            assert!(checked.is_ok(), "{spelling}");
+        }
+    }
+
+    #[test]
+    fn tuning_off_without_retune_is_allowed() {
+        let args = parsed_profile(&["--tune", "off"]).expect("should parse");
+
+        let checked = checked_retune(&args, profile_args(&args));
+
+        assert!(checked.is_ok());
     }
 }

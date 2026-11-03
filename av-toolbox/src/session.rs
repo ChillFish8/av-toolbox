@@ -15,7 +15,7 @@ use av_toolbox_core::{
     PipelineRegistry,
     StageKind,
 };
-use av_toolbox_gpu::{Backend, FrameFormat, Tuning, WarmUp, merge_compilation_cache};
+use av_toolbox_gpu::{Backend, FrameFormat, Retune, Tuning, WarmUp, merge_compilation_cache};
 use av_toolbox_graph::{Diagnostic, DiagnosticCode, NodeId, Span, StageSpec};
 use av_toolbox_pipeline::{CompiledPipeline, StageRef};
 use av_toolbox_runtime::{Cancel, Engine, Progress, RunError, RunReport, Settings};
@@ -174,8 +174,10 @@ impl Session {
 
     /// Builds the engine and runs it on its own thread, with `stop` set once the run stops.
     fn start_engine(&mut self, settings: Settings, stop: ChannelStop) -> Result<StreamHandle, SessionError> {
-        let tuning = self.backend.context().tuning();
-        let settings = with_stall_deadline(settings, tuning);
+        let context = self.backend.context();
+        let tuning = context.tuning();
+        let retune = context.retune();
+        let settings = with_stall_deadline(settings, tuning, retune);
 
         let built = steps::build(&self.registry, &self.specs);
         let pipeline = match built {
@@ -407,12 +409,12 @@ fn repeated_channel(name: &str) -> Diagnostic {
     Diagnostic::error(DiagnosticCode::InvalidArgs, "", Span::unknown(), message)
 }
 
-fn with_stall_deadline(settings: Settings, tuning: Tuning) -> Settings {
+fn with_stall_deadline(settings: Settings, tuning: Tuning, retune: Retune) -> Settings {
     if settings.stall_deadline.is_some() {
         return settings;
     }
 
-    let stall_deadline = steps::stall_deadline_for(tuning);
+    let stall_deadline = steps::stall_deadline_for(tuning, retune);
     Settings {
         stall_deadline,
         ..settings
@@ -645,17 +647,32 @@ mod tests {
             ..Settings::default()
         };
 
-        let kept = with_stall_deadline(settings, Tuning::Auto);
+        for retune in [Retune::No, Retune::Families, Retune::Exhaustive] {
+            let kept = with_stall_deadline(settings.clone(), Tuning::Auto, retune);
 
-        assert_eq!(kept.stall_deadline, Some(deadline));
+            assert_eq!(kept.stall_deadline, Some(deadline), "{retune}");
+        }
     }
 
     #[test]
     fn auto_tuning_waits_longer_when_no_deadline_is_given() {
         let settings = Settings::default();
 
-        let filled = with_stall_deadline(settings, Tuning::Auto);
+        let filled = with_stall_deadline(settings, Tuning::Auto, Retune::No);
 
-        assert_eq!(filled.stall_deadline, steps::stall_deadline_for(Tuning::Auto));
+        let expected = steps::stall_deadline_for(Tuning::Auto, Retune::No);
+        assert_eq!(filled.stall_deadline, expected);
+    }
+
+    #[test]
+    fn a_retune_fills_its_own_deadline() {
+        for retune in [Retune::Families, Retune::Exhaustive] {
+            let settings = Settings::default();
+
+            let filled = with_stall_deadline(settings, Tuning::Cached, retune);
+
+            let expected = steps::stall_deadline_for(Tuning::Cached, retune);
+            assert_eq!(filled.stall_deadline, expected, "{retune}");
+        }
     }
 }

@@ -5,7 +5,17 @@ use cubecl_environment::stream::StreamId;
 
 use crate::memory::{BufferPool, ClientAllocator};
 use crate::probe::{open_client, supported_device};
-use crate::{Accelerator, Capabilities, Device, FrameContext, RuntimeError, StreamPolicy, Tuning, resolve};
+use crate::{
+    Accelerator,
+    Capabilities,
+    Device,
+    FrameContext,
+    Retune,
+    RuntimeError,
+    StreamPolicy,
+    Tuning,
+    resolve,
+};
 
 /// The one stream every client of a [StreamPolicy::SharedStream] backend queues on.
 const SHARED_STREAM: StreamId = StreamId { value: 0 };
@@ -21,6 +31,7 @@ pub struct BuildContext {
     pool: BufferPool,
     device: Device,
     tuning: Tuning,
+    retune: Retune,
 }
 
 impl BuildContext {
@@ -93,6 +104,7 @@ impl BuildContext {
             pool,
             device,
             tuning: Tuning::default(),
+            retune: Retune::default(),
         }
     }
 
@@ -121,6 +133,11 @@ impl BuildContext {
     /// How stages built against this context pick between their kernels' candidate versions.
     pub const fn tuning(&self) -> Tuning {
         self.tuning
+    }
+
+    /// Whether stages built against this context run a fresh tuning pass, ignoring stored results.
+    pub const fn retune(&self) -> Retune {
+        self.retune
     }
 
     pub fn stream_policy(&self) -> StreamPolicy {
@@ -206,6 +223,12 @@ impl Backend {
     /// Has stages built against this backend pick their kernels by `tuning`.
     pub fn with_tuning(mut self, tuning: Tuning) -> Self {
         self.context.tuning = tuning;
+        self
+    }
+
+    /// Has stages built against this backend that can tune run a fresh pass by `retune`.
+    pub fn with_retune(mut self, retune: Retune) -> Self {
+        self.context.retune = retune;
         self
     }
 
@@ -356,6 +379,16 @@ mod tests {
 
         let tuned = backend.with_tuning(Tuning::Off);
         assert_eq!(tuned.context().tuning(), Tuning::Off);
+    }
+
+    #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]
+    #[test]
+    fn a_backend_hands_its_retune_to_the_context() {
+        let backend = Backend::open(TEST_ACCELERATOR, test_device()).expect("should open");
+        assert_eq!(backend.context().retune(), Retune::No);
+
+        let retuned = backend.with_retune(Retune::Exhaustive);
+        assert_eq!(retuned.context().retune(), Retune::Exhaustive);
     }
 
     #[cfg(all(feature = "gpu-tests", any(feature = "vulkan", feature = "metal")))]

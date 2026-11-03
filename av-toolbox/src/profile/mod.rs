@@ -22,7 +22,7 @@ use self::model::{NodeCost, Width};
 use self::pass::{Interrupt, Pass, PassEnd, PassSetup, Warnings, run_pass};
 use self::report::Summary;
 use self::summary::RowSources;
-use crate::cli::{Args, ProfileArgs};
+use crate::cli::{self, Args, ProfileArgs};
 use crate::execute::CANCELLED;
 use crate::load;
 
@@ -38,6 +38,11 @@ struct Outcome {
 }
 
 pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
+    let checked = cli::checked_retune(args, profile);
+    if let Err(error) = checked {
+        error.exit();
+    }
+
     let mut stderr = args.color.stderr();
 
     let Some(mut source) = load::source(&profile.pipeline, &profile.vars, &mut stderr) else {
@@ -53,7 +58,8 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let Some(backend) = load::backend(args) else {
+    let retune = profile.retune();
+    let Some(backend) = load::backend(args, retune) else {
         return ExitCode::FAILURE;
     };
 
