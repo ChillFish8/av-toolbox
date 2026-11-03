@@ -7,6 +7,9 @@ use super::{float_of, noisy_clip, yuv420};
 use crate::stream::{Input, Output, Stream};
 use crate::support::{backend, built_filter};
 
+/// A build name shaped like the ones installs are given.
+const BUILD: &str = "0123456789abcdef";
+
 fn run_tuned(stage: &str, args: serde_json::Value, chunks: Vec<Vec<Input>>) -> Vec<Output> {
     let format = yuv420(64, 32, SampleFormat::U8);
     let output = float_of(&format);
@@ -39,7 +42,7 @@ fn holds_a_result(store: &Path) -> bool {
 fn auto_tuning_stores_a_result_beside_the_kernel_cache() {
     let cache = tempfile::tempdir().expect("a temp dir");
     // CubeCL's config is process wide, so this relies on nextest running each test in its own process.
-    install_compilation_cache_at(cache.path()).expect("no client is open yet");
+    let build_dir = install_compilation_cache_at(cache.path(), BUILD).expect("no client is open yet");
 
     let format = yuv420(64, 32, SampleFormat::U8);
     let clip = noisy_clip(&format, 4);
@@ -52,7 +55,7 @@ fn auto_tuning_stores_a_result_beside_the_kernel_cache() {
 
     assert_eq!(outputs.len(), clip.len());
 
-    let store = cache.path().join("av-denoise-tune");
+    let store = build_dir.join("av-denoise-tune");
     assert!(
         holds_a_result(&store),
         "nothing was stored in {}",

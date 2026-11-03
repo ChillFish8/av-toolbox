@@ -1,3 +1,5 @@
+use std::sync::Once;
+
 use av_toolbox_gpu::{
     Accelerator,
     Backend,
@@ -8,12 +10,16 @@ use av_toolbox_gpu::{
     Tuning,
     codegen_stack_is_sufficient,
     compilation_cache_dir,
+    compilation_cache_disabled,
     default_accelerators,
     install_compilation_cache,
 };
 use av_toolbox_pipeline::OpenBackendError;
 
-use crate::SessionError;
+use crate::{SessionError, build_hash};
+
+/// What a process without the kernel cache goes without, for the warning that says so.
+const LOST_WITHOUT_CACHE: &str = "the tuning store, the tuning lock and parallel kernel compilation";
 
 /// Which backend to open and how its stages pick their kernels.
 #[derive(Debug, Clone)]
@@ -37,8 +43,8 @@ impl Default for BackendOptions {
 /// Installs the kernel cache and opens the first of the accelerators that starts on the chosen device.
 ///
 /// The cache is installed once per process, so a later call reuses it. When something else in the process
-/// configured CubeCL first, its settings are kept. A warning is logged when `RUST_MIN_STACK` is too small
-/// for kernel compilation.
+/// configured CubeCL first, its settings are kept and a warning says what goes missing. A warning is logged
+/// when `RUST_MIN_STACK` is too small for kernel compilation.
 pub fn open_backend(options: &BackendOptions) -> Result<Backend, SessionError> {
     install_cache();
     warn_if_stack_is_small();
@@ -67,22 +73,48 @@ fn warn_if_stack_is_small() {
     );
 }
 
-fn install_cache() {
+/// Installs this build's kernel cache, once per process.
+///
+/// A cache that is off, or that could not be installed, is warned about.
+pub(crate) fn install_cache() {
+    static INSTALL: Once = Once::new();
+
+    INSTALL.call_once(install_cache_now);
+}
+
+fn install_cache_now() {
     if compilation_cache_dir().is_some() {
         return;
     }
 
-    let installed = install_compilation_cache();
+    let build = build_hash();
+    let installed = install_compilation_cache(build);
     match installed {
         Ok(Some(path)) => tracing::info!(?path, "caching compiled kernels"),
-        Ok(None) => tracing::info!(
-            "kernel caching is off and autotune results go to CubeCL's default place, unset \
-             {COMPILATION_CACHE_ENV} to turn it back on"
-        ),
-        Err(CacheError::AlreadyInitialised) => tracing::info!(
-            "CubeCL was configured before the kernel cache could be installed, keeping its settings"
-        ),
+        Ok(None) if compilation_cache_disabled() => warn_cache_off(),
+        Ok(None) => warn_cache_not_installed(),
+        Err(error) => warn_cache_kept_out(&error),
     }
+}
+
+fn warn_cache_off() {
+    tracing::warn!(
+        "kernel caching is off, so this process goes without {LOST_WITHOUT_CACHE}, unset \
+         {COMPILATION_CACHE_ENV} to turn it back on"
+    );
+}
+
+fn warn_cache_not_installed() {
+    tracing::warn!(
+        "the kernel cache could not be installed, so this process goes without {LOST_WITHOUT_CACHE}"
+    );
+}
+
+fn warn_cache_kept_out(error: &CacheError) {
+    tracing::warn!(
+        %error,
+        "the kernel cache could not be installed, so this process goes without {LOST_WITHOUT_CACHE}"
+    );
 }
 
 fn backend_error(error: OpenBackendError) -> SessionError {

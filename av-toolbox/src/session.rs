@@ -21,6 +21,7 @@ use av_toolbox_runtime::{Cancel, Engine, Progress, RunError, RunReport, Settings
 use codespan_reporting::term::termcolor::WriteColor;
 use serde_json::{Map, Value};
 
+use crate::backend::install_cache;
 use crate::error::NamedStage;
 use crate::input::PipelineInput;
 use crate::plan::{self, PlannedNode};
@@ -52,12 +53,18 @@ pub struct Session {
 }
 
 impl Session {
-    /// Opens `source` on `backend`, checking that `channels` gives a format for every `channel/frames` source.
+    /// Opens `source` on `backend`, checking that `channels` gives a format for every `channel/frames`
+    /// source.
+    ///
+    /// It installs the kernel cache when [open_backend](crate::open_backend) has not, or warns that it
+    /// cannot.
     pub fn new(
         source: PipelineSource,
         backend: Backend,
         channels: &[(String, FrameFormat)],
     ) -> Result<Session, SessionError> {
+        install_cache();
+
         let PipelineSource {
             mut specs,
             files,
