@@ -1,18 +1,20 @@
 use std::path::Path;
-#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use cubecl::bytes::Bytes;
 use cubecl::device::DeviceId;
-#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+#[cfg(any(test, feature = "test-support"))]
 use cubecl::prelude::Client;
 use cubecl::server::Handle;
 use cubecl_common::device::ServiceId;
 use cubecl_environment::stream::StreamId;
 
+#[cfg(any(test, feature = "test-support"))]
+use crate::kernel_cache::atexit;
 use crate::memory::DeviceRead;
+#[cfg(any(test, feature = "test-support"))]
+use crate::probe::probe_client;
 use crate::{
     Accelerator,
     BufferPool,
@@ -226,46 +228,38 @@ pub fn test_device() -> Device {
     let value = std::env::var("AVTB_DEVICE").ok();
     let device = device_from_value(value.as_deref());
 
-    #[cfg(feature = "rocm")]
     drain_at_exit(device);
 
     device
 }
 
-/// The ROCm test device's client, synced by [drain_exit_client] when the process exits.
-#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
-static EXIT_CLIENT: OnceLock<Client> = OnceLock::new();
+/// The test device's accelerator and client, synced by [drain_exit_client] when the process exits.
+#[cfg(any(test, feature = "test-support"))]
+static EXIT_CLIENT: OnceLock<(Accelerator, Client)> = OnceLock::new();
 
-#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
-unsafe extern "C" {
-    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
-}
-
-/// Waits for the ROCm device thread to finish its queued tasks when the process exits.
+/// Waits for the test device's thread to finish its queued tasks when the process exits.
 ///
 /// The HIP runtime tears itself down at exit, and a device thread still running a test's queued
 /// tasks then crashes inside it. This hook registers after the runtime has loaded, so it runs
-/// before that teardown.
-#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+/// before that teardown. It drains whichever accelerator the device opens on, as
+/// [Backend::open_default](crate::Backend::open_default) picks it.
+#[cfg(any(test, feature = "test-support"))]
 fn drain_at_exit(device: Device) {
-    if crate::default_accelerators().first() != Some(&Accelerator::Rocm) {
-        return;
-    }
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| register_exit_drain(device));
+}
 
-    if EXIT_CLIENT.get().is_some() {
-        return;
-    }
-
-    let Some(client) = crate::probe::probe_client(Accelerator::Rocm, device) else {
+#[cfg(any(test, feature = "test-support"))]
+fn register_exit_drain(device: Device) {
+    let Some(opened) = open_exit_client(device) else {
         return;
     };
 
-    // Only the call that stores the client registers the hook, so it is registered once.
-    if EXIT_CLIENT.set(client).is_err() {
+    if EXIT_CLIENT.set(opened).is_err() {
         return;
     }
 
-    // Safety: `drain_exit_client` takes no arguments, never unwinds, and stays valid for the
+    // SAFETY: `drain_exit_client` takes no arguments, never unwinds, and stays valid for the
     // life of the process.
     let failed = unsafe { atexit(drain_exit_client) };
     if failed != 0 {
@@ -273,12 +267,24 @@ fn drain_at_exit(device: Device) {
     }
 }
 
-/// Syncs the ROCm test device's client on a new thread.
+/// A client on the first accelerator this build enables that starts on `device`.
+#[cfg(any(test, feature = "test-support"))]
+fn open_exit_client(device: Device) -> Option<(Accelerator, Client)> {
+    for accelerator in default_accelerators() {
+        if let Some(client) = probe_client(accelerator, device) {
+            return Some((accelerator, client));
+        }
+    }
+
+    None
+}
+
+/// Syncs the test device's client on a new thread.
 ///
 /// The exiting thread may already have dropped its thread locals, which the client needs.
-#[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
+#[cfg(any(test, feature = "test-support"))]
 extern "C" fn drain_exit_client() {
-    let Some(client) = EXIT_CLIENT.get() else {
+    let Some((_, client)) = EXIT_CLIENT.get() else {
         return;
     };
 
@@ -333,6 +339,16 @@ mod tests {
         let directory = compilation_cache_dir().expect("the test cache is installed");
         assert!(directory.ends_with("test-autotune/test"), "{directory:?}");
         assert!(directory.join("private").is_dir());
+    }
+
+    #[test]
+    #[cfg(feature = "gpu-tests")]
+    fn the_exit_drain_registers_for_the_opened_accelerator() {
+        let device = test_device();
+        let backend = crate::Backend::open_default(device).expect("should open");
+
+        let (drained, _) = EXIT_CLIENT.get().expect("the drain is registered");
+        assert_eq!(*drained, backend.accelerator());
     }
 
     #[test]

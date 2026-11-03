@@ -524,7 +524,17 @@ impl Engine {
     /// A run nobody cancelled that still ends holding items it never gave to a worker fails as
     /// well. Those items went nowhere, and answering with a report a caller has to read the
     /// fields of would let a pipeline lose frames and still look like it succeeded.
+    ///
+    /// An action set with [Progress::on_first_output] that has not run by the end is dropped then,
+    /// however the run ended.
     pub fn run(self) -> Result<RunReport, RunError> {
+        let progress = self.progress.clone();
+        let _first_output = FirstOutputGuard(progress);
+
+        self.run_threads()
+    }
+
+    fn run_threads(self) -> Result<RunReport, RunError> {
         let Engine {
             prepared,
             tally,
@@ -603,6 +613,15 @@ impl Engine {
             counted_wall,
             timings,
         })
+    }
+}
+
+/// Drops a run's first-output action when the run returns or panics.
+struct FirstOutputGuard(Progress);
+
+impl Drop for FirstOutputGuard {
+    fn drop(&mut self) {
+        self.0.drop_first_output();
     }
 }
 

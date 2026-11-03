@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use av_toolbox_graph::NodeId;
@@ -131,4 +133,38 @@ fn elapsed_is_zero_until_the_run_starts() {
     run_with_watchdog(engine, "elapsed_is_zero_until_the_run_starts");
 
     assert!(progress.elapsed() > Duration::ZERO);
+}
+
+#[test]
+fn the_first_output_action_runs_once_across_every_sink() {
+    let specs = vec![
+        source_spec("input", &[0, 0, 0], 0),
+        sink_spec("out", "input"),
+        meta_sink_spec("log", "input"),
+    ];
+    let engine = build_engine(&specs, Settings::default());
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counted = runs.clone();
+
+    engine.progress().on_first_output(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    run_with_watchdog(engine, "the_first_output_action_runs_once_across_every_sink");
+
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_run_with_no_output_drops_the_first_output_action() {
+    let specs = vec![source_spec("input", &[], 0), sink_spec("out", "input")];
+    let engine = build_engine(&specs, Settings::default());
+    let progress = engine.progress();
+    let held = Arc::new(());
+    let captured = held.clone();
+
+    progress.on_first_output(move || drop(captured));
+    run_with_watchdog(engine, "a_run_with_no_output_drops_the_first_output_action");
+
+    assert_eq!(Arc::strong_count(&held), 1, "a live Progress kept the action");
+    drop(progress);
 }

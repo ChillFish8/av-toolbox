@@ -82,6 +82,7 @@ mod source;
 pub mod steps;
 #[cfg(test)]
 mod tests;
+mod warm_key;
 
 pub use av_toolbox_core::{Granularity, InputFrame, OutputFrame, StageKind};
 pub use av_toolbox_gpu::{

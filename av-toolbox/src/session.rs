@@ -15,7 +15,7 @@ use av_toolbox_core::{
     PipelineRegistry,
     StageKind,
 };
-use av_toolbox_gpu::{Backend, FrameFormat, Tuning, merge_compilation_cache};
+use av_toolbox_gpu::{Backend, FrameFormat, Tuning, WarmUp, merge_compilation_cache};
 use av_toolbox_graph::{Diagnostic, DiagnosticCode, NodeId, Span, StageSpec};
 use av_toolbox_pipeline::{CompiledPipeline, StageRef};
 use av_toolbox_runtime::{Cancel, Engine, Progress, RunError, RunReport, Settings};
@@ -28,6 +28,7 @@ use crate::input::PipelineInput;
 use crate::plan::{self, PlannedNode};
 use crate::report::{self, PipelineFiles};
 use crate::source::PipelineSource;
+use crate::warm_key::pipeline_key;
 use crate::{SessionError, steps};
 
 /// The stage type of the caller's channel source and sink.
@@ -189,6 +190,9 @@ impl Session {
         };
         self.warnings = compiled.warnings().to_vec();
 
+        let key = pipeline_key(&compiled, &self.backend);
+        let warm = WarmUp::begin(key);
+
         let engine = compiled.engine(settings);
         let mut engine = match engine {
             Ok(engine) => engine,
@@ -201,6 +205,9 @@ impl Session {
         if self.discard_artefacts {
             engine = engine.discarding_artefacts();
         }
+
+        let progress = engine.progress();
+        progress.on_first_output(move || finish_warm_up(warm));
 
         let cancel = engine.cancel_handle();
         cancel.on_stop(move || stop.stop());
@@ -223,6 +230,13 @@ impl Session {
     fn pipeline_error(&self, found: Vec<Diagnostic>) -> SessionError {
         let files = self.files.clone();
         SessionError::pipeline(files, found)
+    }
+}
+
+/// Shares and stamps the kernels a warm-up compiled, when this process holds one.
+fn finish_warm_up(warm: Option<WarmUp>) {
+    if let Some(warm) = warm {
+        warm.finish();
     }
 }
 

@@ -66,6 +66,31 @@ impl<S: Side> Source<S> for WatchedSource<S> {
     }
 }
 
+/// Tells [Progress](crate::Progress) when one sink first consumes a frame.
+struct OutputReport {
+    progress: Progress,
+    reported: bool,
+}
+
+impl OutputReport {
+    fn new(progress: &Progress) -> Self {
+        Self {
+            progress: progress.clone(),
+            reported: false,
+        }
+    }
+
+    /// Notes a sink step that consumed `seen` items.
+    fn consumed(&mut self, seen: u64) {
+        if self.reported || seen == 0 {
+            return;
+        }
+
+        self.reported = true;
+        self.progress.output_reached();
+    }
+}
+
 /// What reached the sinks, and when the counted part of the run began.
 pub(super) struct SinkTally {
     frames: AtomicU64,
@@ -127,6 +152,7 @@ struct CountingSink<S: Side> {
     inner: Box<dyn Sink<S>>,
     tally: Arc<SinkTally>,
     steps: Arc<AtomicU64>,
+    output: OutputReport,
 }
 
 impl<S: Side> StageInstance for CountingSink<S> {
@@ -161,7 +187,10 @@ impl<S: Side> Sink<S> for CountingSink<S> {
             self.steps.fetch_add(1, Ordering::Relaxed);
         }
 
-        self.inner.consume(context, Inputs::from_slots(slots))
+        self.inner.consume(context, Inputs::from_slots(slots))?;
+        self.output.consumed(seen);
+
+        Ok(())
     }
 
     fn end_of_stream(&mut self, context: &mut FrameContext) -> Result<(), StageError> {
@@ -175,6 +204,7 @@ struct CountingMetaSink {
     inner: Box<dyn MetaSink>,
     tally: Arc<SinkTally>,
     steps: Arc<AtomicU64>,
+    output: OutputReport,
 }
 
 impl StageInstance for CountingMetaSink {
@@ -199,7 +229,10 @@ impl MetaSink for CountingMetaSink {
             self.steps.fetch_add(1, Ordering::Relaxed);
         }
 
-        self.inner.consume(context, inputs)
+        self.inner.consume(context, inputs)?;
+        self.output.consumed(seen);
+
+        Ok(())
     }
 
     fn consume_record(&mut self, context: &mut FrameContext, record: &MetaRecord) -> Result<(), StageError> {
@@ -277,6 +310,7 @@ pub(super) fn wrap_sinks(
                     inner,
                     tally: tally.clone(),
                     steps,
+                    output: OutputReport::new(progress),
                 };
 
                 (id, StageBox::Sink(Box::new(sink)))
@@ -287,6 +321,7 @@ pub(super) fn wrap_sinks(
                     inner,
                     tally: tally.clone(),
                     steps,
+                    output: OutputReport::new(progress),
                 };
 
                 (id, StageBox::HostSink(Box::new(sink)))
@@ -297,6 +332,7 @@ pub(super) fn wrap_sinks(
                     inner,
                     tally: tally.clone(),
                     steps,
+                    output: OutputReport::new(progress),
                 };
 
                 (id, StageBox::MetaSink(Box::new(sink)))
