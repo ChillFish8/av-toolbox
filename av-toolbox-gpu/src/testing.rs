@@ -5,8 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
 use cubecl::bytes::Bytes;
-use cubecl::config::cache::CacheConfig;
-use cubecl::config::{CubeClRuntimeConfig, RuntimeConfig};
 use cubecl::device::DeviceId;
 #[cfg(all(feature = "rocm", any(test, feature = "test-support")))]
 use cubecl::prelude::Client;
@@ -18,12 +16,14 @@ use crate::memory::DeviceRead;
 use crate::{
     Accelerator,
     BufferPool,
+    CacheError,
     Capabilities,
     Device,
     DeviceAllocator,
     FrameContext,
     StreamPolicy,
     default_accelerators,
+    install_compilation_cache_at,
 };
 
 /// The accelerator this build tests against.
@@ -216,7 +216,7 @@ pub fn flush_counting_context(policy: StreamPolicy) -> (FrameContext, Arc<Atomic
 /// Falls back to [Device::Default] when the variable is unset or empty. Panics when it is set to
 /// something that is not a device selector.
 ///
-/// The first call also keeps CubeCL's autotune results in the workspace's `target/test-autotune`
+/// The first call also installs a private kernel cache under the workspace's `target/test-autotune`
 /// directory, unless CubeCL's config is already set.
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_device() -> Device {
@@ -293,18 +293,18 @@ extern "C" fn drain_exit_client() {
     }
 }
 
-/// Points CubeCL's environment inside the workspace's target directory, leaving a config that is
-/// already set alone.
+/// Gives the test processes a private kernel cache inside the workspace's target directory.
+///
+/// A config that is already set is left alone.
 #[cfg(any(test, feature = "test-support"))]
 fn install_test_tune_cache() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let directory = manifest.join("../target/test-autotune");
+    let root = manifest.join("../target/test-autotune");
 
-    let mut config = CubeClRuntimeConfig::from_current_dir().override_from_env();
-    config.environment.path = CacheConfig::Directory(directory);
-
-    // A config already set means something else chose where results go, which is kept.
-    let _ = CubeClRuntimeConfig::try_set(config);
+    match install_compilation_cache_at(&root, "test") {
+        Ok(_) | Err(CacheError::AlreadyInitialised) => {},
+        Err(error) => tracing::warn!("cannot install the test kernel cache: {error}"),
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -322,6 +322,18 @@ fn device_from_value(value: Option<&str>) -> Device {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "gpu-tests")]
+    use crate::compilation_cache_dir;
+
+    #[test]
+    #[cfg(feature = "gpu-tests")]
+    fn the_test_cache_lives_under_a_private_folder() {
+        test_device();
+
+        let directory = compilation_cache_dir().expect("the test cache is installed");
+        assert!(directory.ends_with("test-autotune/test"), "{directory:?}");
+        assert!(directory.join("private").is_dir());
+    }
 
     #[test]
     fn device_from_value_falls_back_to_default_when_unset_or_empty() {
