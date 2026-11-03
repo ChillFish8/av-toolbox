@@ -147,17 +147,17 @@ pub(crate) fn refill_kernel_cache() {
 
 /// Merges a last time and deletes this process's private file.
 ///
-/// Later merges do nothing. A private file that cannot be deleted while it is open is left for a
-/// later process to delete once this one has exited.
+/// Later merges do nothing. Finishing is part of exiting, so it waits at most [EXIT_LOCK_WAIT] for
+/// the shared cache's lock, and leaves the private file for a later process to delete when the lock
+/// stays busy. A private file that cannot be deleted while it is open is also left for a later
+/// process to delete once this one has exited.
 pub(crate) fn finish_kernel_cache() {
-    finish_waiting(None);
+    finish_waiting(EXIT_LOCK_WAIT);
 }
 
 /// Runs [finish_kernel_cache] when the process exits normally.
 ///
-/// It suits processes without a single place to finish from, such as test binaries. The exit waits
-/// at most [EXIT_LOCK_WAIT] for the shared cache's lock, and leaves the private file for a later
-/// process to delete when the lock stays busy.
+/// It suits processes without a single place to finish from, such as test binaries.
 pub(crate) fn finish_kernel_cache_at_exit() {
     static REGISTER: Once = Once::new();
 
@@ -180,33 +180,32 @@ unsafe extern "C" {
 /// The exiting thread may already have dropped its thread locals, which the database engine needs.
 extern "C" fn finish_at_exit() {
     let name = String::from("kernel-cache-exit");
-    let spawned = std::thread::Builder::new()
-        .name(name)
-        .spawn(|| finish_waiting(Some(EXIT_LOCK_WAIT)));
+    let spawned = std::thread::Builder::new().name(name).spawn(finish_kernel_cache);
 
     if let Ok(handle) = spawned {
         let _ = handle.join();
     }
 }
 
-/// Merges a last time, waiting at most `wait` for the shared cache's lock, and deletes the private
+/// Merges a last time, waiting at most `limit` for the shared cache's lock, and deletes the private
 /// file once its kernels are safe.
 ///
-/// The private file is kept when the merge does not land, so that nothing it holds is lost. With a
-/// `wait`, the whole call is bounded by it, including the time spent getting the slot.
-pub(super) fn finish_waiting(wait: Option<Duration>) {
+/// The private file is kept when the merge does not land, so that nothing it holds is lost. The
+/// whole call is bounded by `limit`, including the time spent getting the slot.
+///
+/// A process that never held its liveness lock deletes the file anyway, because no later process
+/// could prove it stale and prune it.
+pub(super) fn finish_waiting(limit: Duration) {
     let start = Instant::now();
-    let taken = match wait {
-        Some(limit) => active_slot_within(limit).and_then(|mut slot| slot.take()),
-        None => active_slot().take(),
-    };
+    let slot = active_slot_within(limit);
+    let taken = slot.and_then(|mut slot| slot.take());
     let Some(mut active) = taken else {
         return;
     };
 
-    let wait = wait.map(|limit| limit.saturating_sub(start.elapsed()));
-    let merged = guarded(|| active.merge(wait)).unwrap_or(false);
-    if wait.is_some() && !merged {
+    let wait = limit.saturating_sub(start.elapsed());
+    let merged = guarded(|| active.merge(Some(wait))).unwrap_or(false);
+    if !merged && active.liveness.is_some() {
         return;
     }
 

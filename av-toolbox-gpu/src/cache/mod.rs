@@ -131,6 +131,8 @@ pub fn refill_compilation_cache() {
 /// Merges the kernels this process compiled into the shared cache and deletes its private copy.
 ///
 /// Call it once, when the process is done with the GPU. It does nothing when no cache is installed.
+/// It waits at most a few seconds for another process to let go of the shared cache, and then
+/// leaves the private copy for a later process to delete, so exiting never hangs on the cache.
 pub fn finish_compilation_cache() {
     finish_kernel_cache();
 }

@@ -24,7 +24,7 @@ use crate::kernel_cache::private::{
     merge_lock_path,
     refill_kernel_cache,
 };
-use crate::kernel_cache::prune::{lock_file_name, private_name, sidecar};
+use crate::kernel_cache::prune::{SIDECARS, lock_file_name, private_name, sidecar};
 
 const NAMESPACE: &str = "cubecl/test/kernels";
 const CHILD_DIR_ENV: &str = "AVTB_TEST_PRIVATE_CACHE_DIR";
@@ -374,10 +374,31 @@ fn an_exit_that_cannot_get_the_lock_leaves_the_private_file() {
 
     *active_slot() = Some(cache);
     let start = Instant::now();
-    finish_waiting(Some(Duration::from_millis(300)));
+    finish_waiting(Duration::from_millis(300));
 
     assert!(start.elapsed() < Duration::from_secs(5));
     assert!(private.exists(), "unmerged kernels must stay on disk");
+}
+
+/// Without its liveness lock no later process can prove the file stale, so keeping it would leak it.
+#[test]
+fn a_finish_without_a_liveness_lock_deletes_an_unmerged_private_file() {
+    let _serial = SLOT_TESTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    let mut cache = active_cache(dir.path());
+    insert(&cache.private, "compiled", Origin::Local);
+    cache.liveness = None;
+    cache.merge_lock = dir.path().join("missing").join(MERGE_LOCK_NAME);
+    let private = cache.private.clone();
+
+    *active_slot() = Some(cache);
+    finish_waiting(Duration::from_millis(300));
+
+    assert!(!private.exists());
+    for suffix in SIDECARS {
+        let path = sidecar(&private, suffix);
+        assert!(!path.exists(), "{path:?} should be deleted");
+    }
 }
 
 #[test]
@@ -398,7 +419,7 @@ fn an_exit_finish_is_bounded_while_another_thread_holds_the_slot() {
 
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        finish_waiting(Some(Duration::from_millis(300)));
+        finish_waiting(Duration::from_millis(300));
         sender.send(()).unwrap();
     });
     let finished = receiver.recv_timeout(Duration::from_secs(5));

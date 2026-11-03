@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Weak};
 use std::thread::{self, JoinHandle};
@@ -14,7 +15,7 @@ use av_toolbox_core::{
     PipelineRegistry,
     StageKind,
 };
-use av_toolbox_gpu::{Backend, FrameFormat, Tuning};
+use av_toolbox_gpu::{Backend, FrameFormat, Tuning, merge_compilation_cache};
 use av_toolbox_graph::{Diagnostic, DiagnosticCode, NodeId, Span, StageSpec};
 use av_toolbox_pipeline::{CompiledPipeline, StageRef};
 use av_toolbox_runtime::{Cancel, Engine, Progress, RunError, RunReport, Settings};
@@ -34,6 +35,9 @@ const CHANNEL_STAGE: &str = "channel/frames";
 
 /// What a stream's thread hands back once its run ends.
 type Finish = Result<RunReport, RunError>;
+
+/// How many sessions are open in this process, so the last one to close merges the kernel cache.
+static OPEN_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// A loaded pipeline and an opened backend, ready to run as one stream after another.
 ///
@@ -57,7 +61,8 @@ impl Session {
     /// source.
     ///
     /// It installs the kernel cache when [open_backend](crate::open_backend) has not, or warns that it
-    /// cannot.
+    /// cannot. Like [open_backend](crate::open_backend), the first install may set `CUDA_PATH`, so call
+    /// it before spawning threads that read the environment.
     pub fn new(
         source: PipelineSource,
         backend: Backend,
@@ -78,6 +83,8 @@ impl Session {
             Ok(sources) => sources,
             Err(found) => return Err(SessionError::pipeline(files, found)),
         };
+
+        OPEN_SESSIONS.fetch_add(1, Ordering::SeqCst);
 
         Ok(Session {
             specs,
@@ -220,9 +227,16 @@ impl Session {
 }
 
 impl Drop for Session {
+    /// Releases the session's channels, and merges the kernels this process compiled once no session is
+    /// left open.
     fn drop(&mut self) {
         let hub = ChannelHub::process();
         hub.release(&self.token);
+
+        let previously_open = OPEN_SESSIONS.fetch_sub(1, Ordering::SeqCst);
+        if previously_open == 1 {
+            merge_compilation_cache();
+        }
     }
 }
 

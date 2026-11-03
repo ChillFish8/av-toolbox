@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// Sidecar files SQLite-style databases keep beside the database file.
-const SIDECARS: [&str; 3] = ["-wal", "-tshm", "-shm"];
+pub(super) const SIDECARS: [&str; 3] = ["-wal", "-tshm", "-shm"];
 
 /// How long a private file must go unused before it can be deleted.
 pub(crate) const STALE_PRIVATE_AGE: Duration = Duration::from_secs(5 * 60);

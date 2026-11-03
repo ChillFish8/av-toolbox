@@ -7,17 +7,14 @@ pub const CODEGEN_STACK_BYTES: usize = 16 << 20;
 ///
 /// Call this at the top of `main`, before any thread is spawned. A thread's stack size is fixed
 /// when it starts, so setting the variable later does not reach the threads CubeCL has already
-/// made.
+/// made. A value that is already set is kept, even when it is too small. Check it with
+/// [codegen_stack_is_sufficient] once logging has started.
 ///
 /// # Safety
 ///
 /// The same rules as [std::env::set_var] apply.
 pub unsafe fn raise_codegen_stack_limit() {
     if std::env::var_os("RUST_MIN_STACK").is_some() {
-        if !codegen_stack_is_sufficient() {
-            tracing::warn!("RUST_MIN_STACK is set below what kernel codegen needs, see CODEGEN_STACK_BYTES");
-        }
-
         return;
     }
 

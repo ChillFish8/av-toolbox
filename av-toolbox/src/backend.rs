@@ -45,6 +45,9 @@ impl Default for BackendOptions {
 /// The cache is installed once per process, so a later call reuses it. When something else in the process
 /// configured CubeCL first, its settings are kept and a warning says what goes missing. A warning is logged
 /// when `RUST_MIN_STACK` is too small for kernel compilation.
+///
+/// With CUDA enabled and `CUDA_PATH` unset, the first call installs the bundled libdevice and sets
+/// `CUDA_PATH` to it. Open the backend before spawning threads that read the environment.
 pub fn open_backend(options: &BackendOptions) -> Result<Backend, SessionError> {
     install_cache();
     warn_if_stack_is_small();
@@ -83,6 +86,9 @@ pub(crate) fn install_cache() {
 }
 
 fn install_cache_now() {
+    #[cfg(feature = "cuda")]
+    install_libdevice();
+
     if compilation_cache_dir().is_some() {
         return;
     }
@@ -94,6 +100,17 @@ fn install_cache_now() {
         Ok(None) if compilation_cache_disabled() => warn_cache_off(),
         Ok(None) => warn_cache_not_installed(),
         Err(error) => warn_cache_kept_out(&error),
+    }
+}
+
+/// Points `CUDA_PATH` at the bundled libdevice when it is unset, warning when the bundle cannot be installed.
+#[cfg(feature = "cuda")]
+fn install_libdevice() {
+    // SAFETY: this runs once, inside the first `open_backend` or `Session::new`, and both document that they
+    // must be called before the caller spawns threads that read the environment.
+    let installed = unsafe { crate::libdevice::point_cuda_path_at_bundle() };
+    if let Err(error) = installed {
+        tracing::warn!(%error, "cannot install the bundled libdevice");
     }
 }
 

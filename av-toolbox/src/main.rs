@@ -3,8 +3,6 @@ mod describe;
 mod execute;
 mod explain;
 mod inspect;
-#[cfg(feature = "cuda")]
-mod libdevice;
 mod list_devices;
 mod list_stages;
 mod load;
@@ -29,20 +27,11 @@ fn main() -> ExitCode {
     // SAFETY: no other thread exists yet, so nothing can race the environment change.
     unsafe { av_toolbox_gpu::raise_codegen_stack_limit() };
 
-    // SAFETY: still single-threaded, so nothing can race the environment change.
-    #[cfg(feature = "cuda")]
-    let libdevice_outcome = unsafe { self::libdevice::point_cuda_path_at_bundle() };
-
     let args = Args::parse();
     let bars = MultiProgress::new();
     start_logging(&args, &bars);
 
-    #[cfg(feature = "cuda")]
-    if let Err(error) = libdevice_outcome {
-        tracing::warn!(%error, "cannot install the bundled libdevice");
-    }
-
-    match &args.command {
+    let code = match &args.command {
         Command::Execute(execute) => execute::run(&args, execute, &bars),
         Command::Profile(profile_args) => profile::run(&args, profile_args),
         Command::ListDevices => list_devices::run(&args.accelerators),
@@ -51,7 +40,11 @@ fn main() -> ExitCode {
         Command::Explain(explain) => explain::run(&args, explain),
         Command::Inspect(inspect_args) => inspect::run(&args, inspect_args),
         Command::Pull(pull_args) => pull::run(pull_args),
-    }
+    };
+
+    av_toolbox_gpu::finish_compilation_cache();
+
+    code
 }
 
 /// What every command logs by default, with only warnings from crates outside the workspace.

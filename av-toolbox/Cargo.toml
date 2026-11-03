@@ -36,6 +36,7 @@ av-toolbox-pipeline = { workspace = true }
 av-toolbox-runtime = { workspace = true }
 
 [dev-dependencies]
+cubecl-environment = { workspace = true }
 image = { workspace = true }
 y4m = { workspace = true }
 zip = { workspace = true }

@@ -341,6 +341,7 @@ dependencies = [
  "codespan-reporting",
  "console",
  "ctrlc",
+ "cubecl-environment",
  "image",
  "indicatif",
  "mimalloc",

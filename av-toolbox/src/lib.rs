@@ -71,6 +71,8 @@ mod backend;
 mod build_hash;
 mod error;
 mod input;
+#[cfg(feature = "cuda")]
+mod libdevice;
 mod plan;
 #[doc(hidden)]
 pub mod report;
@@ -78,6 +80,8 @@ mod session;
 mod source;
 #[doc(hidden)]
 pub mod steps;
+#[cfg(test)]
+mod tests;
 
 pub use av_toolbox_core::{Granularity, InputFrame, OutputFrame, StageKind};
 pub use av_toolbox_gpu::{
