@@ -1,8 +1,12 @@
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{SyncSender, TrySendError};
+use std::thread;
+use std::time::Duration;
 
 use av_toolbox_core::{
     BoundInputs,
+    CHANNEL_POLL,
     ChannelHub,
+    ChannelStop,
     InputSignature,
     Inputs,
     OutputFrame,
@@ -33,6 +37,9 @@ use crate::shared::INPUTS;
 mod tests;
 
 const STAGE: &str = "channel/frames";
+
+/// The first wait for room on a full channel, doubling up to [CHANNEL_POLL] while it stays full.
+const FIRST_WAIT: Duration = Duration::from_millis(1);
 
 /// Arguments for `channel/frames`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -102,11 +109,12 @@ fn sink_from(hub: &ChannelHub, args: &ChannelArgs) -> Result<FramesSink, StageEr
         )));
     };
 
-    let frames = hub.take_sink(session, stage)?;
+    let bound = hub.take_sink(session, stage)?;
 
     Ok(FramesSink {
         stage: stage.to_owned(),
-        frames: Some(frames),
+        frames: Some(bound.frames),
+        stop: bound.stop,
     })
 }
 
@@ -133,9 +141,35 @@ fn stopped_receiving_error(stage: &str) -> StageError {
 struct FramesSink {
     stage: String,
     frames: Option<SyncSender<OutputFrame>>,
+    stop: ChannelStop,
 }
 
 impl FramesSink {
+    /// Sends `output` to the caller, waiting while the channel is full.
+    ///
+    /// Once the run stops, the frame is dropped and the sink returns quietly, since the caller asked for the
+    /// run to end.
+    fn hand_over(&self, frames: &SyncSender<OutputFrame>, output: OutputFrame) -> Result<(), StageError> {
+        let mut pending = output;
+        let mut wait = FIRST_WAIT;
+
+        loop {
+            let sent = frames.try_send(pending);
+            match sent {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Disconnected(_)) => return Err(stopped_receiving_error(&self.stage)),
+                Err(TrySendError::Full(returned)) => pending = returned,
+            }
+
+            if self.stop.is_stopped() {
+                return Ok(());
+            }
+
+            thread::sleep(wait);
+            wait = wait.saturating_mul(2).min(CHANNEL_POLL);
+        }
+    }
+
     fn planes_of(&self, frame: &HostFrame) -> Result<Vec<Vec<u8>>, StageError> {
         let mut planes = Vec::new();
         for channel in frame.format().channels() {
@@ -171,9 +205,7 @@ impl Sink<HostSide> for FramesSink {
             planes,
         };
 
-        frames
-            .send(output)
-            .map_err(|_| stopped_receiving_error(&self.stage))
+        self.hand_over(frames, output)
     }
 
     fn end_of_stream(&mut self, _context: &mut FrameContext) -> Result<(), StageError> {

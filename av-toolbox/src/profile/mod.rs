@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use av_toolbox::report::PipelineFiles;
 use av_toolbox_core::PipelineRegistry;
 use av_toolbox_graph::StageSpec;
 use av_toolbox_runtime::{Profiling, RunReport, Settings};
@@ -26,7 +27,6 @@ use self::summary::RowSources;
 use crate::cli::{Args, ProfileArgs};
 use crate::execute::CANCELLED;
 use crate::load;
-use crate::report::{self as diagnostics, PipelineFiles};
 
 /// What the three passes found.
 struct Outcome {
@@ -40,7 +40,7 @@ struct Outcome {
 }
 
 pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
-    let mut stderr = diagnostics::stderr(args.color);
+    let mut stderr = args.color.stderr();
 
     let Some(loaded) = load::load(&profile.pipeline, &profile.vars, &mut stderr) else {
         return ExitCode::FAILURE;
@@ -174,7 +174,7 @@ fn profile_passes(
         profile.frames
     );
 
-    let stall_deadline = load::stall_deadline_for(setup.backend.context().tuning());
+    let stall_deadline = av_toolbox::steps::stall_deadline_for(setup.backend.context().tuning());
     let measure_settings = pass_settings(profile, warmup_items, stall_deadline, Some(profiling));
     let undeclared = specs::undeclared(written);
     let measure_end = run_pass(setup, &undeclared, measure_settings, Warnings::Show, stderr);

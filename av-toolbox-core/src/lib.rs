@@ -68,7 +68,17 @@ pub use self::artefact::{
     WantedArtefacts,
     merge_single,
 };
-pub use self::channel::{BoundSource, CHANNEL_DEPTH, ChannelHub, ChannelToken, InputFrame, OutputFrame};
+pub use self::channel::{
+    BoundSink,
+    BoundSource,
+    CHANNEL_DEPTH,
+    CHANNEL_POLL,
+    ChannelHub,
+    ChannelStop,
+    ChannelToken,
+    InputFrame,
+    OutputFrame,
+};
 pub use self::claims::{ClaimError, Claims, DescriptorClaim};
 pub use self::crossing::Crossing;
 pub use self::demand::{AnyDemand, DemandDefinition, DemandKind, InputDemand, RequestError};

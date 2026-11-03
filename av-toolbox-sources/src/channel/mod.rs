@@ -1,8 +1,10 @@
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 
 use av_toolbox_core::{
     BoundInputs,
+    CHANNEL_POLL,
     ChannelHub,
+    ChannelStop,
     InputFrame,
     InputSignature,
     Source,
@@ -47,6 +49,7 @@ pub(crate) struct Opened {
     stage: String,
     format: FrameFormat,
     frames: Receiver<InputFrame>,
+    stop: ChannelStop,
 }
 
 pub(crate) struct Frames;
@@ -115,6 +118,7 @@ fn open_from(hub: &ChannelHub, args: &ChannelArgs) -> Result<Opened, StageError>
         stage: stage.to_owned(),
         format: bound.format,
         frames: bound.frames,
+        stop: bound.stop,
     })
 }
 
@@ -124,6 +128,22 @@ struct FramesSource {
 }
 
 impl FramesSource {
+    /// The caller's next frame, or `None` once the caller closes the stream or the run stops.
+    fn next_frame(&self) -> Option<InputFrame> {
+        loop {
+            if self.opened.stop.is_stopped() {
+                return None;
+            }
+
+            let received = self.opened.frames.recv_timeout(CHANNEL_POLL);
+            match received {
+                Ok(frame) => return Some(frame),
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => return None,
+            }
+        }
+    }
+
     fn check(&self, frame: &InputFrame) -> Result<(), StageError> {
         let stage = &self.opened.stage;
         let format = &self.opened.format;
@@ -158,7 +178,7 @@ impl StageInstance for FramesSource {}
 
 impl Source<HostSide> for FramesSource {
     fn next(&mut self, context: &mut FrameContext) -> Result<Option<HostFrame>, StageError> {
-        let Ok(frame) = self.opened.frames.recv() else {
+        let Some(frame) = self.next_frame() else {
             return Ok(None);
         };
 

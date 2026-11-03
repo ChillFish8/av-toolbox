@@ -5,7 +5,7 @@ use av_toolbox_core::StageKind;
 use av_toolbox_gpu::{Accelerator, Device, Tuning, default_accelerators};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
-use codespan_reporting::term::termcolor::ColorChoice;
+use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 
 fn parse_tuning(value: String) -> Result<Tuning, String> {
     value.parse::<Tuning>().map_err(|error| error.to_string())
@@ -322,6 +322,11 @@ pub(crate) enum ColorMode {
 }
 
 impl ColorMode {
+    pub(crate) fn stderr(self) -> StandardStream {
+        let choice = self.choice();
+        StandardStream::stderr(choice)
+    }
+
     pub(crate) fn choice(self) -> ColorChoice {
         match self {
             Self::Always => ColorChoice::Always,

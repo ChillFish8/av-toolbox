@@ -1,6 +1,17 @@
 use std::sync::mpsc::{Receiver, sync_channel};
+use std::thread;
+use std::time::Instant;
 
-use av_toolbox_core::{ChannelHub, ChannelToken, Inputs, OutputFrame, Sink, SinkDefinition};
+use av_toolbox_core::{
+    CHANNEL_POLL,
+    ChannelHub,
+    ChannelStop,
+    ChannelToken,
+    Inputs,
+    OutputFrame,
+    Sink,
+    SinkDefinition,
+};
 use av_toolbox_gpu::{
     Capabilities,
     Channel,
@@ -33,10 +44,15 @@ fn args(token: &ChannelToken) -> ChannelArgs {
 }
 
 fn sink_with(depth: usize) -> (FramesSink, Receiver<OutputFrame>) {
+    let stop = ChannelStop::new();
+    sink_stopped_by(depth, stop)
+}
+
+fn sink_stopped_by(depth: usize, stop: ChannelStop) -> (FramesSink, Receiver<OutputFrame>) {
     let hub = ChannelHub::default();
     let token = ChannelToken::new();
     let (sender, receiver) = sync_channel(depth);
-    hub.bind_sink(&token, "output", sender);
+    hub.bind_sink(&token, "output", sender, stop);
 
     let sink = sink_from(&hub, &args(&token)).expect("opens");
 
@@ -109,6 +125,31 @@ fn a_dropped_receiver_fails_the_sink() {
     let message = error.to_string();
     assert!(message.contains("stopped receiving"), "{message}");
     assert!(message.contains("output"), "{message}");
+}
+
+#[test]
+fn a_stopped_run_frees_a_sink_whose_caller_stopped_draining() {
+    let format = yuv420(4, 2, SampleFormat::U8, rate());
+    let stop = ChannelStop::new();
+    let (mut sink, receiver) = sink_stopped_by(1, stop.clone());
+    consume(&mut sink, filled_frame(&format, 0, 1));
+
+    let stopper = thread::spawn(move || {
+        thread::sleep(CHANNEL_POLL);
+        stop.stop();
+    });
+    let mut context = testing_context();
+    let item = HostStreamItem::from(filled_frame(&format, 1, 1));
+    let inputs = Inputs::<HostSide>::from_slots(vec![Some(item)]);
+    let started = Instant::now();
+    let consumed = sink.consume(&mut context, inputs);
+    let waited = started.elapsed();
+    stopper.join().expect("the stopper finishes");
+
+    assert!(consumed.is_ok(), "{consumed:?}");
+    assert!(waited < 10 * CHANNEL_POLL, "{waited:?}");
+    let held = receiver.try_recv().expect("the first frame is still waiting");
+    assert_eq!(held.index, 0);
 }
 
 #[test]

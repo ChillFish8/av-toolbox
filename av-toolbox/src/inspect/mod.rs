@@ -4,6 +4,7 @@ mod hash;
 use std::path::Path;
 use std::process::ExitCode;
 
+use av_toolbox::report::{self, PipelineFiles};
 use av_toolbox_core::PipelineRegistry;
 use av_toolbox_graph::Diagnostic;
 use av_toolbox_pipeline::{DiskFiles, Pipeline};
@@ -11,7 +12,6 @@ use av_toolbox_pipeline::{DiskFiles, Pipeline};
 use self::export::{Export, FORMAT_VERSION};
 use crate::cli::{Args, InspectArgs};
 use crate::load;
-use crate::report::{self, PipelineFiles};
 
 pub(crate) fn run(args: &Args, inspect: &InspectArgs) -> ExitCode {
     let Some(registry) = load::registry() else {
@@ -20,7 +20,7 @@ pub(crate) fn run(args: &Args, inspect: &InspectArgs) -> ExitCode {
 
     let inspected = inspect_pipeline(&registry, &inspect.pipeline, &inspect.vars);
 
-    let mut stderr = report::stderr(args.color);
+    let mut stderr = args.color.stderr();
     report::diagnostics(&mut stderr, &inspected.files, &inspected.diagnostics);
 
     if inspect.hash {
@@ -52,7 +52,7 @@ pub(crate) fn inspect_pipeline(
     path: &Path,
     vars: &[(String, String)],
 ) -> Inspected {
-    let supplied = load::supplied(vars);
+    let supplied = av_toolbox::steps::supplied(vars);
     let read = av_toolbox_pipeline::load(path, &DiskFiles, &supplied);
     let pipeline = path.display().to_string();
 

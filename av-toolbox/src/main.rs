@@ -11,7 +11,6 @@ mod load;
 mod profile;
 mod progress;
 mod pull;
-mod report;
 
 use std::process::ExitCode;
 

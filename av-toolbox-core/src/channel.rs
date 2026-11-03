@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use av_toolbox_gpu::FrameFormat;
 
@@ -10,6 +11,9 @@ use crate::StageError;
 
 /// How many frames each channel holds before the sending side waits.
 pub const CHANNEL_DEPTH: usize = 2;
+
+/// The longest a channel stage waits on the caller before it checks whether its run has stopped.
+pub const CHANNEL_POLL: Duration = Duration::from_millis(20);
 
 static PROCESS_HUB: LazyLock<ChannelHub> = LazyLock::new(ChannelHub::new);
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(0);
@@ -64,17 +68,43 @@ impl Default for ChannelToken {
     }
 }
 
+/// Tells a channel stage that its run has stopped, so it stops waiting on the caller.
+#[derive(Debug, Clone, Default)]
+pub struct ChannelStop(Arc<AtomicBool>);
+
+impl ChannelStop {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn stop(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 /// The receiving end of a caller's frames, with the format they have.
 #[derive(Debug)]
 pub struct BoundSource {
     pub format: FrameFormat,
     pub frames: Receiver<InputFrame>,
+    pub stop: ChannelStop,
+}
+
+/// The sending end of the frames handed back to a caller.
+#[derive(Debug)]
+pub struct BoundSink {
+    pub frames: SyncSender<OutputFrame>,
+    pub stop: ChannelStop,
 }
 
 #[derive(Debug)]
 enum Endpoint {
     Source(BoundSource),
-    Sink(SyncSender<OutputFrame>),
+    Sink(BoundSink),
 }
 
 type EndpointKey = (String, String);
@@ -103,13 +133,21 @@ impl ChannelHub {
         stage: &str,
         format: FrameFormat,
         frames: Receiver<InputFrame>,
+        stop: ChannelStop,
     ) {
-        let source = BoundSource { format, frames };
+        let source = BoundSource { format, frames, stop };
         self.bind(token, stage, Endpoint::Source(source));
     }
 
-    pub fn bind_sink(&self, token: &ChannelToken, stage: &str, frames: SyncSender<OutputFrame>) {
-        self.bind(token, stage, Endpoint::Sink(frames));
+    pub fn bind_sink(
+        &self,
+        token: &ChannelToken,
+        stage: &str,
+        frames: SyncSender<OutputFrame>,
+        stop: ChannelStop,
+    ) {
+        let sink = BoundSink { frames, stop };
+        self.bind(token, stage, Endpoint::Sink(sink));
     }
 
     pub fn take_source(&self, token: &str, stage: &str) -> Result<BoundSource, StageError> {
@@ -124,10 +162,10 @@ impl ChannelHub {
         }
     }
 
-    pub fn take_sink(&self, token: &str, stage: &str) -> Result<SyncSender<OutputFrame>, StageError> {
+    pub fn take_sink(&self, token: &str, stage: &str) -> Result<BoundSink, StageError> {
         let endpoint = self.take(token, stage);
         match endpoint {
-            Some(Endpoint::Sink(frames)) => Ok(frames),
+            Some(Endpoint::Sink(sink)) => Ok(sink),
             Some(other) => {
                 self.put_back(token, stage, other);
                 Err(not_bound(stage))
@@ -196,7 +234,7 @@ mod tests {
         let hub = ChannelHub::new();
         let token = ChannelToken::new();
         let (_sender, receiver) = channel();
-        hub.bind_source(&token, "channel/frames", format(), receiver);
+        hub.bind_source(&token, "channel/frames", format(), receiver, ChannelStop::new());
 
         let first = hub.take_source(token.as_str(), "channel/frames");
         let second = hub.take_source(token.as_str(), "channel/frames");
@@ -210,7 +248,7 @@ mod tests {
         let hub = ChannelHub::new();
         let token = ChannelToken::new();
         let (sender, _receiver) = sync_channel(CHANNEL_DEPTH);
-        hub.bind_sink(&token, "channel/frames", sender);
+        hub.bind_sink(&token, "channel/frames", sender, ChannelStop::new());
 
         let first = hub.take_sink(token.as_str(), "channel/frames");
         let second = hub.take_sink(token.as_str(), "channel/frames");
@@ -240,7 +278,7 @@ mod tests {
         let hub = ChannelHub::new();
         let token = ChannelToken::new();
         let (_sender, receiver) = channel();
-        hub.bind_source(&token, "channel/frames", format(), receiver);
+        hub.bind_source(&token, "channel/frames", format(), receiver, ChannelStop::new());
 
         let wrong = hub.take_sink(token.as_str(), "channel/frames");
         let right = hub.take_source(token.as_str(), "channel/frames");
@@ -256,8 +294,20 @@ mod tests {
         let second_token = ChannelToken::new();
         let (first_sender, first_receiver) = channel();
         let (second_sender, second_receiver) = channel();
-        hub.bind_source(&first_token, "channel/frames", format(), first_receiver);
-        hub.bind_source(&second_token, "channel/frames", format(), second_receiver);
+        hub.bind_source(
+            &first_token,
+            "channel/frames",
+            format(),
+            first_receiver,
+            ChannelStop::new(),
+        );
+        hub.bind_source(
+            &second_token,
+            "channel/frames",
+            format(),
+            second_receiver,
+            ChannelStop::new(),
+        );
 
         first_sender
             .send(InputFrame::new(vec![vec![1]]))
@@ -283,7 +333,7 @@ mod tests {
         let hub = ChannelHub::new();
         let token = ChannelToken::new();
         let (sender, receiver) = channel();
-        hub.bind_source(&token, "channel/frames", format(), receiver);
+        hub.bind_source(&token, "channel/frames", format(), receiver, ChannelStop::new());
 
         hub.release(&token);
 

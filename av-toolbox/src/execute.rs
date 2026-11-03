@@ -2,19 +2,20 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use av_toolbox::report;
 use av_toolbox_pipeline::CompiledPipeline;
 use av_toolbox_runtime::{Cancel, Progress, RunReport, Settings};
 use indicatif::MultiProgress;
 
 use crate::cli::{Args, ExecuteArgs};
+use crate::load;
 use crate::progress::{Reporter, Snapshot, clock};
-use crate::{load, report};
 
 /// The exit code of a run stopped with Ctrl+C.
 pub(crate) const CANCELLED: u8 = 130;
 
 pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> ExitCode {
-    let mut stderr = report::stderr(args.color);
+    let mut stderr = args.color.stderr();
 
     let Some(mut loaded) = load::load(&execute.pipeline, &execute.vars, &mut stderr) else {
         return ExitCode::FAILURE;
@@ -49,7 +50,7 @@ pub(crate) fn run(args: &Args, execute: &ExecuteArgs, bars: &MultiProgress) -> E
         return ExitCode::FAILURE;
     };
 
-    let stall_deadline = load::stall_deadline_for(backend.context().tuning());
+    let stall_deadline = av_toolbox::steps::stall_deadline_for(backend.context().tuning());
     let settings = Settings {
         frame_budget: execute.frame_budget,
         stall_deadline,

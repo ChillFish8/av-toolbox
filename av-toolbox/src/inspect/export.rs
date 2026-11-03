@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
+use av_toolbox::report::PipelineFiles;
 use av_toolbox_graph::{Diagnostic, InputRef, Note, Severity, Span, StageSpec};
 use av_toolbox_pipeline::variables::ResolvedVariable;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::profile::file::stage_key;
-use crate::report::PipelineFiles;
 
 /// The version of the export's shape and of the hash input.
 pub(crate) const FORMAT_VERSION: u32 = 2;

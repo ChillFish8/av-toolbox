@@ -1,7 +1,8 @@
 use std::sync::mpsc::channel;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use av_toolbox_core::{ChannelHub, ChannelToken, InputFrame, SourceDefinition};
+use av_toolbox_core::{CHANNEL_POLL, ChannelHub, ChannelStop, ChannelToken, InputFrame, SourceDefinition};
 use av_toolbox_gpu::{
     Capabilities,
     Channel,
@@ -57,7 +58,7 @@ fn source_with(frames: Vec<InputFrame>) -> FramesSource {
     let hub = ChannelHub::default();
     let token = ChannelToken::new();
     let (sender, receiver) = channel();
-    hub.bind_source(&token, "input", format(), receiver);
+    hub.bind_source(&token, "input", format(), receiver, ChannelStop::new());
     for frame in frames {
         sender.send(frame).expect("the receiver is bound");
     }
@@ -97,6 +98,33 @@ fn a_closed_channel_ends_the_stream() {
     let next = source.next(&mut context).expect("reads");
 
     assert!(next.is_none());
+}
+
+#[test]
+fn a_stopped_run_ends_the_stream_while_the_caller_holds_its_sender() {
+    let mut context = testing_context();
+    let hub = ChannelHub::default();
+    let token = ChannelToken::new();
+    let stop = ChannelStop::new();
+    let (_sender, receiver) = channel();
+    hub.bind_source(&token, "input", format(), receiver, stop.clone());
+    let opened = open_from(&hub, &args(&token)).expect("opens");
+    let mut source = FramesSource {
+        opened,
+        next_index: 0,
+    };
+
+    let stopper = thread::spawn(move || {
+        thread::sleep(CHANNEL_POLL);
+        stop.stop();
+    });
+    let started = Instant::now();
+    let next = source.next(&mut context).expect("reads");
+    let waited = started.elapsed();
+    stopper.join().expect("the stopper finishes");
+
+    assert!(next.is_none());
+    assert!(waited < 10 * CHANNEL_POLL, "{waited:?}");
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use av_toolbox::report::{self, PipelineFiles};
 use av_toolbox_core::{Crossing, Granularity, PipelineRegistry, StageKind};
 use av_toolbox_gpu::Backend;
 use av_toolbox_graph::{CompiledGraph, NodeId, NodeRole, StageSpec};
@@ -9,7 +10,6 @@ use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::execute::CANCELLED;
 use crate::load;
-use crate::report::{self, PipelineFiles};
 
 /// Stops whichever pass is running on the first Ctrl+C, and exits at once on the second.
 pub(super) struct Interrupt {

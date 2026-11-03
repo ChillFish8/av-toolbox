@@ -37,6 +37,8 @@ image = { workspace = true }
 y4m = { workspace = true }
 zip = { workspace = true }
 
+av-toolbox-gpu = { workspace = true, features = ["test-support"] }
+
 [build-dependencies]
 pkg-config = { workspace = true, optional = true }
 

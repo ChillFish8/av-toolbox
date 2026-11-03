@@ -2,17 +2,17 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
+use av_toolbox::report;
 use av_toolbox_pipeline::{LiveSource, Pipeline};
 use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::cli::{Args, ExplainArgs};
-use crate::load::Loaded;
-use crate::{load, report};
+use crate::load::{self, Loaded};
 
 const DEFAULT_HTML_PATH: &str = "plan.html";
 
 pub(crate) fn run(args: &Args, explain: &ExplainArgs) -> ExitCode {
-    let mut stderr = report::stderr(args.color);
+    let mut stderr = args.color.stderr();
 
     let Some(mut loaded) = load::load(&explain.pipeline, &explain.vars, &mut stderr) else {
         return ExitCode::FAILURE;

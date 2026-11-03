@@ -1,49 +1,27 @@
 use std::path::Path;
-use std::time::Duration;
 
+use av_toolbox::report::{self, PipelineFiles};
+use av_toolbox::{BackendOptions, steps};
 use av_toolbox_core::PipelineRegistry;
-use av_toolbox_gpu::{
-    Accelerator,
-    Backend,
-    COMPILATION_CACHE_ENV,
-    Device,
-    Tuning,
-    install_compilation_cache,
-};
-use av_toolbox_graph::{Diagnostic, StageSpec};
-use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline, PipelineError, Supplied};
+use av_toolbox_gpu::{Accelerator, Backend, Device};
+use av_toolbox_graph::StageSpec;
+use av_toolbox_pipeline::{CompiledPipeline, DiskFiles, Pipeline};
 use codespan_reporting::term::termcolor::WriteColor;
 
 use crate::cli::Args;
 use crate::profile::file::{self, ProfileFile};
-use crate::report::{self, PipelineFiles};
 
 /// Every built-in stage, or `None` after logging why they could not be registered.
 pub(crate) fn registry() -> Option<PipelineRegistry> {
-    let registered = av_toolbox_pipeline::registry();
+    let registered = steps::registry();
 
     match registered {
         Ok(registry) => Some(registry),
         Err(error) => {
-            tracing::error!("the built-in stages could not be registered: {error}");
+            tracing::error!("{error}");
 
             None
         },
-    }
-}
-
-/// How long a source waits for room on its frame budget while a stage tunes its kernels mid-run.
-///
-/// It matches how long av-denoise waits for another process to finish tuning.
-const TUNING_STALL_DEADLINE: Duration = Duration::from_secs(15 * 60);
-
-/// How long a source may wait for room on its frame budget, `None` for the budget's own default.
-///
-/// [Tuning::Auto] may tune kernels mid-run, and a source waits on the stage tuning them.
-pub(crate) fn stall_deadline_for(tuning: Tuning) -> Option<Duration> {
-    match tuning {
-        Tuning::Auto => Some(TUNING_STALL_DEADLINE),
-        Tuning::Cached | Tuning::Off => None,
     }
 }
 
@@ -53,19 +31,9 @@ pub(crate) struct Loaded {
     pub(crate) specs: Vec<StageSpec>,
 }
 
-/// The variables `--var` flags give, over those `AVTB_VAR_<NAME>` environment variables give.
-pub(crate) fn supplied(vars: &[(String, String)]) -> Supplied {
-    let mut supplied = Supplied::from_env();
-    for (name, value) in vars {
-        supplied.set_flag(name.clone(), value.clone());
-    }
-
-    supplied
-}
-
 /// Reads a pipeline and every file it calls, or prints why it cannot be.
 pub(crate) fn load(path: &Path, vars: &[(String, String)], stderr: &mut dyn WriteColor) -> Option<Loaded> {
-    let supplied = supplied(vars);
+    let supplied = steps::supplied(vars);
 
     let loaded = av_toolbox_pipeline::load(path, &DiskFiles, &supplied);
 
@@ -94,13 +62,12 @@ pub(crate) fn build<'r>(
     files: &PipelineFiles,
     stderr: &mut dyn WriteColor,
 ) -> Option<Pipeline<'r>> {
-    let built = Pipeline::build(registry, specs);
+    let built = steps::build(registry, specs);
 
     match built {
         Ok(pipeline) => Some(pipeline),
-        Err(error) => {
-            let warnings = Vec::new();
-            print_error(error, warnings, files, stderr);
+        Err(found) => {
+            report::diagnostics(stderr, files, &found);
 
             None
         },
@@ -109,33 +76,15 @@ pub(crate) fn build<'r>(
 
 /// Installs the kernel cache and opens the first backend that starts on the chosen device.
 pub(crate) fn backend(args: &Args) -> Option<Backend> {
-    let installed = install_compilation_cache();
-    match installed {
-        Ok(Some(path)) => tracing::info!(?path, "caching compiled kernels"),
-        Ok(None) => tracing::info!(
-            "kernel caching is off and autotune results go to CubeCL's default place, unset \
-             {COMPILATION_CACHE_ENV} to turn it back on"
-        ),
-        Err(error) => {
-            tracing::error!("unable to install the kernel cache: {error}");
+    let options = BackendOptions {
+        accelerators: args.accelerators.clone(),
+        device: args.device,
+        tuning: args.tune,
+    };
 
-            return None;
-        },
-    }
-
-    let opened = av_toolbox_pipeline::open_backend(&args.accelerators, args.device, args.tune);
+    let opened = av_toolbox::open_backend(&options);
     match opened {
-        Ok(backend) => {
-            let accelerator = backend.accelerator();
-            tracing::info!(
-                accelerator = %accelerator,
-                device = %args.device,
-                tuning = %args.tune,
-                "opened the backend"
-            );
-
-            Some(backend)
-        },
+        Ok(backend) => Some(backend),
         Err(error) => {
             tracing::error!("{error}");
 
@@ -171,8 +120,7 @@ fn compile_pipeline<'r, 'b>(
     stderr: &mut dyn WriteColor,
     show_warnings: bool,
 ) -> Option<CompiledPipeline<'r, 'b>> {
-    let warnings = pipeline.warnings().to_vec();
-    let compiled = pipeline.compile(backend);
+    let compiled = steps::compile(pipeline, backend);
 
     match compiled {
         Ok(compiled) => {
@@ -183,24 +131,12 @@ fn compile_pipeline<'r, 'b>(
 
             Some(compiled)
         },
-        Err(error) => {
-            print_error(error, warnings, files, stderr);
+        Err(found) => {
+            report::diagnostics(stderr, files, &found);
 
             None
         },
     }
-}
-
-fn print_error(
-    error: PipelineError,
-    warnings: Vec<Diagnostic>,
-    files: &PipelineFiles,
-    stderr: &mut dyn WriteColor,
-) {
-    let mut found = error.into_diagnostics().into_inner();
-    found.extend(warnings);
-
-    report::diagnostics(stderr, files, &found);
 }
 
 /// Reads the profile at `path` and applies its worker counts, warning about keys that name no stage.
@@ -259,13 +195,6 @@ mod tests {
     use av_toolbox_gpu::default_accelerators;
 
     use super::*;
-
-    #[test]
-    fn only_auto_tuning_waits_longer_on_the_frame_budget() {
-        assert_eq!(stall_deadline_for(Tuning::Auto), Some(TUNING_STALL_DEADLINE));
-        assert_eq!(stall_deadline_for(Tuning::Cached), None);
-        assert_eq!(stall_deadline_for(Tuning::Off), None);
-    }
 
     #[test]
     fn a_profile_from_the_opened_device_raises_no_warning() {

@@ -3,24 +3,17 @@ use av_toolbox_pipeline::{SourceMap, StageRef};
 use av_toolbox_runtime::RunError;
 use codespan_reporting::diagnostic::{Diagnostic as Report, Label, Severity as Level};
 use codespan_reporting::files::{Error as FilesError, Files as _, SimpleFiles};
-use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
+use codespan_reporting::term::termcolor::{Color, ColorSpec, WriteColor};
 use codespan_reporting::term::{self, Config};
 
-use crate::cli::ColorMode;
-
-pub(crate) fn stderr(mode: ColorMode) -> StandardStream {
-    let choice = mode.choice();
-    StandardStream::stderr(choice)
-}
-
 /// Every file a pipeline was read from, for pointing diagnostics at.
-pub(crate) struct PipelineFiles {
+pub struct PipelineFiles {
     files: SimpleFiles<String, String>,
     sources: SourceMap,
 }
 
 impl PipelineFiles {
-    pub(crate) fn new(sources: SourceMap) -> Self {
+    pub fn new(sources: SourceMap) -> Self {
         let mut files = SimpleFiles::new();
 
         for (_, source) in sources.iter() {
@@ -33,7 +26,7 @@ impl PipelineFiles {
     }
 
     /// Where `span` starts, or `None` when the span is unknown.
-    pub(crate) fn locate(&self, span: Span) -> Option<Located> {
+    pub fn locate(&self, span: Span) -> Option<Located> {
         if span.is_unknown() {
             return None;
         }
@@ -50,23 +43,23 @@ impl PipelineFiles {
     }
 
     /// Adds a note at each call that led to the diagnostic's file.
-    pub(crate) fn with_call_notes(&self, diagnostic: Diagnostic) -> Diagnostic {
+    pub fn with_call_notes(&self, diagnostic: Diagnostic) -> Diagnostic {
         self.sources.with_call_notes(diagnostic)
     }
 }
 
 /// Where a span starts in a pipeline file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Located {
-    pub(crate) file: String,
+pub struct Located {
+    pub file: String,
     /// The 1-based line.
-    pub(crate) line: usize,
+    pub line: usize,
     /// The 1-based column, counted in characters.
-    pub(crate) column: usize,
+    pub column: usize,
 }
 
 /// Prints every diagnostic against the files, errors first, then a count of what was found.
-pub(crate) fn diagnostics(writer: &mut dyn WriteColor, files: &PipelineFiles, diagnostics: &[Diagnostic]) {
+pub fn diagnostics(writer: &mut dyn WriteColor, files: &PipelineFiles, diagnostics: &[Diagnostic]) {
     // Nothing is left to report a failed write to stderr to.
     let _ = write_diagnostics(writer, files, diagnostics);
 }
@@ -173,6 +166,12 @@ fn write_line(writer: &mut dyn WriteColor, level: &str, colour: Color, message: 
     writeln!(writer, ": {message}")
 }
 
+/// Prints `message` as a line of its own, marked as an error.
+pub(crate) fn error_line(writer: &mut dyn WriteColor, message: &str) {
+    // Nothing is left to report a failed write to stderr to.
+    let _ = write_line(writer, "error", Color::Red, message);
+}
+
 fn count(diagnostics: &[Diagnostic], severity: Severity) -> usize {
     diagnostics
         .iter()
@@ -193,7 +192,7 @@ fn plural(count: usize, noun: &str) -> String {
 /// at, so it logs an error naming the transfer instead of the error's own `Display`, which
 /// would otherwise leak the node's internal id. A node id nothing in the run names at all falls
 /// back to the error's own `Display`.
-pub(crate) fn run_error(
+pub fn run_error(
     writer: &mut dyn WriteColor,
     files: &PipelineFiles,
     error: &RunError,
@@ -233,7 +232,7 @@ pub(crate) fn run_error(
 ///
 /// A node is known but unwritten when the compiler inserted it, and that is always a transfer
 /// between host and device.
-fn plain_message(error: &RunError) -> String {
+pub(crate) fn plain_message(error: &RunError) -> String {
     if error.node().is_none() {
         return error.to_string();
     }
@@ -243,7 +242,7 @@ fn plain_message(error: &RunError) -> String {
 }
 
 /// The deepest cause of a run error, which names what went wrong without the node it happened on.
-fn innermost(error: &RunError) -> String {
+pub(crate) fn innermost(error: &RunError) -> String {
     let mut current: &dyn std::error::Error = error;
     while let Some(next) = current.source() {
         current = next;
