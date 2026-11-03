@@ -10,6 +10,9 @@
 //! To move to another point in the video, cancel the stream, drop its senders and receivers, join or drop its
 //! handle, then start the next stream.
 //!
+//! Open the backend with [open_backend], because it installs the kernel cache first, and on CUDA the
+//! bundled libdevice. A [Backend] opened any other way runs without the kernel cache.
+//!
 //! Kernel compilation needs a large stack. Set `RUST_MIN_STACK` to [CODEGEN_STACK_BYTES] before any thread
 //! starts, or call [raise_codegen_stack_limit] then.
 //!
@@ -85,9 +88,13 @@ mod tests;
 mod warm_key;
 
 pub use av_toolbox_core::{Granularity, InputFrame, OutputFrame, StageKind};
+/// An opened GPU backend.
+///
+/// Open it with [open_backend], which installs the kernel cache first. Opened any other way it runs
+/// without the cache.
+pub use av_toolbox_gpu::Backend;
 pub use av_toolbox_gpu::{
     Accelerator,
-    Backend,
     CODEGEN_STACK_BYTES,
     ChromaLocation,
     ColourInfo,

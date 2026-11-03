@@ -44,7 +44,7 @@ impl Default for BackendOptions {
 ///
 /// The cache is installed once per process, so a later call reuses it. When something else in the process
 /// configured CubeCL first, its settings are kept and a warning says what goes missing. A warning is logged
-/// when `RUST_MIN_STACK` is too small for kernel compilation.
+/// once when `RUST_MIN_STACK` is too small for kernel compilation.
 ///
 /// With CUDA enabled and `CUDA_PATH` unset, the first call installs the bundled libdevice and sets
 /// `CUDA_PATH` to it. Open the backend before spawning threads that read the environment.
@@ -66,7 +66,14 @@ pub fn open_backend(options: &BackendOptions) -> Result<Backend, SessionError> {
     Ok(backend)
 }
 
+/// Warns once per process when `RUST_MIN_STACK` is too small for kernel compilation.
 fn warn_if_stack_is_small() {
+    static WARN: Once = Once::new();
+
+    WARN.call_once(warn_if_stack_is_small_now);
+}
+
+fn warn_if_stack_is_small_now() {
     if codegen_stack_is_sufficient() {
         return;
     }

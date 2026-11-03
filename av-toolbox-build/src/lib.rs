@@ -46,15 +46,14 @@ impl Display for PinError {
                 "`{name}` must be pinned to an exact version such as \"={version}\", not \"{version}\""
             ),
             Self::MissingVersion { name } => write!(formatter, "`{name}` has no version to pin"),
-            Self::MissingWorkspaceEntry { name } => {
-                write!(
-                    formatter,
-                    "`{name}` is inherited from the workspace, which has no entry for it"
-                )
-            },
+            Self::MissingWorkspaceEntry { name } => write!(
+                formatter,
+                "`{name}` is inherited from the workspace, which has no entry for it"
+            ),
             Self::NoPins => write!(
                 formatter,
-                "the manifest pins no dependency, so the hash would ignore them"
+                "the manifest pins none of cubecl, cubek or av-denoise-core, so the build hash cannot cover \
+                 their versions"
             ),
             Self::Manifest { path, reason } => write!(formatter, "cannot read {}: {reason}", path.display()),
         }
@@ -158,17 +157,16 @@ fn read_pins(manifest: &Path) -> Result<Pins, PinError> {
                     workspace_dependencies = Some(dependencies);
                 }
                 let dependencies = workspace_dependencies.as_ref().expect("the workspace was read");
-                let entry = dependencies.get(name);
-                let entry = entry.ok_or_else(|| PinError::MissingWorkspaceEntry {
-                    name: name.to_owned(),
-                })?;
+                let Some(entry) = dependencies.get(name) else {
+                    return Err(missing_workspace_entry(name));
+                };
                 version_of(entry)
             } else {
                 version_of(spec)
             };
-            let version = version.ok_or_else(|| PinError::MissingVersion {
-                name: name.to_owned(),
-            })?;
+            let Some(version) = version else {
+                return Err(missing_version(name));
+            };
 
             if !version.starts_with('=') {
                 return Err(PinError::NotExact {
@@ -188,6 +186,18 @@ fn read_pins(manifest: &Path) -> Result<Pins, PinError> {
         versions: versions.into_iter().collect(),
         workspace_manifest,
     })
+}
+
+fn missing_workspace_entry(name: &str) -> PinError {
+    PinError::MissingWorkspaceEntry {
+        name: name.to_owned(),
+    }
+}
+
+fn missing_version(name: &str) -> PinError {
+    PinError::MissingVersion {
+        name: name.to_owned(),
+    }
 }
 
 fn is_pinned_name(name: &str) -> bool {

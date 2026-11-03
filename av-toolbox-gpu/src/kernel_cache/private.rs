@@ -271,9 +271,13 @@ pub(super) struct ActiveCache {
     pub(super) merge_lock: PathBuf,
     pub(super) liveness_path: PathBuf,
     pub(super) liveness: Option<File>,
-    /// The shared file's modification time when this process last read or wrote it.
+    /// The shared file's modification time when this process last read all of it.
+    ///
+    /// A merge keeps the older time when others changed the file first, so the next refill reads it.
     pub(super) shared_seen: Option<SystemTime>,
     /// The private file as of the last fill or merge.
+    ///
+    /// A refill keeps the older state when this process wrote since then, so the next merge runs.
     pub(super) written: WriteState,
     /// Entries already merged, so a later merge skips them.
     pub(super) merged: HashSet<EntryKey>,
@@ -308,8 +312,11 @@ impl ActiveCache {
                 return false;
             };
 
+            let before = modified(&self.shared);
             let merged = write_shared(&self.shared, &entries);
-            self.shared_seen = modified(&self.shared);
+            if before == self.shared_seen {
+                self.shared_seen = modified(&self.shared);
+            }
             drop(lock);
 
             if !merged {
@@ -334,11 +341,14 @@ impl ActiveCache {
             return;
         };
 
+        let before = write_state(&self.private);
         copy_shared_entries(&self.shared, &self.private);
         self.shared_seen = modified(&self.shared);
         drop(lock);
 
-        self.written = write_state(&self.private);
+        if before == self.written {
+            self.written = write_state(&self.private);
+        }
     }
 
     pub(super) fn delete(self) {

@@ -328,6 +328,52 @@ fn a_refill_skips_an_unchanged_shared_file() {
 }
 
 #[test]
+fn a_merge_after_a_refill_still_shares_the_unmerged_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cache = active_cache(dir.path());
+    insert(&cache.shared, "first", Origin::Imported);
+    standalone(&cache.shared);
+    fill(&mut cache);
+    insert(&cache.private, "mine", Origin::Local);
+
+    insert(&cache.shared, "other", Origin::Imported);
+    standalone(&cache.shared);
+    cache.refill_if_changed();
+    cache.merge(None);
+
+    let merged = entries(&cache.shared);
+    let expected = vec![
+        ("first".to_string(), Origin::Imported),
+        ("mine".to_string(), Origin::Imported),
+        ("other".to_string(), Origin::Imported),
+    ];
+    assert_eq!(merged, expected);
+}
+
+#[test]
+fn a_refill_after_a_merge_picks_up_what_others_merged_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cache = active_cache(dir.path());
+    insert(&cache.shared, "first", Origin::Imported);
+    standalone(&cache.shared);
+    fill(&mut cache);
+    insert(&cache.private, "mine", Origin::Local);
+
+    insert(&cache.shared, "other", Origin::Imported);
+    standalone(&cache.shared);
+    cache.merge(None);
+    cache.refill_if_changed();
+
+    let refilled = entries(&cache.private);
+    let expected = vec![
+        ("first".to_string(), Origin::Imported),
+        ("mine".to_string(), Origin::Local),
+        ("other".to_string(), Origin::Imported),
+    ];
+    assert_eq!(refilled, expected);
+}
+
+#[test]
 fn a_panic_in_cache_work_is_caught_and_leaves_the_slot_usable() {
     let _serial = SLOT_TESTS.lock().unwrap_or_else(PoisonError::into_inner);
     let caught = guarded(|| panic!("a corrupt cache"));
