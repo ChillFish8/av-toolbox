@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "av-toolbox",
+    "av-toolbox-build",
     "av-toolbox-core",
     "av-toolbox-cubek",
     "av-toolbox-filters",
@@ -58,9 +59,9 @@ v_frame = "0.7"
 y4m = "0.8"
 
 clap = { version = "4.6", features = ["derive", "env"] }
-cubecl = { version = "0.11.3", features = ["std"] }
-cubecl-common = { version = "0.11.3", default-features = false }
-cubecl-environment = { version = "0.11.3", default-features = false, features = ["persistence"] }
+cubecl = { version = "=0.11.3", features = ["std"] }
+cubecl-common = { version = "=0.11.3", default-features = false }
+cubecl-environment = { version = "=0.11.3", default-features = false, features = ["persistence"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 jsonschema = { version = "0.58", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
@@ -69,6 +70,7 @@ toml = { version = "1.1", default-features = false, features = ["std", "parse", 
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
+av-toolbox-build = { path = "av-toolbox-build", version = "0.2.0" }
 av-toolbox-core = { path = "av-toolbox-core", version = "0.2.0" }
 av-toolbox-cubek = { path = "av-toolbox-cubek", version = "0.2.0" }
 av-toolbox-filters = { path = "av-toolbox-filters", version = "0.2.0" }

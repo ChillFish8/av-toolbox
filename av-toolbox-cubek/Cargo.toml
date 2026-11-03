@@ -21,6 +21,9 @@ av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 av-toolbox-models = { workspace = true }
 cubecl-environment = { workspace = true }
 
+[build-dependencies]
+av-toolbox-build = { workspace = true }
+
 [features]
 vulkan = ["cubecl/vulkan", "av-toolbox-gpu/vulkan"]
 metal = ["cubecl/metal-native", "av-toolbox-gpu/metal"]

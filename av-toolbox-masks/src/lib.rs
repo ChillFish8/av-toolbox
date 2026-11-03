@@ -33,6 +33,9 @@ pub mod testing;
 
 use av_toolbox_core::{PipelineRegistry, RegistryError};
 
+/// A hash of this crate's sources and the GPU libraries it pins.
+pub const SOURCE_HASH: &str = env!("AVTB_SOURCE_HASH");
+
 /// Registers every mask this crate provides.
 pub fn register(registry: &mut PipelineRegistry) -> Result<(), RegistryError> {
     registry.register_mask::<detail::DetailMask>()?;

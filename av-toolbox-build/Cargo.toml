@@ -1,0 +1,13 @@
+[package]
+name = "av-toolbox-build"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+description = "Build script helpers that hash the kernel sources of av-toolbox crates."
+
+[dependencies]
+toml = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

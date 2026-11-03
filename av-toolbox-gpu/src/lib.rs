@@ -47,6 +47,9 @@ mod testing;
 #[cfg(test)]
 mod tests;
 
+/// A hash of this crate's sources and the GPU libraries it pins.
+pub const SOURCE_HASH: &str = env!("AVTB_SOURCE_HASH");
+
 pub use cubecl::bytes::Bytes;
 pub use cubecl::prelude::{BufferArg, Client, CubeCount, CubeDim};
 

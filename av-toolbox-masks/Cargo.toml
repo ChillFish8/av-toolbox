@@ -23,6 +23,9 @@ av-toolbox-cubek = { workspace = true, features = ["test-support"] }
 av-toolbox-gpu = { workspace = true, features = ["test-support"] }
 av-toolbox-masks = { path = ".", features = ["test-support"] }
 
+[build-dependencies]
+av-toolbox-build = { workspace = true }
+
 [features]
 vulkan = ["av-toolbox-gpu/vulkan", "av-toolbox-core/vulkan", "av-toolbox-cubek/vulkan"]
 metal = ["av-toolbox-gpu/metal", "av-toolbox-core/metal", "av-toolbox-cubek/metal"]

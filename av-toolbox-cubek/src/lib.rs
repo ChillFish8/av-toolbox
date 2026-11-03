@@ -74,6 +74,9 @@ pub mod values;
 pub mod warp;
 pub mod words;
 
+/// A hash of this crate's sources and the GPU libraries it pins.
+pub const SOURCE_HASH: &str = env!("AVTB_SOURCE_HASH");
+
 pub use self::border::{Edge, mirror, reflect};
 pub use self::dispatch::Dispatch;
 pub use self::plane::{DevicePlane, assert_plane, assert_plane_sized};

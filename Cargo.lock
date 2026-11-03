@@ -328,8 +328,11 @@ name = "av-toolbox"
 version = "0.2.0"
 dependencies = [
  "av-toolbox-core",
+ "av-toolbox-cubek",
+ "av-toolbox-filters",
  "av-toolbox-gpu",
  "av-toolbox-graph",
+ "av-toolbox-masks",
  "av-toolbox-models",
  "av-toolbox-pipeline",
  "av-toolbox-runtime",
@@ -356,6 +359,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "av-toolbox-build"
+version = "0.2.0"
+dependencies = [
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+]
+
+[[package]]
 name = "av-toolbox-core"
 version = "0.2.0"
 dependencies = [
@@ -375,6 +386,7 @@ dependencies = [
 name = "av-toolbox-cubek"
 version = "0.2.0"
 dependencies = [
+ "av-toolbox-build",
  "av-toolbox-cubek",
  "av-toolbox-gpu",
  "av-toolbox-models",
@@ -393,6 +405,7 @@ name = "av-toolbox-filters"
 version = "0.2.0"
 dependencies = [
  "av-denoise-core",
+ "av-toolbox-build",
  "av-toolbox-core",
  "av-toolbox-cubek",
  "av-toolbox-filters",
@@ -413,6 +426,7 @@ dependencies = [
 name = "av-toolbox-gpu"
 version = "0.2.0"
 dependencies = [
+ "av-toolbox-build",
  "cubecl",
  "cubecl-common",
  "cubecl-environment",
@@ -443,6 +457,7 @@ dependencies = [
 name = "av-toolbox-masks"
 version = "0.2.0"
 dependencies = [
+ "av-toolbox-build",
  "av-toolbox-core",
  "av-toolbox-cubek",
  "av-toolbox-gpu",

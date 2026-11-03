@@ -26,8 +26,11 @@ ureq = { workspace = true }
 toml = { workspace = true, features = ["serde", "display"] }
 
 av-toolbox-core = { workspace = true }
+av-toolbox-cubek = { workspace = true }
+av-toolbox-filters = { workspace = true }
 av-toolbox-gpu = { workspace = true }
 av-toolbox-graph = { workspace = true }
+av-toolbox-masks = { workspace = true }
 av-toolbox-models = { workspace = true }
 av-toolbox-pipeline = { workspace = true }
 av-toolbox-runtime = { workspace = true }

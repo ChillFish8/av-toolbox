@@ -68,6 +68,7 @@
 //! ```
 
 mod backend;
+mod build_hash;
 mod error;
 mod input;
 mod plan;
@@ -105,6 +106,7 @@ pub use av_toolbox_runtime::{Cancel, Progress, RunError, RunReport, Settings};
 pub use codespan_reporting::term::termcolor;
 
 pub use self::backend::{BackendOptions, open_backend};
+pub use self::build_hash::build_hash;
 pub use self::error::SessionError;
 pub use self::input::PipelineInput;
 pub use self::plan::PlannedNode;
