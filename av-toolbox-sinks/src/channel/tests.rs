@@ -128,6 +128,22 @@ fn a_dropped_receiver_fails_the_sink() {
 }
 
 #[test]
+fn a_stopped_run_with_a_dropped_receiver_is_not_an_error() {
+    let format = yuv420(4, 2, SampleFormat::U8, rate());
+    let stop = ChannelStop::new();
+    let (mut sink, receiver) = sink_stopped_by(4, stop.clone());
+    stop.stop();
+    drop(receiver);
+
+    let mut context = testing_context();
+    let item = HostStreamItem::from(filled_frame(&format, 0, 1));
+    let inputs = Inputs::<HostSide>::from_slots(vec![Some(item)]);
+    let consumed = sink.consume(&mut context, inputs);
+
+    assert!(consumed.is_ok(), "{consumed:?}");
+}
+
+#[test]
 fn a_stopped_run_frees_a_sink_whose_caller_stopped_draining() {
     let format = yuv420(4, 2, SampleFormat::U8, rate());
     let stop = ChannelStop::new();

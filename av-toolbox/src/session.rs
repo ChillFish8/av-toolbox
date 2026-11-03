@@ -98,7 +98,10 @@ impl Session {
         Session::new(source, backend, channels)
     }
 
-    /// The stages the next stream builds, for changing before it starts.
+    /// The stages the next stream builds, for the CLI's profile passes.
+    ///
+    /// Channel stages must not be added, removed or renamed through it.
+    #[doc(hidden)]
     pub fn specs_mut(&mut self) -> &mut Vec<StageSpec> {
         &mut self.specs
     }
@@ -118,7 +121,7 @@ impl Session {
     }
 
     /// Sets whether streams started from now on drop the artefacts their stages make instead of writing them.
-    pub fn discard_artefacts(&mut self, discard: bool) {
+    pub fn set_discard_artefacts(&mut self, discard: bool) {
         self.discard_artefacts = discard;
     }
 
@@ -495,7 +498,7 @@ impl StreamHandle {
 
     /// Waits for the run to end and reports how it went.
     ///
-    /// A failed run names the stage it failed at.
+    /// The run ends once every sender is dropped, or after [StreamHandle::cancel]. A failed run names the stage it failed at.
     pub fn join(mut self) -> Result<RunReport, SessionError> {
         let thread = self.thread.take().expect("a stream is joined once");
         let joined = thread.join();

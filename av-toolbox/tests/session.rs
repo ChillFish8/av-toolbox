@@ -6,18 +6,23 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use av_toolbox::{
+    ColourInfo,
     FrameFormat,
+    FrameLayout,
+    FrameRate,
     InputFrame,
     NodeRole,
     OutputFrame,
     PipelineInput,
     RunReport,
+    SampleFormat,
     Session,
     SessionError,
     Settings,
     StreamHandle,
+    Subsampling,
 };
-use av_toolbox_gpu::{Backend, ColourInfo, FrameLayout, FrameRate, SampleFormat, Subsampling, test_device};
+use av_toolbox_gpu::{Backend, test_device};
 
 const SIZE: u32 = 64;
 
@@ -508,7 +513,7 @@ fn a_session_discarding_artefacts_writes_none() {
     let directory = tempfile::tempdir().expect("a temp dir");
     let grain_path = directory.path().join("grain");
     let mut session = grain_session(&grain_path);
-    session.discard_artefacts(true);
+    session.set_discard_artefacts(true);
     let frames: Vec<InputFrame> = (0..60).map(grainy_frame).collect();
 
     let finished = round_trip(&mut session, frames);
@@ -615,6 +620,28 @@ fn cancelling_a_held_stream_reports_it_cancelled() {
     assert!(report.cancelled);
     drop(sender);
     drop(receiver);
+}
+
+#[test]
+fn cancelling_then_dropping_both_ends_reports_it_cancelled() {
+    let mut session = session(PASSTHROUGH);
+    let mut stream = session
+        .start_stream(Settings::default())
+        .expect("the stream starts");
+    let sender = stream.take_sender("input").expect("a sender for the source");
+    let receiver = stream.take_receiver("output").expect("a receiver for the sink");
+    let handle = stream.into_handle();
+    let frames = noise_frames(40, 1);
+
+    let feeder = thread::spawn(move || feed(sender, frames));
+    receiver.recv().expect("one frame arrives");
+    handle.cancel();
+    drop(receiver);
+    feeder.join().expect("the feeder finishes");
+    let joined = handle.join();
+
+    let report = joined.expect("a cancelled run is not an error");
+    assert!(report.cancelled);
 }
 
 #[test]

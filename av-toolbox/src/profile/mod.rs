@@ -60,7 +60,7 @@ pub(crate) fn run(args: &Args, profile: &ProfileArgs) -> ExitCode {
     let Some(mut session) = load::session(source, backend, &mut stderr) else {
         return ExitCode::FAILURE;
     };
-    session.discard_artefacts(true);
+    session.set_discard_artefacts(true);
 
     let interrupt = Interrupt::install();
     let mut setup = PassSetup {

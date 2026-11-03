@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 license.workspace = true
 repository.workspace = true
-description = "A command line tool for building and running GPU video processing pipelines."
+description = "A library and command line tool for building and running GPU video processing pipelines."
 
 [dependencies]
 bytesize = { workspace = true }

@@ -1,10 +1,12 @@
 use av_toolbox_gpu::{
     Accelerator,
     Backend,
+    CODEGEN_STACK_BYTES,
     COMPILATION_CACHE_ENV,
     CacheError,
     Device,
     Tuning,
+    codegen_stack_is_sufficient,
     compilation_cache_dir,
     default_accelerators,
     install_compilation_cache,
@@ -35,9 +37,11 @@ impl Default for BackendOptions {
 /// Installs the kernel cache and opens the first of the accelerators that starts on the chosen device.
 ///
 /// The cache is installed once per process, so a later call reuses it. When something else in the process
-/// configured CubeCL first, its settings are kept.
+/// configured CubeCL first, its settings are kept. A warning is logged when `RUST_MIN_STACK` is too small
+/// for kernel compilation.
 pub fn open_backend(options: &BackendOptions) -> Result<Backend, SessionError> {
     install_cache();
+    warn_if_stack_is_small();
 
     let opened = av_toolbox_pipeline::open_backend(&options.accelerators, options.device, options.tuning);
     let backend = opened.map_err(backend_error)?;
@@ -51,6 +55,16 @@ pub fn open_backend(options: &BackendOptions) -> Result<Backend, SessionError> {
     );
 
     Ok(backend)
+}
+
+fn warn_if_stack_is_small() {
+    if codegen_stack_is_sufficient() {
+        return;
+    }
+
+    tracing::warn!(
+        "RUST_MIN_STACK is below {CODEGEN_STACK_BYTES} bytes, kernel compilation may overflow its stack"
+    );
 }
 
 fn install_cache() {

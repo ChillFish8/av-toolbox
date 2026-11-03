@@ -156,6 +156,7 @@ impl FramesSink {
             let sent = frames.try_send(pending);
             match sent {
                 Ok(()) => return Ok(()),
+                Err(TrySendError::Disconnected(_)) if self.stop.is_stopped() => return Ok(()),
                 Err(TrySendError::Disconnected(_)) => return Err(stopped_receiving_error(&self.stage)),
                 Err(TrySendError::Full(returned)) => pending = returned,
             }
