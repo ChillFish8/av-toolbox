@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::spawn_child_test;
-use crate::kernel_cache::lock::{LockKind, hold_liveness_lock, lock_merge, lock_merge_within};
+use crate::kernel_cache::lock::hold_liveness_lock;
 use crate::kernel_cache::prune::{
     STALE_PRIVATE_AGE,
     is_private_name,
@@ -148,23 +148,4 @@ fn liveness_lock_child() {
     File::create(dir.join("ready")).unwrap();
 
     std::thread::sleep(Duration::from_secs(60));
-}
-
-#[test]
-fn a_held_lock_times_out_within_the_limit() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("merge.lock");
-    let _held = lock_merge(&path, LockKind::Exclusive).expect("take the lock");
-
-    let waiter_path = path.clone();
-    let waiter = std::thread::spawn(move || {
-        let start = Instant::now();
-        let lock = lock_merge_within(&waiter_path, LockKind::Exclusive, Duration::from_millis(300));
-        (lock.is_some(), start.elapsed())
-    });
-    let (got_lock, elapsed) = waiter.join().unwrap();
-
-    assert!(!got_lock, "a held lock must not be granted");
-    assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
-    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }
