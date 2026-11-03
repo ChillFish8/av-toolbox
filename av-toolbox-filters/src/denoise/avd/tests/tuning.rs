@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use av_denoise_core::tune::{TuneOutcome, tuning_frame_count};
+use av_denoise_core::tune::{CachePhase, TuneOutcome, tuning_frame_count};
 use av_denoise_core::{
     ChromaLayout,
     ChromaSiting,
@@ -16,7 +16,14 @@ use av_denoise_core::{
 };
 use av_toolbox_gpu::Tuning;
 
-use crate::denoise::avd::tuning::{guarded_tuning, needs_tuning_pass, tuning_config, tuning_prefix};
+use crate::denoise::avd::tuning::{
+    CacheAction,
+    guarded_tuning,
+    hook_action,
+    needs_tuning_pass,
+    tuning_config,
+    tuning_prefix,
+};
 
 #[test]
 fn each_tuning_maps_onto_its_av_denoise_mode() {
@@ -43,7 +50,21 @@ fn the_store_budget_and_determinism_are_carried_or_defaulted() {
     assert_eq!(config.store, Some(store));
     assert_eq!(config.budget, defaults.budget);
     assert_eq!(config.deterministic, defaults.deterministic);
-    assert!(config.cache_hook.is_none());
+}
+
+#[test]
+fn the_tuning_config_carries_the_cache_hook() {
+    for tuning in [Tuning::Auto, Tuning::Cached, Tuning::Off] {
+        let config = tuning_config(tuning, None);
+
+        assert!(config.cache_hook.is_some(), "{tuning}");
+    }
+}
+
+#[test]
+fn the_hook_routes_each_phase() {
+    assert_eq!(hook_action(CachePhase::LockTaken), CacheAction::Refill);
+    assert_eq!(hook_action(CachePhase::KernelsCompiled), CacheAction::Merge);
 }
 
 #[test]
