@@ -41,7 +41,11 @@ COPY --from=builder /build/THIRD-PARTY-LICENSES /app/THIRD-PARTY-LICENSES
 # Vulkan needs host-provided devices and driver files, so this only proves the binary's own libraries resolve.
 RUN /app/av-toolbox --help > /dev/null
 
-# Fails if the binary still loads FFmpeg or its codecs from the system.
-RUN ! ldd /app/av-toolbox | grep -Ei 'ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d|xxhash'
+# The decoders are optional features, so a build without one still passes every other check.
+RUN /app/av-toolbox list-stages --kind source | grep -q '^bestsource/file ' \
+    && /app/av-toolbox list-stages --kind source | grep -q '^ffms2/file '
+
+# Fails if the binary still loads BestSource, FFmpeg or its codecs from the system.
+RUN ! ldd /app/av-toolbox | grep -Ei 'bestsource|ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d|xxhash'
 
 ENTRYPOINT ["/app/av-toolbox"]

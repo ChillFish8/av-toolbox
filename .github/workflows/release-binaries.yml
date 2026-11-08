@@ -124,7 +124,7 @@ jobs:
             vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/ports/**') }}-
             vcpkg-${{ matrix.triplet }}-
 
-      - name: Build static ffms2 and FFmpeg
+      - name: Build static BestSource, ffms2 and FFmpeg
         shell: bash
         env:
           TRIPLET: ${{ matrix.triplet }}
@@ -173,11 +173,26 @@ jobs:
         shell: bash
         run: ./target/release/${{ matrix.binary }} --help > /dev/null
 
+      # The decoders are optional features, so a build without one still passes every other check.
+      - name: Check the decoders are built in
+        shell: bash
+        env:
+          BINARY: target/release/${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          stages="$("${BINARY}" list-stages --kind source)"
+          for stage in bestsource/file ffms2/file; do
+            if ! echo "${stages}" | grep -q "^${stage} "; then
+              echo "::error::${BINARY} has no ${stage} source"
+              exit 1
+            fi
+          done
+
       - name: Set up MSVC tools (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # Fails if the binary still loads ffms2, FFmpeg, dav1d or xxHash from the host.
+      # Fails if the binary still loads BestSource, ffms2, FFmpeg, dav1d or xxHash from the host.
       - name: Check nothing is linked dynamically
         shell: bash
         env:
@@ -190,7 +205,7 @@ jobs:
             Windows) listing="$(dumpbin //dependents "${BINARY}")" ;;
           esac
           echo "${listing}"
-          if echo "${listing}" | grep -Ei 'ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d|xxhash'; then
+          if echo "${listing}" | grep -Ei 'bestsource|ffms2|avcodec|avformat|avutil|swscale|swresample|dav1d|xxhash'; then
             echo "::error::${BINARY} links a codec library dynamically"
             exit 1
           fi
@@ -273,6 +288,7 @@ jobs:
             echo "### Dry run"
             echo
             echo "All three targets built a statically linked CLI archive at version \`${VERSION}\`."
-            echo "Each binary passed its \`--help\` smoke test and the check for dynamically linked codec libraries."
+            echo "Each binary passed its \`--help\` smoke test, the check that BestSource and ffms2 are built in, and the check for dynamically"
+            echo "linked codec libraries."
             echo "Nothing was attached to a release. The archives are on this run as workflow artifacts."
           } >> "${GITHUB_STEP_SUMMARY}"
