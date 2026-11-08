@@ -352,7 +352,7 @@ fn load_block(
     let units = comptime!(shape.units());
     let rounds = comptime!(total.div_ceil(units) as usize);
     let last = comptime!(total - 1);
-    let zero = Load::new(f16::new(0.0f32));
+    let zero = Load::new(f16::new(0.0));
     let mut values = Sequence::<Load>::new();
 
     #[unroll]

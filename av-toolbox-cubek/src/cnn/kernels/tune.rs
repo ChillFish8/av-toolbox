@@ -255,31 +255,35 @@ fn run_tunable(input: TuneInput<'_>, candidate: Candidate) -> Result<LayerRun, S
     Ok(LayerRun::of_candidate(candidate, false))
 }
 
-fn tunable(candidate: Candidate) -> Tunable<TuneKey, BodyInputs, LayerRun> {
-    let name = candidate.name();
+/// The tuner's entry for `candidate` in the list `label`.
+///
+/// CubeCL keeps tunings apart by the names in a set, so the name carries `label` to keep each list's
+/// tunings apart.
+fn tunable(label: &str, candidate: Candidate) -> Tunable<TuneKey, BodyInputs, LayerRun> {
+    let candidate_name = candidate.name();
+    let name = format!("{label}/{candidate_name}");
 
     Tunable::new(&name, move |input: TuneInput<'_>| run_tunable(input, candidate))
 }
 
-fn tunable_set(candidates: &[Candidate]) -> TunableSet<TuneKey, BodyInputs, LayerRun> {
+fn tunable_set(label: &str, candidates: &[Candidate]) -> TunableSet<TuneKey, BodyInputs, LayerRun> {
     let primed = PrimedInputs {
         candidates: candidates.to_vec(),
     };
     let mut set = TunableSet::new(tune_key, primed);
 
     for candidate in candidates.iter().copied() {
-        let entry = tunable(candidate);
+        let entry = tunable(label, candidate);
         set = set.with(entry);
     }
 
     set
 }
 
-/// The name the tuner keeps a device's tunings of the list `label` under.
+/// The name the tuner looks up a device's tunings of the list `label` under.
 ///
-/// The device is named by its runtime and the limits its candidates are chosen by. The list's
-/// fingerprint keeps each version of a list in its own file. CubeCL keeps one tuning a key when it loads a
-/// file, so tunings of an older list sharing a file make it tune that key again.
+/// The device is named by its runtime and the limits its candidates are chosen by, and the list by its
+/// fingerprint.
 fn tuner_id(client: &Client, label: &str, fingerprint: &str) -> String {
     let runtime = client.name();
     let hardware = &client.properties().hardware;
@@ -472,7 +476,7 @@ fn plan_among(client: &Client, label: &str, candidates: &[Candidate], features: 
         Choice::Tuned => {
             let fingerprint = list_fingerprint(candidates);
             let id = tuner_id(client, label, &fingerprint);
-            let set = tunable_set(candidates);
+            let set = tunable_set(label, candidates);
             let shared_set = Arc::new(set);
 
             Plan::Tuned {

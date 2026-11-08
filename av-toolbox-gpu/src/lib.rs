@@ -26,7 +26,6 @@ mod context;
 mod device;
 mod enumerate;
 mod frame;
-mod kernel_cache;
 #[cfg(feature = "cuda")]
 mod libdevice;
 mod memory;
@@ -61,12 +60,9 @@ pub use self::cache::{
     compilation_cache_dir,
     compilation_cache_disabled,
     default_cache_dir,
-    finish_compilation_cache,
     install_compilation_cache,
     install_compilation_cache_at,
     install_compilation_cache_once,
-    merge_compilation_cache,
-    refill_compilation_cache,
 };
 pub use self::capabilities::{Capabilities, CapabilitiesBuilder, ElementType, capabilities_for};
 pub use self::context::{FrameContext, LoadItem};

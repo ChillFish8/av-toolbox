@@ -10,8 +10,6 @@ use cubecl::server::Handle;
 use cubecl_common::device::ServiceId;
 use cubecl_environment::stream::StreamId;
 
-#[cfg(any(test, feature = "test-support"))]
-use crate::kernel_cache::atexit;
 use crate::memory::DeviceRead;
 #[cfg(any(test, feature = "test-support"))]
 use crate::probe::probe_client;
@@ -237,6 +235,11 @@ pub fn test_device() -> Device {
 #[cfg(any(test, feature = "test-support"))]
 static EXIT_CLIENT: OnceLock<(Accelerator, Client)> = OnceLock::new();
 
+#[cfg(any(test, feature = "test-support"))]
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+}
+
 /// Waits for the test device's thread to finish its queued tasks when the process exits.
 ///
 /// The HIP runtime tears itself down at exit, and a device thread still running a test's queued
@@ -299,7 +302,7 @@ extern "C" fn drain_exit_client() {
     }
 }
 
-/// Gives the test processes a private kernel cache inside the workspace's target directory.
+/// Gives the test processes a shared kernel cache inside the workspace's target directory.
 ///
 /// A config that is already set is left alone.
 #[cfg(any(test, feature = "test-support"))]
@@ -333,12 +336,13 @@ mod tests {
 
     #[test]
     #[cfg(feature = "gpu-tests")]
-    fn the_test_cache_lives_under_a_private_folder() {
+    fn the_test_cache_lives_in_the_test_build_directory() {
         test_device();
 
         let directory = compilation_cache_dir().expect("the test cache is installed");
+        let database = cubecl::environment::path();
         assert!(directory.ends_with("test-autotune/test"), "{directory:?}");
-        assert!(directory.join("private").is_dir());
+        assert_eq!(database.parent(), Some(directory));
     }
 
     #[test]

@@ -246,7 +246,7 @@ fn block_sums(values: &[f32], opaque_zero: u32) -> BlockSums {
     #[unroll]
     for outer in 0..4usize {
         let mirrored = comptime!(7 - outer);
-        let outer_cosine = comptime!(COSINES[outer]);
+        let outer_cosine = comptime!(f64::from(COSINES[outer]));
         let outer_weight = f32::new(outer_cosine);
         let row_difference = rows[outer] - rows[mirrored];
         let column_difference = columns[outer] - columns[mirrored];
@@ -261,7 +261,7 @@ fn block_sums(values: &[f32], opaque_zero: u32) -> BlockSums {
             reason = "the unrolled loops read the cosines when the kernel compiles"
         )]
         for inner in 0..4usize {
-            let inner_cosine = comptime!(COSINES[inner]);
+            let inner_cosine = comptime!(f64::from(COSINES[inner]));
             let inner_weight = f32::new(inner_cosine);
             let near_first = comptime!(outer * 8 + inner);
             let near_second = comptime!(outer * 8 + 7 - inner);
@@ -401,7 +401,7 @@ fn qed_kernel<E: Scalar>(
         let y = top + row as u32;
 
         if y < height {
-            let row_cosine = comptime!(COSINES[row]);
+            let row_cosine = comptime!(f64::from(COSINES[row]));
             let row_weight = f32::new(row_cosine);
             let row_value = mean + rounded_product(row_weight, row_part, opaque_zero);
 
@@ -414,8 +414,8 @@ fn qed_kernel<E: Scalar>(
                 let x = left + column as u32;
 
                 if x < width {
-                    let column_cosine = comptime!(COSINES[column]);
-                    let cross_cosine = comptime!(COSINES[row] * COSINES[column]);
+                    let column_cosine = comptime!(f64::from(COSINES[column]));
+                    let cross_cosine = comptime!(f64::from(COSINES[row] * COSINES[column]));
                     let column_weight = f32::new(column_cosine);
                     let cross_weight = f32::new(cross_cosine);
                     let with_column = row_value + rounded_product(column_weight, column_part, opaque_zero);

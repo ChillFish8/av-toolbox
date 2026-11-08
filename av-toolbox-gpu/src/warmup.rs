@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::cache::{compilation_cache_dir, merge_compilation_cache, refill_compilation_cache};
+use crate::cache::compilation_cache_dir;
 
 /// How long a process waits for the one ahead of it before compiling for itself.
 ///
@@ -22,24 +22,11 @@ const WARMUP_FOLDER: &str = "warmup";
 /// Keys this process already holds a place for.
 static CLAIMED: LazyLock<Mutex<HashSet<u128>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// How a warm-up shares its kernels through the kernel cache.
-#[derive(Debug, Clone, Copy)]
-struct CacheHooks {
-    merge: fn(),
-    refill: fn(),
-}
-
-const SHARED_CACHE: CacheHooks = CacheHooks {
-    merge: merge_compilation_cache,
-    refill: refill_compilation_cache,
-};
-
 /// A claim on compiling one kernel set, held while this process compiles it.
 #[derive(Debug)]
 pub struct WarmUp {
     key: u128,
     directory: PathBuf,
-    hooks: CacheHooks,
     #[expect(dead_code, reason = "held only so dropping it releases the OS lock")]
     lock: File,
 }
@@ -58,8 +45,7 @@ impl WarmUp {
     /// Returns `None` when there is nothing to coordinate: no cache directory, the set is already
     /// stamped as compiled, this process already holds the claim, the lock file could not be
     /// opened, or the wait ran out. In every one of those cases the caller should go ahead and
-    /// compile. A stamp found at once or after waiting first copies the kernels other processes
-    /// shared into this one's cache.
+    /// compile.
     ///
     /// The wait blocks the calling thread for up to 180 seconds, and cancelling a run does not
     /// interrupt it.
@@ -67,11 +53,11 @@ impl WarmUp {
         let cache = compilation_cache_dir()?;
         let directory = cache.join(WARMUP_FOLDER);
 
-        Self::begin_in(&directory, key, WAIT_LIMIT, SHARED_CACHE)
+        Self::begin_in(&directory, key, WAIT_LIMIT)
     }
 
-    /// The body of [WarmUp::begin], against a directory, wait limit and cache the caller names.
-    fn begin_in(directory: &Path, key: u128, wait_limit: Duration, hooks: CacheHooks) -> Option<Self> {
+    /// The body of [WarmUp::begin], against a directory and wait limit the caller names.
+    fn begin_in(directory: &Path, key: u128, wait_limit: Duration) -> Option<Self> {
         // The build's cache directory may be fresh, so the warmup folder may not exist yet.
         if let Err(error) = std::fs::create_dir_all(directory) {
             tracing::debug!("could not make the warmup directory: {error}");
@@ -79,7 +65,6 @@ impl WarmUp {
         }
 
         if is_warm(directory, key) {
-            (hooks.refill)();
             return None;
         }
 
@@ -92,12 +77,7 @@ impl WarmUp {
         let waited = wait_for_lock(directory, key, wait_limit);
         let lock = match waited {
             Waited::Locked(lock) => lock,
-            Waited::Warm => {
-                release(key);
-                (hooks.refill)();
-                return None;
-            },
-            Waited::GaveUp => {
+            Waited::Warm | Waited::GaveUp => {
                 release(key);
                 return None;
             },
@@ -106,18 +86,15 @@ impl WarmUp {
         Some(Self {
             key,
             directory: directory.to_path_buf(),
-            hooks,
             lock,
         })
     }
 
-    /// Shares the compiled kernels with other processes, then records that this kernel set is compiled.
+    /// Records that this kernel set is compiled, so other processes load it rather than compile it.
     ///
     /// A `WarmUp` dropped without this records nothing, so an interrupted compile is never
     /// reported as warm. The next run pays the full cost again.
     pub fn finish(self) {
-        (self.hooks.merge)();
-
         if let Err(error) = std::fs::write(stamp_path(&self.directory, self.key), []) {
             tracing::debug!("could not stamp the warmed kernel set: {error}");
         }
@@ -202,37 +179,10 @@ fn stamp_path(directory: &Path, key: u128) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
-
     use super::*;
 
     /// Short enough that a contended lock fails a test quickly rather than after three minutes.
     const BRIEFLY: Duration = Duration::from_millis(50);
-
-    thread_local! {
-        /// The stamp the probing merge looks for.
-        static PROBED_STAMP: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-        /// Whether that stamp existed when the merge ran, once it has run.
-        static STAMPED_AT_MERGE: Cell<Option<bool>> = const { Cell::new(None) };
-        static REFILLS: Cell<usize> = const { Cell::new(0) };
-    }
-
-    fn probe_merge() {
-        let stamp = PROBED_STAMP.with_borrow(Clone::clone);
-        let stamped = stamp.is_some_and(|path| path.exists());
-
-        STAMPED_AT_MERGE.set(Some(stamped));
-    }
-
-    fn count_refill() {
-        let refills = REFILLS.get();
-        REFILLS.set(refills + 1);
-    }
-
-    const PROBED: CacheHooks = CacheHooks {
-        merge: probe_merge,
-        refill: count_refill,
-    };
 
     fn held_warm_up(directory: &Path, key: u128) -> WarmUp {
         let Waited::Locked(lock) = wait_for_lock(directory, key, BRIEFLY) else {
@@ -247,7 +197,6 @@ mod tests {
         WarmUp {
             key,
             directory: directory.to_path_buf(),
-            hooks: PROBED,
             lock,
         }
     }
@@ -325,19 +274,12 @@ mod tests {
     }
 
     #[test]
-    fn finishing_merges_then_stamps() {
+    fn finishing_stamps_and_releases_the_claim() {
         let directory = tempfile::tempdir().expect("should make a directory");
-        let stamp = stamp_path(directory.path(), 5);
-        PROBED_STAMP.set(Some(stamp));
 
         let warm_up = held_warm_up(directory.path(), 5);
         warm_up.finish();
 
-        assert_eq!(
-            STAMPED_AT_MERGE.get(),
-            Some(false),
-            "the merge ran after the stamp, or not at all"
-        );
         assert!(is_warm(directory.path(), 5));
         assert!(!is_claimed(5), "finishing left the key claimed");
     }
@@ -352,7 +294,6 @@ mod tests {
             !is_warm(directory.path(), 6),
             "an unfinished compile was stamped warm"
         );
-        assert_eq!(STAMPED_AT_MERGE.get(), None, "an unfinished compile was merged");
         assert!(!is_claimed(6), "dropping left the key claimed");
     }
 
@@ -361,7 +302,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("should make a directory");
         let root = directory.path().join("not-made-yet").join(WARMUP_FOLDER);
 
-        let warm_up = WarmUp::begin_in(&root, 10, BRIEFLY, PROBED).expect("should claim a cold key");
+        let warm_up = WarmUp::begin_in(&root, 10, BRIEFLY).expect("should claim a cold key");
         assert!(root.is_dir(), "the warmup directory was not made");
         assert!(is_claimed(10));
 
@@ -373,26 +314,25 @@ mod tests {
     fn beginning_twice_in_one_process_claims_once() {
         let directory = tempfile::tempdir().expect("should make a directory");
 
-        let first = WarmUp::begin_in(directory.path(), 11, BRIEFLY, PROBED).expect("should claim a cold key");
-        let second = WarmUp::begin_in(directory.path(), 11, BRIEFLY, PROBED);
+        let first = WarmUp::begin_in(directory.path(), 11, BRIEFLY).expect("should claim a cold key");
+        let second = WarmUp::begin_in(directory.path(), 11, BRIEFLY);
         assert!(second.is_none(), "the same process claimed one key twice");
 
         drop(first);
     }
 
     #[test]
-    fn beginning_on_a_stamped_key_refills_and_reports_nothing_to_do() {
+    fn beginning_on_a_stamped_key_reports_nothing_to_do() {
         let directory = tempfile::tempdir().expect("should make a directory");
         std::fs::write(stamp_path(directory.path(), 12), []).expect("should write the stamp");
 
-        let began = WarmUp::begin_in(directory.path(), 12, BRIEFLY, PROBED);
+        let began = WarmUp::begin_in(directory.path(), 12, BRIEFLY);
 
         assert!(began.is_none());
-        assert_eq!(REFILLS.get(), 1);
     }
 
     #[test]
-    fn a_stamp_found_while_waiting_triggers_a_refill() {
+    fn a_stamp_found_while_waiting_reports_nothing_to_do() {
         let directory = tempfile::tempdir().expect("should make a directory");
         let lock = lock_path(directory.path(), 13);
         let stamp = stamp_path(directory.path(), 13);
@@ -404,27 +344,25 @@ mod tests {
             std::fs::write(stamp, []).expect("should write the stamp");
             drop(elsewhere);
         });
-        let began = WarmUp::begin_in(directory.path(), 13, Duration::from_secs(30), PROBED);
+        let began = WarmUp::begin_in(directory.path(), 13, Duration::from_secs(30));
         finisher.join().expect("the finisher should not panic");
 
         assert!(
             began.is_none(),
             "a waiter compiled kernels the holder already stamped"
         );
-        assert_eq!(REFILLS.get(), 1);
         assert!(!is_claimed(13), "the waiter kept its claim");
     }
 
     #[test]
-    fn running_out_the_wait_releases_the_claim_without_a_refill() {
+    fn running_out_the_wait_releases_the_claim() {
         let directory = tempfile::tempdir().expect("should make a directory");
         let elsewhere = File::create(lock_path(directory.path(), 14)).expect("should make the lock");
         elsewhere.lock().expect("should lock");
 
-        let began = WarmUp::begin_in(directory.path(), 14, BRIEFLY, PROBED);
+        let began = WarmUp::begin_in(directory.path(), 14, BRIEFLY);
 
         assert!(began.is_none());
-        assert_eq!(REFILLS.get(), 0);
         assert!(!is_claimed(14), "giving up kept the claim");
     }
 }

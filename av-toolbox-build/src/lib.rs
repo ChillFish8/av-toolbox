@@ -1,7 +1,7 @@
 //! Build script helpers that key a crate's kernel cache
 //!
 //! A kernel crate calls [emit] from its `build.rs`. The hash covers the crate's sources and the exact
-//! versions of the GPU libraries it pins, so a change to either starts a fresh cache.
+//! versions or git revisions of the GPU libraries it pins, so a change to either starts a fresh cache.
 //! It reads nothing outside the crate's own files and its workspace manifest, so it gives the same result
 //! from a published package.
 
@@ -16,7 +16,7 @@ use toml::{Table, Value};
 #[cfg(test)]
 mod tests;
 
-/// Dependency name prefixes that must be pinned to an exact version.
+/// Dependency name prefixes that must be pinned to an exact version or git revision.
 pub const PINNED_PREFIXES: [&str; 3] = ["cubecl", "cubek", "av-denoise-core"];
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -30,6 +30,8 @@ pub enum PinError {
     NotExact { name: String, version: String },
     /// A pinned dependency has no version to read.
     MissingVersion { name: String },
+    /// A pinned git dependency names no `rev`, so its commit can move.
+    NoRevision { name: String },
     /// A pinned dependency inherits from the workspace, which has no entry for it.
     MissingWorkspaceEntry { name: String },
     /// The manifest pins no dependency at all.
@@ -46,6 +48,7 @@ impl Display for PinError {
                 "`{name}` must be pinned to an exact version such as \"={version}\", not \"{version}\""
             ),
             Self::MissingVersion { name } => write!(formatter, "`{name}` has no version to pin"),
+            Self::NoRevision { name } => write!(formatter, "`{name}` comes from git and must name a `rev`"),
             Self::MissingWorkspaceEntry { name } => write!(
                 formatter,
                 "`{name}` is inherited from the workspace, which has no entry for it"
@@ -90,7 +93,7 @@ pub fn source_hash(src: &Path) -> u64 {
     hash
 }
 
-/// Every pinned dependency of `manifest` with its version, sorted by name.
+/// Every pinned dependency of `manifest` with its version or git revision, sorted by name.
 ///
 /// A dependency inherited from the workspace takes its version from the nearest workspace manifest above.
 /// Only `[dependencies]` and `[build-dependencies]` are read, not `[target.*.dependencies]` tables.
@@ -108,7 +111,7 @@ pub fn build_hash_for(src: &Path, manifest: &Path) -> Result<u64, PinError> {
 
 /// Prints the cargo directives that set `env_name` to the build hash of the crate being built.
 ///
-/// Call it from `build.rs`. It panics if a pinned dependency does not have an exact version.
+/// Call it from `build.rs`. It panics if a pinned dependency does not have an exact version or git revision.
 pub fn emit(env_name: &str) {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets the manifest directory");
     let manifest_dir = PathBuf::from(manifest_dir);
@@ -150,7 +153,7 @@ fn read_pins(manifest: &Path) -> Result<Pins, PinError> {
                 continue;
             }
 
-            let version = if inherits_workspace(spec) {
+            let pin = if inherits_workspace(spec) {
                 if workspace_dependencies.is_none() {
                     let (path, dependencies) = read_workspace_dependencies(manifest)?;
                     workspace_manifest = Some(path);
@@ -160,21 +163,12 @@ fn read_pins(manifest: &Path) -> Result<Pins, PinError> {
                 let Some(entry) = dependencies.get(name) else {
                     return Err(missing_workspace_entry(name));
                 };
-                version_of(entry)
+                pin_of(name, entry)?
             } else {
-                version_of(spec)
-            };
-            let Some(version) = version else {
-                return Err(missing_version(name));
+                pin_of(name, spec)?
             };
 
-            if !version.starts_with('=') {
-                return Err(PinError::NotExact {
-                    name: name.to_owned(),
-                    version,
-                });
-            }
-            versions.insert(name.to_owned(), version);
+            versions.insert(name.to_owned(), pin);
         }
     }
 
@@ -206,6 +200,38 @@ fn is_pinned_name(name: &str) -> bool {
 
 fn inherits_workspace(spec: &Value) -> bool {
     spec.get("workspace").and_then(Value::as_bool) == Some(true)
+}
+
+/// The exact version or git revision `spec` pins `name` to.
+///
+/// A git dependency is pinned as `git+<url>#<rev>`, so moving to another commit changes the hash.
+fn pin_of(name: &str, spec: &Value) -> Result<String, PinError> {
+    if let Some(url) = spec.get("git").and_then(Value::as_str) {
+        return git_pin(name, url, spec);
+    }
+
+    let Some(version) = version_of(spec) else {
+        return Err(missing_version(name));
+    };
+
+    if !version.starts_with('=') {
+        return Err(PinError::NotExact {
+            name: name.to_owned(),
+            version,
+        });
+    }
+
+    Ok(version)
+}
+
+fn git_pin(name: &str, url: &str, spec: &Value) -> Result<String, PinError> {
+    let Some(rev) = spec.get("rev").and_then(Value::as_str) else {
+        return Err(PinError::NoRevision {
+            name: name.to_owned(),
+        });
+    };
+
+    Ok(format!("git+{url}#{rev}"))
 }
 
 fn version_of(spec: &Value) -> Option<String> {

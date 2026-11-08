@@ -233,14 +233,6 @@ fn reader_sees_the_second_write(context: &BuildContext) -> bool {
     })
 }
 
-/// How the context under test keeps work across threads in order.
-#[derive(Copy, Clone)]
-enum WorkOrder {
-    #[cfg(all(feature = "vulkan", not(feature = "metal")))]
-    Unordered,
-    Policy(StreamPolicy),
-}
-
 /// Which cross-thread hazard each hand-off is put through.
 #[derive(Copy, Clone)]
 enum Hazard {
@@ -258,50 +250,33 @@ fn reads_fresh_data(context: &BuildContext, hazard: Hazard) -> bool {
     }
 }
 
-/// Counts how many of [HAND_OFFS] hand-offs through `hazard` read stale data under `ordering`.
-fn stale_reads(ordering: WorkOrder, hazard: Hazard) -> usize {
+/// Counts how many of [HAND_OFFS] hand-offs through `hazard` read stale data under `policy`.
+fn stale_reads(policy: StreamPolicy, hazard: Hazard) -> usize {
     let selector = test_device();
     let converted = selector.to_cubecl(TEST_ACCELERATOR);
     let cubecl_device = converted.expect("the test device names a device on the test backend");
     let opened = open_client(TEST_ACCELERATOR, selector, &cubecl_device);
     let client = opened.expect("the backend should open");
 
-    let context = match ordering {
-        #[cfg(all(feature = "vulkan", not(feature = "metal")))]
-        WorkOrder::Unordered => BuildContext::unordered(TEST_ACCELERATOR, selector, cubecl_device, client),
-        WorkOrder::Policy(policy) => {
-            BuildContext::with_policy(TEST_ACCELERATOR, selector, cubecl_device, client, policy)
-        },
-    };
+    let context = BuildContext::with_policy(TEST_ACCELERATOR, selector, cubecl_device, client, policy);
 
     (0..HAND_OFFS)
         .filter(|_| !reads_fresh_data(&context, hazard))
         .count()
 }
 
-#[cfg(all(feature = "vulkan", not(feature = "metal")))]
-#[test]
-fn without_a_policy_a_handed_off_buffer_is_read_stale() {
-    let stale = stale_reads(WorkOrder::Unordered, Hazard::WriteThenRead);
-
-    assert!(
-        stale > 0,
-        "every one of {HAND_OFFS} hand-offs read the second write"
-    );
-}
-
 #[test]
 fn a_shared_stream_reads_a_handed_off_buffer_after_its_write() {
-    let ordering = WorkOrder::Policy(StreamPolicy::SharedStream);
-    let stale = stale_reads(ordering, Hazard::WriteThenRead);
+    let policy = StreamPolicy::SharedStream;
+    let stale = stale_reads(policy, Hazard::WriteThenRead);
 
     assert_eq!(stale, 0, "{stale} of {HAND_OFFS} hand-offs read stale data");
 }
 
 #[test]
 fn flushing_at_hand_off_reads_a_handed_off_buffer_after_its_write() {
-    let ordering = WorkOrder::Policy(StreamPolicy::FlushAtHandOff);
-    let stale = stale_reads(ordering, Hazard::WriteThenRead);
+    let policy = StreamPolicy::FlushAtHandOff;
+    let stale = stale_reads(policy, Hazard::WriteThenRead);
 
     assert_eq!(stale, 0, "{stale} of {HAND_OFFS} hand-offs read stale data");
 }
@@ -309,33 +284,33 @@ fn flushing_at_hand_off_reads_a_handed_off_buffer_after_its_write() {
 #[cfg(all(feature = "vulkan", not(feature = "metal")))]
 #[test]
 fn without_a_step_flush_a_fanned_out_buffer_is_reused_before_its_read() {
-    let ordering = WorkOrder::Policy(StreamPolicy::FlushAtHandOff);
+    let policy = StreamPolicy::FlushAtHandOff;
     let hazard = Hazard::ReadThenReuse {
         reader_flushes: false,
     };
 
-    let stale = stale_reads(ordering, hazard);
+    let stale = stale_reads(policy, hazard);
 
     assert!(stale > 0, "every one of {HAND_OFFS} copies held the first write");
 }
 
 #[test]
 fn flushing_at_hand_off_reads_a_fanned_out_buffer_before_it_is_reused() {
-    let ordering = WorkOrder::Policy(StreamPolicy::FlushAtHandOff);
+    let policy = StreamPolicy::FlushAtHandOff;
     let hazard = Hazard::ReadThenReuse { reader_flushes: true };
-    let stale = stale_reads(ordering, hazard);
+    let stale = stale_reads(policy, hazard);
 
     assert_eq!(stale, 0, "{stale} of {HAND_OFFS} copies read reused data");
 }
 
 #[test]
 fn a_shared_stream_reads_a_fanned_out_buffer_before_it_is_reused() {
-    let ordering = WorkOrder::Policy(StreamPolicy::SharedStream);
+    let policy = StreamPolicy::SharedStream;
     let hazard = Hazard::ReadThenReuse {
         reader_flushes: false,
     };
 
-    let stale = stale_reads(ordering, hazard);
+    let stale = stale_reads(policy, hazard);
 
     assert_eq!(stale, 0, "{stale} of {HAND_OFFS} copies read reused data");
 }

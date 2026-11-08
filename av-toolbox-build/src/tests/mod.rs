@@ -111,6 +111,39 @@ fn an_inexact_pin_is_refused() {
 }
 
 #[test]
+fn a_git_pin_is_read_as_its_revision() {
+    let root = TempDir::new().expect("a temp dir is created");
+    let manifest = manifest_with(
+        root.path(),
+        "[dependencies]\ncubecl = { git = \"https://example.com/cubecl\", rev = \"abc123\" }\n",
+    );
+
+    let pins = pinned_versions(&manifest).expect("the pins are read");
+
+    let expected = (
+        "cubecl".to_owned(),
+        "git+https://example.com/cubecl#abc123".to_owned(),
+    );
+    assert_eq!(pins, vec![expected]);
+}
+
+#[test]
+fn a_git_pin_without_a_revision_is_refused() {
+    let root = TempDir::new().expect("a temp dir is created");
+    let manifest = manifest_with(
+        root.path(),
+        "[dependencies]\ncubecl = { git = \"https://example.com/cubecl\", branch = \"main\" }\n",
+    );
+
+    let error = pinned_versions(&manifest).expect_err("the pin is refused");
+
+    let expected = PinError::NoRevision {
+        name: "cubecl".to_owned(),
+    };
+    assert_eq!(error, expected);
+}
+
+#[test]
 fn a_dependency_version_change_changes_the_hash() {
     let root = TempDir::new().expect("a temp dir is created");
     let sources = root.path().join("src");

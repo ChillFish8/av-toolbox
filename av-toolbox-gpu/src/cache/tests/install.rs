@@ -2,13 +2,7 @@ use cubecl::environment::{CacheOption, Namespace, Store, StoreOptions};
 use cubecl_environment::persistence::{Access, Database};
 
 use super::BUILD;
-use crate::cache::{
-    CacheError,
-    compilation_cache_dir,
-    finish_compilation_cache,
-    install_compilation_cache_at,
-    install_or_skip,
-};
+use crate::cache::{CacheError, compilation_cache_dir, install_compilation_cache_at, install_or_skip};
 
 // CubeCL's config is process wide, so the tests that install rely on nextest running each test in
 // its own process.
@@ -56,14 +50,13 @@ fn a_read_only_root_installs_nothing_and_says_so() {
 }
 
 #[test]
-fn a_finished_install_merges_its_entries_and_deletes_its_private_file() {
+fn kernels_reach_the_shared_file_directly() {
     let root = tempfile::tempdir().expect("temp dir");
 
     let build_dir = install_compilation_cache_at(root.path(), BUILD).expect("the cache installs");
 
-    let private_dir = build_dir.join("private");
     let database = cubecl::environment::path();
-    assert_eq!(database.parent(), Some(private_dir.as_path()));
+    assert_eq!(database.parent(), Some(build_dir.as_path()));
 
     let options = StoreOptions::new()
         .storage(Namespace::new("cache-test"))
@@ -72,14 +65,8 @@ fn a_finished_install_merges_its_entries_and_deletes_its_private_file() {
     store
         .insert("key".to_string(), "value".to_string())
         .expect("the entry is stored");
-    assert!(database.exists(), "{database:?} should hold the entry");
 
-    finish_compilation_cache();
-
-    assert!(!database.exists(), "{database:?} should be deleted once finished");
-
-    let shared_path = build_dir.join("default.db");
-    let shared = Database::open_at(&shared_path, Access::ReadOnly).expect("the shared file exists");
+    let shared = Database::open_at(&database, Access::ReadOnly).expect("the shared file exists");
     let namespace = Namespace::new("cache-test");
     let mut values = Vec::new();
     shared.scan(namespace.as_str(), &mut |_, value| {
@@ -89,9 +76,5 @@ fn a_finished_install_merges_its_entries_and_deletes_its_private_file() {
 
     // The store writes values as CBOR, where a five byte text string starts with 0x65.
     let expected = b"\x65value".to_vec();
-    assert_eq!(
-        values,
-        vec![expected],
-        "the entry should be merged into {shared_path:?}"
-    );
+    assert_eq!(values, vec![expected], "the entry should be in {database:?}");
 }

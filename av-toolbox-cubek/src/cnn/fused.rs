@@ -292,7 +292,7 @@ impl<'a, T: CubePrimitive> ViewOperationsMutExpand<T, BatchedCoords> for FusedVi
         _scope: &Scope,
         _shared_memory: &SliceExpand<T>,
         _position: <BatchedCoords as CubeType>::ExpandType,
-    ) {
+    ) -> PendingExpand<()> {
         panic!("the fused output view has no tensor map")
     }
 }
@@ -486,7 +486,7 @@ fn launch_with<E: Epilogue>(
         Some(_) => AccumulatorOperand::Present,
         None => AccumulatorOperand::Absent,
     };
-    let strategy: BlueprintStrategy<RuntimeArgs, FusedRoutine> = match blueprint {
+    let strategy: BlueprintStrategy<FusedRoutine> = match blueprint {
         Some(forced) => BlueprintStrategy::Forced(forced.matmul().clone()),
         None => BlueprintStrategy::Inferred(SimpleArgs::default()),
     };

@@ -7,7 +7,7 @@ use cubecl::prelude::*;
 /// Index 31 and above hold -1, so a threshold read there is negative and every `<=` test against it fails.
 #[cube]
 fn limlut(index: f32) -> f32 {
-    let mut threshold = f32::new(-1.0f32);
+    let mut threshold = f32::new(-1.0);
 
     if index < 2.0 {
         threshold = 6.0;

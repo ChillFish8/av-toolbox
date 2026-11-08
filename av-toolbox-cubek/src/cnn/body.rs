@@ -239,7 +239,7 @@ fn im2col_kernel<F: Float>(input: &[F], columns: &mut [F], height: u32, width: u
     let source_row = (pixel / width) as i32 + (tap / 3) as i32 - 1;
     let inside =
         source_column >= 0 && source_row >= 0 && source_column < width as i32 && source_row < height as i32;
-    let mut value = F::new(0.0f32);
+    let mut value = F::new(0.0);
 
     if inside {
         let index = (source_row as u32 * width + source_column as u32) * channels + channel;

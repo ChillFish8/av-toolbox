@@ -44,7 +44,8 @@ jobs:
       matrix:
         # One binary per platform carrying every backend that platform can reach. cudarc and ash load their driver
         # libraries at runtime, so a vulkan and cuda binary runs on a host with only one of them.
-        # Linux builds on 22.04 for the older glibc floor.
+        # Linux builds on 22.04 for the older glibc floor. macOS pins its deployment target to 15.0, because Apple's
+        # toolchain otherwise targets the runner's own release.
         include:
           - os: ubuntu-22.04
             platform: linux-x86
@@ -58,8 +59,9 @@ jobs:
             triplet: x64-windows-static-md-release
             archive: av-toolbox-win64-x86.zip
             binary: av-toolbox.exe
-          - os: macos-14
+          - os: macos-26
             platform: macos-aarch64
+            macos_deployment_target: "15.0"
             features: metal,static-ffms2,static-bestsource
             triplet: arm64-osx-release
             archive: av-toolbox-macos-aarch64.tar.gz
@@ -67,6 +69,9 @@ jobs:
     concurrency:
       group: release-binaries-${{ matrix.platform }}-${{ github.event.release.tag_name || inputs.version || github.run_id }}
       cancel-in-progress: false
+    # Empty off macOS, where nothing reads it.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

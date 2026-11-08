@@ -1,12 +1,10 @@
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use av_denoise_core::tune::{
-    CacheHook,
-    CachePhase,
     TuneOutcome,
     TuneReport,
     TuneRequest,
@@ -16,14 +14,7 @@ use av_denoise_core::tune::{
     tuning_frame_count,
 };
 use av_denoise_core::{EngineSpec, SearchMode, TuningConfig, TuningMode};
-use av_toolbox_gpu::{
-    Client,
-    Retune,
-    Tuning,
-    compilation_cache_dir,
-    merge_compilation_cache,
-    refill_compilation_cache,
-};
+use av_toolbox_gpu::{Client, Retune, Tuning, compilation_cache_dir};
 
 /// The directory av-denoise keeps its tuning results in, inside the kernel cache's build directory.
 const STORE_DIR: &str = "av-denoise-tune";
@@ -47,34 +38,8 @@ pub(crate) fn tuning_config(tuning: Tuning, retune: Retune, store: Option<PathBu
     TuningConfig {
         mode,
         store,
-        cache_hook: Some(kernel_cache_hook()),
         ..TuningConfig::default()
     }
-}
-
-/// What the kernel cache does at a point in a tuning pass.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub(crate) enum CacheAction {
-    Refill,
-    Merge,
-}
-
-/// The action the kernel cache takes at `phase`.
-pub(crate) fn hook_action(phase: CachePhase) -> CacheAction {
-    match phase {
-        CachePhase::LockTaken => CacheAction::Refill,
-        CachePhase::KernelsCompiled => CacheAction::Merge,
-    }
-}
-
-/// The hook a tuning pass calls to keep this process's kernel cache in step with other processes.
-///
-/// A taken lock refills the private cache from the shared one, and compiled kernels are merged back.
-fn kernel_cache_hook() -> CacheHook {
-    Arc::new(|phase| match hook_action(phase) {
-        CacheAction::Refill => refill_compilation_cache(),
-        CacheAction::Merge => merge_compilation_cache(),
-    })
 }
 
 /// Where tuning results are stored, or `None` to keep them for this process only.

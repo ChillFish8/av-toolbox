@@ -26,7 +26,7 @@ av-toolbox-build = { workspace = true }
 
 [features]
 vulkan = ["cubecl/vulkan"]
-metal = ["cubecl/metal-native"]
+metal = ["cubecl/metal"]
 cuda = ["cubecl/cuda"]
 rocm = ["cubecl/hip"]
 # Tests that need a real device. Not enabled in CI, which has no accelerator.

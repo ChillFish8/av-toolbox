@@ -64,26 +64,6 @@ impl BuildContext {
         Self::assemble(accelerator, device, cubecl_device, client, policy)
     }
 
-    /// A context that leaves each thread on its own stream and never flushes, so work handed
-    /// between threads can run out of order.
-    #[cfg(all(test, feature = "gpu-tests", feature = "vulkan", not(feature = "metal")))]
-    pub(crate) fn unordered(
-        accelerator: Accelerator,
-        device: Device,
-        cubecl_device: cubecl::Device,
-        client: Client,
-    ) -> Self {
-        // The pool reports `SharedStream` only so it never flushes. The client is deliberately
-        // left unpinned, so each thread keeps its own stream.
-        Self::assemble(
-            accelerator,
-            device,
-            cubecl_device,
-            client,
-            StreamPolicy::SharedStream,
-        )
-    }
-
     fn assemble(
         accelerator: Accelerator,
         device: Device,

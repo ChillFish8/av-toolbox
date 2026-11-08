@@ -36,9 +36,9 @@ cc = "1.2"
 codespan-reporting = "0.13"
 console = "0.16"
 ctrlc = "3.5"
-cubek-convolution = "=0.3.1"
-cubek-matmul = "=0.3.1"
-cubek-std = "=0.3.1"
+cubek-convolution = { git = "https://github.com/tracel-ai/cubek", rev = "a60992c47e51970602efdaa473ec83d76233ea47" }
+cubek-matmul = { git = "https://github.com/tracel-ai/cubek", rev = "a60992c47e51970602efdaa473ec83d76233ea47" }
+cubek-std = { git = "https://github.com/tracel-ai/cubek", rev = "a60992c47e51970602efdaa473ec83d76233ea47" }
 etcetera = "0.11"
 ffms2-sys = "0.3"
 half = "2.7"
@@ -59,9 +59,9 @@ v_frame = "0.7"
 y4m = "0.8"
 
 clap = { version = "4.6", features = ["derive", "env"] }
-cubecl = { version = "=0.11.3", features = ["std"] }
-cubecl-common = { version = "=0.11.3", default-features = false }
-cubecl-environment = { version = "=0.11.3", default-features = false, features = ["persistence"] }
+cubecl = { git = "https://github.com/ChillFish8/cubecl", rev = "e3c9246de93b97e0f3355e18c86e3afbb7cbd2f5", features = ["std", "rusqlite"] }
+cubecl-common = { git = "https://github.com/ChillFish8/cubecl", rev = "e3c9246de93b97e0f3355e18c86e3afbb7cbd2f5", default-features = false }
+cubecl-environment = { git = "https://github.com/ChillFish8/cubecl", rev = "e3c9246de93b97e0f3355e18c86e3afbb7cbd2f5", default-features = false, features = ["rusqlite"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 jsonschema = { version = "0.58", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
@@ -87,4 +87,11 @@ avtbx-bestsource = { path = "thirdparty/bestsource", version = "0.2.0" }
 avtbx-vship = { path = "thirdparty/vship", version = "0.2.0" }
 
 av-scenechange = { version = "0.24", default-features = false, features = ["asm", "threading"] }
-av-denoise-core = { version = "=0.6.0", default-features = false }
+av-denoise-core = { git = "https://github.com/ChillFish8/av-denoise", rev = "d0359af24aac0a4ca52ae7ca5aedf6da22ae57f4", default-features = false }
+
+# cubek builds on upstream CubeCL, so this keeps it on the same CubeCL build as everything else.
+[patch."https://github.com/tracel-ai/cubecl"]
+cubecl = { git = "https://github.com/ChillFish8/cubecl", rev = "e3c9246de93b97e0f3355e18c86e3afbb7cbd2f5" }
+cubecl-common = { git = "https://github.com/ChillFish8/cubecl", rev = "e3c9246de93b97e0f3355e18c86e3afbb7cbd2f5" }
+cubecl-environment = { git = "https://github.com/ChillFish8/cubecl", rev = "e3c9246de93b97e0f3355e18c86e3afbb7cbd2f5" }
+cubecl-ir = { git = "https://github.com/ChillFish8/cubecl", rev = "e3c9246de93b97e0f3355e18c86e3afbb7cbd2f5" }

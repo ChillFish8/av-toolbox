@@ -31,7 +31,7 @@ fn main() -> ExitCode {
     let bars = MultiProgress::new();
     start_logging(&args, &bars);
 
-    let code = match &args.command {
+    match &args.command {
         Command::Execute(execute) => execute::run(&args, execute, &bars),
         Command::Profile(profile_args) => profile::run(&args, profile_args),
         Command::ListDevices => list_devices::run(&args.accelerators),
@@ -40,11 +40,7 @@ fn main() -> ExitCode {
         Command::Explain(explain) => explain::run(&args, explain),
         Command::Inspect(inspect_args) => inspect::run(&args, inspect_args),
         Command::Pull(pull_args) => pull::run(pull_args),
-    };
-
-    av_toolbox_gpu::finish_compilation_cache();
-
-    code
+    }
 }
 
 /// What every command logs by default, with only warnings from crates outside the workspace.

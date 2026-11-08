@@ -1,4 +1,5 @@
 mod location;
+mod prepare;
 #[cfg(test)]
 mod tests;
 mod tidy;
@@ -8,18 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
 
+use cubecl::config::cache::CacheConfig;
 use cubecl::config::{CubeClRuntimeConfig, RuntimeConfig};
 
 pub use self::location::default_cache_dir;
 use self::location::{CacheLocation, resolve_cache_location};
+use self::prepare::prepare_kernel_cache;
 use self::tidy::{build_cache_dir, tidy_cache_root};
-use crate::kernel_cache::{
-    PrivateKernelCache,
-    finish_kernel_cache,
-    finish_kernel_cache_at_exit,
-    merge_kernel_cache,
-    refill_kernel_cache,
-};
 
 /// The variable that overrides where compiled kernels and autotune results are cached, or turns caching off.
 ///
@@ -69,8 +65,7 @@ pub fn install_compilation_cache(build: &str) -> Result<Option<PathBuf>, CacheEr
 /// Installs the cache in the directory of `build` under `root`, ignoring [COMPILATION_CACHE_ENV].
 ///
 /// Each build keeps its kernels in a directory of its own, and an install removes the directories of other
-/// builds once they have gone unused for a week. Each process works on a private copy of the cache, merged
-/// back into the shared one by [finish_compilation_cache] or when the process exits.
+/// builds once they have gone unused for a week. Every process reads and writes the same cache file.
 ///
 /// This has to run before the first client is opened, because opening one locks CubeCL's global config.
 pub fn install_compilation_cache_at(root: &Path, build: &str) -> Result<PathBuf, CacheError> {
@@ -114,29 +109,6 @@ pub fn compilation_cache_dir() -> Option<&'static Path> {
     CACHE_DIR.get().map(PathBuf::as_path)
 }
 
-/// Merges the kernels this process compiled so far into the shared cache, so other processes can load them.
-///
-/// Does nothing when no cache is installed.
-pub fn merge_compilation_cache() {
-    merge_kernel_cache();
-}
-
-/// Copies into this process's cache what other processes merged into the shared cache since it last looked.
-///
-/// Does nothing when no cache is installed.
-pub fn refill_compilation_cache() {
-    refill_kernel_cache();
-}
-
-/// Merges the kernels this process compiled into the shared cache and deletes its private copy.
-///
-/// Call it once, when the process is done with the GPU. It does nothing when no cache is installed.
-/// It waits at most a few seconds for another process to let go of the shared cache, and then
-/// leaves the private copy for a later process to delete, so exiting never hangs on the cache.
-pub fn finish_compilation_cache() {
-    finish_kernel_cache();
-}
-
 /// Installs the cache in `root`, logging a build directory that cannot be created and answering `Ok(None)`.
 pub(crate) fn install_or_skip(root: &Path, build: &str) -> Result<Option<PathBuf>, CacheError> {
     let installed = install_compilation_cache_at(root, build);
@@ -165,22 +137,19 @@ fn log_install(build: &str) {
     }
 }
 
-/// Points CubeCL's global config at a private copy of the cache in `build_dir`.
-///
-/// The private copy is only filled once the config is set, so a config that was already set leaves the
-/// cache files alone.
+/// Points CubeCL's global config at the cache in `build_dir`, then opens the cache once before CubeCL does.
 fn set_runtime_config(build_dir: &Path) -> Result<(), CacheError> {
     let mut config = CubeClRuntimeConfig::from_current_dir().override_from_env();
     config.compilation.cache = true;
-    let private_cache = PrivateKernelCache::configure(build_dir, &mut config);
+    config.environment.path = CacheConfig::Directory(build_dir.to_path_buf());
 
     let installed = CubeClRuntimeConfig::try_set(config);
     if !installed {
         return Err(CacheError::AlreadyInitialised);
     }
 
-    private_cache.start();
-    finish_kernel_cache_at_exit();
+    let database = cubecl::environment::path();
+    prepare_kernel_cache(&database);
 
     Ok(())
 }
